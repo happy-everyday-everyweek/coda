@@ -1,4 +1,4 @@
-package com.zcode.mobileui
+package com.coda.mobileui
 
 import android.content.Context
 import android.content.Intent
@@ -30,11 +30,11 @@ import androidx.drawerlayout.widget.DrawerLayout
 import androidx.transition.AutoTransition
 import androidx.transition.TransitionManager
 import com.google.android.material.snackbar.Snackbar
-import com.zcode.mobileui.core.SendModes
-import com.zcode.mobileui.core.ZController
-import com.zcode.mobileui.core.ZModelLevel
-import com.zcode.mobileui.core.ZParse
-import com.zcode.mobileui.core.ZSessionInfo
+import com.coda.mobileui.core.SendModes
+import com.coda.mobileui.core.ZController
+import com.coda.mobileui.core.ZModelLevel
+import com.coda.mobileui.core.ZParse
+import com.coda.mobileui.core.ZSessionInfo
 
 /** 会话状态：Working 用灰、待您操作（含错误）用黄、已完成未读用绿、已读则整行不显示。 */
 private enum class ConvStatus { WORKING, WAITING, DONE_UNREAD, NONE }
@@ -86,7 +86,7 @@ private data class DrawerConversation(
 )
 
 /**
- * ZCode Mobile 主界面：真实运行时客户端。
+ * Coda 主界面：真实运行时客户端。
  * 会话、消息、模型与工具调用均来自本地 zcode app-server（stdio 子进程）。
  */
 class MainActivity : BaseActivity() {
@@ -901,7 +901,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         )
         zc.messages.forEach { message ->
             val fullText = message.text()
-            val tools = message.parts.filterIsInstance<com.zcode.mobileui.core.ZPart.ToolPart>()
+            val tools = message.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
             if (fullText.isEmpty() && tools.isEmpty()) return@forEach
             if (message.role == "user") {
                 host.addView(
@@ -1176,7 +1176,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         showSlashPanel(matched)
     }
 
-    private fun showSlashPanel(commands: List<com.zcode.mobileui.core.ZSlashCommand>) {
+    private fun showSlashPanel(commands: List<com.coda.mobileui.core.ZSlashCommand>) {
         hideSlashPanel()
         val overlay = findViewById<View>(android.R.id.content) as? ViewGroup ?: return
         val scroll = android.widget.HorizontalScrollView(this).apply {

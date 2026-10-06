@@ -1,4 +1,4 @@
-package com.zcode.mobileui.core
+package com.coda.mobileui.core
 
 import android.content.Context
 import android.os.Handler
@@ -381,10 +381,59 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
+    /** 使用统计数据（range: "7d" | "30d" | "all"）。 */
+    fun fetchUsageStats(range: String, cb: (Boolean, JSONObject?) -> Unit) {
+        runtime.call("usage/stats", JSONObject().put("range", range)) { ok, body ->
+            cb(ok, if (ok) body else null)
+        }
+    }
+
+    /** 插件列表。 */
+    fun fetchPlugins(cb: (Boolean, JSONObject?) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        runtime.call("plugins/list", params) { ok, body ->
+            cb(ok, if (ok) body else null)
+        }
+    }
+
+    /** MCP 服务器状态列表（mode: status 只读快照，不做连接操作）。 */
+    fun fetchMcpList(cb: (Boolean, JSONObject?) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("mode", "status")
+        runtime.call("mcp/list", params) { ok, body ->
+            cb(ok, if (ok) body else null)
+        }
+    }
+
+    /** 启用 / 停用插件。 */
+    fun setPluginEnabled(pluginId: String, enabled: Boolean, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("pluginId", pluginId)
+            .put("enabled", enabled)
+        runtime.call("plugins/setEnabled", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+
     // ---------------------------------------------------------------- 会话操作
 
     fun workspacePath(): String {
-        val f = File("/sdcard/ZCode/workspace")
+        // 品牌目录迁移（一次性）：旧的 /sdcard/ZCode 改名为 /sdcard/Coda
+        val brandDir = File("/sdcard/Coda")
+        val legacy = File("/sdcard/ZCode")
+        if (!brandDir.exists() && legacy.exists()) {
+            try {
+                legacy.renameTo(brandDir)
+            } catch (_: Throwable) {
+            }
+        }
+        val f = File(brandDir, "workspace")
         return try {
             if (f.exists() || f.mkdirs()) f.absolutePath
             else File(app.filesDir, "workspace").apply { mkdirs() }.absolutePath

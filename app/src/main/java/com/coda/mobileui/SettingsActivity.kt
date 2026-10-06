@@ -1,4 +1,4 @@
-package com.zcode.mobileui
+package com.coda.mobileui
 
 import android.content.Intent
 import android.os.Bundle
@@ -9,7 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.snackbar.Snackbar
 
 /**
- * 设置（一级）：分类列表，对齐 ZCode 桌面端的全部设置分区。
+ * 设置（一级）：分类列表，对齐桌面端的全部设置分区。
  */
 class SettingsActivity : BaseActivity() {
 

@@ -1,4 +1,4 @@
-package com.zcode.mobileui
+package com.coda.mobileui
 
 import android.content.res.Configuration
 import android.os.Build

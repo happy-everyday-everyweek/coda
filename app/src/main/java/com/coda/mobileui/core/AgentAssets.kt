@@ -1,4 +1,4 @@
-package com.zcode.mobileui.core
+package com.coda.mobileui.core
 
 import android.content.Context
 import java.io.File
@@ -6,7 +6,7 @@ import java.io.File
 /**
  * 用户级 Agent 资产（子智能体 / 命令 / 技能）的文件管理。
  *
- * 目录与 ZCode 运行时一致（桌面端同款落盘格式）：
+ * 目录与运行时内核（桌面端同款落盘格式）一致：
  * - 子智能体: {HOME}/.zcode/agents/<name>.md     （frontmatter 必须 name/description）
  * - 命令:     {HOME}/.zcode/commands/<name>.md   （frontmatter description 可选）
  * - 技能:     {HOME}/.zcode/skills/<name>/SKILL.md（frontmatter name/description）

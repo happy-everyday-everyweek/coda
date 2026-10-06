@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- MD3 主题基座：静态回退色板（动态取色不可用时使用） -->
-    <style name="Theme.ZCodeMobileUI.Base" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.Coda.Base" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/md3_primary</item>
         <item name="colorOnPrimary">@color/md3_on_primary</item>
         <item name="colorPrimaryContainer">@color/md3_primary_container</item>
@@ -30,5 +30,5 @@
         <item name="android:windowLightStatusBar">@bool/window_light_system_bars</item>
     </style>
 
-    <style name="Theme.ZCodeMobileUI" parent="Theme.ZCodeMobileUI.Base" />
+    <style name="Theme.Coda" parent="Theme.Coda.Base" />
 </resources>

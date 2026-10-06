@@ -1,4 +1,4 @@
-package com.zcode.mobileui
+package com.coda.mobileui
 
 import android.app.Activity
 import android.app.Application

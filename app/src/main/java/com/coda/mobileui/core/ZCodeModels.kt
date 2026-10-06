@@ -1,4 +1,4 @@
-package com.zcode.mobileui.core
+package com.coda.mobileui.core
 
 import org.json.JSONArray
 import org.json.JSONObject

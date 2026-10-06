@@ -85,7 +85,7 @@
                     android:visibility="gone" />
             </FrameLayout>
 
-            <com.zcode.mobileui.StrengthSliderView
+            <com.coda.mobileui.StrengthSliderView
                 android:id="@+id/strength_slider"
                 android:layout_width="match_parent"
                 android:layout_height="76dp"

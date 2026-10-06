@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ZCode</string>
+    <string name="app_name">Coda</string>
     <string name="default_model">GLM-4.6</string>
     <string name="composer_hint">输入消息…</string>
     <string name="greeting">有什么可以帮忙的？</string>

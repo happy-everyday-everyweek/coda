@@ -1,4 +1,4 @@
-package com.zcode.mobileui
+package com.coda.mobileui
 
 import android.app.Application
 import androidx.appcompat.app.AppCompatDelegate
@@ -7,7 +7,7 @@ import androidx.appcompat.app.AppCompatDelegate
  * 启动时应用用户选择的主题模式（浅色 / 深色 / 跟随系统）。
  * 动态取色与自定义主色由 BaseActivity 按设置开关处理。
  */
-class ZCodeMobileApp : Application() {
+class CodaApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppCompatDelegate.setDefaultNightMode(SettingsStore.get(this).nightMode)

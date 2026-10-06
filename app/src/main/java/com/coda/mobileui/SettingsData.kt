@@ -1,8 +1,11 @@
-package com.zcode.mobileui
+package com.coda.mobileui
 
 import android.content.Context
-import com.zcode.mobileui.core.AgentAssets
-import com.zcode.mobileui.core.ProviderStore
+import com.coda.mobileui.core.AgentAssets
+import com.coda.mobileui.core.CodaExtras
+import com.coda.mobileui.core.ProviderStore
+import org.json.JSONObject
+import java.io.File
 
 /** 设置行类型。key 非空表示该行接入真实交互。 */
 sealed class SettingRow {
@@ -38,7 +41,7 @@ data class SettingsPage(val title: String, val rows: List<SettingRow>)
 /**
  * 设置数据。
  *
- * 一级列表对齐 ZCode 桌面端的分区；工作区搜索范围与记忆属于工作区能力，放在工作区页。
+ * 一级列表对齐桌面端的分区；工作区搜索范围与记忆属于工作区能力，放在工作区页。
  * 外观页已接入真实设置（主题模式、主色、自动取色、界面字号、代码显示）。
  */
 object SettingsData {
@@ -179,6 +182,174 @@ object SettingsData {
         return SettingsPage(title, rows)
     }
 
+    /** 使用统计页：数据来自运行时 usage/stats（界面层异步加载后传入）。 */
+    fun usage(ctx: Context, range: String, data: JSONObject?): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        val rangeLabel = when (range) {
+            "30d" -> "近 30 日"
+            "all" -> "全部时间"
+            else -> "近 7 日"
+        }
+        rows += SettingRow.Header("统计范围")
+        rows += SettingRow.Value("时间范围", rangeLabel, "usage_range")
+        if (data == null) {
+            rows += SettingRow.Value("正在读取…", "从运行时获取使用统计")
+            return SettingsPage("使用统计", rows)
+        }
+        val s = data.optJSONObject("summary")
+        if (s == null || s.optInt("totalSessions", 0) == 0) {
+            rows += SettingRow.Value("暂无统计数据", "还没有产生用量记录")
+            rows += SettingRow.Value("刷新", "重新读取统计", "extras_refresh:usage")
+            return SettingsPage("使用统计", rows)
+        }
+        rows += SettingRow.Header("用量概览")
+        rows += SettingRow.Value("总 Token", CodaExtras.formatCount(s.optLong("totalTokens")))
+        rows += SettingRow.Value(
+            "输入 / 输出",
+            CodaExtras.formatCount(s.optLong("inputTokens")) + " / " +
+                CodaExtras.formatCount(s.optLong("outputTokens")),
+        )
+        rows += SettingRow.Value(
+            "缓存命中率",
+            "${(s.optDouble("cacheHitRate", 0.0) * 100).toInt()}%",
+        )
+        s.optJSONObject("favoriteModel")?.let { fm ->
+            val model = fm.optString("modelId")
+            if (model.isNotEmpty()) {
+                rows += SettingRow.Value(
+                    "最常用模型",
+                    "$model · ${(fm.optDouble("share", 0.0) * 100).toInt()}%",
+                )
+            }
+        }
+        rows += SettingRow.Header("会话与工具")
+        rows += SettingRow.Value(
+            "会话 / 回合",
+            "${s.optInt("totalSessions")} / ${s.optInt("totalTurns")}",
+        )
+        rows += SettingRow.Value("工具调用", "${s.optInt("toolCallCount")} 次")
+        rows += SettingRow.Value(
+            "平均首字 / 回合时长",
+            "${s.optLong("avgTimeToFirstTokenMs")} / ${s.optLong("avgTurnDurationMs")} ms",
+        )
+        rows += SettingRow.Header("活跃度")
+        rows += SettingRow.Value(
+            "活跃天数",
+            "${s.optInt("activeDays")} 天 · 当前连续 ${s.optInt("currentStreakDays")} 天",
+        )
+        rows += SettingRow.Value("最长连续", "${s.optInt("longestStreakDays")} 天")
+        rows += SettingRow.Value(
+            "单日峰值",
+            CodaExtras.formatCount(s.optLong("peakDayTokens")) + " Token",
+        )
+        rows += SettingRow.Value("刷新", "重新读取统计", "extras_refresh:usage")
+        return SettingsPage("使用统计", rows)
+    }
+
+    /** 插件页：数据来自运行时 plugins/list（界面层异步加载后传入）。 */
+    fun plugins(ctx: Context, data: JSONObject?): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        rows += SettingRow.Header("已安装插件")
+        if (data == null) {
+            rows += SettingRow.Value("正在读取…", "从运行时获取插件列表")
+            return SettingsPage("插件", rows)
+        }
+        val items = CodaExtras.parsePlugins(data)
+        if (items.isEmpty()) {
+            rows += SettingRow.Value("未安装插件", "通过插件市场安装后在此管理")
+        } else {
+            items.forEach { p ->
+                val parts = mutableListOf<String>()
+                parts += if (p.enabled) "启用中" else "已停用"
+                if (p.skillCount > 0) parts += "${p.skillCount} 技能"
+                if (p.commandCount > 0) parts += "${p.commandCount} 命令"
+                if (p.mcpCount > 0) parts += "${p.mcpCount} MCP"
+                p.version?.let { parts += "v$it" }
+                rows += SettingRow.Toggle(
+                    p.name,
+                    parts.joinToString(" · "),
+                    p.enabled,
+                    "plugins_toggle:${p.id}",
+                )
+            }
+        }
+        rows += SettingRow.Value("刷新", "重新读取插件列表", "extras_refresh:plugins")
+        return SettingsPage("插件", rows)
+    }
+
+    /** MCP 服务器页：数据来自运行时 mcp/list（界面层异步加载后传入）。 */
+    fun mcp(ctx: Context, data: JSONObject?): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        rows += SettingRow.Header("已配置服务器")
+        if (data == null) {
+            rows += SettingRow.Value("正在读取…", "从运行时获取 MCP 状态")
+            return SettingsPage("MCP 服务器", rows)
+        }
+        val items = CodaExtras.parseMcpServers(data)
+        if (items.isEmpty()) {
+            rows += SettingRow.Value("未配置 MCP 服务器", "配置后在此查看连接状态")
+        } else {
+            items.forEach { m ->
+                val detail = buildString {
+                    append(CodaExtras.mcpStatusLabel(m.status))
+                    append(" · ").append(m.transport)
+                    if (m.toolCount > 0) append(" · ").append(m.toolCount).append(" 工具")
+                    m.error?.let { append(" · ").append(it.take(60)) }
+                }
+                rows += SettingRow.Value(m.name, detail)
+            }
+        }
+        rows += SettingRow.Value("刷新", "重新读取 MCP 状态", "extras_refresh:mcp")
+        return SettingsPage("MCP 服务器", rows)
+    }
+
+    /** 定时任务页：读取运行时数据库 tasks-index.sqlite 的 automations 表。 */
+    fun automations(ctx: Context): SettingsPage {
+        val dbFile = File(File(ctx.filesDir, "zcode-data/.zcode/v2"), "tasks-index.sqlite")
+        val items = CodaExtras.readAutomations(dbFile)
+        val rows = mutableListOf<SettingRow>()
+        rows += SettingRow.Header("已创建任务")
+        if (items.isEmpty()) {
+            rows += SettingRow.Value("暂无定时任务", "由 Agent 创建的定时任务会显示在这里")
+        } else {
+            items.forEach { a ->
+                val detail = buildString {
+                    append(a.cron)
+                    append(" · ").append(if (a.enabled) "启用" else "停用")
+                    append(" · 运行 ").append(a.runCount).append(" 次")
+                    a.nextRunAt?.let { append(" · 下次 ").append(CodaExtras.formatTs(it)) }
+                    if (a.lastError != null) append(" · 上次失败")
+                }
+                rows += SettingRow.Value(a.title.ifEmpty { a.id.take(12) }, detail)
+            }
+        }
+        rows += SettingRow.Value("刷新", "重新读取任务列表", "extras_refresh:automations")
+        return SettingsPage("定时任务", rows)
+    }
+
+    /** 钩子页：读取工作区与用户级 settings.json 的 hooks 段。 */
+    fun hooks(ctx: Context, workspacePath: String?): SettingsPage {
+        val home = File(ctx.filesDir, "home")
+        val items = CodaExtras.readHooks(workspacePath, home)
+        val rows = mutableListOf<SettingRow>()
+        rows += SettingRow.Header("已配置 Hook")
+        if (items.isEmpty()) {
+            rows += SettingRow.Value("未配置钩子", "在 settings.json 中配置后在此查看")
+        } else {
+            items.forEach { h ->
+                val detail = buildString {
+                    append(h.source)
+                    if (h.matcher.isNotEmpty()) append(" · ").append(h.matcher)
+                    if (h.command.isNotEmpty()) append(" · ").append(h.command.take(80))
+                }
+                rows += SettingRow.Value(h.event, detail)
+            }
+        }
+        rows += SettingRow.Header("说明")
+        rows += SettingRow.Value("信任审查", "外部钩子首次运行前需要授予信任")
+        return SettingsPage("钩子", rows)
+    }
+
     val pages: Map<String, SettingsPage> = mapOf(
         "system" to SettingsPage(
             "系统",
@@ -252,57 +423,6 @@ object SettingsData {
                 SettingRow.Value("打开设置", "全局"),
                 SettingRow.Header("桌面端"),
                 SettingRow.Value("全部恢复默认", "清除所有自定义键位覆盖"),
-            ),
-        ),
-        "plugins" to SettingsPage(
-            "插件",
-            listOf(
-                SettingRow.Value("已安装插件", "3 个"),
-                SettingRow.Value("插件市场", "浏览"),
-                SettingRow.Value("检查更新", "立即检查"),
-                SettingRow.Value("恢复内置插件", "恢复"),
-                SettingRow.Value("从外部 Agent 导入插件", "导入"),
-            ),
-        ),
-        "mcp" to SettingsPage(
-            "MCP 服务器",
-            listOf(
-                SettingRow.Value("已配置 MCP 服务器", "2 个"),
-                SettingRow.Value("Plugin MCP 服务器", "1 个"),
-                SettingRow.Value("新建 MCP 服务器", "添加"),
-                SettingRow.Value("从外部 Agent 导入", "导入"),
-                SettingRow.Toggle("显示远端已存在", "同步时显示远端已有的服务器", false),
-            ),
-        ),
-        "automations" to SettingsPage(
-            "定时任务",
-            listOf(
-                SettingRow.Toggle("定时任务", "按计划自动运行任务", true),
-                SettingRow.Value("已创建任务", "2 个"),
-                SettingRow.Value("离线时段任务", "夜间运行"),
-                SettingRow.Value("最近运行", "今天 02:00"),
-            ),
-        ),
-        "hooks" to SettingsPage(
-            "钩子",
-            listOf(
-                SettingRow.Value("已配置 Hook", "1 个"),
-                SettingRow.Value("Plugin Hook", "1 个"),
-                SettingRow.Value("新建钩子", "选择事件"),
-                SettingRow.Value("导入 Hook", "导入"),
-                SettingRow.Value("审查信任", "最近安装或修改的钩子需要审查"),
-            ),
-        ),
-        "usage" to SettingsPage(
-            "使用统计",
-            listOf(
-                SettingRow.Header("应用用量"),
-                SettingRow.Value("调用次数", "328"),
-                SettingRow.Value("工具调用合计", "56 次"),
-                SettingRow.Value("时间范围", "近 7 日"),
-                SettingRow.Header("个人套餐"),
-                SettingRow.Value("Token 消耗总量", "1.2M"),
-                SettingRow.Value("剩余额度", "查看"),
             ),
         ),
         "migration" to SettingsPage(

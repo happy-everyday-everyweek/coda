@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "com.zcode.mobileui"
+    namespace = "com.coda.mobileui"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.zcode.mobileui"
+        applicationId = "com.coda.mobileui"
         minSdk = 26
         targetSdk = 28
-        versionCode = 4
-        versionName = "0.2.2-core"
+        versionCode = 5
+        versionName = "0.3.0-core"
     }
 
     buildTypes {

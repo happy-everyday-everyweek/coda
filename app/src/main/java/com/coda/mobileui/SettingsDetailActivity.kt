@@ -1,4 +1,4 @@
-package com.zcode.mobileui
+package com.coda.mobileui
 
 import android.content.Intent
 import android.graphics.drawable.Drawable
@@ -19,9 +19,9 @@ import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
-import com.zcode.mobileui.core.AgentAssets
-import com.zcode.mobileui.core.ProviderStore
-import com.zcode.mobileui.core.ZController
+import com.coda.mobileui.core.AgentAssets
+import com.coda.mobileui.core.ProviderStore
+import com.coda.mobileui.core.ZController
 
 /**
  * 二级页面：既承载设置的二级页，也承载工作区页（EXTRA_PAGE = "workspace"）。
@@ -32,6 +32,33 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     private lateinit var store: SettingsStore
     private var pageKey: String = PAGE_SYSTEM
     private var firstResume = true
+
+    // ---- 扩展页异步数据（使用统计 / 插件 / MCP）----
+    private val extrasCache = HashMap<String, org.json.JSONObject>()
+    private val extrasLoading = HashSet<String>()
+
+    private fun usageRange(): String =
+        getSharedPreferences("zcode_bridge", MODE_PRIVATE)
+            .getString("usage_range", "7d") ?: "7d"
+
+    /** 首次进入异步页时拉取数据；成功后缓存并重渲染。 */
+    private fun ensureExtrasLoaded(kind: String) {
+        if (extrasCache.containsKey(kind) || extrasLoading.contains(kind)) return
+        extrasLoading.add(kind)
+        val zc = ZController.get(this)
+        val done: (Boolean, org.json.JSONObject?) -> Unit = { ok, data ->
+            extrasLoading.remove(kind)
+            if (ok && data != null) {
+                extrasCache[kind] = data
+                runOnUiThread { renderPage() }
+            }
+        }
+        when (kind) {
+            "usage" -> zc.fetchUsageStats(usageRange(), done)
+            "plugins" -> zc.fetchPlugins(done)
+            "mcp" -> zc.fetchMcpList(done)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,7 +80,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             return
         }
         if (pageKey == PAGE_PROVIDERS || pageKey == PAGE_SUBAGENTS ||
-            pageKey == PAGE_SKILLS || pageKey == PAGE_COMMANDS
+            pageKey == PAGE_SKILLS || pageKey == PAGE_COMMANDS ||
+            pageKey == PAGE_AUTOMATIONS || pageKey == PAGE_HOOKS
         ) {
             renderPage()
         }
@@ -66,6 +94,20 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         PAGE_SUBAGENTS -> SettingsData.subagents(this)
         PAGE_SKILLS -> SettingsData.skills(this)
         PAGE_COMMANDS -> SettingsData.commands(this)
+        PAGE_USAGE -> {
+            ensureExtrasLoaded("usage")
+            SettingsData.usage(this, usageRange(), extrasCache["usage"])
+        }
+        PAGE_PLUGINS -> {
+            ensureExtrasLoaded("plugins")
+            SettingsData.plugins(this, extrasCache["plugins"])
+        }
+        PAGE_MCP -> {
+            ensureExtrasLoaded("mcp")
+            SettingsData.mcp(this, extrasCache["mcp"])
+        }
+        PAGE_AUTOMATIONS -> SettingsData.automations(this)
+        PAGE_HOOKS -> SettingsData.hooks(this, ZController.get(this).workspacePath())
         else -> SettingsData.pages[pageKey] ?: SettingsData.pages.getValue(PAGE_SYSTEM)
     }
 
@@ -100,12 +142,28 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     override fun onToggleChange(key: String, checked: Boolean) {
+        if (key.startsWith("plugins_toggle:")) {
+            val id = key.removePrefix("plugins_toggle:")
+            ZController.get(this).setPluginEnabled(id, checked) { ok, msg ->
+                runOnUiThread {
+                    snack(
+                        if (ok) {
+                            if (checked) "已启用插件" else "已停用插件"
+                        } else {
+                            "插件设置失败: $msg"
+                        },
+                    )
+                    extrasCache.remove("plugins")
+                    renderPage()
+                }
+            }
+            return
+        }
         val needRecreate = when (key) {
             KEY_AUTO_COLOR -> {
                 store.autoColor = checked
                 true
             }
-
             KEY_CODE_LINE_NUMBERS -> {
                 store.showLineNumbers = checked
                 false
@@ -115,7 +173,6 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 store.wrapLongLines = checked
                 false
             }
-
             else -> false
         }
         if (needRecreate) recreate() else renderPage()
@@ -146,6 +203,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 val path = rest.substringAfter(':', "")
                 val item = if (path.isNotEmpty()) AgentAssets.readItem(path) else null
                 if (kind != null && item != null) editAsset(kind, item) else renderPage()
+            }
+            key == "usage_range" -> pickUsageRange()
+            key.startsWith("extras_refresh:") -> {
+                extrasCache.remove(key.removePrefix("extras_refresh:"))
+                renderPage()
             }
             else -> Snackbar.make(
                 findViewById(android.R.id.content),
@@ -449,6 +511,23 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         else -> null
     }
 
+    /** 使用统计的时间范围：近 7 日 / 近 30 日 / 全部。 */
+    private fun pickUsageRange() {
+        val labels = arrayOf("近 7 日", "近 30 日", "全部时间")
+        val values = arrayOf("7d", "30d", "all")
+        val current = values.indexOf(usageRange()).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("统计范围")
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                getSharedPreferences("zcode_bridge", MODE_PRIVATE).edit()
+                    .putString("usage_range", values[which]).apply()
+                extrasCache.remove("usage")
+                dialog.dismiss()
+                renderPage()
+            }
+            .show()
+    }
+
     private fun snack(text: String) {
         Snackbar.make(findViewById(android.R.id.content), text, Snackbar.LENGTH_LONG).show()
     }
@@ -465,6 +544,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_SUBAGENTS = "subagents"
         const val PAGE_SKILLS = "skills"
         const val PAGE_COMMANDS = "commands"
+        const val PAGE_USAGE = "usage"
+        const val PAGE_PLUGINS = "plugins"
+        const val PAGE_MCP = "mcp"
+        const val PAGE_AUTOMATIONS = "automations"
+        const val PAGE_HOOKS = "hooks"
 
         /** 接入真实交互的设置键。 */
         const val KEY_AUTO_COLOR = "auto_color"

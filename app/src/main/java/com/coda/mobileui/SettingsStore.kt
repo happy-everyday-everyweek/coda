@@ -1,4 +1,4 @@
-package com.zcode.mobileui
+package com.coda.mobileui
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -132,14 +132,14 @@ class SettingsStore private constructor(context: Context) {
         )
 
         val ACCENT_THEMES = intArrayOf(
-            R.style.Theme_ZCodeMobileUI,
-            R.style.Theme_ZCodeMobileUI_Blue,
-            R.style.Theme_ZCodeMobileUI_Violet,
-            R.style.Theme_ZCodeMobileUI_Green,
-            R.style.Theme_ZCodeMobileUI_Amber,
-            R.style.Theme_ZCodeMobileUI_Rose,
-            R.style.Theme_ZCodeMobileUI_Teal,
-            R.style.Theme_ZCodeMobileUI_Orange,
+            R.style.Theme_Coda,
+            R.style.Theme_Coda_Blue,
+            R.style.Theme_Coda_Violet,
+            R.style.Theme_Coda_Green,
+            R.style.Theme_Coda_Amber,
+            R.style.Theme_Coda_Rose,
+            R.style.Theme_Coda_Teal,
+            R.style.Theme_Coda_Orange,
         )
 
         /**
