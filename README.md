@@ -26,3 +26,9 @@
 - 首次启动会解包核心载荷（约 200 MB，1-2 分钟，有界面提示）。
 - 模型走标准 OpenAI / Anthropic 兼容接口，在「设置 → 模型设置」中配置。
 - 用户级资产目录（与桌面端一致）：`{HOME}/.zcode/agents`、`{HOME}/.zcode/commands`、`{HOME}/.zcode/skills`。
+
+## 许可
+
+本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0，比 GPL v3 更严格：通过计算机网络提供服务时同样要求提供源代码）。
+
+内置运行时载荷包含第三方组件（ZCode CLI 为 Apache-2.0，Node.js 为 MIT 等），其版权与许可声明归各上游项目所有，再分发时请一并保留。
