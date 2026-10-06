@@ -116,9 +116,21 @@ class MainActivity : BaseActivity() {
 
     /** 流式文本缓冲：assistantMessageId → 累计文本。 */
     private val liveText = HashMap<String, StringBuilder>()
+    /** 流式思考缓冲：assistantMessageId → 累计思考文本。 */
+    private val liveReasoning = HashMap<String, StringBuilder>()
 
     /** 当前渲染中的消息正文：messageId → TextView。 */
     private val messageViews = HashMap<String, TextView>()
+    /** 当前渲染中的思考块正文：messageId → TextView。 */
+    private val reasoningViews = HashMap<String, TextView>()
+    /** 思考块折叠状态：messageId → 是否收起（缺省收起）。 */
+    private val reasoningCollapsed = HashMap<String, Boolean>()
+    /** 思考开始时间：messageId → 首个思考增量到达的毫秒时间戳。 */
+    private val reasoningStart = HashMap<String, Long>()
+    /** 思考结束时间：messageId → 完成态首次渲染的毫秒时间戳。 */
+    private val reasoningDone = HashMap<String, Long>()
+    /** 当前回合开始时间，用于“正在生成”指示的连续相位与计时。 */
+    private var runningSince: Long? = null
 
     /** UI 线程 Handler（流式刷新节流用）。 */
     private val ui = android.os.Handler(android.os.Looper.getMainLooper())
@@ -392,6 +404,12 @@ class MainActivity : BaseActivity() {
                 hideSettingsPage()
                 liveText.clear()
                 messageViews.clear()
+                liveReasoning.clear()
+                reasoningViews.clear()
+                reasoningCollapsed.clear()
+                reasoningStart.clear()
+                reasoningDone.clear()
+                runningSince = null
                 zc.newSession { ok, msg ->
                     if (ok) {
                         chatView.visibility = View.VISIBLE
@@ -826,6 +844,10 @@ collapseFullDrawerThen { showConversation(conversation) }
             val tv = messageViews[mid] ?: continue
             markwon.setMarkdown(tv, buf.toString())
         }
+        for ((mid, buf) in liveReasoning) {
+            val tv = reasoningViews[mid] ?: continue
+            tv.text = buf.toString()
+        }
     }
 
     private fun attachZController() {
@@ -840,6 +862,18 @@ collapseFullDrawerThen { showConversation(conversation) }
                 buf.append(text)
                 ui.removeCallbacks(streamFlush)
                 ui.postDelayed(streamFlush, 120)
+            }
+            override fun onReasoningDelta(assistantMessageId: String, text: String) {
+                val buf = liveReasoning.getOrPut(assistantMessageId) { StringBuilder() }
+                buf.append(text)
+                reasoningStart.getOrPut(assistantMessageId) { System.currentTimeMillis() }
+                if (reasoningViews[assistantMessageId] == null) {
+                    // 思考块尚未建出：消息已在列表中时重建让其出现，否则等常规刷新
+                    if (zc.messages.any { it.id == assistantMessageId }) renderChat()
+                } else {
+                    ui.removeCallbacks(streamFlush)
+                    ui.postDelayed(streamFlush, 120)
+                }
             }
 
             override fun onNotice(text: String) {
@@ -874,6 +908,11 @@ collapseFullDrawerThen { showConversation(conversation) }
 
     /** 依据控制器状态刷新界面。 */
     private fun renderFromController() {
+        if (zc.running) {
+            if (runningSince == null) runningSince = System.currentTimeMillis()
+        } else {
+            runningSince = null
+        }
         renderDrawerSessions()
         zc.currentModel?.let { pair ->
             val label = zc.modelOptions
@@ -893,6 +932,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         val host = chatHost()
         host.removeAllViews()
         messageViews.clear()
+        reasoningViews.clear()
         val inflater = LayoutInflater.from(this)
         val neutral = com.google.android.material.color.MaterialColors.getColor(
             this,
@@ -902,7 +942,13 @@ collapseFullDrawerThen { showConversation(conversation) }
         zc.messages.forEach { message ->
             val fullText = message.text()
             val tools = message.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
-            if (fullText.isEmpty() && tools.isEmpty()) return@forEach
+            val partReasoning = message.parts
+                .filterIsInstance<com.coda.mobileui.core.ZPart.Reasoning>()
+                .joinToString("") { it.text }
+            val liveRs = liveReasoning[message.id]?.toString()
+            if (fullText.isEmpty() && tools.isEmpty() && partReasoning.isEmpty() && liveRs == null) {
+                return@forEach
+            }
             if (message.role == "user") {
                 host.addView(
                     inflater.inflate(R.layout.view_chat_message, host, false).apply {
@@ -914,6 +960,13 @@ collapseFullDrawerThen { showConversation(conversation) }
                     },
                 )
             } else {
+                val displayReasoning =
+                    if (liveRs != null && liveRs.length > partReasoning.length) liveRs else partReasoning
+                if (displayReasoning.isNotEmpty()) {
+                    val reasoningStreaming =
+                        zc.running && liveRs != null && liveRs.length > partReasoning.length
+                    host.addView(buildReasoningBlock(message.id, displayReasoning, reasoningStreaming))
+                }
                 val streaming = liveText[message.id]?.toString()
                 val display = if (streaming != null && streaming.length > fullText.length) streaming else fullText
                 host.addView(
@@ -947,16 +1000,225 @@ collapseFullDrawerThen { showConversation(conversation) }
                 }
             }
         }
-        if (zc.running) {
-            host.addView(
+        val todos = effectiveTodos()
+        if (todos.isNotEmpty()) {
+            host.addView(buildTodoCard(todos))
+        }
+        if (zc.running && !turnHasReasoning()) {
+            host.addView(buildRunningIndicator(neutral))
+        }
+    }
+
+    /** 思考块：默认收起；思考中显示点阵与计时，完成后定格为简洁文字，点击文字展开内容。 */
+    private fun buildReasoningBlock(messageId: String, text: String, streaming: Boolean): View {
+        val neutral = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        val collapsed = reasoningCollapsed[messageId] ?: true
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setBackgroundResource(R.drawable.bg_tool_card)
+            layoutParams = LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) }
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(2), 0, dp(2))
+        }
+        val label = TextView(this).apply {
+            textSize = 12f
+            setTextColor(neutral)
+            fontFeatureSettings = "tnum"
+        }
+        if (streaming) {
+            val start = reasoningStart.getOrPut(messageId) { System.currentTimeMillis() }
+            val loader = LatticeLoaderView(this).apply {
+                setIndicatorColor(neutral)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { rightMargin = dp(8) }
+            }
+            val showTick = { ms: Long -> label.text = "正在思考 ${fmtDur(ms)}" }
+            showTick(System.currentTimeMillis() - start)
+            loader.onTick = showTick
+            loader.start(System.currentTimeMillis() - start)
+            header.addView(loader)
+        } else {
+            val start = reasoningStart[messageId]
+            if (start != null) {
+                val doneAt = reasoningDone.getOrPut(messageId) { System.currentTimeMillis() }
+                label.text = "思考 ${fmtDur((doneAt - start).coerceAtLeast(0L))}"
+            } else {
+                label.text = "思考过程"
+            }
+        }
+        header.addView(label)
+        val body = TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setTextColor(neutral)
+            setPadding(0, dp(4), 0, 0)
+            visibility = if (collapsed) View.GONE else View.VISIBLE
+        }
+        header.setOnClickListener {
+            val nowCollapsed = reasoningCollapsed[messageId] ?: true
+            reasoningCollapsed[messageId] = !nowCollapsed
+            body.visibility = if (nowCollapsed) View.VISIBLE else View.GONE
+        }
+        wrap.addView(header)
+        wrap.addView(body)
+        reasoningViews[messageId] = body
+        return wrap
+    }
+
+    /** “正在生成…”指示行：最左侧点阵脉冲 + 文字。 */
+    private fun buildRunningIndicator(neutral: Int): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), dp(4), 0, dp(8))
+        }
+        val loader = LatticeLoaderView(this).apply {
+            setIndicatorColor(neutral)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { rightMargin = dp(8) }
+        }
+        val since = runningSince ?: System.currentTimeMillis().also { runningSince = it }
+        loader.start(System.currentTimeMillis() - since)
+        row.addView(loader)
+        row.addView(
+            TextView(this).apply {
+                text = "正在生成…"
+                textSize = 12f
+                setTextColor(neutral)
+            },
+        )
+        return row
+    }
+
+    /** 本轮（最后一条用户消息之后）是否已有思考输出。 */
+    private fun turnHasReasoning(): Boolean {
+        val messages = zc.messages
+        val lastUser = messages.indexOfLast { it.role == "user" }
+        return messages.drop(lastUser + 1).any { m ->
+            liveReasoning[m.id] != null ||
+                m.parts.any { it is com.coda.mobileui.core.ZPart.Reasoning }
+        }
+    }
+
+    /** 时长文案：60 秒内为 X.Xs，否则 Xm Y.Ys。 */
+    private fun fmtDur(ms: Long): String {
+        val ds = ms / 100
+        return if (ds < 600) {
+            String.format(java.util.Locale.US, "%.1fs", ds / 10.0)
+        } else {
+            String.format(java.util.Locale.US, "%dm %.1fs", ds / 600, (ds % 600) / 10.0)
+        }
+    }
+
+    /** 待办卡片：展示当前会话待办，最多 12 项。 */
+    private fun buildTodoCard(todos: List<com.coda.mobileui.core.ZParse.ZTodo>): View {
+        val neutral = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        val primary = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            androidx.appcompat.R.attr.colorPrimary,
+            neutral,
+        )
+        val done = todos.count { it.status == "completed" }
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setBackgroundResource(R.drawable.bg_tool_card)
+            layoutParams = LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(8) }
+        }
+        wrap.addView(
+            TextView(this).apply {
+                text = "待办 · $done/${todos.size} 已完成"
+                textSize = 12f
+                setTextColor(neutral)
+                setPadding(0, 0, 0, dp(4))
+            },
+        )
+        todos.take(12).forEach { t ->
+            val mark = when (t.status) {
+                "completed" -> "✓"
+                "in_progress" -> "◐"
+                else -> "○"
+            }
+            wrap.addView(
                 TextView(this).apply {
-                    text = "正在生成…"
-                    textSize = 12f
-                    setTextColor(neutral)
-                    setPadding(dp(2), dp(4), 0, dp(8))
+                    text = "$mark ${t.content}"
+                    textSize = 13f
+                    setTextColor(if (t.status == "in_progress") primary else neutral)
+                    setPadding(0, dp(2), 0, dp(2))
+                    if (t.status == "completed") {
+                        paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+                    }
                 },
             )
         }
+        if (todos.size > 12) {
+            wrap.addView(
+                TextView(this).apply {
+                    text = "… 还有 ${todos.size - 12} 项"
+                    textSize = 12f
+                    setTextColor(neutral)
+                },
+            )
+        }
+        return wrap
+    }
+
+    /** 当前待办：回合进行中优先用消息里的最新 TodoWrite；否则快照优先。 */
+    private fun effectiveTodos(): List<com.coda.mobileui.core.ZParse.ZTodo> {
+        val fromMessages = todosFromMessages()
+        if (zc.running && fromMessages.isNotEmpty()) return fromMessages
+        if (zc.todos.isNotEmpty()) return zc.todos
+        return fromMessages
+    }
+
+    /** 从最近一条 TodoWrite 工具调用的输入解析待办。 */
+    private fun todosFromMessages(): List<com.coda.mobileui.core.ZParse.ZTodo> {
+        for (m in zc.messages.asReversed()) {
+            for (p in m.parts.asReversed()) {
+                if (p !is com.coda.mobileui.core.ZPart.ToolPart) continue
+                if (p.tool != "TodoWrite") continue
+                val input = p.input ?: continue
+                try {
+                    val arr = org.json.JSONObject(input).optJSONArray("todos") ?: continue
+                    val out = mutableListOf<com.coda.mobileui.core.ZParse.ZTodo>()
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val c = o.optString("content")
+                        if (c.isEmpty()) continue
+                        out += com.coda.mobileui.core.ZParse.ZTodo(
+                            c,
+                            o.optString("status", "pending"),
+                            o.optString("priority", "medium"),
+                        )
+                    }
+                    if (out.isNotEmpty()) return out
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        return emptyList()
     }
 
     /** 重建抽屉里的会话列表（真实会话）。 */
@@ -1023,6 +1285,12 @@ collapseFullDrawerThen { showConversation(conversation) }
             collapseFullDrawerThen {
                 liveText.clear()
                 messageViews.clear()
+                liveReasoning.clear()
+                reasoningViews.clear()
+                reasoningCollapsed.clear()
+                reasoningStart.clear()
+                reasoningDone.clear()
+                runningSince = null
                 zc.openSession(session.id, null)
                 chatView.visibility = View.VISIBLE
                 emptyState.visibility = View.GONE

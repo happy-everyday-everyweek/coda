@@ -11,8 +11,8 @@ android {
         applicationId = "com.coda.mobileui"
         minSdk = 26
         targetSdk = 28
-        versionCode = 7
-        versionName = "0.5.0-core"
+        versionCode = 8
+        versionName = "0.6.0-core"
     }
 
     buildTypes {

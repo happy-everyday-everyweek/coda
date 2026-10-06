@@ -22,6 +22,9 @@ class ZController private constructor(private val app: Context) {
         /** 流式文本增量（用于局部渲染）。 */
         fun onDelta(assistantMessageId: String, text: String) {}
 
+        /** 流式思考增量（用于局部渲染）。 */
+        fun onReasoningDelta(assistantMessageId: String, text: String) {}
+
         /** 轻提示（错误/状态）。 */
         fun onNotice(text: String) {}
 
@@ -56,6 +59,9 @@ class ZController private constructor(private val app: Context) {
     var currentModel: Triple<String, String, String?>? = null
         private set
     var slashCommands: List<ZSlashCommand> = emptyList()
+        private set
+    /** 当前会话待办列表（随会话快照同步）。 */
+    var todos: List<ZParse.ZTodo> = emptyList()
         private set
 
     private val listeners = CopyOnWriteArrayList<Listener>()
@@ -237,6 +243,7 @@ class ZController private constructor(private val app: Context) {
         ZParse.parseCurrentSelection(root)?.let { currentModel = it }
         val sc = ZParse.parseSlashCommands(root)
         if (sc.isNotEmpty()) slashCommands = sc
+        todos = ZParse.parseTodos(root)
         notif { onStateChanged() }
     }
 
@@ -281,6 +288,7 @@ class ZController private constructor(private val app: Context) {
             "turn.completed" -> {
                 running = false
                 doRefreshMessages()
+                refreshSnapshotQuiet()
                 notif { onStateChanged() }
             }
 
@@ -312,9 +320,15 @@ class ZController private constructor(private val app: Context) {
                 val kind = payload.optString("kind")
                 val delta = payload.optString("delta")
                 val mid = payload.optString("assistantMessageId")
-                if (kind == "text_delta" && delta.isNotEmpty()) {
-                    notif { onDelta(mid, delta) }
-                    scheduleRefreshSoon()
+                when (kind) {
+                    "text_delta" -> if (delta.isNotEmpty()) {
+                        notif { onDelta(mid, delta) }
+                        scheduleRefreshSoon()
+                    }
+
+                    "reasoning_delta" -> if (delta.isNotEmpty()) {
+                        notif { onReasoningDelta(mid, delta) }
+                    }
                 }
             }
 
@@ -323,6 +337,27 @@ class ZController private constructor(private val app: Context) {
                 if (kind == "result" || kind == "error" || kind == "batch") {
                     scheduleRefreshSoon()
                 }
+            }
+        }
+    }
+
+    /** 回合结束后的静默快照刷新（同步待办等快照级状态），不切换会话、不触发打开回调。 */
+    private var snapshotRefreshing = false
+
+    private fun refreshSnapshotQuiet() {
+        val sid = currentSessionId ?: return
+        if (snapshotRefreshing) return
+        snapshotRefreshing = true
+        val params = JSONObject()
+            .put("sessionId", sid)
+            .put("deliveryKind", "desktop-continuous")
+            .put("includeSnapshot", true)
+        runtime.call("session/subscribe", params) { ok, body ->
+            snapshotRefreshing = false
+            if (!ok) return@call
+            val snap = body.optJSONObject("snapshot") ?: return@call
+            post {
+                if (currentSessionId == sid) applySnapshot(snap)
             }
         }
     }

@@ -233,4 +233,36 @@ object ZParse {
         }
         return out
     }
+
+    /** 待办项（会话快照 todos）。 */
+    data class ZTodo(val content: String, val status: String, val priority: String)
+
+    /** 解析快照待办：优先根级 todos；为空时回退到最后一个 todoGroup 的列表。 */
+    fun parseTodos(root: JSONObject): List<ZTodo> {
+        val direct = parseTodoArray(root.optJSONArray("todos"))
+        if (direct.isNotEmpty()) return direct
+        val groups = root.optJSONArray("todoGroups") ?: return emptyList()
+        for (i in groups.length() - 1 downTo 0) {
+            val g = groups.optJSONObject(i) ?: continue
+            val list = parseTodoArray(g.optJSONArray("todos"))
+            if (list.isNotEmpty()) return list
+        }
+        return emptyList()
+    }
+
+    private fun parseTodoArray(arr: JSONArray?): List<ZTodo> {
+        if (arr == null) return emptyList()
+        val out = ArrayList<ZTodo>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val content = o.optString("content")
+            if (content.isEmpty()) continue
+            out += ZTodo(
+                content = content,
+                status = o.optString("status", "pending"),
+                priority = o.optString("priority", "medium"),
+            )
+        }
+        return out
+    }
 }
