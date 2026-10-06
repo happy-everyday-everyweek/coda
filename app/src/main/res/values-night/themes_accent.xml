@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自定义主色（深色）。 -->
+    <style name="Theme.ZCodeMobileUI.Blue" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#AEC6FF</item>
+        <item name="colorOnPrimary">#002F6C</item>
+        <item name="colorPrimaryContainer">#00458F</item>
+        <item name="colorOnPrimaryContainer">#D8E2FF</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Violet" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#CFBCFF</item>
+        <item name="colorOnPrimary">#381E72</item>
+        <item name="colorPrimaryContainer">#4F378B</item>
+        <item name="colorOnPrimaryContainer">#EADDFF</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Green" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#A5D6B8</item>
+        <item name="colorOnPrimary">#00391F</item>
+        <item name="colorPrimaryContainer">#20502F</item>
+        <item name="colorOnPrimaryContainer">#D7F2E0</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Amber" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#E8C069</item>
+        <item name="colorOnPrimary">#442B00</item>
+        <item name="colorPrimaryContainer">#624000</item>
+        <item name="colorOnPrimaryContainer">#FFDF9E</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Rose" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#FFB1C7</item>
+        <item name="colorOnPrimary">#65002F</item>
+        <item name="colorPrimaryContainer">#8E0045</item>
+        <item name="colorOnPrimaryContainer">#FFD9E2</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Teal" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#62D6E8</item>
+        <item name="colorOnPrimary">#00363F</item>
+        <item name="colorPrimaryContainer">#004E5A</item>
+        <item name="colorOnPrimaryContainer">#B6EBF2</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Orange" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#FFB68C</item>
+        <item name="colorOnPrimary">#5C1A00</item>
+        <item name="colorPrimaryContainer">#7F2A00</item>
+        <item name="colorOnPrimaryContainer">#FFDBC8</item>
+    </style>
+</resources>

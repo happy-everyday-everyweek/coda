@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分组内相邻行之间的断开缝：一条与页面背景同色的细线。 -->
+<View xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="@dimen/settings_card_gap"
+    android:background="?attr/colorSurface" />

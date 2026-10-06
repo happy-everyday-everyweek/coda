@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 设置分组卡片：圆角只出现在分组首行的上边与末行的下边，中间行为直角。 -->
+    <dimen name="settings_card_corner">16dp</dimen>
+    <!-- 分组内相邻行之间的断开缝（与页面背景同色的细线）。 -->
+    <dimen name="settings_card_gap">3dp</dimen>
+    <!-- 卡片左右外边距。 -->
+    <dimen name="settings_card_margin">16dp</dimen>
+</resources>

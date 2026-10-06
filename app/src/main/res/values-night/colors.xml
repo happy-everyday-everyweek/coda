@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- MD3 静态回退色板（深色，黑白中性） -->
+    <color name="max_accent">#C4B0FF</color>
+    <color name="md3_primary">#E6E6E6</color>
+    <color name="md3_on_primary">#1B1B1B</color>
+    <color name="md3_primary_container">#333333</color>
+    <color name="md3_on_primary_container">#E6E6E6</color>
+    <color name="md3_secondary">#C6C6C6</color>
+    <color name="md3_on_secondary">#2B2B2B</color>
+    <color name="md3_secondary_container">#3A3A3A</color>
+    <color name="md3_on_secondary_container">#E6E6E6</color>
+    <color name="md3_surface">#131313</color>
+    <color name="md3_on_surface">#E6E6E6</color>
+    <color name="md3_surface_variant">#4A4A4A</color>
+    <color name="md3_on_surface_variant">#C4C4C4</color>
+    <color name="md3_surface_container_lowest">#0A0A0A</color>
+    <color name="md3_surface_container_low">#1B1B1B</color>
+    <color name="md3_surface_container">#202020</color>
+    <color name="md3_surface_container_high">#2A2A2A</color>
+    <color name="md3_surface_container_highest">#353535</color>
+    <color name="md3_outline">#8E8E8E</color>
+    <color name="md3_outline_variant">#464646</color>
+    <color name="md3_error">#F2B8B5</color>
+    <color name="md3_on_error">#601410</color>
+    <color name="md3_error_container">#8C1D18</color>
+    <color name="md3_on_error_container">#F9DEDC</color>
+
+    <!-- 会话状态与 PR 状态（深色） -->
+    <color name="status_working">#B0B0B0</color>
+    <color name="status_waiting">#E8C069</color>
+    <color name="status_done">#7FD3A2</color>
+    <color name="pr_merged">#C3A9F0</color>
+
+    <!-- 变更摘要：增加用绿、减少用红 -->
+    <color name="change_added">#7FD3A2</color>
+    <color name="change_removed">#F2B8B5</color>
+</resources>

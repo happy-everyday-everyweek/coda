@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZCode</string>
+    <string name="default_model">GLM-4.6</string>
+    <string name="composer_hint">输入消息…</string>
+    <string name="greeting">有什么可以帮忙的？</string>
+    <string name="model_picker_title">选择模型</string>
+    <string name="workspace_placeholder">工作区面板将在下一版本提供</string>
+    <string name="settings_placeholder">设置页将在后续版本提供</string>
+    <string name="nav_new_chat">新对话</string>
+    <string name="nav_settings">设置</string>
+    <string name="menu">打开菜单</string>
+    <string name="workspace">工作区</string>
+    <string name="attach">添加附件</string>
+    <string name="send">发送</string>
+
+    <!-- 历史对话（静态演示数据） -->
+    <string name="history_conversation_1">修复深色模式下的对比度问题</string>
+    <string name="history_conversation_2">重构会话存储模块</string>
+    <string name="history_conversation_3">排查构建失败的原因</string>
+    <string name="history_conversation_4">编写 MCP 工具接入文档</string>
+    <string name="history_conversation_5">优化启动速度的性能分析</string>
+    <string name="history_conversation_6">设计移动端布局方案</string>
+
+    <!-- 会话状态（抽屉第一行） -->
+    <string name="conv_status_working">Working</string>
+    <string name="conv_status_waiting">待您操作</string>
+    <string name="conv_status_done">已完成</string>
+
+    <!-- 模型选择面板 -->
+    <string name="drawer_search_hint">搜索会话</string>
+    <string name="chat_role_user">你</string>
+    <string name="chat_role_ai">Agent</string>
+    <string name="tool_state_running">运行中</string>
+    <string name="tool_state_done">已完成</string>
+    <string name="tool_state_failed">失败</string>
+    <string name="settings_open_drawer">打开抽屉</string>
+    <string name="model_panel_default">默认</string>
+    <string name="model_panel_default_desc">推荐模型集</string>
+    <string name="model_panel_add_provider_name">添加供应商</string>
+    <string name="strength_light">轻度</string>
+    <string name="strength_hint">更快消耗使用额度</string>
+    <string name="strength_reset">重置强度</string>
+    <string name="model_panel_current_model">%1$s ›</string>
+    <string name="model_panel_add_provider">供应商配置将在后续版本提供</string>
+    <string name="model_panel_title">选择模型</string>
+
+    <!-- 对话示例（静态演示） -->
+    <string name="chat_user_1">深色模式下设置页有些文字看不清，帮我修复一下对比度问题</string>
+    <string name="chat_ai_1">收到。我检查了深色主题的配色，问题出在次要文字与背景的对比度不足。我会把 onSurfaceVariant 系列色值调整到符合 MD3 对比度标准，并同步检查输入框的提示文字。</string>
+    <string name="chat_user_2">好，顺便看下输入框的提示文字</string>
+    <string name="chat_ai_2">已确认，提示文字改用 colorOnSurfaceVariant 后会清晰很多。修复完成后你在深色模式里再看一眼效果。</string>
+
+    <!-- 设置页（静态演示） -->
+    <string name="settings_title">设置</string>
+    <string name="settings_back">返回</string>
+    <string name="settings_more">更多</string>
+    <string name="settings_more_placeholder">更多选项将在后续版本提供</string>
+    <string name="settings_group_models">模型与账号</string>
+    <string name="settings_default_model">默认模型</string>
+    <string name="settings_account">账号</string>
+    <string name="settings_not_logged_in">未登录</string>
+    <string name="settings_group_general">通用</string>
+    <string name="settings_appearance_mode">外观模式</string>
+    <string name="settings_follow_system">跟随系统</string>
+    <string name="settings_notifications">允许通知</string>
+    <string name="settings_group_about">其他</string>
+    <string name="settings_storage">数据与存储</string>
+    <string name="settings_storage_value">默认</string>
+    <string name="settings_version">版本</string>
+    <string name="settings_version_value">0.1.0-ui</string>
+
+    <!-- 外观页（真实设置） -->
+    <string name="appearance_accent">主色</string>
+    <string name="appearance_accent_custom">自定义颜色…</string>
+    <string name="appearance_accent_custom_hint">输入 #RRGGBB</string>
+    <string name="appearance_font_scale">界面字号</string>
+    <string name="appearance_code_font_size">代码字号</string>
+    <string name="appearance_code_theme_light">浅色代码主题</string>
+    <string name="appearance_code_theme_dark">深色代码主题</string>
+    <string name="setting_not_wired">该设置将在后续版本接入</string>
+</resources>

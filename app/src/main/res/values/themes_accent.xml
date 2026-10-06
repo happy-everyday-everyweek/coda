@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      自定义主色（浅色）。开启“自动取色”时这些主题不生效，改由系统壁纸取色。
+      每套只覆盖主色相关的四个 MD3 属性，其余色值沿用基础主题。
+    -->
+    <style name="Theme.ZCodeMobileUI.Blue" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#1D5FD0</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#D8E2FF</item>
+        <item name="colorOnPrimaryContainer">#001A41</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Violet" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#6A4CA8</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#EADDFF</item>
+        <item name="colorOnPrimaryContainer">#21005D</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Green" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#2E6B45</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#D7F2E0</item>
+        <item name="colorOnPrimaryContainer">#00210F</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Amber" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#8A6100</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#FFDF9E</item>
+        <item name="colorOnPrimaryContainer">#271900</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Rose" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#B3325C</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#FFD9E2</item>
+        <item name="colorOnPrimaryContainer">#3F001C</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Teal" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#0F7B8A</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#B6EBF2</item>
+        <item name="colorOnPrimaryContainer">#00202A</item>
+    </style>
+
+    <style name="Theme.ZCodeMobileUI.Orange" parent="Theme.ZCodeMobileUI">
+        <item name="colorPrimary">#B4551C</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#FFDBC8</item>
+        <item name="colorOnPrimaryContainer">#3A0B00</item>
+    </style>
+</resources>

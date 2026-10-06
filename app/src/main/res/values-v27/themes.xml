@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 27+ 才支持浅色导航栏图标与刘海屏延伸布局 -->
+    <style name="Theme.ZCodeMobileUI" parent="Theme.ZCodeMobileUI.Base">
+        <item name="android:navigationBarColor">@color/md3_surface</item>
+        <item name="android:windowLightNavigationBar">@bool/window_light_system_bars</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 承载设置行 key 的标签 id -->
+    <item name="settings_page_back" type="id" />
+    <item name="settings_page_container" type="id" />
+    <item name="tag_setting_key" type="id" />
+</resources>

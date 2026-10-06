@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 图标配色（深色模式）：底盘压深，角色提亮。 -->
+    <color name="icon_bg_auto">#1C1C1C</color>
+    <color name="icon_role_auto">#D8D8D8</color>
+    <color name="icon_bg_black">#131313</color>
+    <color name="icon_role_black">#727272</color>
+    <color name="icon_bg_blue">#154496</color>
+    <color name="icon_role_blue">#739CE2</color>
+    <color name="icon_bg_violet">#4C3779</color>
+    <color name="icon_role_violet">#A390C9</color>
+    <color name="icon_bg_green">#214D32</color>
+    <color name="icon_role_green">#7DA38C</color>
+    <color name="icon_bg_amber">#634600</color>
+    <color name="icon_role_amber">#B69D61</color>
+    <color name="icon_bg_rose">#812442</color>
+    <color name="icon_role_rose">#D0809A</color>
+    <color name="icon_bg_teal">#0B5963</color>
+    <color name="icon_role_teal">#6AADB6</color>
+    <color name="icon_bg_orange">#823D14</color>
+    <color name="icon_role_orange">#D09672</color>
+</resources>
