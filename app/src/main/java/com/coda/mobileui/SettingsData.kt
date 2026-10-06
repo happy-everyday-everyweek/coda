@@ -4,6 +4,8 @@ import android.content.Context
 import com.coda.mobileui.core.AgentAssets
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
+import com.coda.mobileui.core.PhoneAccessibilityService
+import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.ProviderStore
 import org.json.JSONObject
@@ -55,7 +57,7 @@ object SettingsData {
         SettingRow.Category("appearance", "外观", "主题、主色、界面字号与代码显示", R.drawable.ic_sun),
         SettingRow.Category("providers", "模型设置", "管理自定义模型供应商", R.drawable.ic_logo_spark),
         SettingRow.Category("browser", "浏览器控制", "内置浏览器与浏览器数据", R.drawable.ic_globe),
-        SettingRow.Category("computer", "电脑控制", "Agent 操作电脑屏幕", R.drawable.ic_monitor),
+        SettingRow.Category("computer", "手机控制", "Agent 操作本机屏幕（无障碍服务）", R.drawable.ic_monitor),
         SettingRow.Category("shortcuts", "键盘快捷键", "命令键位绑定", R.drawable.ic_keyboard),
         SettingRow.Header("Agent 能力"),
         SettingRow.Category("subagents", "子智能体", "管理用户级子智能体 Markdown 文件", R.drawable.ic_hierarchy),
@@ -390,6 +392,44 @@ object SettingsData {
         return SettingsPage("钩子", rows)
     }
 
+    /** 手机控制页：无障碍服务与本机 MCP 服务器开关。 */
+    fun phoneControl(ctx: Context): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        val enabled = PhoneControl.isEnabled(ctx)
+        val accEnabled =
+            PhoneAccessibilityService.isEnabledInSystem(ctx) || PhoneAccessibilityService.isEnabled()
+        rows += SettingRow.Header("手机控制")
+        rows += SettingRow.Toggle(
+            "启用手机控制",
+            "让 Agent 通过无障碍服务操作本机屏幕：读取界面、点击、输入、滑动、截图",
+            enabled,
+            "phone_control_enable",
+        )
+        rows += SettingRow.Value(
+            "无障碍授权",
+            if (accEnabled) "已授权" else "未授权 · 点击前往系统设置开启「Coda 手机控制」",
+            "phone_control_accessibility",
+        )
+        rows += SettingRow.Value("服务状态", PhoneControl.statusText(ctx))
+        rows += SettingRow.Header("可用工具")
+        rows += SettingRow.Value(
+            "工具列表",
+            "dump_ui / screenshot / tap / long_press / swipe / tap_element / type_text / press_key / open_app / wait",
+        )
+        rows += SettingRow.Value(
+            "调用方式",
+            "在对话中直接说，例如：帮我打开设置，找到电池，看看还剩多少电",
+        )
+        rows += SettingRow.Value(
+            "安全说明",
+            "仅本机回环访问 + 随机令牌；默认关闭，随时可停",
+        )
+        if (enabled) {
+            rows += SettingRow.Value("重新同步配置", "重新写入内核 MCP 配置", "phone_control_sync")
+        }
+        return SettingsPage("手机控制", rows)
+    }
+
     /** 系统页：移动端真实可操作项（运行状态、存储与日志、关于）。 */
     fun system(ctx: Context): SettingsPage {
         val rows = mutableListOf<SettingRow>()
@@ -427,15 +467,6 @@ object SettingsData {
                 SettingRow.Value("导入 Chrome 登录状态", "导入浏览器数据"),
                 SettingRow.Value("清除内置浏览器缓存", "清除缓存"),
                 SettingRow.Value("清除全部浏览器数据", "清除全部"),
-            ),
-        ),
-        "computer" to SettingsPage(
-            "电脑控制",
-            listOf(
-                SettingRow.Toggle("电脑控制", "允许 Agent 操作电脑屏幕", false),
-                SettingRow.Value("屏幕录制权限", "未授权"),
-                SettingRow.Value("辅助功能权限", "未授权"),
-                SettingRow.Value("已连接设备", "无"),
             ),
         ),
         "shortcuts" to SettingsPage(

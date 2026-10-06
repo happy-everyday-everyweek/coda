@@ -79,4 +79,7 @@
     <string name="appearance_code_theme_light">浅色代码主题</string>
     <string name="appearance_code_theme_dark">深色代码主题</string>
     <string name="setting_not_wired">该设置将在后续版本接入</string>
+    <!-- 手机控制 -->
+    <string name="phone_control_service_description">Coda 手机控制：允许你在对话中让 Agent 读取屏幕内容并执行点击、输入、滑动等操作（仅在本地运行，需手动开启）。</string>
+    <string name="phone_control_service_label">Coda 手机控制</string>
 </resources>

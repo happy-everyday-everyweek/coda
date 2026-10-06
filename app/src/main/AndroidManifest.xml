@@ -153,6 +153,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+        <!-- 手机控制执行端：无障碍服务（默认关闭，用户在设置中开启） -->
+        <service
+            android:name=".core.PhoneAccessibilityService"
+            android:exported="false"
+            android:label="@string/phone_control_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
     </application>
 
 </manifest>

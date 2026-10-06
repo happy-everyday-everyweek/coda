@@ -27,6 +27,7 @@ import com.coda.mobileui.core.AutomationSchedule
 import com.coda.mobileui.core.AutomationStore
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
+import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.core.ZController
 import java.io.File
@@ -116,6 +117,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
         PAGE_AUTOMATIONS -> SettingsData.automations(this)
         PAGE_HOOKS -> SettingsData.hooks(this, ZController.get(this).workspacePath())
+        PAGE_COMPUTER -> SettingsData.phoneControl(this)
         PAGE_SYSTEM -> SettingsData.system(this)
         else -> SettingsData.pages[pageKey] ?: SettingsData.system(this)
     }
@@ -166,6 +168,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     renderPage()
                 }
             }
+            return
+        }
+        if (key == "phone_control_enable") {
+            applyPhoneControl(checked)
             return
         }
         val needRecreate = when (key) {
@@ -231,6 +237,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             key == "system_copy_logs" -> copyLogsPath()
             key == "system_license" -> showLicense()
             key == "system_github" -> openUrl("https://github.com/happy-everyday-everyweek/coda")
+            key == "phone_control_accessibility" -> PhoneControl.openAccessibilitySettings(this)
+            key == "phone_control_sync" -> {
+                PhoneControl.syncMcpConfig(this, true)
+                snack("已重新写入内核 MCP 配置")
+                renderPage()
+            }
             key.startsWith("extras_refresh:") -> {
                 extrasCache.remove(key.removePrefix("extras_refresh:"))
                 renderPage()
@@ -606,6 +618,30 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             .show()
     }
 
+    // ------------------------------------------------------------ 手机控制
+
+    /** 手机控制开关：启停本地 MCP 服务器、同步内核配置，并重启核心使配置生效。 */
+    private fun applyPhoneControl(enable: Boolean) {
+        val err = PhoneControl.applyEnabled(this, enable)
+        if (err != null) {
+            snack(err)
+            renderPage()
+            return
+        }
+        if (enable) {
+            snack("已启用手机控制；正在重启核心使配置生效")
+            ZController.get(this).restartCore { ok, msg ->
+                runOnUiThread {
+                    snack(if (ok) "核心已重启，手机控制工具已就绪" else "核心重启失败: $msg")
+                    renderPage()
+                }
+            }
+        } else {
+            snack("已停用手机控制")
+            ZController.get(this).restartCore { _, _ -> runOnUiThread { renderPage() } }
+        }
+    }
+
     // ------------------------------------------------------------ 钩子管理
 
     /** 钩子详情：显示命令与信任状态，可信任或删除工作区源条目。 */
@@ -834,6 +870,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_MCP = "mcp"
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
+        const val PAGE_COMPUTER = "computer"
 
         /** 接入真实交互的设置键。 */
         const val KEY_AUTO_COLOR = "auto_color"
