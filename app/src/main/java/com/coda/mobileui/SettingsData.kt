@@ -3,9 +3,12 @@ package com.coda.mobileui
 import android.content.Context
 import com.coda.mobileui.core.AgentAssets
 import com.coda.mobileui.core.CodaExtras
+import com.coda.mobileui.core.HooksCore
+import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.ProviderStore
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 
 /** 设置行类型。key 非空表示该行接入真实交互。 */
 sealed class SettingRow {
@@ -303,89 +306,117 @@ object SettingsData {
         return SettingsPage("MCP 服务器", rows)
     }
 
-    /** 定时任务页：读取运行时数据库 tasks-index.sqlite 的 automations 表。 */
+    /** 定时任务页：读取运行时数据库的 automations 表；点击条目进入管理（启停/删除）。 */
     fun automations(ctx: Context): SettingsPage {
         val dbFile = File(File(ctx.filesDir, "zcode-data/.zcode/v2"), "tasks-index.sqlite")
         val items = CodaExtras.readAutomations(dbFile)
         val rows = mutableListOf<SettingRow>()
         rows += SettingRow.Header("已创建任务")
         if (items.isEmpty()) {
-            rows += SettingRow.Value("暂无定时任务", "由 Agent 创建的定时任务会显示在这里")
+            rows += SettingRow.Value("暂无定时任务", "在对话中让 Agent 创建，例如：每天早上 9 点总结待办")
         } else {
             items.forEach { a ->
                 val detail = buildString {
                     append(a.cron)
-                    append(" · ").append(if (a.enabled) "启用" else "停用")
-                    append(" · 运行 ").append(a.runCount).append(" 次")
+                    append(" · ")
+                    append(
+                        when {
+                            a.lifecycle == "completed" -> "已完成"
+                            !a.enabled -> "已停用"
+                            else -> "启用中"
+                        },
+                    )
+                    if (!a.recurring) append(" · 一次性")
+                    append(" · 已运行 ").append(a.runCount).append(" 次")
                     a.nextRunAt?.let { append(" · 下次 ").append(CodaExtras.formatTs(it)) }
                     if (a.lastError != null) append(" · 上次失败")
                 }
-                rows += SettingRow.Value(a.title.ifEmpty { a.id.take(12) }, detail)
+                rows += SettingRow.Value(
+                    a.title.ifEmpty { "（未命名任务）" },
+                    detail,
+                    "automation_edit:${a.id}",
+                )
             }
         }
         rows += SettingRow.Value("刷新", "重新读取任务列表", "extras_refresh:automations")
         return SettingsPage("定时任务", rows)
     }
 
-    /** 钩子页：读取工作区与用户级 settings.json 的 hooks 段。 */
+    /** 钩子页：读取工作区与用户级钩子配置；条目可查看、信任或删除。 */
     fun hooks(ctx: Context, workspacePath: String?): SettingsPage {
         val home = File(ctx.filesDir, "home")
-        val items = CodaExtras.readHooks(workspacePath, home)
         val rows = mutableListOf<SettingRow>()
-        rows += SettingRow.Header("已配置 Hook")
-        if (items.isEmpty()) {
-            rows += SettingRow.Value("未配置钩子", "在 settings.json 中配置后在此查看")
+        val wp = workspacePath
+        if (wp == null) {
+            rows += SettingRow.Value("无法确定工作区路径", "核心尚未启动")
+            return SettingsPage("钩子", rows)
+        }
+        val snap = HooksCore.discover(wp, home)
+        val trusted = HooksCore.readTrustedDigests(wp, home)
+        rows += SettingRow.Header("工作区钩子")
+        if (snap.entries.isEmpty()) {
+            rows += SettingRow.Value("未配置", "点击下方「添加钩子」在工作区配置中新建")
         } else {
-            items.forEach { h ->
-                val detail = buildString {
-                    append(h.source)
-                    if (h.matcher.isNotEmpty()) append(" · ").append(h.matcher)
-                    if (h.command.isNotEmpty()) append(" · ").append(h.command.take(80))
+            snap.entries.forEach { e ->
+                val trust = when {
+                    e.declarationDigest in trusted -> "已信任"
+                    e.source.editable -> "未信任"
+                    else -> "只读来源"
                 }
-                rows += SettingRow.Value(h.event, detail)
+                val detail = buildString {
+                    append(HooksCore.EVENT_LABELS[e.event] ?: e.event)
+                    if (e.matcher != null) append(" · ").append(e.matcher)
+                    append(" · ").append(trust)
+                    if (e.command.isNotEmpty()) append(" · ").append(e.command.take(50))
+                }
+                rows += SettingRow.Value(e.event, detail, "hooks_edit:${e.declarationDigest.take(16)}")
             }
         }
-        rows += SettingRow.Header("说明")
-        rows += SettingRow.Value("信任审查", "外部钩子首次运行前需要授予信任")
+        rows += SettingRow.Header("用户级钩子")
+        if (snap.userEntries.isEmpty()) {
+            rows += SettingRow.Value("未配置", "用户级配置位于 HOME/.zcode/cli/config.json")
+        } else {
+            snap.userEntries.forEach { e ->
+                val detail = buildString {
+                    append(HooksCore.EVENT_LABELS[e.event] ?: e.event)
+                    if (e.matcher != null) append(" · ").append(e.matcher)
+                    if (e.command.isNotEmpty()) append(" · ").append(e.command.take(50))
+                }
+                rows += SettingRow.Value(e.event, detail, "hooks_edit:${e.declarationDigest.take(16)}")
+            }
+        }
+        rows += SettingRow.Value("添加钩子", "在工作区 .zcode/config.json 中新建 command 钩子", "hooks_new")
+        rows += SettingRow.Value("刷新", "重新扫描钩子配置", "extras_refresh:hooks")
         return SettingsPage("钩子", rows)
     }
 
+    /** 系统页：移动端真实可操作项（运行状态、存储与日志、关于）。 */
+    fun system(ctx: Context): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        val ctrl = ZController.get(ctx)
+        rows += SettingRow.Header("运行状态")
+        rows += SettingRow.Value("核心状态", if (ctrl.runtime.isRunning) "运行中" else "已停止")
+        rows += SettingRow.Value("重启核心", "重新启动运行时；供应商等配置变更后生效", "system_restart")
+        rows += SettingRow.Header("通用")
+        rows += SettingRow.Value("界面语言", Locale.getDefault().displayName)
+        rows += SettingRow.Value("数据存储路径", "应用私有目录 files/zcode-data")
+        rows += SettingRow.Header("存储与日志")
+        rows += SettingRow.Value("清理临时文件", "删除运行时临时目录中的缓存文件", "system_clear_tmp")
+        rows += SettingRow.Value("日志位置", "复制日志目录路径到剪贴板", "system_copy_logs")
+        rows += SettingRow.Header("关于")
+        rows += SettingRow.Value("应用版本", appVersion(ctx))
+        rows += SettingRow.Value("开源许可", "AGPL-3.0 · 内核来自 zCode 开源项目（Apache-2.0）", "system_license")
+        rows += SettingRow.Value("项目主页", "github.com/happy-everyday-everyweek/coda", "system_github")
+        return SettingsPage("系统", rows)
+    }
+
+    private fun appVersion(ctx: Context): String = try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "—"
+    } catch (_: Throwable) {
+        "—"
+    }
+
     val pages: Map<String, SettingsPage> = mapOf(
-        "system" to SettingsPage(
-            "系统",
-            listOf(
-                SettingRow.Header("常规"),
-                SettingRow.Value("界面语言", "简体中文"),
-                SettingRow.Value("界面模式", "编程模式"),
-                SettingRow.Toggle("任务通知", "任务完成、失败或需要确认时发送通知", true),
-                SettingRow.Toggle("通知声音", "通知开启后，可单独关闭提示音", true),
-                SettingRow.Value("数据存储路径", "默认：用户主目录"),
-                SettingRow.Toggle("接受预览版更新", "最快提前体验新功能与改进版本", false),
-                SettingRow.Toggle("自动下载并安装更新", "检测到更新时自动开始下载", true),
-                SettingRow.Header("消息显示"),
-                SettingRow.Toggle("显示思考过程", "在消息流中展示完整的模型思考内容", true),
-                SettingRow.Toggle("显示待办", "在消息流中展示 Todo 工具卡片", true),
-                SettingRow.Toggle("分组探索工具", "将连续读取和搜索工具聚合为 Explore 分组", true),
-                SettingRow.Toggle("分组终端命令", "将连续的非只读 Shell 命令聚合为 Terminal 分组", true),
-                SettingRow.Toggle("分组文件更改", "将 Write、Edit 和 ApplyPatch 聚合为 Changes 分组", true),
-                SettingRow.Value("交互行为", "队列"),
-                SettingRow.Toggle("提问自动继续", "Agent 提问 5 分钟未回答会自动继续", true),
-                SettingRow.Toggle("性能模式", "精简渲染输出，提高性能", false),
-                SettingRow.Header("高级"),
-                SettingRow.Toggle("自动归档旧任务", "将已完成、无未读且超过保留期的任务自动归档", false),
-                SettingRow.Value("归档保留时长", "7 天后归档"),
-                SettingRow.Toggle("完整保留模型 I/O", "不自动压缩、限制大小或删除旧记录", false),
-                SettingRow.Value("HTTP 代理", "未设置"),
-                SettingRow.Value("不使用代理的地址", "未设置"),
-                SettingRow.Value("自定义证书", "未设置"),
-                SettingRow.Header("终端与桌面"),
-                SettingRow.Toggle("继承系统终端 Profile", "尽量继承登录 shell 环境、代理与字体", true),
-                SettingRow.Value("终端字体", "留空自动继承"),
-                SettingRow.Toggle("增强 Find 和 Grep", "新会话中使用增强的搜索能力", false),
-                SettingRow.Toggle("Chrome 硬件加速", "关闭可规避部分显卡导致的白屏、闪退", true),
-                SettingRow.Toggle("保持电脑运行", "阻止系统因空闲进入休眠", false),
-            ),
-        ),
         "browser" to SettingsPage(
             "浏览器控制",
             listOf(

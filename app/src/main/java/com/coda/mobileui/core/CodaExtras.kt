@@ -140,6 +140,8 @@ object CodaExtras {
         val cron: String,
         val prompt: String,
         val enabled: Boolean,
+        val lifecycle: String,
+        val recurring: Boolean,
         val runCount: Int,
         val nextRunAt: Long?,
         val lastRunAt: Long?,
@@ -158,8 +160,9 @@ object CodaExtras {
             )
             val out = mutableListOf<AutomationItem>()
             db.rawQuery(
-                "SELECT automation_id, title, cron_expr, prompt, enabled, run_count, " +
-                    "next_run_at, last_run_at, last_error FROM automations ORDER BY created_at DESC",
+                "SELECT automation_id, title, cron_expr, prompt, enabled, lifecycle_status, " +
+                    "recurring, run_count, next_run_at, last_run_at, last_error " +
+                    "FROM automations ORDER BY created_at DESC",
                 null,
             ).use { c ->
                 while (c.moveToNext()) {
@@ -169,10 +172,12 @@ object CodaExtras {
                         cron = c.getString(2) ?: "",
                         prompt = c.getString(3) ?: "",
                         enabled = c.getInt(4) != 0,
-                        runCount = c.getInt(5),
-                        nextRunAt = if (c.isNull(6)) null else c.getLong(6),
-                        lastRunAt = if (c.isNull(7)) null else c.getLong(7),
-                        lastError = if (c.isNull(8)) null else c.getString(8),
+                        lifecycle = c.getString(5) ?: "active",
+                        recurring = c.getInt(6) != 0,
+                        runCount = c.getInt(7),
+                        nextRunAt = if (c.isNull(8)) null else c.getLong(8),
+                        lastRunAt = if (c.isNull(9)) null else c.getLong(9),
+                        lastError = if (c.isNull(10)) null else c.getString(10),
                     )
                 }
             }

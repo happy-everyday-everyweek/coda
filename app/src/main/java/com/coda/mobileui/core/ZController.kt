@@ -102,7 +102,10 @@ class ZController private constructor(private val app: Context) {
                 startWaiters.clear()
                 ws.forEach { it(ok, msg) }
             }
-            if (ok) refreshSessions(null)
+            if (ok) {
+                refreshSessions(null)
+                AutomationScheduler.start(this)
+            }
         }
     }
 
@@ -165,10 +168,19 @@ class ZController private constructor(private val app: Context) {
                     }
                 }
 
-                else -> false
+                else -> {
+                    if (AutomationHost.get(app).handleReverse(runtime, this@ZController, requestId, method, params)) {
+                        true
+                    } else {
+                        false
+                    }
+                }
             }
         }
     }
+
+    /** 供调度器等内部组件访问应用上下文。 */
+    fun appContext(): Context = app
 
     private fun findAllowResponse(params: JSONObject): JSONObject? {
         val opts = params.optJSONArray("options") ?: return null

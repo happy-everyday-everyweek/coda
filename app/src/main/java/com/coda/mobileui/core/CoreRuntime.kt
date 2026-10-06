@@ -314,6 +314,16 @@ class CoreRuntime(private val ctx: Context) {
         writeFrame(JSONObject().put("id", id).put("result", result))
     }
 
+    /** 错误应答（JSON-RPC 风格 error 对象）。 */
+    fun respondError(id: Any, code: Int, message: String) {
+        writeFrame(
+            JSONObject().put("id", id).put(
+                "error",
+                JSONObject().put("code", code).put("message", message),
+            ),
+        )
+    }
+
     fun call(method: String, params: JSONObject, cb: ((Boolean, JSONObject) -> Unit)? = null) {
         val id = nextId.getAndIncrement()
         if (cb != null) pending[id] = cb

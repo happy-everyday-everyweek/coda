@@ -1,8 +1,11 @@
 package com.coda.mobileui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
@@ -20,8 +23,13 @@ import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.coda.mobileui.core.AgentAssets
+import com.coda.mobileui.core.AutomationSchedule
+import com.coda.mobileui.core.AutomationStore
+import com.coda.mobileui.core.CodaExtras
+import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.core.ZController
+import java.io.File
 
 /**
  * 二级页面：既承载设置的二级页，也承载工作区页（EXTRA_PAGE = "workspace"）。
@@ -108,7 +116,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
         PAGE_AUTOMATIONS -> SettingsData.automations(this)
         PAGE_HOOKS -> SettingsData.hooks(this, ZController.get(this).workspacePath())
-        else -> SettingsData.pages[pageKey] ?: SettingsData.pages.getValue(PAGE_SYSTEM)
+        PAGE_SYSTEM -> SettingsData.system(this)
+        else -> SettingsData.pages[pageKey] ?: SettingsData.system(this)
     }
 
     private fun renderPage() {
@@ -205,6 +214,23 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 if (kind != null && item != null) editAsset(kind, item) else renderPage()
             }
             key == "usage_range" -> pickUsageRange()
+            key.startsWith("automation_edit:") -> {
+                automationDialog(key.removePrefix("automation_edit:"))
+            }
+            key == "hooks_new" -> addHookDialog()
+            key.startsWith("hooks_edit:") -> hookDialog(key.removePrefix("hooks_edit:"))
+            key == "system_restart" -> {
+                ZController.get(this).restartCore { ok, msg ->
+                    runOnUiThread {
+                        snack(if (ok) "核心已重启" else "重启失败: $msg")
+                        renderPage()
+                    }
+                }
+            }
+            key == "system_clear_tmp" -> clearTmp()
+            key == "system_copy_logs" -> copyLogsPath()
+            key == "system_license" -> showLicense()
+            key == "system_github" -> openUrl("https://github.com/happy-everyday-everyweek/coda")
             key.startsWith("extras_refresh:") -> {
                 extrasCache.remove(key.removePrefix("extras_refresh:"))
                 renderPage()
@@ -502,6 +528,265 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val alert = dialog.show()
         // 键盘弹出时上移对话框，保证输入框与输入内容不被输入法遮挡
         alert.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+    }
+
+    // ------------------------------------------------------------ 定时任务管理
+
+    /** 定时任务管理：查看详情，可启停或删除。 */
+    private fun automationDialog(id: String) {
+        val store = AutomationStore(applicationContext)
+        val row = store.getRow(id)
+        if (row == null) {
+            snack("任务不存在，可能已被删除")
+            renderPage()
+            return
+        }
+        val title = row.optString("title").ifEmpty { "（未命名任务）" }
+        val enabled = row.optLong("enabled", 0L) != 0L
+        val runCount = row.optLong("run_count", 0L)
+        val detail = buildString {
+            append("计划：").append(row.optString("cron_expr")).append('\n')
+            append("提示词：").append(row.optString("prompt").take(160)).append('\n')
+            append("状态：").append(if (enabled) "启用中" else "已停用")
+            append(" · 已运行 ").append(runCount).append(" 次\n")
+            if (!row.isNull("next_run_at")) {
+                append("下次运行：").append(CodaExtras.formatTs(row.optLong("next_run_at"))).append('\n')
+            }
+            if (!row.isNull("last_error")) {
+                append("上次错误：").append(row.optString("last_error").take(120))
+            }
+        }
+        val builder = MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(detail)
+            .setPositiveButton(if (enabled) "停用" else "启用") { _, _ -> toggleAutomation(id, !enabled) }
+            .setNegativeButton("关闭", null)
+        builder.setNeutralButton("删除") { _, _ -> confirmDeleteAutomation(id, title) }
+        builder.show()
+    }
+
+    private fun toggleAutomation(id: String, enable: Boolean) {
+        Thread({
+            val store = AutomationStore(applicationContext)
+            val row = store.getRow(id)
+            val next: Long? = if (enable && row != null) {
+                val rule = AutomationSchedule.parseRule(
+                    row.optString("schedule_rule").takeIf { it != "null" },
+                )
+                AutomationSchedule.computeNext(
+                    row.optString("cron_expr"),
+                    rule,
+                    System.currentTimeMillis(),
+                )
+            } else {
+                null
+            }
+            val ok = store.setEnabled(id, enable, next, System.currentTimeMillis())
+            runOnUiThread {
+                snack(if (ok) (if (enable) "已启用" else "已停用") else "操作失败")
+                renderPage()
+            }
+        }, "coda-auto-toggle").start()
+    }
+
+    private fun confirmDeleteAutomation(id: String, title: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("删除任务")
+            .setMessage("确定删除「$title」？此操作不可恢复。")
+            .setPositiveButton("删除") { _, _ ->
+                Thread({
+                    val ok = AutomationStore(applicationContext).delete(id)
+                    runOnUiThread {
+                        snack(if (ok) "已删除" else "删除失败")
+                        renderPage()
+                    }
+                }, "coda-auto-del").start()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    // ------------------------------------------------------------ 钩子管理
+
+    /** 钩子详情：显示命令与信任状态，可信任或删除工作区源条目。 */
+    private fun hookDialog(digestPrefix: String) {
+        val ctrl = ZController.get(this)
+        val home = File(filesDir, "home")
+        val wp = ctrl.workspacePath()
+        val snap = HooksCore.discover(wp, home)
+        val entry = snap.entries.firstOrNull { it.declarationDigest.startsWith(digestPrefix) }
+            ?: snap.userEntries.firstOrNull { it.declarationDigest.startsWith(digestPrefix) }
+        if (entry == null) {
+            snack("钩子已变化，请刷新后重试")
+            renderPage()
+            return
+        }
+        val isProject = snap.entries.any { it.declarationDigest == entry.declarationDigest }
+        val trusted = HooksCore.readTrustedDigests(wp, home).contains(entry.declarationDigest)
+        val detail = buildString {
+            append("事件：").append(HooksCore.EVENT_LABELS[entry.event] ?: entry.event).append('\n')
+            if (entry.matcher != null) append("匹配：").append(entry.matcher).append('\n')
+            append("类型：").append(if (entry.hook.optString("type") == "process") "进程" else "命令").append('\n')
+            append("命令：").append(entry.command.take(300)).append('\n')
+            append("来源：").append(entry.source.relPath).append('\n')
+            append("信任：").append(
+                when {
+                    !isProject -> "用户级（不可在此信任）"
+                    trusted -> "已信任"
+                    else -> "未信任（运行时不会执行）"
+                },
+            )
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(entry.event)
+            .setMessage(detail)
+            .setNegativeButton("关闭", null)
+        val bundle = snap.bundleDigest
+        if (isProject && !trusted && bundle != null) {
+            dialog.setPositiveButton("信任") { _, _ ->
+                grantHook(ctrl, wp, bundle, entry.declarationDigest)
+            }
+        }
+        if (isProject && entry.source.editable) {
+            dialog.setNeutralButton("删除") { _, _ ->
+                val err = HooksCore.removeHook(
+                    entry.source.canonicalPath,
+                    entry.event,
+                    entry.matcherIndex,
+                    entry.hookIndex,
+                )
+                snack(err ?: "已删除")
+                renderPage()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun grantHook(ctrl: ZController, wp: String, bundleDigest: String, declarationDigest: String) {
+        HooksCore.grant(ctrl.runtime, wp, bundleDigest, declarationDigest) { ok, reason ->
+            runOnUiThread {
+                snack(
+                    if (ok) {
+                        "已授予信任"
+                    } else {
+                        "未授予: ${reason ?: "未知原因"}（可尝试重新打开本页后重试）"
+                    },
+                )
+                renderPage()
+            }
+        }
+    }
+
+    /** 新建钩子：先选事件，再填命令。 */
+    private fun addHookDialog() {
+        val eventNames = HooksCore.EVENT_NAMES.toTypedArray()
+        val labels = eventNames.map { "${HooksCore.EVENT_LABELS[it] ?: it}（$it）" }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("选择事件")
+            .setItems(labels) { _, which -> addHookInputDialog(eventNames[which]) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun addHookInputDialog(event: String) {
+        val matcherInput = EditText(this).apply { hint = "匹配（可选，如工具名前缀）" }
+        val commandInput = EditText(this).apply {
+            hint = "命令（如 echo hook-ok）"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 2
+        }
+        val timeoutInput = EditText(this).apply {
+            hint = "超时毫秒（可选，默认 60000）"
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), 0)
+            addView(matcherInput)
+            addView(commandInput)
+            addView(timeoutInput)
+        }
+        val scroller = ScrollView(this).apply { addView(wrap) }
+        val alert = MaterialAlertDialogBuilder(this)
+            .setTitle("添加钩子 · $event")
+            .setView(scroller)
+            .setPositiveButton("保存") { _, _ ->
+                val matcher = matcherInput.text.toString().trim().takeIf { it.isNotEmpty() }
+                val command = commandInput.text.toString().trim()
+                val timeout = timeoutInput.text.toString().trim().toLongOrNull()
+                val err = HooksCore.addHook(
+                    ZController.get(this).workspacePath(),
+                    event,
+                    matcher,
+                    command,
+                    timeout,
+                )
+                snack(err ?: "已保存；未信任的钩子需要在本页授予信任后才会执行")
+                renderPage()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+        alert.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+    }
+
+    // ------------------------------------------------------------ 系统页操作
+
+    private fun clearTmp() {
+        Thread({
+            val tmp = File(filesDir, "tmp")
+            var freed = 0L
+            var count = 0
+            fun wipe(f: File) {
+                if (f.isDirectory) {
+                    f.listFiles()?.forEach { wipe(it) }
+                } else {
+                    freed += f.length()
+                    if (f.delete()) count++
+                }
+            }
+            tmp.listFiles()?.forEach { wipe(it) }
+            val mb = freed / (1024.0 * 1024.0)
+            runOnUiThread {
+                snack(String.format(java.util.Locale.US, "已清理 %d 个文件，释放 %.1f MB", count, mb))
+            }
+        }, "coda-clear-tmp").start()
+    }
+
+    private fun copyLogsPath() {
+        val path = try {
+            val ext = getExternalMediaDirs()
+            if (ext != null && ext.isNotEmpty() && ext[0] != null) {
+                File(ext[0], "logs").absolutePath
+            } else {
+                File(filesDir, "run-logs").absolutePath
+            }
+        } catch (_: Throwable) {
+            File(filesDir, "run-logs").absolutePath
+        }
+        val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("coda-logs", path))
+        snack("已复制日志目录路径：$path")
+    }
+
+    private fun showLicense() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("开源许可")
+            .setMessage(
+                "Coda 以 AGPL-3.0 许可证发布。\n\n" +
+                    "内置运行时内核来自 zCode 开源项目（Apache-2.0），版权归其各自作者所有；" +
+                    "再分发时保留上游许可与声明。\n\n" +
+                    "完整许可证文本见项目仓库 LICENSE 文件。",
+            )
+            .setPositiveButton("关闭", null)
+            .show()
+    }
+
+    private fun openUrl(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Throwable) {
+            snack("无法打开链接: $e")
+        }
     }
 
     private fun parseAssetKind(name: String): AgentAssets.Kind? = when (name) {
