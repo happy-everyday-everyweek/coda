@@ -362,6 +362,25 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
+    /** 拉取 workspace 级表现（含斜杠命令目录）：无会话时也能拿到内置命令表。 */
+    fun refreshWorkspacePresentation(cb: ((Boolean) -> Unit)? = null) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        runtime.call("workspace/readPresentation", params) { ok, body ->
+            if (ok) {
+                val sc = ZParse.parseSlashCommands(body)
+                if (sc.isNotEmpty()) {
+                    post {
+                        slashCommands = sc
+                        notif { onStateChanged() }
+                    }
+                }
+            }
+            cb?.invoke(ok)
+        }
+    }
+
     // ---------------------------------------------------------------- 会话操作
 
     fun workspacePath(): String {

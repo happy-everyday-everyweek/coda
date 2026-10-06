@@ -832,6 +832,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         zc.addListener(object : ZController.Listener {
             override fun onStateChanged() {
                 renderFromController()
+                refreshSlashPanelIfTyping()
             }
 
             override fun onDelta(assistantMessageId: String, text: String) {
@@ -861,7 +862,13 @@ collapseFullDrawerThen { showConversation(conversation) }
             snack("首次启动：正在解包核心运行时（约 1-2 分钟），完成后自动可用…")
         }
         zc.ensureStarted { ok, msg ->
-            if (!ok) snack("核心启动失败: $msg") else renderFromController()
+            if (!ok) {
+                snack("核心启动失败: $msg")
+            } else {
+                renderFromController()
+                // 无会话时也预取命令表：输入“/”即可看到内置命令
+                zc.refreshWorkspacePresentation(null)
+            }
         }
     }
 
@@ -1141,6 +1148,13 @@ collapseFullDrawerThen { showConversation(conversation) }
     }
 
     // ------------------------------------------------------------ 斜杠命令
+    /** 数据源变化时（如核心启动完成填充命令表），如果用户正在输入“/”，自动刷新建议条。 */
+    private fun refreshSlashPanelIfTyping() {
+        val t = inputMessage.text?.toString().orEmpty()
+        if (t.startsWith("/") && !t.contains(' ') && !t.contains('\n')) {
+            updateSlashPanel()
+        }
+    }
 
     /** 输入以“/”开头且还没打空格时，浮出命令建议条。 */
     private fun updateSlashPanel() {

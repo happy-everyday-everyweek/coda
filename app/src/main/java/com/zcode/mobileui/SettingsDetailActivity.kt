@@ -418,6 +418,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 if (err != null) {
                     snack(err)
                 } else {
+                    if (kind == AgentAssets.Kind.COMMAND) {
+                        // 命令目录随时生效：立即刷新斜杠命令表
+                        ZController.get(this).refreshWorkspacePresentation(null)
+                    }
                     snack("已保存；新建会话后生效")
                     renderPage()
                 }
@@ -426,6 +430,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         if (item != null) {
             dialog.setNeutralButton("删除") { _, _ ->
                 AgentAssets.delete(item.path)
+                if (kind == AgentAssets.Kind.COMMAND) {
+                    ZController.get(this).refreshWorkspacePresentation(null)
+                }
                 snack("已删除")
                 renderPage()
             }

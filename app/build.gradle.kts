@@ -11,8 +11,8 @@ android {
         applicationId = "com.zcode.mobileui"
         minSdk = 26
         targetSdk = 28
-        versionCode = 3
-        versionName = "0.2.1-core"
+        versionCode = 4
+        versionName = "0.2.2-core"
     }
 
     buildTypes {
