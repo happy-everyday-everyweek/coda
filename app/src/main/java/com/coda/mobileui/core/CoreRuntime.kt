@@ -41,6 +41,10 @@ class CoreRuntime(private val ctx: Context) {
 
     private var process: Process? = null
     private var writer: OutputStreamWriter? = null
+    private val startLock = Object()
+    private var starting = false
+    private val startObservers = mutableListOf<(Boolean, String) -> Unit>()
+    private val startSeq = AtomicInteger(0)
 
     private val nextId = AtomicInteger(1)
     private val pending = ConcurrentHashMap<Int, (Boolean, JSONObject) -> Unit>()
@@ -158,69 +162,107 @@ class CoreRuntime(private val ctx: Context) {
 
     // ---------------------------------------------------------------- 启动/停止
 
-    /** 启动 app-server；结果在主线程回调。 */
+    /** 启动 app-server；并发调用只会启动一次，结果通知所有等待者。 */
     fun start(onResult: (Boolean, String) -> Unit) {
-        if (isRunning) {
-            onResult(true, "已在运行")
-            return
+        synchronized(startLock) {
+            if (isRunning) {
+                onResult(true, "已在运行")
+                return
+            }
+            if (starting) {
+                startObservers += onResult
+                return
+            }
+            starting = true
         }
+        val seq = startSeq.incrementAndGet()
         Thread({
+            var ok = false
+            var msg = "启动失败"
             try {
+                log(
+                    "[core] start #$seq 来源: " + Throwable().stackTrace.take(7).joinToString(" < ") {
+                        "${it.className.substringAfterLast('.')}.${it.methodName}"
+                    },
+                )
                 initDirs()
                 if (!ensureExtracted()) {
-                    mainHandler.post { onResult(false, "载荷解包失败") }
-                    return@Thread
+                    msg = "载荷解包失败"
+                } else {
+                    openLogFile()
+                    val cmd = listOf(File(coreDir, "zcode").absolutePath, "app-server", "--stdio")
+                    val pb = ProcessBuilder(cmd)
+                    pb.directory(workDir)
+                    pb.redirectErrorStream(false)
+                    val env = pb.environment()
+                    env["LD_LIBRARY_PATH"] = File(coreDir, "lib").absolutePath
+                    env["ZCODE_STORAGE_DIR"] = storageDir.absolutePath
+                    env["ZCODE_DATA_BASE_DIR"] = dataDir.absolutePath
+                    env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] =
+                        File(coreDir, "provider/zcode-builtin.json").absolutePath
+                    env["HOME"] = homeDir.absolutePath
+                    env["TMPDIR"] = tmpDir.absolutePath
+                    env["PATH"] = "/system/bin:/system/xbin:/vendor/bin:/product/bin"
+                    env["TERM"] = "xterm-256color"
+                    env["LANG"] = "C.UTF-8"
+                    val p = pb.start()
+                    process = p
+                    writer = OutputStreamWriter(p.outputStream, Charsets.UTF_8)
+                    Thread({ readLoop(p) }, "zcore-out").start()
+                    Thread({ errLoop(p) }, "zcore-err").start()
+                    Thread({
+                        val code = try {
+                            p.waitFor()
+                        } catch (_: Throwable) {
+                            -1
+                        }
+                        val isCurrent = process === p
+                        if (isCurrent) {
+                            process = null
+                            writer = null
+                        }
+                        log(
+                            "[core] 进程退出，退出码=$code" +
+                                if (isCurrent) "" else "（非当前进程，忽略）",
+                        )
+                        if (isCurrent) mainHandler.post { events?.onExit(code) }
+                    }, "zcore-wait").start()
+                    ok = true
+                    msg = "已启动"
+                    log("[core] app-server 已启动")
                 }
-                openLogFile()
-                val cmd = listOf(File(coreDir, "zcode").absolutePath, "app-server", "--stdio")
-                val pb = ProcessBuilder(cmd)
-                pb.directory(workDir)
-                pb.redirectErrorStream(false)
-                val env = pb.environment()
-                env["LD_LIBRARY_PATH"] = File(coreDir, "lib").absolutePath
-                env["ZCODE_STORAGE_DIR"] = storageDir.absolutePath
-                env["ZCODE_DATA_BASE_DIR"] = dataDir.absolutePath
-                env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] =
-                    File(coreDir, "provider/zcode-builtin.json").absolutePath
-                env["HOME"] = homeDir.absolutePath
-                env["TMPDIR"] = tmpDir.absolutePath
-                env["PATH"] = "/system/bin:/system/xbin:/vendor/bin:/product/bin"
-                env["TERM"] = "xterm-256color"
-                env["LANG"] = "C.UTF-8"
-                val p = pb.start()
-                process = p
-                writer = OutputStreamWriter(p.outputStream, Charsets.UTF_8)
-                Thread({ readLoop(p) }, "zcore-out").start()
-                Thread({ errLoop(p) }, "zcore-err").start()
-                Thread({
-                    val code = try {
-                        p.waitFor()
-                    } catch (_: Throwable) {
-                        -1
-                    }
-                    process = null
-                    log("[core] 进程退出，退出码=$code")
-                    mainHandler.post { events?.onExit(code) }
-                }, "zcore-wait").start()
-                log("[core] app-server 已启动")
-                mainHandler.post { onResult(true, "已启动") }
             } catch (t: Throwable) {
                 log("!! 启动失败: $t")
-                mainHandler.post { onResult(false, "启动失败: ${t.message}") }
+                msg = "启动失败: ${t.message}"
+            }
+            val rok = ok
+            val rmsg = msg
+            val observers: List<(Boolean, String) -> Unit>
+            synchronized(startLock) {
+                starting = false
+                observers = startObservers.toList()
+                startObservers.clear()
+            }
+            mainHandler.post {
+                onResult(rok, rmsg)
+                for (o in observers) o(rok, rmsg)
             }
         }, "zcore-start").start()
     }
 
     fun stopCore() {
-        try {
-            writer?.close()
-        } catch (_: Throwable) {
-        }
-        try {
-            process?.destroy()
-        } catch (_: Throwable) {
-        }
+        val p = process
         process = null
+        val w = writer
+        writer = null
+        try {
+            w?.close()
+        } catch (_: Throwable) {
+        }
+        try {
+            p?.destroy()
+        } catch (_: Throwable) {
+        }
     }
 
     // ---------------------------------------------------------------- 帧收发
@@ -359,11 +401,13 @@ class CoreRuntime(private val ctx: Context) {
     }
 
     fun log(line: String) {
+        val ts = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+        val full = "[$ts] $line"
         synchronized(logLock) {
-            logBuf.append(line).append('\n')
+            logBuf.append(full).append('\n')
             if (logBuf.length > 400_000) logBuf.delete(0, 100_000)
             try {
-                logFile?.appendText(line + "\n")
+                logFile?.appendText(full + "\n")
             } catch (_: Throwable) {
             }
         }

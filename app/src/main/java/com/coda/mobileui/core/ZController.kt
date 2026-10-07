@@ -70,6 +70,12 @@ class ZController private constructor(private val app: Context) {
 
     private var started = false
     private var startWaiters = mutableListOf<(Boolean, String) -> Unit>()
+    /** 连续意外退出计数（稳定运行超 2 分钟后重置）。 */
+    private var exitCount = 0
+    /** 最近一次启动成功的时刻。 */
+    private var lastStartAt = 0L
+    /** 是否已安排自动重启（防重复安排）。 */
+    private var autoRestartScheduled = false
     private var refreshScheduled = false
     private var refreshing = false
     private var refreshAgain = false
@@ -103,6 +109,7 @@ class ZController private constructor(private val app: Context) {
         runtime.events = runtimeEvents()
         runtime.start { ok, msg ->
             started = ok
+            if (ok) lastStartAt = System.currentTimeMillis()
             post {
                 val ws = startWaiters.toList()
                 startWaiters.clear()
@@ -119,12 +126,16 @@ class ZController private constructor(private val app: Context) {
         runtime.stopCore()
         started = false
         running = false
-        ensureStarted { ok, msg ->
-            if (ok) {
-                currentSessionId?.let { openSession(it, null) }
+        exitCount = 0
+        // 稍等旧进程完全退出，避免新旧进程短暂共存后再启动。
+        main.postDelayed({
+            ensureStarted { ok, msg ->
+                if (ok) {
+                    currentSessionId?.let { openSession(it, null) }
+                }
+                cb(ok, msg)
             }
-            cb(ok, msg)
-        }
+        }, 600)
     }
 
     private fun runtimeEvents(): CoreRuntime.Events = object : CoreRuntime.Events {
@@ -141,10 +152,27 @@ class ZController private constructor(private val app: Context) {
         override fun onExit(code: Int) {
             started = false
             running = false
-            notif {
-                onNotice("核心进程已退出（code=$code）")
-                onStateChanged()
+            val now = System.currentTimeMillis()
+            if (now - lastStartAt > 120_000L) exitCount = 0
+            exitCount += 1
+            if (exitCount <= 5 && !autoRestartScheduled) {
+                autoRestartScheduled = true
+                notif { onNotice("核心进程意外退出（code=$code），正在自动重启…") }
+                main.postDelayed({
+                    autoRestartScheduled = false
+                    ensureStarted { ok, msg ->
+                        if (ok) {
+                            notif { onNotice("核心已自动重启") }
+                            currentSessionId?.let { openSession(it, null) }
+                        } else {
+                            notif { onNotice("自动重启失败：$msg") }
+                        }
+                    }
+                }, 1200)
+            } else {
+                notif { onNotice("核心进程已退出（code=$code）") }
             }
+            notif { onStateChanged() }
         }
 
         override fun onInteractiveReverse(requestId: Any, method: String, params: JSONObject): Boolean {

@@ -113,6 +113,8 @@ class MainActivity : BaseActivity() {
 
     /** 真实运行时控制器（核心进程 + 协议）。 */
     private val zc by lazy { ZController.get(this) }
+    /** 会话状态监听器（随 Activity 生命周期注册/移除）。 */
+    private var zListener: ZController.Listener? = null
 
     /** 流式文本缓冲：assistantMessageId → 累计文本。 */
     private val liveText = HashMap<String, StringBuilder>()
@@ -834,6 +836,12 @@ collapseFullDrawerThen { showConversation(conversation) }
 
     // ------------------------------------------------------------ 运行时对接
 
+    override fun onDestroy() {
+        zListener?.let { zc.removeListener(it) }
+        zListener = null
+        super.onDestroy()
+    }
+
     private fun snack(text: String) {
         val root = findViewById<View>(android.R.id.content) ?: return
         Snackbar.make(root, text, Snackbar.LENGTH_LONG).show()
@@ -851,7 +859,8 @@ collapseFullDrawerThen { showConversation(conversation) }
     }
 
     private fun attachZController() {
-        zc.addListener(object : ZController.Listener {
+        if (zListener != null) return
+        val listener = object : ZController.Listener {
             override fun onStateChanged() {
                 renderFromController()
                 refreshSlashPanelIfTyping()
@@ -891,7 +900,9 @@ collapseFullDrawerThen { showConversation(conversation) }
             override fun onSessionOpened(sessionId: String) {
                 renderFromController()
             }
-        })
+        }
+        zListener = listener
+        zc.addListener(listener)
         if (!java.io.File(filesDir, "core/.ready").exists()) {
             snack("首次启动：正在解包核心运行时（约 1-2 分钟），完成后自动可用…")
         }
