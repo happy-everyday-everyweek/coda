@@ -1,5 +1,6 @@
 package com.coda.mobileui
 
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Context
 import android.graphics.Color
@@ -14,7 +15,6 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,22 +24,26 @@ import com.google.android.material.color.MaterialColors
 
 /**
  * 标准半屏卡片容器：
- * - 常规模式：从底部升起，默认停靠半屏（卡片形态）；顶部滑动把手；
- *   向上拖动展开为全屏，向下拖回半屏，半屏继续下拉关闭；
+ * - 常规模式：从底部升起，默认停靠为「悬浮卡片」（四周留距、四角圆角）；
+ *   向上拖动展开为真全屏（无缝隙、四角直角、紧贴屏幕），向下拖回卡片，卡片态继续下拉关闭；
  * - 紧凑模式（compact）：高度随内容自适应（上限约 0.72 屏），仅支持下拉关闭；
+ * - 顶部中央为滑动把手（无关闭按钮；关闭靠下拉、点遮罩或返回键）；
  * - 内容由调用方填充；确认类用「副按钮 + 主按钮」页脚，选择/表单类用 content 区域。
  */
 class CodaSheet(private val activity: Activity) {
 
     companion object {
-        /** 全屏态高度占屏高比例（顶部留出少量背景）。 */
-        private const val FULL_RATIO = 0.93f
-
-        /** 半屏态高度占屏高比例（卡片形态）。 */
+        /** 半屏卡片高度占屏高比例。 */
         private const val HALF_RATIO = 0.61f
 
         /** 紧凑模式内容区高度上限占屏高比例。 */
         private const val COMPACT_MAX_RATIO = 0.72f
+
+        /** 卡片态四周留距。 */
+        private const val CARD_GAP_DP = 16f
+
+        /** 卡片圆角。 */
+        private const val CARD_CORNER_DP = 28f
     }
 
     private var titleText: String? = null
@@ -57,10 +61,15 @@ class CodaSheet(private val activity: Activity) {
 
     private var root: FrameLayout? = null
     private var scrim: View? = null
-    private var panel: View? = null
+    private var panel: LinearLayout? = null
+    private var grabberRow: FrameLayout? = null
+    private var footerRow: LinearLayout? = null
     private var backCallback: OnBackPressedCallback? = null
-    private var fullHeight = 0
-    private var halfOffset = 0f
+    private var panelAnim: ValueAnimator? = null
+    private var fullScreenH = 0
+    private var statusBarH = 0
+    private var navBarH = 0
+    private var cornerPx = 0f
 
     var isShowing: Boolean = false
         private set
@@ -98,13 +107,16 @@ class CodaSheet(private val activity: Activity) {
     private fun color(attr: Int, fallback: Int): Int =
         MaterialColors.getColor(activity.window.decorView, attr, fallback)
 
-    /** 显示半屏卡片（常规模式默认停靠半屏；紧凑模式自适应内容高度）。 */
+    private fun cardHeightPx(): Int = (fullScreenH * HALF_RATIO).toInt()
+
+    /** 显示半屏卡片（常规模式默认停靠卡片态；紧凑模式自适应内容高度）。 */
     fun show() {
         if (isShowing) return
         val decor = activity.window.decorView as ViewGroup
         val screenH = activity.resources.displayMetrics.heightPixels
-        fullHeight = (screenH * FULL_RATIO).toInt()
-        halfOffset = fullHeight - screenH * HALF_RATIO
+        statusBarH = statusBarHeightPx()
+        navBarH = navBarHeightPx()
+        fullScreenH = if (decor.height > 0) decor.height else screenH + statusBarH
 
         val surface = color(com.google.android.material.R.attr.colorSurface, Color.WHITE)
         val onSurface = color(com.google.android.material.R.attr.colorOnSurface, Color.BLACK)
@@ -123,21 +135,21 @@ class CodaSheet(private val activity: Activity) {
         }
         rootView.addView(scrimView, matchParams())
 
-        // 面板：顶部大圆角
+        // 面板（卡片态：四周留距 + 四角圆角；全屏态：无距、无圆角、贴满屏幕）
+        cornerPx = dp(CARD_CORNER_DP).toFloat()
         val panelView = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 setColor(surface)
                 cornerRadii = floatArrayOf(
-                    dp(28f).toFloat(), dp(28f).toFloat(),
-                    dp(28f).toFloat(), dp(28f).toFloat(),
-                    0f, 0f, 0f, 0f,
+                    cornerPx, cornerPx, cornerPx, cornerPx,
+                    cornerPx, cornerPx, cornerPx, cornerPx,
                 )
             }
             elevation = dp(24f).toFloat()
             outlineProvider = object : ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, dp(28f).toFloat())
+                    outline.setRoundRect(0, 0, view.width, view.height, cornerPx)
                 }
             }
         }
@@ -146,19 +158,23 @@ class CodaSheet(private val activity: Activity) {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM,
-            )
+            ).apply {
+                leftMargin = dp(CARD_GAP_DP)
+                rightMargin = dp(CARD_GAP_DP)
+                bottomMargin = dp(CARD_GAP_DP)
+            }
         } else {
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                fullHeight,
+                cardHeightPx(),
                 Gravity.BOTTOM,
             )
         }
         rootView.addView(panelView, panelParams)
 
-        // 拖拽区：滑动把手行 + 控制行
+        // 拖拽区：滑动把手行（+ 可选操作行）
         val dragArea = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        val grabberRow = FrameLayout(activity).apply {
+        val grabRow = FrameLayout(activity).apply {
             addView(
                 View(activity).apply {
                     background = GradientDrawable().apply {
@@ -169,33 +185,19 @@ class CodaSheet(private val activity: Activity) {
                 FrameLayout.LayoutParams(dp(36f), dp(4f), Gravity.CENTER),
             )
         }
+        grabberRow = grabRow
         dragArea.addView(
-            grabberRow,
+            grabRow,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(20f)),
         )
 
-        val header = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20f), dp(6f), dp(20f), dp(4f))
-        }
-        val closeBtn = FrameLayout(activity).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(withAlpha(onSurface, 0.08f))
-            }
-            setOnClickListener { dismiss() }
-            addView(
-                ImageView(activity).apply {
-                    setImageResource(R.drawable.ic_close_lucide)
-                    setColorFilter(onSurface)
-                },
-                FrameLayout.LayoutParams(dp(16f), dp(16f), Gravity.CENTER),
-            )
-        }
-        header.addView(closeBtn, LinearLayout.LayoutParams(dp(36f), dp(36f)))
-        header.addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
         if (headerActionText != null) {
+            val header = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(20f), dp(6f), dp(20f), dp(4f))
+            }
+            header.addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
             header.addView(
                 TextView(activity).apply {
                     text = headerActionText
@@ -209,14 +211,14 @@ class CodaSheet(private val activity: Activity) {
                     setOnClickListener { headerActionBlock?.invoke(this@CodaSheet) }
                 },
             )
+            dragArea.addView(
+                header,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
         }
-        dragArea.addView(
-            header,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
         panelView.addView(
             dragArea,
             LinearLayout.LayoutParams(
@@ -329,6 +331,7 @@ class CodaSheet(private val activity: Activity) {
                     LinearLayout.LayoutParams(0, dp(52f), 1f),
                 )
             }
+            footerRow = footer
             panelView.addView(
                 footer,
                 LinearLayout.LayoutParams(
@@ -343,6 +346,8 @@ class CodaSheet(private val activity: Activity) {
         var dragging = false
         var startRawY = 0f
         var startTrans = 0f
+        var startH = 0
+        var lastH = 0
         var lastRawY = 0f
         var lastMoveAt = 0L
         dragArea.setOnTouchListener { _, ev ->
@@ -351,24 +356,35 @@ class CodaSheet(private val activity: Activity) {
                     dragging = true
                     startRawY = ev.rawY
                     startTrans = panelView.translationY
+                    startH = panelView.height
+                    lastH = startH
                     lastRawY = ev.rawY
                     lastMoveAt = SystemClock.uptimeMillis()
+                    cancelPanelAnim()
+                    panelView.animate().cancel()
                     true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
                     if (!dragging) return@setOnTouchListener false
                     val dy = ev.rawY - startRawY
-                    var t = startTrans + dy
                     if (compactMode) {
-                        // 紧凑模式：仅允许向下拖（关），向上阻尼
-                        t = if (t < 0f) t * 0.3f else t
+                        // 紧凑模式：仅向下拖（关），向上阻尼
+                        var t = startTrans + dy
+                        if (t < 0f) t = t * 0.3f
+                        panelView.translationY = t
                     } else {
-                        t = if (t < 0f) t * 0.35f else t
-                        if (t > halfOffset) t = halfOffset + (t - halfOffset) * 0.6f
+                        // 常规模式：直接调整高度（上拖变大、下拖变小），越界阻尼
+                        var h = startH - dy.toInt()
+                        if (h > fullScreenH) h = fullScreenH + ((h - fullScreenH) * 0.35f).toInt()
+                        val minH = (cardHeightPx() * 0.42f).toInt()
+                        if (h < minH) h = minH
+                        applyDock(
+                            (h - cardHeightPx()).toFloat() / (fullScreenH - cardHeightPx()),
+                            h,
+                        )
+                        lastH = h
                     }
-                    panelView.animate().cancel()
-                    panelView.translationY = t
                     lastRawY = ev.rawY
                     lastMoveAt = SystemClock.uptimeMillis()
                     true
@@ -379,19 +395,21 @@ class CodaSheet(private val activity: Activity) {
                     val now = SystemClock.uptimeMillis()
                     val dt = (now - lastMoveAt).coerceAtLeast(1L)
                     val vy = (ev.rawY - lastRawY) / dt.toFloat() * 1000f
-                    val t = panelView.translationY
                     val flingDown = vy > fling * 1.1f
+                    val flingUp = vy < -fling * 1.1f
                     if (compactMode) {
-                        if (t > dp(80f) || (t > dp(16f) && flingDown)) dismiss() else animateTo(0f)
+                        val t = panelView.translationY
+                        if (t > dp(80f) || (t > dp(16f) && flingDown)) dismiss() else animateCompactBack()
                     } else {
-                        val beyond = t - halfOffset
-                        val flingUp = vy < -fling * 1.1f
+                        val h = lastH
+                        val belowCard = cardHeightPx() - h
+                        val span = (fullScreenH - cardHeightPx()).toFloat()
                         when {
-                            beyond > dp(96f) || (beyond > dp(24f) && flingDown) -> dismiss()
-                            flingUp || t < halfOffset * 0.4f -> animateTo(0f)
-                            flingDown && t > dp(40f) -> animateTo(halfOffset)
-                            t < halfOffset * 0.5f -> animateTo(0f)
-                            else -> animateTo(halfOffset)
+                            belowCard > dp(110f) || (belowCard > dp(24f) && flingDown) -> dismiss()
+                            flingUp && h > cardHeightPx() + dp(24f) -> snapTo(1f, h)
+                            flingDown && h < fullScreenH - dp(40f) -> snapTo(0f, h)
+                            h > cardHeightPx() + span * 0.5f -> snapTo(1f, h)
+                            else -> snapTo(0f, h)
                         }
                     }
                     true
@@ -418,39 +436,97 @@ class CodaSheet(private val activity: Activity) {
         panel = panelView
         isShowing = true
 
-        // 入场动画
-        if (compactMode) {
-            panelView.post {
-                val h = panelView.height
-                if (h > 0) {
-                    panelView.translationY = h.toFloat()
-                    panelView.animate()
-                        .translationY(0f)
-                        .setDuration(260)
-                        .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
-                        .start()
-                }
-            }
-        } else {
-            panelView.translationY = fullHeight.toFloat()
+        // 初始形态与入场动画
+        if (!compactMode) {
+            applyDock(0f)
+            panelView.translationY = (cardHeightPx() + dp(CARD_GAP_DP)).toFloat()
             panelView.animate()
-                .translationY(halfOffset)
+                .translationY(0f)
                 .setDuration(280)
                 .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
                 .start()
+        } else {
+            panelView.post {
+                val slide = (panelView.height + dp(CARD_GAP_DP)).toFloat()
+                panelView.translationY = slide
+                panelView.animate()
+                    .translationY(0f)
+                    .setDuration(260)
+                    .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
+                    .start()
+            }
         }
         scrimView.animate().alpha(1f).setDuration(200).start()
     }
 
-    /** 拖拽松手后的吸附动画。 */
-    private fun animateTo(target: Float) {
+    /**
+     * 应用停靠进度：p=0 卡片态（半屏），p=1 全屏态。
+     * 调整高度 / 四周留距 / 圆角 / 顶部内边距（状态栏避让）与阴影。
+     */
+    private fun applyDock(pRaw: Float, heightOverride: Int? = null) {
+        val panelView = panel ?: return
+        val p = pRaw.coerceIn(0f, 1f)
+        val full = fullScreenH
+        val card = cardHeightPx()
+        val h = heightOverride ?: (card + ((full - card) * p).toInt())
+        val gap = (dp(CARD_GAP_DP) * (1f - p)).toInt()
+        val lp = panelView.layoutParams as FrameLayout.LayoutParams
+        if (lp.height != h || lp.leftMargin != gap || lp.rightMargin != gap || lp.bottomMargin != gap) {
+            lp.height = h
+            lp.leftMargin = gap
+            lp.rightMargin = gap
+            lp.bottomMargin = gap
+            panelView.layoutParams = lp
+        }
+        val radius = dp(CARD_CORNER_DP) * (1f - p)
+        (panelView.background as? GradientDrawable)?.let { bg ->
+            bg.cornerRadii = floatArrayOf(
+                radius, radius, radius, radius,
+                radius, radius, radius, radius,
+            )
+        }
+        cornerPx = radius
+        panelView.invalidateOutline()
+        panelView.elevation = dp(24f) * (1f - p)
+        grabberRow?.setPadding(0, (statusBarH * p).toInt(), 0, 0)
+        footerRow?.setPadding(dp(20f), dp(10f), dp(20f), dp(24f) + (navBarH * p).toInt())
+    }
+
+    /** 拖拽松手后吸附到卡片（p=0）或全屏（p=1）。 */
+    private fun snapTo(p: Float, fromH: Int? = null) {
+        val panelView = panel ?: return
+        cancelPanelAnim()
+        val full = fullScreenH
+        val card = cardHeightPx()
+        val h0 = fromH ?: panelView.height
+        val h1 = card + ((full - card) * p).toInt()
+        val p0 = ((h0 - card).toFloat() / (full - card)).coerceIn(0f, 1f)
+        val anim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 230
+            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { a ->
+                val t = a.animatedValue as Float
+                applyDock(p0 + (p - p0) * t, (h0 + ((h1 - h0) * t)).toInt())
+            }
+            start()
+        }
+        panelAnim = anim
+    }
+
+    /** 紧凑模式：下拉未达关闭阈值时弹回。 */
+    private fun animateCompactBack() {
         val p = panel ?: return
         p.animate().cancel()
         p.animate()
-            .translationY(target)
+            .translationY(0f)
             .setDuration(220)
             .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
             .start()
+    }
+
+    private fun cancelPanelAnim() {
+        panelAnim?.cancel()
+        panelAnim = null
     }
 
     /** 展示后更新内容（清空并重建；供异步加载完成后刷新用）。 */
@@ -465,6 +541,7 @@ class CodaSheet(private val activity: Activity) {
     fun dismiss() {
         if (!isShowing) return
         isShowing = false
+        cancelPanelAnim()
         val rootView = root ?: return
         val scrimView = scrim
         val panelView = panel
@@ -473,20 +550,36 @@ class CodaSheet(private val activity: Activity) {
             it.remove()
         }
         backCallback = null
-        val exitTarget = if (compactMode) (panelView?.height ?: 0).toFloat() else fullHeight.toFloat()
         panelView?.animate()?.cancel()
+        val exit = ((panelView?.height ?: 0) + dp(CARD_GAP_DP)).toFloat()
         panelView?.animate()
-            ?.translationY(exitTarget)
+            ?.translationY(exit)
             ?.setDuration(200)
             ?.withEndAction {
                 (rootView.parent as? ViewGroup)?.removeView(rootView)
                 root = null
                 scrim = null
                 panel = null
+                grabberRow = null
+                footerRow = null
                 onDismissBlock?.invoke()
             }
             ?.start()
         scrimView?.animate()?.alpha(0f)?.setDuration(160)?.start()
+    }
+
+    private fun statusBarHeightPx(): Int = try {
+        val id = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (id > 0) activity.resources.getDimensionPixelSize(id) else dp(24f)
+    } catch (e: Throwable) {
+        dp(24f)
+    }
+
+    private fun navBarHeightPx(): Int = try {
+        val id = activity.resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        if (id > 0) activity.resources.getDimensionPixelSize(id) else 0
+    } catch (e: Throwable) {
+        0
     }
 
     private fun matchParams(): ViewGroup.LayoutParams = ViewGroup.LayoutParams(
