@@ -62,7 +62,7 @@ object PhoneControl {
         return t
     }
 
-    fun isServerRunning(): Boolean = server?.isRunning == true
+    fun isServerRunning(): Boolean = server?.isAlive() == true
 
     fun statusText(ctx: Context): String = when {
         !isEnabled(ctx) -> "已停用"
@@ -170,8 +170,13 @@ class PhoneControlServer(
     @Volatile
     var isRunning = false
         private set
-
     private var serverSocket: ServerSocket? = null
+
+    /** 服务器是否真实存活（socket 仍有效且未被停用）。 */
+    fun isAlive(): Boolean {
+        val ss = serverSocket ?: return false
+        return isRunning && !ss.isClosed
+    }
 
     fun start(): String? {
         return try {
@@ -194,15 +199,19 @@ class PhoneControlServer(
         }
         serverSocket = null
     }
-
     private fun acceptLoop(ss: ServerSocket) {
-        while (isRunning) {
-            val socket = try {
-                ss.accept()
-            } catch (_: Throwable) {
-                break
+        try {
+            while (isRunning) {
+                val socket = try {
+                    ss.accept()
+                } catch (_: Throwable) {
+                    break
+                }
+                Thread({ handleConnection(socket) }, "coda-phone-conn").start()
             }
-            Thread({ handleConnection(socket) }, "coda-phone-conn").start()
+        } finally {
+            // accept 循环意外结束（如 socket 被系统回收）：复位状态，避免界面误报“运行中”。
+            isRunning = false
         }
     }
 

@@ -435,7 +435,12 @@ object SettingsData {
         val rows = mutableListOf<SettingRow>()
         val ctrl = ZController.get(ctx)
         rows += SettingRow.Header("运行状态")
-        rows += SettingRow.Value("核心状态", if (ctrl.runtime.isRunning) "运行中" else "已停止")
+        val coreState = when {
+            ctrl.runtime.isRunning -> "运行中"
+            ctrl.runtime.isStarting -> "启动中…"
+            else -> "已停止"
+        }
+        rows += SettingRow.Value("核心状态", coreState)
         rows += SettingRow.Value("重启核心", "重新启动运行时；供应商等配置变更后生效", "system_restart")
         rows += SettingRow.Header("通用")
         rows += SettingRow.Value("界面语言", Locale.getDefault().displayName)

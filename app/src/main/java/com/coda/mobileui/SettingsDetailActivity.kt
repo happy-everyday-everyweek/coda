@@ -42,6 +42,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     private var pageKey: String = PAGE_SYSTEM
     private var firstResume = true
 
+    /** 供应商配置防抖重启（连续保存合并为一次）。 */
+    private val providerRestartHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingProviderRestart: Runnable? = null
+
     // ---- 扩展页异步数据（使用统计 / 插件 / MCP）----
     private val extrasCache = HashMap<String, org.json.JSONObject>()
     private val extrasLoading = HashSet<String>()
@@ -88,9 +92,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             firstResume = false
             return
         }
+        if (pageKey == PAGE_COMPUTER && PhoneControl.isEnabled(this) && !PhoneControl.isServerRunning()) {
+            // 该跑未跑（如从系统设置授权返回）：尝试补启；失败时状态行会显示“已停止”。
+            PhoneControl.startServer(this)
+        }
         if (pageKey == PAGE_PROVIDERS || pageKey == PAGE_SUBAGENTS ||
             pageKey == PAGE_SKILLS || pageKey == PAGE_COMMANDS ||
-            pageKey == PAGE_AUTOMATIONS || pageKey == PAGE_HOOKS
+            pageKey == PAGE_AUTOMATIONS || pageKey == PAGE_HOOKS ||
+            pageKey == PAGE_COMPUTER
         ) {
             renderPage()
         }
@@ -454,12 +463,20 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         alert.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     }
 
-    /** 保存后的统一步骤：重启核心使配置生效，并刷新本页列表。 */
+    /** 保存后的统一步骤：防抖合并连续保存，随后重启核心使配置生效。 */
     private fun applyProviderChange() {
         renderPage()
-        ZController.get(this).restartCore { ok, msg ->
-            snack(if (ok) "已保存，核心已重启；返回后可在模型面板选择新模型" else "核心重启失败: $msg")
+        val debouncing = pendingProviderRestart != null
+        pendingProviderRestart?.let { providerRestartHandler.removeCallbacks(it) }
+        val job = Runnable {
+            pendingProviderRestart = null
+            ZController.get(this).restartCore { ok, msg ->
+                snack(if (ok) "已保存，核心已重启；返回后可在模型面板选择新模型" else "核心重启失败: $msg")
+            }
         }
+        pendingProviderRestart = job
+        providerRestartHandler.postDelayed(job, 700)
+        if (!debouncing) snack("已保存，正在应用新配置…")
     }
 
     private fun confirmDeleteProvider(p: ProviderStore.Provider) {

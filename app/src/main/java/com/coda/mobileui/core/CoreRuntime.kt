@@ -76,6 +76,10 @@ class CoreRuntime(private val ctx: Context) {
     val isRunning: Boolean
         get() = process?.isAlive == true
 
+    /** 是否正在启动（启动线程运行中，覆盖解包与进程拉起阶段）。 */
+    val isStarting: Boolean
+        get() = starting
+
     // ---------------------------------------------------------------- 目录与解包
 
     fun initDirs() {
