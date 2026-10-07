@@ -537,7 +537,114 @@ class ZController private constructor(private val app: Context) {
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
-
+    /** 插件总览：市场 / 可用插件 / 已安装 / 可恢复内置。 */
+    fun fetchPluginsOverview(cb: (Boolean, JSONObject?) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        runtime.call("plugins/overview", params) { ok, body ->
+            cb(ok, if (ok) body else null)
+        }
+    }
+    /** 安装插件。 */
+    fun installPlugin(pluginName: String, marketplace: String, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("pluginName", pluginName)
+            .put("marketplace", marketplace)
+        runtime.call("plugins/install", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+    /** 卸载插件。 */
+    fun uninstallPlugin(pluginId: String, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("pluginId", pluginId)
+        runtime.call("plugins/uninstall", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+    /** 更新插件（pluginId 或整个 marketplace，二选一）。 */
+    fun updatePlugin(pluginId: String?, marketplace: String?, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        pluginId?.let { params.put("pluginId", it) }
+        marketplace?.let { params.put("marketplace", it) }
+        runtime.call("plugins/update", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+    /** 写入插件配置项（options 为键值对；clearOptionKeys 用于清除选项）。 */
+    fun configurePlugin(
+        pluginId: String,
+        options: JSONObject,
+        clearKeys: List<String>,
+        cb: (Boolean, String) -> Unit,
+    ) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("pluginId", pluginId)
+            .put("options", options)
+        if (clearKeys.isNotEmpty()) params.put("clearOptionKeys", JSONArray(clearKeys))
+        runtime.call("plugins/configure", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+    /** 重置插件配置为默认值。 */
+    fun resetPluginConfig(pluginId: String, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("pluginId", pluginId)
+        runtime.call("plugins/resetConfig", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+    /** 添加插件市场源。 */
+    fun addPluginMarketplace(source: String, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("source", source)
+        runtime.call("plugins/marketplace/add", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+    /** 移除插件市场。 */
+    fun removePluginMarketplace(marketplace: String, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("marketplace", marketplace)
+        runtime.call("plugins/marketplace/remove", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+    /** 刷新插件市场索引（marketplace 为空时刷新全部）。 */
+    fun updatePluginMarketplace(marketplace: String?, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        marketplace?.let { params.put("marketplace", it) }
+        runtime.call("plugins/marketplace/update", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+    /** 恢复内置插件。 */
+    fun restoreBuiltinPlugin(pluginId: String, cb: (Boolean, String) -> Unit) {
+        val wp = workspacePath()
+        val params = JSONObject()
+            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+            .put("pluginId", pluginId)
+        runtime.call("plugins/restoreBuiltin", params) { ok, body ->
+            cb(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
     // ---------------------------------------------------------------- 会话操作
 
     fun workspacePath(): String {

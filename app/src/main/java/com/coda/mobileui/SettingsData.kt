@@ -251,34 +251,55 @@ object SettingsData {
         return SettingsPage("使用统计", rows)
     }
 
-    /** 插件页：数据来自运行时 plugins/list（界面层异步加载后传入）。 */
+    /** 插件页：数据来自运行时 plugins/overview（界面层异步加载后传入）。 */
     fun plugins(ctx: Context, data: JSONObject?): SettingsPage {
         val rows = mutableListOf<SettingRow>()
-        rows += SettingRow.Header("已安装插件")
-        if (data == null) {
+        val ov = CodaExtras.parsePluginsOverview(data)
+        if (ov == null) {
+            rows += SettingRow.Header("已安装插件")
             rows += SettingRow.Value("正在读取…", "从运行时获取插件列表")
             return SettingsPage("插件", rows)
         }
-        val items = CodaExtras.parsePlugins(data)
-        if (items.isEmpty()) {
-            rows += SettingRow.Value("未安装插件", "通过插件市场安装后在此管理")
+        if (!ov.capabilitySupported) {
+            rows += SettingRow.Header("插件能力")
+            rows += SettingRow.Value("当前环境暂不支持插件", ov.capabilityReason ?: "内核报告插件能力不可用")
+            rows += SettingRow.Value("刷新", "重新读取插件列表", "extras_refresh:plugins")
+            return SettingsPage("插件", rows)
+        }
+        rows += SettingRow.Header("已安装插件")
+        if (ov.installed.isEmpty()) {
+            rows += SettingRow.Value("未安装插件", "从下方「浏览插件市场」安装")
         } else {
-            items.forEach { p ->
+            ov.installed.forEach { p ->
                 val parts = mutableListOf<String>()
                 parts += if (p.enabled) "启用中" else "已停用"
-                if (p.skillCount > 0) parts += "${p.skillCount} 技能"
-                if (p.commandCount > 0) parts += "${p.commandCount} 命令"
-                if (p.mcpCount > 0) parts += "${p.mcpCount} MCP"
                 p.version?.let { parts += "v$it" }
-                rows += SettingRow.Toggle(
-                    p.name,
-                    parts.joinToString(" · "),
-                    p.enabled,
-                    "plugins_toggle:${p.id}",
-                )
+                if (p.updateStatus != null) {
+                    parts += p.latestVersion?.let { "有更新 → v$it" } ?: "有更新"
+                }
+                if (p.componentTypes.isNotEmpty()) {
+                    parts += p.componentTypes.joinToString("·") { CodaExtras.componentKindLabel(it) }
+                }
+                rows += SettingRow.Value(p.name, parts.joinToString(" · "), "plugins_detail:${p.id}")
             }
         }
-        rows += SettingRow.Value("刷新", "重新读取插件列表", "extras_refresh:plugins")
+        if (ov.restorable.isNotEmpty()) {
+            rows += SettingRow.Header("可恢复的内置插件")
+            ov.restorable.forEach { p ->
+                rows += SettingRow.Value(p.name, "点击恢复内置插件", "plugins_restore:${p.id}")
+            }
+        }
+        rows += SettingRow.Header("插件市场")
+        rows += SettingRow.Value("浏览插件市场", "查看可用插件并安装", "plugins_market")
+        rows += SettingRow.Value("添加插件市场源", "从 Git 仓库或 URL 添加", "plugins_add_market")
+        if (ov.marketplaces.isNotEmpty()) {
+            rows += SettingRow.Value(
+                "已配置 ${ov.marketplaces.size} 个市场",
+                ov.marketplaces.joinToString("、") { it.name },
+                "",
+            )
+        }
+        rows += SettingRow.Value("刷新", "重新读取插件列表与市场", "extras_refresh:plugins")
         return SettingsPage("插件", rows)
     }
 

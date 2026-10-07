@@ -67,7 +67,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
         when (kind) {
             "usage" -> zc.fetchUsageStats(usageRange(), done)
-            "plugins" -> zc.fetchPlugins(done)
+            "plugins" -> zc.fetchPluginsOverview(done)
             "mcp" -> zc.fetchMcpList(done)
         }
     }
@@ -251,6 +251,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 snack("已重新写入内核 MCP 配置")
                 renderPage()
             }
+            key == "plugins_market" -> openPluginMarket()
+            key == "plugins_add_market" -> addMarketplaceDialog()
+            key.startsWith("plugins_detail:") -> openPluginDetail(key.removePrefix("plugins_detail:"))
+            key.startsWith("plugins_restore:") -> restoreBuiltinPlugin(key.removePrefix("plugins_restore:"))
             key.startsWith("extras_refresh:") -> {
                 extrasCache.remove(key.removePrefix("extras_refresh:"))
                 renderPage()
@@ -307,6 +311,445 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 onConfirm()
             }
             .show()
+    }
+
+    // ------------------------------------------------------------ 插件管理
+    /** 插件详情：读取 plugins/list 全量数据，找到目标插件后弹出半屏卡片。 */
+    private fun openPluginDetail(pluginId: String) {
+        ZController.get(this).fetchPlugins { ok, data ->
+            runOnUiThread {
+                if (!ok || data == null) {
+                    snack("读取插件详情失败")
+                } else {
+                    val detail = CodaExtras.findPluginDetail(data, pluginId)
+                    if (detail == null) snack("未找到插件：$pluginId") else showPluginDetailSheet(detail)
+                }
+            }
+        }
+    }
+
+    /** 插件详情卡：信息、组件清单、配置编辑与操作按钮。 */
+    private fun showPluginDetailSheet(d: CodaExtras.PluginDetail) {
+        val editors = LinkedHashMap<String, View>()
+        val sheet = CodaSheet(this)
+            .title(d.name)
+            .subtitle(
+                buildString {
+                    append(if (d.enabled) "启用中" else "已停用")
+                    d.version?.let { append(" · v$it") }
+                    if (d.marketplace.isNotEmpty()) append(" · ${d.marketplace}")
+                },
+            )
+        sheet.content { col ->
+            d.description?.let { desc -> col.addView(sheetBodyText(desc)) }
+            val meta = mutableListOf<String>()
+            d.author?.let { meta += "作者：$it" }
+            if (d.source.isNotEmpty()) meta += "来源：${d.source}"
+            d.homepage?.let { meta += it }
+            if (meta.isNotEmpty()) col.addView(sheetBodyText(meta.joinToString("\n")))
+            if (d.components.isNotEmpty()) {
+                col.addView(sheetSectionLabel("包含组件"))
+                d.components.forEach { g ->
+                    col.addView(
+                        sheetBodyText(
+                            "${CodaExtras.componentKindLabel(g.kind)}（${g.names.size}）：${g.names.joinToString("、")}",
+                        ),
+                    )
+                }
+            } else {
+                val counts = mutableListOf<String>()
+                if (d.skillRootCount > 0) counts += "${d.skillRootCount} 技能"
+                if (d.commandRootCount > 0) counts += "${d.commandRootCount} 命令"
+                if (d.mcpServerNames.isNotEmpty()) counts += "${d.mcpServerNames.size} MCP"
+                if (counts.isNotEmpty()) {
+                    col.addView(sheetSectionLabel("包含组件"))
+                    col.addView(sheetBodyText(counts.joinToString(" · ")))
+                }
+            }
+            if (d.hookSummaries.isNotEmpty()) {
+                col.addView(sheetSectionLabel("钩子"))
+                d.hookSummaries.take(8).forEach { h -> col.addView(sheetBodyText(h)) }
+            }
+            col.addView(sheetSectionLabel("配置"))
+            if (d.options.isEmpty()) {
+                col.addView(sheetBodyText("此插件没有可配置项"))
+            } else {
+                d.options.forEach { opt -> col.addView(buildPluginOptionRow(opt, editors)) }
+            }
+            col.addView(sheetSectionLabel("操作"))
+            if (d.options.isNotEmpty()) {
+                col.addView(
+                    sheetWideButton("重置配置为默认值") {
+                        sheetConfirm("重置配置", "将「${d.name}」的配置恢复为默认值？", "重置") {
+                            ZController.get(this).resetPluginConfig(d.id) { ok, msg ->
+                                runOnUiThread {
+                                    snack(if (ok) "已重置配置" else "重置失败: $msg")
+                                    if (ok) extrasCache.remove("plugins")
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+            col.addView(
+                sheetWideButton(if (d.enabled) "停用此插件" else "启用此插件") {
+                    ZController.get(this).setPluginEnabled(d.id, !d.enabled) { ok, msg ->
+                        runOnUiThread {
+                            val text = if (ok) {
+                                if (d.enabled) "已停用插件" else "已启用插件"
+                            } else {
+                                "插件设置失败: $msg"
+                            }
+                            snack(text)
+                            extrasCache.remove("plugins")
+                            if (ok) renderPage()
+                        }
+                    }
+                },
+            )
+            col.addView(
+                sheetWideButton("卸载此插件", danger = true) {
+                    sheetConfirm("卸载插件", "确定卸载「${d.name}」？其配置将一并移除。", "卸载") {
+                        ZController.get(this).uninstallPlugin(d.id) { ok, msg ->
+                            runOnUiThread {
+                                snack(if (ok) "已卸载 ${d.name}" else "卸载失败: $msg")
+                                extrasCache.remove("plugins")
+                                if (ok) renderPage()
+                            }
+                        }
+                    }
+                },
+            )
+        }
+        if (d.options.isNotEmpty()) {
+            sheet.primaryAction("保存配置") { s ->
+                val options = org.json.JSONObject()
+                val clear = mutableListOf<String>()
+                d.options.forEach { opt ->
+                    val view = editors[opt.key] ?: return@forEach
+                    if (view is EditText) {
+                        val text = view.text.toString().trim()
+                        if (text.isNotEmpty()) {
+                            if (opt.type == "number") {
+                                val number: Any? = text.toLongOrNull() ?: text.toDoubleOrNull()
+                                if (number != null) options.put(opt.key, number) else options.put(opt.key, text)
+                            } else {
+                                options.put(opt.key, text)
+                            }
+                        } else if (opt.current != null) {
+                            clear += opt.key
+                        }
+                    } else if (view is com.google.android.material.materialswitch.MaterialSwitch) {
+                        options.put(opt.key, view.isChecked)
+                    }
+                }
+                ZController.get(this).configurePlugin(d.id, options, clear) { ok, msg ->
+                    runOnUiThread {
+                        if (ok) {
+                            s.dismiss()
+                            snack("配置已保存")
+                            extrasCache.remove("plugins")
+                            renderPage()
+                        } else {
+                            snack("保存失败: $msg")
+                        }
+                    }
+                }
+            }
+        }
+        sheet.show()
+    }
+
+    /** 插件配置项控件：布尔开关 / 文本输入（敏感项用密码框）。 */
+    private fun buildPluginOptionRow(
+        opt: CodaExtras.PluginConfigOption,
+        editors: MutableMap<String, View>,
+    ): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, dp(2))
+        }
+        col.addView(
+            TextView(this).apply {
+                text = opt.title ?: opt.key
+                textSize = 14f
+                typeface = android.graphics.Typeface.create(
+                    "sans-serif-medium",
+                    android.graphics.Typeface.NORMAL,
+                )
+            },
+        )
+        opt.description?.let {
+            col.addView(
+                TextView(this).apply {
+                    text = it
+                    textSize = 12f
+                    setTextColor(
+                        MaterialColors.getColor(
+                            this@SettingsDetailActivity,
+                            com.google.android.material.R.attr.colorOnSurfaceVariant,
+                            android.graphics.Color.GRAY,
+                        ),
+                    )
+                },
+            )
+        }
+        if (opt.type == "boolean") {
+            val sw = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
+                isChecked = (opt.current as? Boolean) ?: (opt.default as? Boolean) ?: false
+            }
+            col.addView(sw)
+            editors[opt.key] = sw
+        } else {
+            val et = EditText(this).apply {
+                setText(CodaExtras.anyToText(opt.current ?: opt.default))
+                hint = opt.key
+                inputType = when {
+                    opt.sensitive -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    opt.type == "number" -> InputType.TYPE_CLASS_NUMBER or
+                        InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+                    else -> InputType.TYPE_CLASS_TEXT
+                }
+            }
+            col.addView(et)
+            editors[opt.key] = et
+        }
+        return col
+    }
+
+    /** sheet 小标题（与聊天页工具详情同款样式）。 */
+    private fun sheetSectionLabel(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        setTextColor(
+            MaterialColors.getColor(
+                this@SettingsDetailActivity,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                android.graphics.Color.GRAY,
+            ),
+        )
+        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+        setPadding(0, dp(14), 0, dp(6))
+    }
+
+    /** sheet 正文小字。 */
+    private fun sheetBodyText(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        setTextColor(
+            MaterialColors.getColor(
+                this@SettingsDetailActivity,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                android.graphics.Color.GRAY,
+            ),
+        )
+        setPadding(0, dp(2), 0, dp(2))
+    }
+
+    /** sheet 内整行按钮；danger 时使用主题警示色。 */
+    private fun sheetWideButton(label: String, danger: Boolean = false, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            isAllCaps = false
+            if (danger) {
+                setTextColor(
+                    MaterialColors.getColor(
+                        this@SettingsDetailActivity,
+                        androidx.appcompat.R.attr.colorError,
+                        android.graphics.Color.RED,
+                    ),
+                )
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(6) }
+            setOnClickListener { onClick() }
+        }
+
+    /** 插件市场：市场列表 + 可用插件 + 安装。 */
+    private fun openPluginMarket() {
+        ZController.get(this).fetchPluginsOverview { ok, data ->
+            runOnUiThread {
+                if (!ok || data == null) {
+                    snack("读取插件市场失败")
+                } else {
+                    val ov = CodaExtras.parsePluginsOverview(data)
+                    if (ov == null) snack("插件市场数据解析失败") else showPluginMarketSheet(ov)
+                }
+            }
+        }
+    }
+
+    /** 市场半屏卡：市场源信息、可用插件安装、刷新索引。 */
+    private fun showPluginMarketSheet(ov: CodaExtras.PluginOverview) {
+        val sheet = CodaSheet(this).title("插件市场")
+        sheet.content { col ->
+            col.addView(sheetSectionLabel("市场源"))
+            if (ov.marketplaces.isEmpty()) {
+                col.addView(sheetBodyText("尚未配置市场源。通过下方「添加市场」引入。"))
+            } else {
+                ov.marketplaces.forEach { m ->
+                    col.addView(
+                        sheetBodyText(
+                            buildString {
+                                append(m.name)
+                                append(" · ${m.pluginCount} 个插件")
+                                if (m.isOfficial) append(" · 官方")
+                                m.lastUpdated?.let { append(" · 更新于 $it") }
+                                m.refreshFailure?.let { append("\n刷新失败：$it") }
+                            },
+                        ),
+                    )
+                }
+                col.addView(
+                    sheetWideButton("更新市场索引") {
+                        snack("正在刷新市场索引…")
+                        ZController.get(this).updatePluginMarketplace(null) { ok, msg ->
+                            runOnUiThread {
+                                if (ok) {
+                                    snack("市场索引已更新")
+                                    extrasCache.remove("plugins")
+                                    renderPage()
+                                } else {
+                                    snack("更新失败: $msg")
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+            col.addView(sheetSectionLabel("可用插件"))
+            if (ov.available.isEmpty()) {
+                col.addView(sheetBodyText("没有可用插件。先添加市场源或刷新索引。"))
+            } else {
+                ov.available.forEach { p ->
+                    col.addView(
+                        buildMarketPluginRow(p) {
+                            sheet.dismiss()
+                            installFromMarket(p)
+                        },
+                    )
+                }
+            }
+            if (ov.restorable.isNotEmpty()) {
+                col.addView(sheetSectionLabel("可恢复的内置插件"))
+                ov.restorable.forEach { p ->
+                    col.addView(
+                        sheetWideButton("恢复「${p.name}」") { restoreBuiltinPlugin(p.id) },
+                    )
+                }
+            }
+        }
+        sheet.primaryAction("添加市场") { s ->
+            s.dismiss()
+            addMarketplaceDialog()
+        }
+        sheet.show()
+    }
+
+    /** 市场内单个可安装插件的行：名称、描述与安装按钮。 */
+    private fun buildMarketPluginRow(p: CodaExtras.PluginCandidate, onInstall: () -> Unit): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, dp(2))
+        }
+        col.addView(
+            TextView(this).apply {
+                text = buildString {
+                    append(p.name)
+                    p.version?.let { append("  v$it") }
+                    if (p.installed) append("（已安装）")
+                }
+                textSize = 14f
+                typeface = android.graphics.Typeface.create(
+                    "sans-serif-medium",
+                    android.graphics.Typeface.NORMAL,
+                )
+            },
+        )
+        p.description?.let { col.addView(sheetBodyText(it)) }
+        if (p.componentTypes.isNotEmpty()) {
+            col.addView(
+                sheetBodyText(p.componentTypes.joinToString("·") { CodaExtras.componentKindLabel(it) }),
+            )
+        }
+        col.addView(
+            sheetWideButton(if (p.installed) "已安装" else "安装") {
+                if (!p.installed) onInstall()
+            },
+        )
+        return col
+    }
+
+    /** 从市场安装插件（面板先关闭，安装完成后重开刷新）。 */
+    private fun installFromMarket(p: CodaExtras.PluginCandidate) {
+        snack("正在安装 ${p.name}…")
+        ZController.get(this).installPlugin(p.name, p.marketplace) { ok, msg ->
+            runOnUiThread {
+                if (ok) {
+                    snack("已安装 ${p.name}")
+                    extrasCache.remove("plugins")
+                    renderPage()
+                    openPluginMarket()
+                } else {
+                    snack("安装失败: $msg")
+                }
+            }
+        }
+    }
+
+    /** 添加市场源：输入 Git 仓库或 URL。 */
+    private fun addMarketplaceDialog() {
+        val input = EditText(this).apply {
+            hint = "Git 仓库（owner/repo）或 URL"
+        }
+        val sheet = CodaSheet(this)
+            .compact()
+            .title("添加插件市场源")
+            .secondaryAction("取消") { it.dismiss() }
+        sheet.content { col ->
+            col.addView(
+                input,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(10) },
+            )
+        }
+        sheet.primaryAction("添加") { s ->
+            val source = input.text.toString().trim()
+            if (source.isEmpty()) {
+                snack("请输入市场来源")
+            } else {
+                snack("正在添加市场…")
+                ZController.get(this).addPluginMarketplace(source) { ok, msg ->
+                    runOnUiThread {
+                        if (ok) {
+                            s.dismiss()
+                            snack("已添加市场")
+                            extrasCache.remove("plugins")
+                            renderPage()
+                        } else {
+                            snack("添加失败: $msg")
+                        }
+                    }
+                }
+            }
+        }
+        sheet.show()
+    }
+
+    /** 恢复一个内置插件（从插件页或市场页触发）。 */
+    private fun restoreBuiltinPlugin(pluginId: String) {
+        snack("正在恢复…")
+        ZController.get(this).restoreBuiltinPlugin(pluginId) { ok, msg ->
+            runOnUiThread {
+                snack(if (ok) "已恢复内置插件" else "恢复失败: $msg")
+                extrasCache.remove("plugins")
+                if (ok) renderPage()
+            }
+        }
     }
 
     /** 主色：色板选择 + 自定义颜色入口；选中即关闭自动取色、同步更换应用图标。 */
