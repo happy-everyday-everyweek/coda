@@ -133,6 +133,21 @@ class MainActivity : BaseActivity() {
     private val reasoningDone = HashMap<String, Long>()
     /** 当前回合开始时间，用于“正在生成”指示的连续相位与计时。 */
     private var runningSince: Long? = null
+    /** 待发送附件（选择后复制到缓存目录，发送时随消息携带）。 */
+    private data class PendingAttach(
+        val path: String,
+        val name: String,
+        val mime: String,
+        val sizeBytes: Long,
+    )
+    private val pendingAttachments = mutableListOf<PendingAttach>()
+    private var attachScroll: View? = null
+    private var attachChips: LinearLayout? = null
+    /** 附件选择器（SAF 多选，任意类型）。 */
+    private val attachPicker =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            uris?.forEach { uri -> importAttachment(uri) }
+        }
 
     /** UI 线程 Handler（流式刷新节流用）。 */
     private val ui = android.os.Handler(android.os.Looper.getMainLooper())
@@ -320,7 +335,11 @@ class MainActivity : BaseActivity() {
         emptyState = findViewById(R.id.empty_state)
         chatView = findViewById(R.id.chat_view)
         setupSendMode()
-
+        attachScroll = findViewById(R.id.attach_scroll)
+        attachChips = findViewById(R.id.attach_chips)
+        findViewById<View>(R.id.btn_attach).setOnClickListener {
+            attachPicker.launch(arrayOf("*/*"))
+        }
         // 全面屏 insets：顶部状态栏、底部导航栏/键盘、抽屉
         findViewById<View>(R.id.composer_container).applyBottomInsetWithIme()
         findViewById<View>(R.id.drawer_scroll).applyDrawerInset(8)
@@ -805,7 +824,7 @@ collapseFullDrawerThen { showConversation(conversation) }
     /** 发送输入框内容：交给运行时；空输入时若正在运行则变成“停止”。 */
     private fun sendMessage(mode: String) {
         val text = inputMessage.text?.toString()?.trim().orEmpty()
-        if (text.isEmpty()) {
+        if (text.isEmpty() && pendingAttachments.isEmpty()) {
             if (zc.running) {
                 zc.stop { ok, msg ->
                     if (!ok) snack("停止失败: $msg")
@@ -818,10 +837,15 @@ collapseFullDrawerThen { showConversation(conversation) }
         zc.setMode(protocolMode)
         inputMessage.text?.clear()
         hideSettingsPage()
-
+        val atts = buildAttachmentsJson()
         fun doSend() {
-            zc.send(text) { ok, msg ->
-                if (!ok) snack("发送失败: $msg")
+            zc.send(text, atts) { ok, msg ->
+                if (ok) {
+                    pendingAttachments.clear()
+                    renderAttachChips()
+                } else {
+                    snack("发送失败: $msg")
+                }
             }
         }
 
@@ -833,7 +857,311 @@ collapseFullDrawerThen { showConversation(conversation) }
             doSend()
         }
     }
+    /** 附件导入：复制到应用缓存目录（内核进程可直接读取 localPath），加入待发送列表。 */
+    private fun importAttachment(uri: android.net.Uri) {
+        Thread {
+            try {
+                var name = "attachment"
+                var declaredSize = -1L
+                contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    if (c.moveToFirst()) {
+                        val hi = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (hi >= 0) name = c.getString(hi) ?: name
+                        val si = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (si >= 0) declaredSize = c.getLong(si)
+                    }
+                }
+                val mime = contentResolver.getType(uri) ?: guessMime(name)
+                val dir = java.io.File(cacheDir, "attach").apply { mkdirs() }
+                val safe = name.replace(Regex("[^\\w.\\-\\u4e00-\\u9fa5]"), "_").take(60)
+                val dest = java.io.File(dir, System.currentTimeMillis().toString() + "_" + safe)
+                contentResolver.openInputStream(uri)?.use { input ->
+                    dest.outputStream().use { output -> input.copyTo(output) }
+                } ?: throw IllegalStateException("无法读取所选文件")
+                val size = if (declaredSize > 0) declaredSize else dest.length()
+                runOnUiThread {
+                    pendingAttachments += PendingAttach(dest.absolutePath, name, mime, size)
+                    renderAttachChips()
+                }
+            } catch (e: Throwable) {
+                runOnUiThread { snack("添加附件失败: ${e.message}") }
+            }
+        }.start()
+    }
 
+    /** 附件 MIME 兜底（按扩展名）。 */
+    private fun guessMime(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "mp4" -> "video/mp4"
+        "pdf" -> "application/pdf"
+        "txt" -> "text/plain"
+        "md" -> "text/markdown"
+        else -> "application/octet-stream"
+    }
+
+    /** 组装待发送附件（协议格式：kind / filename / localPath / mimeType / sizeBytes）。 */
+    private fun buildAttachmentsJson(): org.json.JSONArray? {
+        if (pendingAttachments.isEmpty()) return null
+        val arr = org.json.JSONArray()
+        pendingAttachments.forEach { a ->
+            arr.put(
+                org.json.JSONObject()
+                    .put("kind", kindOf(a.mime))
+                    .put("filename", a.name)
+                    .put("localPath", a.path)
+                    .put("mimeType", a.mime)
+                    .put("sizeBytes", a.sizeBytes),
+            )
+        }
+        return arr
+    }
+
+    private fun kindOf(mime: String): String = when {
+        mime.startsWith("image/") -> "image"
+        mime.startsWith("video/") -> "video"
+        mime.startsWith("audio/") -> "audio"
+        mime == "application/pdf" -> "pdf"
+        else -> "file"
+    }
+
+    /** 待发送附件 chips：名称 + 大小 + 移除按钮。 */
+    private fun renderAttachChips() {
+        val scroll = attachScroll ?: return
+        val chips = attachChips ?: return
+        chips.removeAllViews()
+        if (pendingAttachments.isEmpty()) {
+            scroll.visibility = View.GONE
+            return
+        }
+        scroll.visibility = View.VISIBLE
+        val neutral = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        pendingAttachments.toList().forEach { att ->
+            val chip = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setBackgroundResource(R.drawable.bg_tool_card)
+                setPadding(dp(10), dp(6), dp(6), dp(6))
+            }
+            chip.addView(
+                ImageView(this).apply {
+                    setImageResource(R.drawable.ic_file)
+                    setColorFilter(neutral)
+                    layoutParams = LinearLayout.LayoutParams(dp(16), dp(16))
+                },
+            )
+            chip.addView(
+                TextView(this).apply {
+                    text = att.name
+                    textSize = 12f
+                    maxWidth = dp(150)
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                    setPadding(dp(6), 0, dp(4), 0)
+                },
+            )
+            chip.addView(
+                TextView(this).apply {
+                    text = fmtSize(att.sizeBytes)
+                    textSize = 11f
+                    setTextColor(neutral)
+                },
+            )
+            chip.addView(
+                ImageView(this).apply {
+                    setImageResource(R.drawable.ic_close_lucide)
+                    setColorFilter(neutral)
+                    val lp = LinearLayout.LayoutParams(dp(14), dp(14))
+                    lp.marginStart = dp(8)
+                    layoutParams = lp
+                    setOnClickListener {
+                        pendingAttachments.remove(att)
+                        renderAttachChips()
+                    }
+                },
+            )
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            lp.marginEnd = dp(6)
+            chips.addView(chip, lp)
+        }
+    }
+
+    /** 人类可读的文件大小。 */
+    private fun fmtSize(bytes: Long): String = when {
+        bytes >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1048576.0)
+        bytes >= 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
+
+    /** 用户消息里的附件行：缩略图/图标 + 文件名 + 大小；图片点击全屏预览。 */
+    private fun buildAttachmentRow(f: com.coda.mobileui.core.ZPart.FilePart): View {
+        val neutral = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        val isImage = f.mime.startsWith("image/")
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_tool_card)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.END
+                topMargin = dp(2)
+            }
+        }
+        val thumb = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setImageResource(R.drawable.ic_file)
+            setColorFilter(neutral)
+        }
+        row.addView(thumb)
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), 0, 0, 0)
+        }
+        col.addView(
+            TextView(this).apply {
+                text = f.filename
+                textSize = 13f
+                maxWidth = dp(180)
+                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            },
+        )
+        col.addView(
+            TextView(this).apply {
+                val dims = if (isImage && f.width > 0) " · ${f.width}×${f.height}" else ""
+                text = fmtSize(f.sizeBytes) + dims
+                textSize = 11f
+                setTextColor(neutral)
+            },
+        )
+        row.addView(col)
+        if (isImage) {
+            row.setOnClickListener { openImagePreview(f) }
+            loadAttachmentThumb(f, thumb)
+        }
+        return row
+    }
+
+    /** 附件缩略图：本地文件直读；zcode-artifact 引用走 v4/attachment/read 读回。 */
+    private fun loadAttachmentThumb(f: com.coda.mobileui.core.ZPart.FilePart, into: ImageView) {
+        val url = f.url
+        if (url.isEmpty()) return
+        if (!url.startsWith("zcode-artifact://")) {
+            if (java.io.File(url).exists()) {
+                Thread {
+                    val bmp = decodeSampledFile(url, 128)
+                    if (bmp != null) {
+                        runOnUiThread {
+                            into.clearColorFilter()
+                            into.setImageBitmap(bmp)
+                        }
+                    }
+                }.start()
+            }
+            return
+        }
+        zc.readAttachment(url) { ok, bytes ->
+            if (ok && bytes != null) {
+                val bmp = decodeSampledBytes(bytes, 128)
+                if (bmp != null) {
+                    into.clearColorFilter()
+                    into.setImageBitmap(bmp)
+                }
+            }
+        }
+    }
+
+    /** 图片预览：全屏黑底、点按关闭；数据来源同缩略图。 */
+    private fun openImagePreview(f: com.coda.mobileui.core.ZPart.FilePart) {
+        fun show(bytes: ByteArray?) {
+            if (bytes == null) {
+                snack("图片不可用（可能已过期或未妥善保存）")
+                return
+            }
+            val bmp = try {
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Throwable) {
+                null
+            }
+            if (bmp == null) {
+                snack("图片解码失败")
+                return
+            }
+            val dlg = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar)
+            val iv = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                setImageBitmap(bmp)
+                setOnClickListener { dlg.dismiss() }
+            }
+            dlg.setContentView(iv)
+            dlg.show()
+        }
+        val url = f.url
+        if (url.startsWith("zcode-artifact://")) {
+            snack("正在加载图片…")
+            zc.readAttachment(url) { ok, bytes -> show(if (ok) bytes else null) }
+        } else if (java.io.File(url).exists()) {
+            Thread {
+                val bytes = try {
+                    java.io.File(url).readBytes()
+                } catch (e: Throwable) {
+                    null
+                }
+                runOnUiThread { show(bytes) }
+            }.start()
+        } else {
+            snack("图片不可用（本地文件已清理）")
+        }
+    }
+
+    /** 按目标像素采样解码本地文件（防大图 OOM）。 */
+    private fun decodeSampledFile(path: String, targetPx: Int): android.graphics.Bitmap? = try {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(path, bounds)
+        var sample = 1
+        while (bounds.outWidth / sample > targetPx * 2 && bounds.outHeight / sample > targetPx * 2) {
+            sample *= 2
+        }
+        android.graphics.BitmapFactory.decodeFile(
+            path,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+        )
+    } catch (e: Throwable) {
+        null
+    }
+
+    /** 按目标像素采样解码字节数组（防大图 OOM）。 */
+    private fun decodeSampledBytes(bytes: ByteArray, targetPx: Int): android.graphics.Bitmap? = try {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / sample > targetPx * 2 && bounds.outHeight / sample > targetPx * 2) {
+            sample *= 2
+        }
+        android.graphics.BitmapFactory.decodeByteArray(
+            bytes,
+            0,
+            bytes.size,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+        )
+    } catch (e: Throwable) {
+        null
+    }
     // ------------------------------------------------------------ 运行时对接
 
     override fun onDestroy() {
@@ -957,7 +1285,9 @@ collapseFullDrawerThen { showConversation(conversation) }
                 .filterIsInstance<com.coda.mobileui.core.ZPart.Reasoning>()
                 .joinToString("") { it.text }
             val liveRs = liveReasoning[message.id]?.toString()
-            if (fullText.isEmpty() && tools.isEmpty() && partReasoning.isEmpty() && liveRs == null) {
+            val files = message.parts
+                .filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>()
+            if (fullText.isEmpty() && tools.isEmpty() && partReasoning.isEmpty() && liveRs == null && files.isEmpty()) {
                 return@forEach
             }
             if (message.role == "user") {
@@ -968,8 +1298,10 @@ collapseFullDrawerThen { showConversation(conversation) }
                         body.text = fullText
                         body.setBackgroundResource(R.drawable.bg_bubble_user)
                         body.setPadding(dp(14), dp(10), dp(14), dp(10))
+                        if (fullText.isEmpty()) body.visibility = View.GONE
                     },
                 )
+                files.forEach { f -> host.addView(buildAttachmentRow(f)) }
             } else {
                 val displayReasoning =
                     if (liveRs != null && liveRs.length > partReasoning.length) liveRs else partReasoning

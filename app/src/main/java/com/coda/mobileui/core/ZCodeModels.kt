@@ -46,6 +46,16 @@ sealed class ZPart {
         var title: String?,
         var durationMs: Long?,
     ) : ZPart()
+    /** 附件部件（用户消息）：文件名 / MIME / 内容引用（本地路径或 zcode-artifact://）/ 大小与图片尺寸。 */
+    class FilePart(
+        val filename: String,
+        val mime: String,
+        val url: String,
+        val sizeBytes: Long,
+        val width: Int,
+        val height: Int,
+        val previewReady: Boolean,
+    ) : ZPart()
 }
 
 /** 消息。 */
@@ -113,7 +123,19 @@ object ZParse {
                 durationMs = duration,
             )
         }
-
+        "file" -> {
+            val meta = o.optJSONObject("metadata")
+            val img = meta?.optJSONObject("image")
+            ZPart.FilePart(
+                filename = o.optString("filename").ifEmpty { "附件" },
+                mime = o.optString("mime"),
+                url = o.optString("url"),
+                sizeBytes = meta?.optLong("sizeBytes", 0L) ?: 0L,
+                width = img?.optInt("width", 0) ?: 0,
+                height = img?.optInt("height", 0) ?: 0,
+                previewReady = meta?.optString("recoverability") == "provider_ready",
+            )
+        }
         else -> null
     }
 

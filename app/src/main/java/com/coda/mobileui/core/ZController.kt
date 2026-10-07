@@ -720,14 +720,14 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
-    fun send(text: String, cb: ((Boolean, String) -> Unit)? = null) {
+    fun send(text: String, attachments: JSONArray? = null, cb: ((Boolean, String) -> Unit)? = null) {
         val sid = currentSessionId
         if (sid == null) {
             cb?.invoke(false, "没有打开的会话")
             return
         }
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) {
+        if (trimmed.isEmpty() && (attachments == null || attachments.length() == 0)) {
             cb?.invoke(false, "内容为空")
             return
         }
@@ -737,6 +737,9 @@ class ZController private constructor(private val app: Context) {
             return
         }
         val params = JSONObject().put("sessionId", sid).put("content", text)
+        if (attachments != null && attachments.length() > 0) {
+            params.put("attachments", attachments)
+        }
         val sel = buildModelSelection()
         if (sel != null) params.put("modelSelection", sel)
         runtime.call("session/send", params) { ok, body ->
@@ -751,7 +754,51 @@ class ZController private constructor(private val app: Context) {
             }
         }
     }
-
+    /**
+     * 读取会话附件内容（v4/attachment/read 分块拼接）。
+     * 用于消息里图片附件的预览；回调在主线程，bytes 为 null 表示失败。
+     */
+    fun readAttachment(ref: String, cb: (Boolean, ByteArray?) -> Unit) {
+        val sid = currentSessionId
+        if (sid == null) {
+            post { cb(false, null) }
+            return
+        }
+        val maxBytes = 20 * 1024 * 1024
+        val chunkLimit = 512 * 1024
+        val out = java.io.ByteArrayOutputStream()
+        fun step(offset: Long) {
+            val params = JSONObject()
+                .put("sessionId", sid)
+                .put("ref", ref)
+                .put("offset", offset)
+                .put("limit", chunkLimit)
+            runtime.call("v4/attachment/read", params) { ok, body ->
+                if (!ok || body == null) {
+                    post { cb(false, null) }
+                    return@call
+                }
+                val bytes = try {
+                    android.util.Base64.decode(body.optString("dataBase64"), android.util.Base64.DEFAULT)
+                } catch (e: Throwable) {
+                    null
+                }
+                if (bytes == null) {
+                    post { cb(false, null) }
+                    return@call
+                }
+                out.write(bytes)
+                val nextRaw = body.opt("nextOffset")
+                if (nextRaw == null || nextRaw == JSONObject.NULL || out.size() >= maxBytes) {
+                    val data = out.toByteArray()
+                    post { cb(true, data) }
+                } else {
+                    step(body.optLong("nextOffset", 0L))
+                }
+            }
+        }
+        step(0L)
+    }
     fun stop(cb: ((Boolean, String) -> Unit)? = null) {
         val sid = currentSessionId
         if (sid == null) {

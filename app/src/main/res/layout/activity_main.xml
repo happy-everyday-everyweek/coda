@@ -258,6 +258,23 @@
                     android:paddingEnd="8dp"
                     android:paddingBottom="6dp">
 
+                    <HorizontalScrollView
+                        android:id="@+id/attach_scroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingStart="6dp"
+                        android:paddingTop="6dp"
+                        android:paddingEnd="6dp"
+                        android:scrollbars="none"
+                        android:visibility="gone">
+
+                        <LinearLayout
+                            android:id="@+id/attach_chips"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal" />
+                    </HorizontalScrollView>
+
                     <EditText
                         android:id="@+id/input_message"
                         android:layout_width="match_parent"
