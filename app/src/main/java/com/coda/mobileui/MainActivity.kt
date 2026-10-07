@@ -994,20 +994,19 @@ collapseFullDrawerThen { showConversation(conversation) }
                     },
                 )
                 tools.forEach { tool ->
-                    host.addView(
-                        inflater.inflate(R.layout.view_chat_tool, host, false).apply {
-                            findViewById<TextView>(R.id.tool_name).text = toolLabel(tool.tool)
-                            findViewById<ImageView>(R.id.tool_icon).setImageResource(toolIcon(tool.tool))
-                            findViewById<ImageView>(R.id.tool_icon).setColorFilter(neutral)
-                            findViewById<TextView>(R.id.tool_summary).text =
-                                (tool.output ?: tool.input ?: "").take(160)
-                            findViewById<TextView>(R.id.tool_detail).text = when (tool.status) {
-                                "running", "scheduled" -> getString(R.string.tool_state_running)
-                                "error", "denied" -> getString(R.string.tool_state_failed)
-                                else -> ""
-                            }
-                        },
-                    )
+                    val row = inflater.inflate(R.layout.view_chat_tool, host, false)
+                    row.findViewById<TextView>(R.id.tool_name).text = toolLabel(tool.tool)
+                    row.findViewById<ImageView>(R.id.tool_icon).setImageResource(toolIcon(tool.tool))
+                    row.findViewById<ImageView>(R.id.tool_icon).setColorFilter(neutral)
+                    row.findViewById<TextView>(R.id.tool_summary).text =
+                        (tool.output ?: tool.input ?: "").take(160)
+                    row.findViewById<TextView>(R.id.tool_detail).text = when (tool.status) {
+                        "running", "scheduled" -> getString(R.string.tool_state_running)
+                        "error", "denied" -> getString(R.string.tool_state_failed)
+                        else -> ""
+                    }
+                    row.setOnClickListener { showToolDetail(tool) }
+                    host.addView(row)
                 }
             }
         }
@@ -1133,6 +1132,86 @@ collapseFullDrawerThen { showConversation(conversation) }
             String.format(java.util.Locale.US, "%.1fs", ds / 10.0)
         } else {
             String.format(java.util.Locale.US, "%dm %.1fs", ds / 600, (ds % 600) / 10.0)
+        }
+    }
+
+    /**工具调用详情：半屏卡片展示完整输入/输出。 */
+    private fun showToolDetail(tool: com.coda.mobileui.core.ZPart.ToolPart) {
+        val status = when (tool.status) {
+            "running", "scheduled" -> getString(R.string.tool_state_running)
+            "error", "denied" -> getString(R.string.tool_state_failed)
+            else -> "完成"
+        }
+        val bits = mutableListOf(status)
+        tool.durationMs?.let { bits += fmtDur(it) }
+        tool.title?.takeIf { it.isNotEmpty() }?.let { bits += it }
+        CodaSheet(this)
+            .title(toolLabel(tool.tool))
+            .subtitle(bits.joinToString(" · "))
+            .content { col ->
+                val input = tool.input
+                val output = tool.output
+                if (!input.isNullOrBlank()) {
+                    col.addView(sheetSectionLabel("输入"))
+                    col.addView(sheetCodeBlock(prettyJson(input)))
+                }
+                if (!output.isNullOrBlank()) {
+                    col.addView(sheetSectionLabel("输出"))
+                    col.addView(sheetCodeBlock(output))
+                }
+                if (input.isNullOrBlank() && output.isNullOrBlank()) {
+                    col.addView(sheetSectionLabel("暂无可展示的输入/输出"))
+                }
+            }
+            .show()
+    }
+
+    private fun sheetSectionLabel(text: String): TextView {
+        val neutral = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        return TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setTextColor(neutral)
+            typeface = android.graphics.Typeface.create(
+                "sans-serif-medium",
+                android.graphics.Typeface.NORMAL,
+            )
+            setPadding(0, dp(14), 0, dp(6))
+        }
+    }
+
+    private fun sheetCodeBlock(text: String): TextView {
+        val neutral = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        return TextView(this).apply {
+            this.text = text
+            textSize = 12f
+            setTextColor(neutral)
+            setTextIsSelectable(true)
+            typeface = android.graphics.Typeface.MONOSPACE
+            setBackgroundResource(R.drawable.bg_tool_card)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+    }
+
+    private fun prettyJson(s: String): String {
+        val t = s.trim()
+        if (!t.startsWith("{") && !t.startsWith("[")) return s
+        return try {
+            if (t.startsWith("{")) {
+                org.json.JSONObject(t).toString(2)
+            } else {
+                org.json.JSONArray(t).toString(2)
+            }
+        } catch (_: Throwable) {
+            s
         }
     }
 
