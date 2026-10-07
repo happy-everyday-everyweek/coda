@@ -20,7 +20,6 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.color.MaterialColors
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.coda.mobileui.core.AgentAssets
 import com.coda.mobileui.core.AutomationSchedule
@@ -264,40 +263,96 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
+    /** 半屏单选列表：点击项后自动关闭。 */
+    private fun sheetPickList(title: String, options: List<String>, current: Int, onPick: (Int) -> Unit) {
+        val sheet = CodaSheet(this).title(title)
+        sheet.content { col ->
+            val neutral = MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                android.graphics.Color.GRAY,
+            )
+            val primary = MaterialColors.getColor(
+                this,
+                androidx.appcompat.R.attr.colorPrimary,
+                neutral,
+            )
+            options.forEachIndexed { index, label ->
+                col.addView(
+                    TextView(this).apply {
+                        text = label
+                        textSize = 16f
+                        setTextColor(if (index == current) primary else neutral)
+                        setPadding(dp(2), dp(14), dp(2), dp(14))
+                        setOnClickListener {
+                            onPick(index)
+                            sheet.dismiss()
+                        }
+                    },
+                )
+            }
+        }
+        sheet.show()
+    }
+
+    /** 半屏确认卡片：紧凑模式 + 取消/确认双按钮。 */
+    private fun sheetConfirm(title: String, message: String, confirmText: String, onConfirm: () -> Unit) {
+        CodaSheet(this)
+            .compact()
+            .title(title)
+            .subtitle(message)
+            .secondaryAction("取消") { it.dismiss() }
+            .primaryAction(confirmText) { sheet ->
+                sheet.dismiss()
+                onConfirm()
+            }
+            .show()
+    }
+
     /** 主色：色板选择 + 自定义颜色入口；选中即关闭自动取色、同步更换应用图标。 */
     private fun pickAccent() {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_accent_picker, null)
-        val grid = dialogView.findViewById<GridLayout>(R.id.accent_grid)
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.appearance_accent)
-            .setView(dialogView)
-            .create()
-
-        val cellSize = dp(48)
-        SettingsStore.ACCENT_COLORS.forEachIndexed { index, color ->
-            val cell = View(this)
-            cell.layoutParams = GridLayout.LayoutParams().apply {
-                width = cellSize
-                height = cellSize
-                setMargins(dp(8), dp(8), dp(8), dp(8))
+        val sheet = CodaSheet(this).title(getString(R.string.appearance_accent))
+        sheet.content { col ->
+            val grid = GridLayout(this).apply {
+                columnCount = 4
+                rowCount = 2
             }
-            cell.background = accentSwatch(color, index == store.accentIndex && !store.autoColor)
-            cell.contentDescription = SettingsStore.ACCENT_NAMES[index]
-            cell.setOnClickListener {
-                store.accentIndex = index
-                store.customAccentHex = ""
-                store.autoColor = false
-                dialog.dismiss()
-                recreate()
+            val cellSize = dp(48)
+            SettingsStore.ACCENT_COLORS.forEachIndexed { index, color ->
+                val cell = View(this)
+                cell.layoutParams = GridLayout.LayoutParams().apply {
+                    width = cellSize
+                    height = cellSize
+                    setMargins(dp(8), dp(8), dp(8), dp(8))
+                }
+                cell.background = accentSwatch(color, index == store.accentIndex && !store.autoColor)
+                cell.contentDescription = SettingsStore.ACCENT_NAMES[index]
+                cell.setOnClickListener {
+                    store.accentIndex = index
+                    store.customAccentHex = ""
+                    store.autoColor = false
+                    sheet.dismiss()
+                    recreate()
+                }
+                grid.addView(cell)
             }
-            grid.addView(cell)
+            col.addView(grid)
+            col.addView(
+                Button(this).apply {
+                    text = getString(R.string.appearance_accent_custom)
+                    isAllCaps = false
+                    setOnClickListener {
+                        sheet.dismiss()
+                        pickCustomAccent()
+                    }
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(16) },
+            )
         }
-
-        dialogView.findViewById<Button>(R.id.accent_custom).setOnClickListener {
-            dialog.dismiss()
-            pickCustomAccent()
-        }
-        dialog.show()
+        sheet.show()
     }
 
     /** 色板色块：圆形填充，选中时描边。 */
@@ -322,66 +377,63 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             hint = getString(R.string.appearance_accent_custom_hint)
             setText(store.customAccentHex.removePrefix("#"))
         }
-        val wrapper = FrameLayout(this).apply {
-            setPadding(dp(24), dp(8), dp(24), 0)
-            addView(
+        val sheet = CodaSheet(this)
+            .compact()
+            .title(getString(R.string.appearance_accent_custom))
+            .secondaryAction(getString(android.R.string.cancel)) { it.dismiss() }
+        sheet.content { col ->
+            col.addView(
                 input,
-                FrameLayout.LayoutParams(
+                LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
+                ).apply { topMargin = dp(10) },
             )
         }
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.appearance_accent_custom)
-            .setView(wrapper)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val hex = input.text.toString().trim().removePrefix("#")
-                val parsed = hex.toLongOrNull(16)?.toInt() ?: return@setPositiveButton
+        sheet.primaryAction(getString(android.R.string.ok)) { s ->
+            val hex = input.text.toString().trim().removePrefix("#")
+            val parsed = hex.toLongOrNull(16)?.toInt()
+            if (parsed != null) {
                 val color = parsed or 0xFF000000.toInt()
                 store.customAccentHex = "#" + hex.uppercase().padStart(6, '0')
                 store.accentIndex = SettingsStore.nearestAccentIndex(color)
                 store.autoColor = false
+                s.dismiss()
                 recreate()
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        }
+        sheet.show()
     }
 
     /** 界面字号：调整后整站文字随之缩放。 */
     private fun pickFontScale() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.appearance_font_scale)
-            .setSingleChoiceItems(SettingsStore.FONT_SCALE_NAMES, store.fontScaleIndex) { dialog, which ->
-                store.fontScaleIndex = which
-                dialog.dismiss()
-                recreate()
-            }
-            .show()
+        sheetPickList(
+            getString(R.string.appearance_font_scale),
+            SettingsStore.FONT_SCALE_NAMES.toList(),
+            store.fontScaleIndex,
+        ) { which ->
+            store.fontScaleIndex = which
+            recreate()
+        }
     }
 
     private fun pickCodeFontSize() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.appearance_code_font_size)
-            .setSingleChoiceItems(SettingsStore.CODE_FONT_SIZE_NAMES, store.codeFontSizeIndex) { dialog, which ->
-                store.codeFontSizeIndex = which
-                dialog.dismiss()
-                renderPage()
-            }
-            .show()
+        sheetPickList(
+            getString(R.string.appearance_code_font_size),
+            SettingsStore.CODE_FONT_SIZE_NAMES.toList(),
+            store.codeFontSizeIndex,
+        ) { which ->
+            store.codeFontSizeIndex = which
+            renderPage()
+        }
     }
 
     private fun pickCodeTheme(title: String, isLight: Boolean) {
         val current = if (isLight) store.codeThemeLightIndex else store.codeThemeDarkIndex
-        MaterialAlertDialogBuilder(this)
-            .setTitle(title)
-            .setSingleChoiceItems(SettingsStore.CODE_THEMES, current) { dialog, which ->
-                if (isLight) store.codeThemeLightIndex = which else store.codeThemeDarkIndex = which
-                dialog.dismiss()
-                renderPage()
-            }
-            .show()
+        sheetPickList(title, SettingsStore.CODE_THEMES.toList(), current) { which ->
+            if (isLight) store.codeThemeLightIndex = which else store.codeThemeDarkIndex = which
+            renderPage()
+        }
     }
 
     /** 供应商编辑（添加 / 修改）：保存后重启核心使配置生效。 */
@@ -412,32 +464,33 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             hint = "接口类型（默认 openai-chat-completions）"
             setText(existing?.apiType ?: "openai-chat-completions")
         }
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(8), dp(24), 0)
-            addView(idInput)
-            addView(nameInput)
-            addView(urlInput)
-            addView(keyInput)
-            addView(modelsInput)
-            addView(apiTypeInput)
+        val sheet = CodaSheet(this)
+            .title(if (existing == null) "添加供应商" else "编辑供应商")
+            .secondaryAction("取消") { it.dismiss() }
+        if (existing != null) {
+            sheet.headerAction("删除") { s ->
+                s.dismiss()
+                confirmDeleteProvider(existing)
+            }
         }
-        // 包一层 ScrollView：字段较多，键盘弹出时可以滚动查看输入内容
-        val scroller = ScrollView(this).apply { addView(wrap) }
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(if (existing == null) "添加供应商" else "编辑供应商")
-            .setView(scroller)
-            .setPositiveButton("保存") { _, _ ->
-                val id = idInput.text.toString().trim()
-                val models = modelsInput.text.toString()
-                    .split(',', '，')
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .toMutableList()
-                if (id.isEmpty() || models.isEmpty()) {
-                    snack("供应商 ID 与至少一个模型名不能为空")
-                    return@setPositiveButton
-                }
+        sheet.content { col ->
+            col.addView(idInput)
+            col.addView(nameInput)
+            col.addView(urlInput)
+            col.addView(keyInput)
+            col.addView(modelsInput)
+            col.addView(apiTypeInput)
+        }
+        sheet.primaryAction("保存") { s ->
+            val id = idInput.text.toString().trim()
+            val models = modelsInput.text.toString()
+                .split(',', '，')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toMutableList()
+            if (id.isEmpty() || models.isEmpty()) {
+                snack("供应商 ID 与至少一个模型名不能为空")
+            } else {
                 val list = ProviderStore.load(this)
                 list.removeAll { it.id == id }
                 list.add(
@@ -452,15 +505,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     ),
                 )
                 ProviderStore.save(this, list)
+                s.dismiss()
                 applyProviderChange()
             }
-            .setNegativeButton("取消", null)
-        if (existing != null) {
-            dialog.setNeutralButton("删除") { _, _ -> confirmDeleteProvider(existing) }
         }
-        val alert = dialog.show()
-        // 键盘弹出时上移对话框，保证输入框与输入内容不被输入法遮挡
-        alert.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        sheet.show()
     }
 
     /** 保存后的统一步骤：防抖合并连续保存，随后重启核心使配置生效。 */
@@ -480,17 +529,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     private fun confirmDeleteProvider(p: ProviderStore.Provider) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("删除供应商")
-            .setMessage("确定删除「${p.name}」及其全部模型配置？")
-            .setPositiveButton("删除") { _, _ ->
-                val list = ProviderStore.load(this)
-                list.removeAll { it.id == p.id }
-                ProviderStore.save(this, list)
-                applyProviderChange()
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        sheetConfirm("删除供应商", "确定删除「${p.name}」及其全部模型配置？", "删除") {
+            val list = ProviderStore.load(this)
+            list.removeAll { it.id == p.id }
+            ProviderStore.save(this, list)
+            applyProviderChange()
+        }
     }
 
     /** 子智能体 / 技能 / 命令 的编辑对话框（与设置系统其它对话框同套组件）。 */
@@ -511,41 +555,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             minLines = 6
             gravity = android.view.Gravity.TOP or android.view.Gravity.START
         }
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(8), dp(24), 0)
-            addView(nameInput)
-            addView(descInput)
-            addView(bodyInput)
-        }
-        // 包一层 ScrollView：正文较长时键盘弹出仍可滚动查看
-        val scroller = ScrollView(this).apply { addView(wrap) }
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(if (item == null) "新建${kind.label}" else "编辑${kind.label}")
-            .setView(scroller)
-            .setPositiveButton("保存") { _, _ ->
-                val err = AgentAssets.save(
-                    this,
-                    kind,
-                    nameInput.text.toString().trim(),
-                    descInput.text.toString().trim(),
-                    bodyInput.text.toString(),
-                    item?.path,
-                )
-                if (err != null) {
-                    snack(err)
-                } else {
-                    if (kind == AgentAssets.Kind.COMMAND) {
-                        // 命令目录随时生效：立即刷新斜杠命令表
-                        ZController.get(this).refreshWorkspacePresentation(null)
-                    }
-                    snack("已保存；新建会话后生效")
-                    renderPage()
-                }
-            }
-            .setNegativeButton("取消", null)
+        val sheet = CodaSheet(this)
+            .title(if (item == null) "新建${kind.label}" else "编辑${kind.label}")
+            .secondaryAction("取消") { it.dismiss() }
         if (item != null) {
-            dialog.setNeutralButton("删除") { _, _ ->
+            sheet.headerAction("删除") { s ->
+                s.dismiss()
                 AgentAssets.delete(item.path)
                 if (kind == AgentAssets.Kind.COMMAND) {
                     ZController.get(this).refreshWorkspacePresentation(null)
@@ -554,9 +569,32 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 renderPage()
             }
         }
-        val alert = dialog.show()
-        // 键盘弹出时上移对话框，保证输入框与输入内容不被输入法遮挡
-        alert.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        sheet.content { col ->
+            col.addView(nameInput)
+            col.addView(descInput)
+            col.addView(bodyInput)
+        }
+        sheet.primaryAction("保存") { s ->
+            val err = AgentAssets.save(
+                this,
+                kind,
+                nameInput.text.toString().trim(),
+                descInput.text.toString().trim(),
+                bodyInput.text.toString(),
+                item?.path,
+            )
+            if (err != null) {
+                snack(err)
+            } else {
+                if (kind == AgentAssets.Kind.COMMAND) {
+                    ZController.get(this).refreshWorkspacePresentation(null)
+                }
+                snack("已保存；新建会话后生效")
+                s.dismiss()
+                renderPage()
+            }
+        }
+        sheet.show()
     }
 
     // ------------------------------------------------------------ 定时任务管理
@@ -576,8 +614,6 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val detail = buildString {
             append("计划：").append(row.optString("cron_expr")).append('\n')
             append("提示词：").append(row.optString("prompt").take(160)).append('\n')
-            append("状态：").append(if (enabled) "启用中" else "已停用")
-            append(" · 已运行 ").append(runCount).append(" 次\n")
             if (!row.isNull("next_run_at")) {
                 append("下次运行：").append(CodaExtras.formatTs(row.optLong("next_run_at"))).append('\n')
             }
@@ -585,13 +621,36 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 append("上次错误：").append(row.optString("last_error").take(120))
             }
         }
-        val builder = MaterialAlertDialogBuilder(this)
-            .setTitle(title)
-            .setMessage(detail)
-            .setPositiveButton(if (enabled) "停用" else "启用") { _, _ -> toggleAutomation(id, !enabled) }
-            .setNegativeButton("关闭", null)
-        builder.setNeutralButton("删除") { _, _ -> confirmDeleteAutomation(id, title) }
-        builder.show()
+        val sheet = CodaSheet(this)
+            .title(title)
+            .subtitle(
+                (if (enabled) "启用中" else "已停用") + " · 已运行 $runCount 次",
+            )
+        sheet.content { col ->
+            val neutral = MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                android.graphics.Color.GRAY,
+            )
+            col.addView(
+                TextView(this).apply {
+                    text = detail
+                    textSize = 14f
+                    setTextColor(neutral)
+                    setPadding(0, dp(10), 0, dp(4))
+                },
+            )
+        }
+        sheet.secondaryAction("关闭") { it.dismiss() }
+        sheet.primaryAction(if (enabled) "停用" else "启用") { s ->
+            s.dismiss()
+            toggleAutomation(id, !enabled)
+        }
+        sheet.headerAction("删除") { s ->
+            s.dismiss()
+            confirmDeleteAutomation(id, title)
+        }
+        sheet.show()
     }
 
     private fun toggleAutomation(id: String, enable: Boolean) {
@@ -619,20 +678,15 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     private fun confirmDeleteAutomation(id: String, title: String) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("删除任务")
-            .setMessage("确定删除「$title」？此操作不可恢复。")
-            .setPositiveButton("删除") { _, _ ->
-                Thread({
-                    val ok = AutomationStore(applicationContext).delete(id)
-                    runOnUiThread {
-                        snack(if (ok) "已删除" else "删除失败")
-                        renderPage()
-                    }
-                }, "coda-auto-del").start()
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        sheetConfirm("删除任务", "确定删除「$title」？此操作不可恢复。", "删除") {
+            Thread({
+                val ok = AutomationStore(applicationContext).delete(id)
+                runOnUiThread {
+                    snack(if (ok) "已删除" else "删除失败")
+                    renderPage()
+                }
+            }, "coda-auto-del").start()
+        }
     }
 
     // ------------------------------------------------------------ 手机控制
@@ -690,18 +744,34 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 },
             )
         }
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(entry.event)
-            .setMessage(detail)
-            .setNegativeButton("关闭", null)
+        val sheet = CodaSheet(this)
+            .title(entry.event)
+        sheet.content { col ->
+            val neutral = MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                android.graphics.Color.GRAY,
+            )
+            col.addView(
+                TextView(this).apply {
+                    text = detail
+                    textSize = 14f
+                    setTextColor(neutral)
+                    setPadding(0, dp(10), 0, dp(4))
+                },
+            )
+        }
+        sheet.secondaryAction("关闭") { it.dismiss() }
         val bundle = snap.bundleDigest
         if (isProject && !trusted && bundle != null) {
-            dialog.setPositiveButton("信任") { _, _ ->
+            sheet.primaryAction("信任") { s ->
+                s.dismiss()
                 grantHook(ctrl, wp, bundle, entry.declarationDigest)
             }
         }
         if (isProject && entry.source.editable) {
-            dialog.setNeutralButton("删除") { _, _ ->
+            sheet.headerAction("删除") { s ->
+                s.dismiss()
                 val err = HooksCore.removeHook(
                     entry.source.canonicalPath,
                     entry.event,
@@ -712,7 +782,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 renderPage()
             }
         }
-        dialog.show()
+        sheet.show()
     }
 
     private fun grantHook(ctrl: ZController, wp: String, bundleDigest: String, declarationDigest: String) {
@@ -733,12 +803,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 新建钩子：先选事件，再填命令。 */
     private fun addHookDialog() {
         val eventNames = HooksCore.EVENT_NAMES.toTypedArray()
-        val labels = eventNames.map { "${HooksCore.EVENT_LABELS[it] ?: it}（$it）" }.toTypedArray()
-        MaterialAlertDialogBuilder(this)
-            .setTitle("选择事件")
-            .setItems(labels) { _, which -> addHookInputDialog(eventNames[which]) }
-            .setNegativeButton("取消", null)
-            .show()
+        val labels = eventNames.map { "${HooksCore.EVENT_LABELS[it] ?: it}（$it）" }
+        sheetPickList("选择事件", labels, -1) { which ->
+            addHookInputDialog(eventNames[which])
+        }
     }
 
     private fun addHookInputDialog(event: String) {
@@ -752,34 +820,30 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             hint = "超时毫秒（可选，默认 60000）"
             inputType = InputType.TYPE_CLASS_NUMBER
         }
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(8), dp(24), 0)
-            addView(matcherInput)
-            addView(commandInput)
-            addView(timeoutInput)
+        val sheet = CodaSheet(this)
+            .title("添加钩子 · $event")
+            .secondaryAction("取消") { it.dismiss() }
+        sheet.content { col ->
+            col.addView(matcherInput)
+            col.addView(commandInput)
+            col.addView(timeoutInput)
         }
-        val scroller = ScrollView(this).apply { addView(wrap) }
-        val alert = MaterialAlertDialogBuilder(this)
-            .setTitle("添加钩子 · $event")
-            .setView(scroller)
-            .setPositiveButton("保存") { _, _ ->
-                val matcher = matcherInput.text.toString().trim().takeIf { it.isNotEmpty() }
-                val command = commandInput.text.toString().trim()
-                val timeout = timeoutInput.text.toString().trim().toLongOrNull()
-                val err = HooksCore.addHook(
-                    ZController.get(this).workspacePath(),
-                    event,
-                    matcher,
-                    command,
-                    timeout,
-                )
-                snack(err ?: "已保存；未信任的钩子需要在本页授予信任后才会执行")
-                renderPage()
-            }
-            .setNegativeButton("取消", null)
-            .show()
-        alert.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        sheet.primaryAction("保存") { s ->
+            val matcher = matcherInput.text.toString().trim().takeIf { it.isNotEmpty() }
+            val command = commandInput.text.toString().trim()
+            val timeout = timeoutInput.text.toString().trim().toLongOrNull()
+            val err = HooksCore.addHook(
+                ZController.get(this).workspacePath(),
+                event,
+                matcher,
+                command,
+                timeout,
+            )
+            snack(err ?: "已保存；未信任的钩子需要在本页授予信任后才会执行")
+            s.dismiss()
+            renderPage()
+        }
+        sheet.show()
     }
 
     // ------------------------------------------------------------ 系统页操作
@@ -822,15 +886,29 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     private fun showLicense() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("开源许可")
-            .setMessage(
-                "Coda 以 AGPL-3.0 许可证发布。\n\n" +
-                    "内置运行时内核来自 zCode 开源项目（Apache-2.0），版权归其各自作者所有；" +
-                    "再分发时保留上游许可与声明。\n\n" +
-                    "完整许可证文本见项目仓库 LICENSE 文件。",
-            )
-            .setPositiveButton("关闭", null)
+        CodaSheet(this)
+            .compact()
+            .title("开源许可")
+            .content { col ->
+                val neutral = MaterialColors.getColor(
+                    this,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                )
+                col.addView(
+                    TextView(this).apply {
+                        text =
+                            "Coda 以 AGPL-3.0 许可证发布。\n\n" +
+                                "内置运行时内核来自 zCode 开源项目（Apache-2.0），版权归其各自作者所有；" +
+                                "再分发时保留上游许可与声明。\n\n" +
+                                "完整许可证文本见项目仓库 LICENSE 文件。"
+                        textSize = 14f
+                        setTextColor(neutral)
+                        setPadding(0, dp(8), 0, dp(4))
+                    },
+                )
+            }
+            .primaryAction("关闭") { it.dismiss() }
             .show()
     }
 
@@ -851,19 +929,15 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     /** 使用统计的时间范围：近 7 日 / 近 30 日 / 全部。 */
     private fun pickUsageRange() {
-        val labels = arrayOf("近 7 日", "近 30 日", "全部时间")
+        val labels = listOf("近 7 日", "近 30 日", "全部时间")
         val values = arrayOf("7d", "30d", "all")
         val current = values.indexOf(usageRange()).coerceAtLeast(0)
-        MaterialAlertDialogBuilder(this)
-            .setTitle("统计范围")
-            .setSingleChoiceItems(labels, current) { dialog, which ->
-                getSharedPreferences("zcode_bridge", MODE_PRIVATE).edit()
-                    .putString("usage_range", values[which]).apply()
-                extrasCache.remove("usage")
-                dialog.dismiss()
-                renderPage()
-            }
-            .show()
+        sheetPickList("统计范围", labels, current) { which ->
+            getSharedPreferences("zcode_bridge", MODE_PRIVATE).edit()
+                .putString("usage_range", values[which]).apply()
+            extrasCache.remove("usage")
+            renderPage()
+        }
     }
 
     private fun snack(text: String) {

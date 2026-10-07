@@ -1,6 +1,7 @@
 package com.coda.mobileui
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.drawable.GradientDrawable
@@ -23,17 +24,22 @@ import com.google.android.material.color.MaterialColors
 
 /**
  * 标准半屏卡片容器：
- * - 从底部升起，默认停靠半屏（卡片形态）；顶部带滑动把手；
- * - 向上拖动展开为全屏，向下拖动回到半屏；半屏继续下拉（或快速下甩）关闭；
- * - 内容由调用方填充，组件只负责停靠、拖拽与遮罩。
+ * - 常规模式：从底部升起，默认停靠半屏（卡片形态）；顶部滑动把手；
+ *   向上拖动展开为全屏，向下拖回半屏，半屏继续下拉关闭；
+ * - 紧凑模式（compact）：高度随内容自适应（上限约 0.72 屏），仅支持下拉关闭；
+ * - 内容由调用方填充；确认类用「副按钮 + 主按钮」页脚，选择/表单类用 content 区域。
  */
 class CodaSheet(private val activity: Activity) {
 
     companion object {
         /** 全屏态高度占屏高比例（顶部留出少量背景）。 */
         private const val FULL_RATIO = 0.93f
+
         /** 半屏态高度占屏高比例（卡片形态）。 */
         private const val HALF_RATIO = 0.61f
+
+        /** 紧凑模式内容区高度上限占屏高比例。 */
+        private const val COMPACT_MAX_RATIO = 0.72f
     }
 
     private var titleText: String? = null
@@ -42,8 +48,11 @@ class CodaSheet(private val activity: Activity) {
     private var headerActionBlock: ((CodaSheet) -> Unit)? = null
     private var primaryText: String? = null
     private var primaryBlock: ((CodaSheet) -> Unit)? = null
+    private var secondaryText: String? = null
+    private var secondaryBlock: ((CodaSheet) -> Unit)? = null
     private var contentBlock: ((LinearLayout) -> Unit)? = null
     private var onDismissBlock: (() -> Unit)? = null
+    private var compactMode = false
 
     private var root: FrameLayout? = null
     private var scrim: View? = null
@@ -71,7 +80,16 @@ class CodaSheet(private val activity: Activity) {
         primaryBlock = block
     }
 
+    /** 页脚次要按钮（与主按钮并排，描边样式）。 */
+    fun secondaryAction(text: String, block: (CodaSheet) -> Unit): CodaSheet = apply {
+        secondaryText = text
+        secondaryBlock = block
+    }
+
     fun onDismiss(block: () -> Unit): CodaSheet = apply { onDismissBlock = block }
+
+    /** 紧凑模式：高度随内容自适应（上限约 0.72 屏），仅支持下拉关闭。 */
+    fun compact(): CodaSheet = apply { compactMode = true }
 
     private fun dp(v: Float): Int =
         (v * activity.resources.displayMetrics.density + 0.5f).toInt()
@@ -79,7 +97,7 @@ class CodaSheet(private val activity: Activity) {
     private fun color(attr: Int, fallback: Int): Int =
         MaterialColors.getColor(activity.window.decorView, attr, fallback)
 
-    /** 显示半屏卡片（默认停靠半屏，可拖拽展开全屏）。 */
+    /** 显示半屏卡片（常规模式默认停靠半屏；紧凑模式自适应内容高度）。 */
     fun show() {
         if (isShowing) return
         val decor = activity.window.decorView as ViewGroup
@@ -104,7 +122,7 @@ class CodaSheet(private val activity: Activity) {
         }
         rootView.addView(scrimView, matchParams())
 
-        // 面板：顶部大圆角，高度 = 全屏态高度（用 translationY 表现半屏）
+        // 面板：顶部大圆角
         val panelView = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
@@ -122,10 +140,20 @@ class CodaSheet(private val activity: Activity) {
                 }
             }
         }
-        rootView.addView(
-            panelView,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, fullHeight, Gravity.BOTTOM),
-        )
+        val panelParams = if (compactMode) {
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM,
+            )
+        } else {
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                fullHeight,
+                Gravity.BOTTOM,
+            )
+        }
+        rootView.addView(panelView, panelParams)
 
         // 拖拽区：滑动把手行 + 控制行
         val dragArea = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
@@ -201,18 +229,33 @@ class CodaSheet(private val activity: Activity) {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24f), dp(8f), dp(24f), dp(20f))
         }
-        val scroll = ScrollView(activity).apply {
-            isFillViewport = true
-            overScrollMode = View.OVER_SCROLL_ALWAYS
-            addView(
-                contentCol,
-                ViewGroup.LayoutParams(
+        val scroll: ScrollView = if (compactMode) {
+            MaxHeightScrollView(activity).apply {
+                maxHeightPx = (screenH * COMPACT_MAX_RATIO).toInt()
+            }
+        } else {
+            ScrollView(activity)
+        }
+        scroll.isFillViewport = true
+        scroll.overScrollMode = View.OVER_SCROLL_ALWAYS
+        scroll.addView(
+            contentCol,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        panelView.addView(
+            scroll,
+            if (compactMode) {
+                LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-        }
-        panelView.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                )
+            } else {
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            },
+        )
 
         if (!titleText.isNullOrEmpty()) {
             contentCol.addView(
@@ -239,25 +282,51 @@ class CodaSheet(private val activity: Activity) {
         }
         contentBlock?.invoke(contentCol)
 
-        // 底部主操作（可选）
-        if (primaryText != null) {
-            val footer = FrameLayout(activity).apply {
+        // 页脚按钮（可选：单主按钮，或 副+主 双按钮）
+        if (primaryText != null || secondaryText != null) {
+            val footer = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
             }
-            footer.addView(
-                TextView(activity).apply {
-                    text = primaryText
-                    textSize = 15f
+            fun footerButton(
+                label: String,
+                filled: Boolean,
+                block: (CodaSheet) -> Unit,
+            ): TextView = TextView(activity).apply {
+                text = label
+                textSize = 15f
+                gravity = Gravity.CENTER
+                if (filled) {
                     setTextColor(onPrimary)
-                    gravity = Gravity.CENTER
                     background = GradientDrawable().apply {
                         cornerRadius = dp(26f).toFloat()
                         setColor(primary)
                     }
-                    setOnClickListener { primaryBlock?.invoke(this@CodaSheet) }
-                },
-                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52f)),
-            )
+                } else {
+                    setTextColor(onSurface)
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(26f).toFloat()
+                        setStroke(dp(1f), withAlpha(onSurface, 0.25f))
+                    }
+                }
+                setOnClickListener { block(this@CodaSheet) }
+            }
+            val both = primaryText != null && secondaryText != null
+            if (secondaryText != null) {
+                footer.addView(
+                    footerButton(secondaryText!!, false) { secondaryBlock?.invoke(it) },
+                    LinearLayout.LayoutParams(0, dp(52f), 1f).apply {
+                        if (both) rightMargin = dp(12f)
+                    },
+                )
+            }
+            if (primaryText != null) {
+                footer.addView(
+                    footerButton(primaryText!!, true) { primaryBlock?.invoke(it) },
+                    LinearLayout.LayoutParams(0, dp(52f), 1f),
+                )
+            }
             panelView.addView(
                 footer,
                 LinearLayout.LayoutParams(
@@ -267,7 +336,7 @@ class CodaSheet(private val activity: Activity) {
             )
         }
 
-        // —— 拖拽逻辑（把手/空白区拖动；半屏⇄全屏⇄关闭）——
+        // —— 拖拽逻辑 ——
         val fling = ViewConfiguration.get(activity).scaledMinimumFlingVelocity.toFloat()
         var dragging = false
         var startRawY = 0f
@@ -289,9 +358,13 @@ class CodaSheet(private val activity: Activity) {
                     if (!dragging) return@setOnTouchListener false
                     val dy = ev.rawY - startRawY
                     var t = startTrans + dy
-                    // 超过上界（全屏后继续上拉）与下界的阻尼
-                    t = if (t < 0f) t * 0.35f else t
-                    if (t > halfOffset) t = halfOffset + (t - halfOffset) * 0.6f
+                    if (compactMode) {
+                        // 紧凑模式：仅允许向下拖（关），向上阻尼
+                        t = if (t < 0f) t * 0.3f else t
+                    } else {
+                        t = if (t < 0f) t * 0.35f else t
+                        if (t > halfOffset) t = halfOffset + (t - halfOffset) * 0.6f
+                    }
                     panelView.animate().cancel()
                     panelView.translationY = t
                     lastRawY = ev.rawY
@@ -303,21 +376,21 @@ class CodaSheet(private val activity: Activity) {
                     dragging = false
                     val now = SystemClock.uptimeMillis()
                     val dt = (now - lastMoveAt).coerceAtLeast(1L)
-                    val vy = (ev.rawY - lastRawY) / dt.toFloat() * 1000f // px/s，向下为正
+                    val vy = (ev.rawY - lastRawY) / dt.toFloat() * 1000f
                     val t = panelView.translationY
-                    val beyond = t - halfOffset
                     val flingDown = vy > fling * 1.1f
-                    val flingUp = vy < -fling * 1.1f
-                    when {
-                        // 半屏继续下拉：拉出足够距离或快速下甩 → 关闭
-                        beyond > dp(96f) || (beyond > dp(24f) && flingDown) -> dismiss()
-                        // 快速上甩或上移过半 → 全屏
-                        flingUp || t < halfOffset * 0.4f -> animateTo(0f)
-                        // 从全屏快速下甩（拖出一点但未过半）→ 半屏
-                        flingDown && t > dp(40f) -> animateTo(halfOffset)
-                        // 其余按位置吸附
-                        t < halfOffset * 0.5f -> animateTo(0f)
-                        else -> animateTo(halfOffset)
+                    if (compactMode) {
+                        if (t > dp(80f) || (t > dp(16f) && flingDown)) dismiss() else animateTo(0f)
+                    } else {
+                        val beyond = t - halfOffset
+                        val flingUp = vy < -fling * 1.1f
+                        when {
+                            beyond > dp(96f) || (beyond > dp(24f) && flingDown) -> dismiss()
+                            flingUp || t < halfOffset * 0.4f -> animateTo(0f)
+                            flingDown && t > dp(40f) -> animateTo(halfOffset)
+                            t < halfOffset * 0.5f -> animateTo(0f)
+                            else -> animateTo(halfOffset)
+                        }
                     }
                     true
                 }
@@ -343,13 +416,27 @@ class CodaSheet(private val activity: Activity) {
         panel = panelView
         isShowing = true
 
-        // 入场：从底部升到半屏
-        panelView.translationY = fullHeight.toFloat()
-        panelView.animate()
-            .translationY(halfOffset)
-            .setDuration(280)
-            .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
-            .start()
+        // 入场动画
+        if (compactMode) {
+            panelView.post {
+                val h = panelView.height
+                if (h > 0) {
+                    panelView.translationY = h.toFloat()
+                    panelView.animate()
+                        .translationY(0f)
+                        .setDuration(260)
+                        .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
+                        .start()
+                }
+            }
+        } else {
+            panelView.translationY = fullHeight.toFloat()
+            panelView.animate()
+                .translationY(halfOffset)
+                .setDuration(280)
+                .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
+                .start()
+        }
         scrimView.animate().alpha(1f).setDuration(200).start()
     }
 
@@ -376,9 +463,10 @@ class CodaSheet(private val activity: Activity) {
             it.remove()
         }
         backCallback = null
+        val exitTarget = if (compactMode) (panelView?.height ?: 0).toFloat() else fullHeight.toFloat()
         panelView?.animate()?.cancel()
         panelView?.animate()
-            ?.translationY(fullHeight.toFloat())
+            ?.translationY(exitTarget)
             ?.setDuration(200)
             ?.withEndAction {
                 (rootView.parent as? ViewGroup)?.removeView(rootView)
@@ -402,4 +490,16 @@ class CodaSheet(private val activity: Activity) {
         Color.green(color),
         Color.blue(color),
     )
+
+    /** 高度受限的滚动容器（紧凑模式内容上限）。 */
+    private class MaxHeightScrollView(context: Context) : ScrollView(context) {
+        var maxHeightPx: Int = Int.MAX_VALUE
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            if (measuredHeight > maxHeightPx) {
+                setMeasuredDimension(measuredWidth, maxHeightPx)
+            }
+        }
+    }
 }

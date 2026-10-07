@@ -1403,18 +1403,41 @@ collapseFullDrawerThen { showConversation(conversation) }
             }
         }
         if (labels.isEmpty()) labels += "拒绝"
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle("权限请求：$toolName")
-            .setMessage(reason.ifEmpty { "该操作需要你的确认。" })
-            .setItems(labels.toTypedArray()) { _, which ->
-                val resp = options?.optJSONObject(which)?.optJSONObject("response")
-                    ?: org.json.JSONObject().put("decision", "deny")
-                zc.runtime.respond(requestId, resp)
-            }
-            .setOnCancelListener {
+        var responded = false
+        val sheet = CodaSheet(this)
+            .compact()
+            .title("权限请求：$toolName")
+            .subtitle(reason.ifEmpty { "该操作需要你的确认。" })
+        sheet.onDismiss {
+            if (!responded) {
                 zc.runtime.respond(requestId, org.json.JSONObject().put("decision", "deny"))
             }
-            .show()
+        }
+        sheet.content { col ->
+            val onSurface = com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurface,
+                Color.BLACK,
+            )
+            labels.forEachIndexed { index, label ->
+                col.addView(
+                    TextView(this).apply {
+                        text = label
+                        textSize = 16f
+                        setTextColor(onSurface)
+                        setPadding(dp(2), dp(14), dp(2), dp(14))
+                        setOnClickListener {
+                            responded = true
+                            val resp = options?.optJSONObject(index)?.optJSONObject("response")
+                                ?: org.json.JSONObject().put("decision", "deny")
+                            zc.runtime.respond(requestId, resp)
+                            sheet.dismiss()
+                        }
+                    },
+                )
+            }
+        }
+        sheet.show()
     }
 
     /** 用户提问对话框（AskUserQuestion）。 */
@@ -1434,26 +1457,66 @@ collapseFullDrawerThen { showConversation(conversation) }
                 values += o.optString("value", o.optString("label"))
             }
         }
-        val builder = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(questionText)
-            .setOnCancelListener {
+        var responded = false
+        val sheet = CodaSheet(this)
+            .compact()
+            .title(questionText)
+        sheet.onDismiss {
+            if (!responded) {
                 zc.runtime.respond(requestId, org.json.JSONObject().put("action", "decline"))
             }
+        }
         if (labels.isNotEmpty()) {
-            builder.setItems(labels.toTypedArray()) { _, which ->
-                respondUserInput(requestId, questionText, values.getOrElse(which) { labels[which] })
+            sheet.content { col ->
+                val onSurface = com.google.android.material.color.MaterialColors.getColor(
+                    this,
+                    com.google.android.material.R.attr.colorOnSurface,
+                    Color.BLACK,
+                )
+                labels.forEachIndexed { index, label ->
+                    col.addView(
+                        TextView(this).apply {
+                            text = label
+                            textSize = 16f
+                            setTextColor(onSurface)
+                            setPadding(dp(2), dp(14), dp(2), dp(14))
+                            setOnClickListener {
+                                responded = true
+                                respondUserInput(
+                                    requestId,
+                                    questionText,
+                                    values.getOrElse(index) { labels[index] },
+                                )
+                                sheet.dismiss()
+                            }
+                        },
+                    )
+                }
             }
+            sheet.show()
         } else {
             val input = EditText(this)
-            builder.setView(input)
-                .setPositiveButton("提交") { _, _ ->
-                    respondUserInput(requestId, questionText, input.text.toString())
-                }
-                .setNegativeButton("拒绝") { _, _ ->
-                    zc.runtime.respond(requestId, org.json.JSONObject().put("action", "decline"))
-                }
+            sheet.content { col ->
+                col.addView(
+                    input,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(10) },
+                )
+            }
+            sheet.secondaryAction("拒绝") { s ->
+                responded = true
+                zc.runtime.respond(requestId, org.json.JSONObject().put("action", "decline"))
+                s.dismiss()
+            }
+            sheet.primaryAction("提交") { s ->
+                responded = true
+                respondUserInput(requestId, questionText, input.text.toString())
+                s.dismiss()
+            }
+            sheet.show()
         }
-        builder.show()
     }
 
     private fun respondUserInput(requestId: Any, question: String, answer: String) {
