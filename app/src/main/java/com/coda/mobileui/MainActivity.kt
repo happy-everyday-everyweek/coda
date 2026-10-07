@@ -2006,9 +2006,19 @@ collapseFullDrawerThen { showConversation(conversation) }
         val container = findViewById<LinearLayout>(R.id.model_panel_content)
         val inflater = LayoutInflater.from(this)
         container.removeAllViews()
-
         strengthLevel = controllerStrengthIndex()
         addStrengthCard(container, inflater)
+        // 列表为空时主动刷新一次（读取当前/最近会话的快照）；成功后重建面板。
+        if (zc.modelOptions.isEmpty()) {
+            zc.refreshModelOptions { ok ->
+                if (ok) {
+                    runOnUiThread {
+                        val scrim = findViewById<View>(R.id.model_panel_scrim)
+                        if (scrim.visibility == View.VISIBLE) buildModelPanel()
+                    }
+                }
+            }
+        }
     }
 
     /** 模型强度卡片：照参考图（左上闪电、右上重置、档位名与模型名、下方五档滑杆）。 */

@@ -116,7 +116,7 @@ class ZController private constructor(private val app: Context) {
                 ws.forEach { it(ok, msg) }
             }
             if (ok) {
-                refreshSessions(null)
+                refreshSessions { ok2 -> if (ok2) refreshModelOptions() }
                 AutomationScheduler.start(this)
             }
         }
@@ -132,6 +132,8 @@ class ZController private constructor(private val app: Context) {
             ensureStarted { ok, msg ->
                 if (ok) {
                     currentSessionId?.let { openSession(it, null) }
+                    // 配置变更后立即可见：刷新可用模型列表（无会话时读最近快照）。
+                    refreshModelOptions()
                 }
                 cb(ok, msg)
             }
@@ -453,6 +455,46 @@ class ZController private constructor(private val app: Context) {
                 }
             }
             cb?.invoke(ok)
+        }
+    }
+
+    /**
+     * 主动刷新可用模型列表：读取当前（或最近一条）会话的快照。
+     * 用于“重启核心后 / 未打开会话时”的模型面板展示（只读，不切换会话）。
+     */
+    fun refreshModelOptions(cb: ((Boolean) -> Unit)? = null) {
+        val sid = currentSessionId ?: sessions.firstOrNull()?.id
+        if (sid == null) {
+            refreshSessions { ok ->
+                val next = if (ok) sessions.firstOrNull()?.id else null
+                if (next == null) {
+                    cb?.invoke(false)
+                } else {
+                    readModelOptions(next, cb)
+                }
+            }
+            return
+        }
+        readModelOptions(sid, cb)
+    }
+
+    private fun readModelOptions(sessionId: String, cb: ((Boolean) -> Unit)?) {
+        val params = JSONObject()
+            .put("sessionId", sessionId)
+            .put("deliveryKind", "desktop-continuous")
+        runtime.call("session/read", params) { ok, body ->
+            var changed = false
+            if (ok) {
+                val mo = ZParse.parseModelOptions(body)
+                if (mo.isNotEmpty()) {
+                    post {
+                        modelOptions = mo
+                        notif { onStateChanged() }
+                    }
+                    changed = true
+                }
+            }
+            cb?.invoke(changed)
         }
     }
 
