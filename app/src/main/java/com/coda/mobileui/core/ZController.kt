@@ -427,7 +427,10 @@ class ZController private constructor(private val app: Context) {
     }
 
     fun refreshSessions(cb: ((Boolean) -> Unit)?) {
-        runtime.call("session/list", JSONObject()) { ok, body ->
+        val params = JSONObject()
+            .put("workspace", workspaceRef())
+            .put("includeArchived", false)
+        runtime.call("session/list", params) { ok, body ->
             if (ok) {
                 val list = ZParse.parseSessionInfos(body)
                 post {
@@ -470,12 +473,22 @@ class ZController private constructor(private val app: Context) {
                 if (next == null) {
                     cb?.invoke(false)
                 } else {
-                    readModelOptions(next, cb)
+                    readModelOptions(next) { ok2 -> if (ok2) cb?.invoke(true) else readModelOptionsAfterResume(next, cb) }
                 }
             }
             return
         }
-        readModelOptions(sid, cb)
+        readModelOptions(sid) { ok -> if (ok) cb?.invoke(true) else readModelOptionsAfterResume(sid, cb) }
+    }
+    /** 冷会话读取失败：先恢复（resume）再读一次（与桌面端冷恢复语义一致）。 */
+    private fun readModelOptionsAfterResume(sessionId: String, cb: ((Boolean) -> Unit)?) {
+        resumeSession(sessionId) { rok, _ ->
+            if (!rok) {
+                cb?.invoke(false)
+                return@resumeSession
+            }
+            readModelOptions(sessionId, cb)
+        }
     }
 
     private fun readModelOptions(sessionId: String, cb: ((Boolean) -> Unit)?) {
@@ -691,6 +704,32 @@ class ZController private constructor(private val app: Context) {
     }
 
     fun openSession(sessionId: String, cb: ((Boolean) -> Unit)?) {
+        subscribeSession(sessionId) { ok, msg ->
+            if (ok) {
+                cb?.invoke(true)
+                return@subscribeSession
+            }
+            // 冷会话（内核要求先恢复才能订阅）：按桌面端流程先 session/resume 再订阅
+            if (msg != null && msg.contains("not active", ignoreCase = true)) {
+                resumeSession(sessionId) { rok, rmsg ->
+                    if (rok) {
+                        subscribeSession(sessionId) { ok2, msg2 ->
+                            if (!ok2 && msg2 != null) notif { onNotice("打开会话失败: $msg2") }
+                            cb?.invoke(ok2)
+                        }
+                    } else {
+                        notif { onNotice("恢复会话失败: ${rmsg ?: "未知错误"}") }
+                        cb?.invoke(false)
+                    }
+                }
+            } else {
+                if (msg != null) notif { onNotice("打开会话失败: $msg") }
+                cb?.invoke(false)
+            }
+        }
+    }
+    /** 订阅会话（打开会话的第二段；冷会话需先 resumeSession 恢复）。 */
+    private fun subscribeSession(sessionId: String, cb: ((Boolean, String?) -> Unit)?) {
         val params = JSONObject()
             .put("sessionId", sessionId)
             .put("deliveryKind", "desktop-continuous")
@@ -706,13 +745,33 @@ class ZController private constructor(private val app: Context) {
                     }
                     // 主线程、且 currentSessionId 已就绪后再拉消息、再触发回调
                     doRefreshMessages()
-                    cb?.invoke(true)
+                    cb?.invoke(true, null)
                 }
             } else {
-                notif { onNotice("打开会话失败: ${errMsg(body)}") }
-                post { cb?.invoke(false) }
+                post { cb?.invoke(false, errMsg(body)) }
             }
         }
+    }
+    /**
+     * 恢复历史会话（桌面端 session/resume 语义）：
+     * 冷会话必须先恢复（激活 runtime）后才能订阅、读取与发送。
+     */
+    fun resumeSession(sessionId: String, cb: ((Boolean, String) -> Unit)? = null) {
+        val params = JSONObject()
+            .put("sessionId", sessionId)
+            .put("workspace", workspaceRef())
+        runtime.call("session/resume", params) { ok, body ->
+            if (ok) {
+                post { cb?.invoke(true, "ok") }
+            } else {
+                post { cb?.invoke(false, errMsg(body)) }
+            }
+        }
+    }
+    /** 统一的 workspace 引用（对齐桌面端 buildWorkspaceRef）。 */
+    private fun workspaceRef(): JSONObject {
+        val wp = workspacePath()
+        return JSONObject().put("workspacePath", wp).put("workspaceKey", wp)
     }
 
     fun closeSession(sessionId: String, cb: ((Boolean) -> Unit)? = null) {
@@ -739,7 +798,19 @@ class ZController private constructor(private val app: Context) {
             cb?.invoke(true, "ok")
             return
         }
+        doSend(sid, text, attachments, retried = false, cb = cb)
+    }
+    /** 发送请求（对齐桌面端：inputId/queryId/modelSelection/attachments）；冷会话失败时自动恢复一次后重试。 */
+    private fun doSend(
+        sid: String,
+        text: String,
+        attachments: JSONArray?,
+        retried: Boolean,
+        cb: ((Boolean, String) -> Unit)?,
+    ) {
         val params = JSONObject().put("sessionId", sid).put("content", text)
+        params.put("inputId", UUID.randomUUID().toString())
+        params.put("queryId", UUID.randomUUID().toString())
         if (attachments != null && attachments.length() > 0) {
             params.put("attachments", attachments)
         }
@@ -747,13 +818,28 @@ class ZController private constructor(private val app: Context) {
         if (sel != null) params.put("modelSelection", sel)
         runtime.call("session/send", params) { ok, body ->
             if (ok) {
-                running = true
-                scheduleRefreshSoon()
-                notif { onStateChanged() }
-                cb?.invoke(true, "ok")
+                post {
+                    running = true
+                    scheduleRefreshSoon()
+                    notif { onStateChanged() }
+                    cb?.invoke(true, "ok")
+                }
             } else {
-                notif { onNotice("发送失败: ${errMsg(body)}") }
-                cb?.invoke(false, errMsg(body))
+                val msg = errMsg(body)
+                // 冷会话被回收：恢复一次后重试（与桌面端 resume 语义一致）
+                if (!retried && msg.contains("not active", ignoreCase = true)) {
+                    resumeSession(sid) { rok, _ ->
+                        if (rok) {
+                            doSend(sid, text, attachments, retried = true, cb = cb)
+                        } else {
+                            notif { onNotice("发送失败: $msg") }
+                            cb?.invoke(false, msg)
+                        }
+                    }
+                } else {
+                    notif { onNotice("发送失败: $msg") }
+                    cb?.invoke(false, msg)
+                }
             }
         }
     }
@@ -808,18 +894,23 @@ class ZController private constructor(private val app: Context) {
             cb?.invoke(false, "无会话")
             return
         }
-        val cmd = JSONObject()
-            .put("commandId", UUID.randomUUID().toString())
-            .put("clientId", "mobile-ui")
-            .put("sessionId", sid)
-            .put("type", "stop")
-            .put("payload", JSONObject())
-            .put("issuedAt", System.currentTimeMillis())
-        runtime.call("v4/command", cmd) { ok, body ->
+        // 终止：优先 legacy session/stop（内核对该命令有越队处理），失败再回退 v4/command
+        runtime.call("session/stop", JSONObject().put("sessionId", sid)) { ok, body ->
             if (ok) {
+                post {
+                    running = false
+                    notif { onStateChanged() }
+                }
                 cb?.invoke(true, "ok")
             } else {
-                runtime.call("session/stop", JSONObject().put("sessionId", sid)) { ok2, body2 ->
+                val cmd = JSONObject()
+                    .put("commandId", UUID.randomUUID().toString())
+                    .put("clientId", "mobile-ui")
+                    .put("sessionId", sid)
+                    .put("type", "stop")
+                    .put("payload", JSONObject())
+                    .put("issuedAt", System.currentTimeMillis())
+                runtime.call("v4/command", cmd) { ok2, body2 ->
                     cb?.invoke(ok2, if (ok2) "ok" else errMsg(body2))
                 }
             }
@@ -833,6 +924,7 @@ class ZController private constructor(private val app: Context) {
             return
         }
         val params = JSONObject().put("sessionId", sid)
+        params.put("inputId", UUID.randomUUID().toString())
         if (!instructions.isNullOrEmpty()) params.put("instructions", instructions)
         runtime.call("session/compact", params) { ok, body ->
             cb?.invoke(ok, if (ok) "ok" else errMsg(body))
