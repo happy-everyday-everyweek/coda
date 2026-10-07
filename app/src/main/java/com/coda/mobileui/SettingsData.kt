@@ -59,6 +59,7 @@ object SettingsData {
         SettingRow.Category("browser", "浏览器控制", "内置浏览器与浏览器数据", R.drawable.ic_globe),
         SettingRow.Category("computer", "手机控制", "Agent 操作本机屏幕（无障碍服务）", R.drawable.ic_monitor),
         SettingRow.Category("shortcuts", "键盘快捷键", "命令键位绑定", R.drawable.ic_keyboard),
+        SettingRow.Category("integrations", "集成", "云服务与第三方平台连接", R.drawable.ic_integrations),
         SettingRow.Header("Agent 能力"),
         SettingRow.Category("subagents", "子智能体", "管理用户级子智能体 Markdown 文件", R.drawable.ic_hierarchy),
         SettingRow.Category("plugins", "插件", "启用或停用已安装的插件", R.drawable.ic_layers),
@@ -251,6 +252,47 @@ object SettingsData {
         return SettingsPage("使用统计", rows)
     }
 
+    /** 集成页：第三方连接入口。 */
+    fun integrations(ctx: Context): SettingsPage = SettingsPage(
+        "集成",
+        listOf(
+            SettingRow.Header("第三方"),
+            SettingRow.Value("云服务", "GitHub 等云平台账号连接", "integrations_cloud"),
+        ),
+    )
+
+    /** 云服务页：提供商的连接状态与添加入口。 */
+    fun cloud(ctx: Context): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        val login = com.coda.mobileui.core.GitHub.loginName(ctx)
+        rows += SettingRow.Header("云服务提供商")
+        if (login != null) {
+            rows += SettingRow.Value("GitHub", "已连接：@$login · 点击管理", "cloud_github")
+        } else {
+            rows += SettingRow.Value("GitHub", "未连接 · 点击连接", "cloud_github")
+        }
+        rows += SettingRow.Value("添加云服务提供商", "选择要连接的云平台（GitHub）", "cloud_add")
+        return SettingsPage("云服务", rows)
+    }
+
+    /** GitHub 页：未登录显示登录入口；已登录显示账号与浏览入口。 */
+    fun github(ctx: Context): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        val login = com.coda.mobileui.core.GitHub.loginName(ctx)
+        if (login == null) {
+            rows += SettingRow.Header("GitHub 集成")
+            rows += SettingRow.Value("使用 GitHub 登录", "设备码授权：App 显示代码，浏览器输入即可", "github_login")
+            rows += SettingRow.Value("说明", "登录后可浏览仓库、分支与 PR，并供 Agent 使用", "")
+        } else {
+            rows += SettingRow.Header("账号")
+            rows += SettingRow.Value("已登录：@$login", "Coda 已连接到你的 GitHub", "")
+            rows += SettingRow.Header("浏览")
+            rows += SettingRow.Value("仓库", "查看你的仓库列表（含分支与 PR）", "github_repos")
+            rows += SettingRow.Header("管理")
+            rows += SettingRow.Value("退出登录", "清除本机保存的访问令牌", "github_logout")
+        }
+        return SettingsPage("GitHub", rows)
+    }
     /** 插件页：数据来自运行时 plugins/overview（界面层异步加载后传入）。 */
     fun plugins(ctx: Context, data: JSONObject?): SettingsPage {
         val rows = mutableListOf<SettingRow>()

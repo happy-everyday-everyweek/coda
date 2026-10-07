@@ -44,6 +44,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 供应商配置防抖重启（连续保存合并为一次）。 */
     private val providerRestartHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingProviderRestart: Runnable? = null
+    /** GitHub 登录轮询。 */
+    private val ghHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var ghPollRunnable: Runnable? = null
 
     // ---- 扩展页异步数据（使用统计 / 插件 / MCP）----
     private val extrasCache = HashMap<String, org.json.JSONObject>()
@@ -97,11 +100,16 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
         if (pageKey == PAGE_PROVIDERS || pageKey == PAGE_SUBAGENTS ||
             pageKey == PAGE_SKILLS || pageKey == PAGE_COMMANDS ||
-            pageKey == PAGE_AUTOMATIONS || pageKey == PAGE_HOOKS ||
-            pageKey == PAGE_COMPUTER
+            pageKey == PAGE_AUTOMATIONS || pageKey == PAGE_HOOKS || pageKey == PAGE_COMPUTER ||
+            pageKey == PAGE_GITHUB
         ) {
             renderPage()
         }
+    }
+
+    override fun onDestroy() {
+        stopGitHubPolling()
+        super.onDestroy()
     }
 
     private fun currentPage(): SettingsPage = when (pageKey) {
@@ -119,6 +127,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             ensureExtrasLoaded("plugins")
             SettingsData.plugins(this, extrasCache["plugins"])
         }
+        PAGE_GITHUB -> SettingsData.github(this)
+        PAGE_INTEGRATIONS -> SettingsData.integrations(this)
+        PAGE_CLOUD -> SettingsData.cloud(this)
         PAGE_MCP -> {
             ensureExtrasLoaded("mcp")
             SettingsData.mcp(this, extrasCache["mcp"])
@@ -255,6 +266,18 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             key == "plugins_add_market" -> addMarketplaceDialog()
             key.startsWith("plugins_detail:") -> openPluginDetail(key.removePrefix("plugins_detail:"))
             key.startsWith("plugins_restore:") -> restoreBuiltinPlugin(key.removePrefix("plugins_restore:"))
+            key == "github_login" -> startGitHubLogin()
+            key == "github_repos" -> openGitHubRepos()
+            key == "github_logout" -> confirmGitHubLogout()
+            key == "integrations_cloud" -> openSettingsPage(PAGE_CLOUD)
+            key == "cloud_github" -> {
+                if (com.coda.mobileui.core.GitHub.loginName(this) != null) {
+                    openSettingsPage(PAGE_GITHUB)
+                } else {
+                    startGitHubLogin()
+                }
+            }
+            key == "cloud_add" -> showCloudProviderPicker()
             key.startsWith("extras_refresh:") -> {
                 extrasCache.remove(key.removePrefix("extras_refresh:"))
                 renderPage()
@@ -751,6 +774,325 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             }
         }
     }
+
+    // ------------------------------------------------------------ GitHub 集成
+    /** 页内跳转：打开另一个设置页面实例（返回键自然回到上一屏）。 */
+    private fun openSettingsPage(page: String) {
+        try {
+            startActivity(
+                Intent(this, SettingsDetailActivity::class.java)
+                    .putExtra(EXTRA_PAGE, page),
+            )
+        } catch (e: Throwable) {
+            snack("打开页面失败: ${e.message}")
+        }
+    }
+
+    /** 云服务：选择要连接的提供商。 */
+    private fun showCloudProviderPicker() {
+        sheetPickList("添加云服务提供商", listOf("GitHub"), -1) { _ ->
+            if (com.coda.mobileui.core.GitHub.loginName(this) != null) {
+                snack("GitHub 已连接")
+                openSettingsPage(PAGE_GITHUB)
+            } else {
+                startGitHubLogin()
+            }
+        }
+    }
+
+    /** 发起设备码登录：申请设备码 → 弹卡片 + 打开浏览器 → 轮询授权结果。 */
+    private fun startGitHubLogin() {
+        snack("正在申请设备码…")
+        com.coda.mobileui.core.GitHub.requestDeviceCode { ok, dc, err ->
+            if (!ok || dc == null) {
+                snack("申请失败: ${err ?: "未知错误"}")
+            } else {
+                showGitHubLoginSheet(dc)
+            }
+        }
+    }
+
+    /** 设备码登录卡：大字号代码 + 指引；自动跳转系统浏览器打开 GitHub 授权页。 */
+    private fun showGitHubLoginSheet(dc: com.coda.mobileui.core.GitHub.DeviceCode) {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("GitHub device code", dc.userCode))
+        val statusView = TextView(this).apply {
+            text = "等待浏览器中完成授权…"
+            textSize = 13f
+            setTextColor(
+                MaterialColors.getColor(
+                    this@SettingsDetailActivity,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                ),
+            )
+            setPadding(0, dp(10), 0, 0)
+        }
+        val sheet = CodaSheet(this)
+            .compact()
+            .title("连接 GitHub")
+            .subtitle("代码已复制，粘贴到浏览器完成授权")
+        sheet.content { col ->
+            col.addView(sheetBodyText("1. 在打开的浏览器页面（github.com/login/device）粘贴代码"))
+            col.addView(sheetBodyText("2. 点击继续并确认授权"))
+            col.addView(
+                TextView(this).apply {
+                    text = dc.userCode
+                    textSize = 28f
+                    setTextColor(
+                        MaterialColors.getColor(
+                            this@SettingsDetailActivity,
+                            androidx.appcompat.R.attr.colorPrimary,
+                            android.graphics.Color.WHITE,
+                        ),
+                    )
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    setPadding(0, dp(8), 0, dp(8))
+                },
+            )
+            col.addView(statusView)
+        }
+        sheet.primaryAction("打开浏览器") { openGitHubDevicePage(dc.verificationUri) }
+        sheet.secondaryAction("取消") { s ->
+            stopGitHubPolling()
+            s.dismiss()
+        }
+        sheet.show()
+        openGitHubDevicePage(dc.verificationUri)
+        startGitHubPolling(dc, sheet, statusView)
+    }
+
+    private fun openGitHubDevicePage(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Throwable) {
+            snack("无法打开浏览器: ${e.message}")
+        }
+    }
+
+    /** 轮询设备码授权状态；成功后保存令牌并刷新页面。 */
+    private fun startGitHubPolling(
+        dc: com.coda.mobileui.core.GitHub.DeviceCode,
+        sheet: CodaSheet,
+        statusView: TextView,
+    ) {
+        stopGitHubPolling()
+        var delayMs = dc.interval * 1000L
+        var attempts = (dc.expiresIn / dc.interval.coerceAtLeast(1)).coerceAtLeast(1)
+        val schedule = object : Runnable {
+            override fun run() {
+                com.coda.mobileui.core.GitHub.pollAccessToken(this@SettingsDetailActivity, dc.deviceCode) { status, _, msg ->
+                    when (status) {
+                        "ok" -> {
+                            stopGitHubPolling()
+                            com.coda.mobileui.core.GitHub.fetchUser(this@SettingsDetailActivity) { ok2, u, _ ->
+                                statusView.text = if (ok2 && u != null) "已连接：@${u.login}" else "已连接"
+                                snack("GitHub 已连接")
+                                sheet.dismiss()
+                                renderPage()
+                            }
+                        }
+                        "pending" -> {
+                            attempts -= 1
+                            if (attempts <= 0) {
+                                statusView.text = "已超时，请重新发起连接"
+                                stopGitHubPolling()
+                            } else {
+                                ghPollRunnable = this
+                                ghHandler.postDelayed(this, delayMs)
+                            }
+                        }
+                        "slow_down" -> {
+                            delayMs += 5000
+                            ghPollRunnable = this
+                            ghHandler.postDelayed(this, delayMs)
+                        }
+                        else -> {
+                            statusView.text = msg ?: "连接失败"
+                            stopGitHubPolling()
+                        }
+                    }
+                }
+            }
+        }
+        ghPollRunnable = schedule
+        ghHandler.postDelayed(schedule, delayMs)
+    }
+
+    private fun stopGitHubPolling() {
+        ghPollRunnable?.let { ghHandler.removeCallbacks(it) }
+        ghPollRunnable = null
+    }
+
+    /** 退出 GitHub 登录（清除本机令牌）。 */
+    private fun confirmGitHubLogout() {
+        sheetConfirm("退出登录", "确定断开 GitHub 连接？本机保存的访问令牌将被清除。", "退出") {
+            com.coda.mobileui.core.GitHub.logout(this)
+            snack("已断开 GitHub 连接")
+            renderPage()
+        }
+    }
+
+    /** 仓库浏览：加载仓库列表后弹出半屏卡片。 */
+    private fun openGitHubRepos() {
+        val sheet = CodaSheet(this).title("GitHub 仓库")
+        sheet.content { col -> col.addView(sheetBodyText("正在加载仓库…")) }
+        sheet.show()
+        com.coda.mobileui.core.GitHub.fetchRepos(this) { ok, list, err ->
+            if (!ok || list == null) {
+                sheet.refreshContent { col -> col.addView(sheetBodyText("加载失败：${err ?: "未知错误"}")) }
+            } else if (list.isEmpty()) {
+                sheet.refreshContent { col -> col.addView(sheetBodyText("没有可见的仓库")) }
+            } else {
+                sheet.refreshContent { col ->
+                    list.forEach { r ->
+                        col.addView(
+                            buildRepoRow(r) {
+                                sheet.dismiss()
+                                openRepoDetail(r)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /** 仓库行：名称 + 私有标记 + 描述 + 最近推送。 */
+    private fun buildRepoRow(repo: com.coda.mobileui.core.GitHub.Repo, onClick: () -> Unit): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, dp(10))
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        col.addView(
+            TextView(this).apply {
+                text = buildString {
+                    append(repo.name)
+                    if (repo.privateRepo) append("（私有）")
+                }
+                textSize = 15f
+                typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            },
+        )
+        repo.description?.let {
+            col.addView(
+                TextView(this).apply {
+                    text = it
+                    textSize = 12f
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setTextColor(
+                        MaterialColors.getColor(
+                            this@SettingsDetailActivity,
+                            com.google.android.material.R.attr.colorOnSurfaceVariant,
+                            android.graphics.Color.GRAY,
+                        ),
+                    )
+                },
+            )
+        }
+        col.addView(
+            sheetBodyText(
+                buildString {
+                    repo.defaultBranch?.let { append("默认分支 $it") }
+                    repo.pushedAt?.let {
+                        if (this.isNotEmpty()) append(" · ")
+                        append("最近推送 ${ghDate(it)}")
+                    }
+                },
+            ),
+        )
+        return col
+    }
+
+    /** 仓库详情：分支与 PR 两个区块（异步加载，就绪后刷新卡片）。 */
+    private fun openRepoDetail(repo: com.coda.mobileui.core.GitHub.Repo) {
+        val sheet = CodaSheet(this)
+            .title(repo.name)
+            .subtitle(repo.fullName + if (repo.privateRepo) " · 私有" else "")
+        sheet.content { col -> col.addView(sheetBodyText("正在加载分支与 PR…")) }
+        sheet.show()
+        var branches: List<com.coda.mobileui.core.GitHub.Branch>? = null
+        var pulls: List<com.coda.mobileui.core.GitHub.Pull>? = null
+        var failMsg: String? = null
+        var done = 0
+        fun tryRender() {
+            if (done < 2) return
+            val bs = branches
+            val ps = pulls
+            val fm = failMsg
+            sheet.refreshContent { col ->
+                col.addView(sheetSectionLabel("分支"))
+                if (bs == null || bs.isEmpty()) {
+                    col.addView(sheetBodyText(fm ?: "无分支"))
+                } else {
+                    bs.take(20).forEach { b ->
+                        col.addView(
+                            sheetBodyText(
+                                buildString {
+                                    append("• ")
+                                    append(b.name)
+                                    b.sha?.take(7)?.let { append(" · $it") }
+                                },
+                            ),
+                        )
+                    }
+                    if (bs.size > 20) col.addView(sheetBodyText("…共 ${bs.size} 个"))
+                }
+                col.addView(sheetSectionLabel("Pull Requests"))
+                if (ps == null || ps.isEmpty()) {
+                    col.addView(sheetBodyText(if (ps != null) "没有 PR" else (fm ?: "无 PR")))
+                } else {
+                    ps.forEach { p ->
+                        val state = when {
+                            p.draft -> "草稿"
+                            p.state == "open" -> "开启"
+                            p.state == "closed" -> "已关闭"
+                            else -> p.state
+                        }
+                        col.addView(
+                            sheetBodyText(
+                                buildString {
+                                    append("#")
+                                    append(p.number)
+                                    append(" ")
+                                    append(p.title)
+                                    append("（")
+                                    append(state)
+                                    append(" · @")
+                                    append(p.user)
+                                    append("）")
+                                    p.updatedAt?.let {
+                                        append("\n")
+                                        append(p.headRef)
+                                        append(" → ")
+                                        append(p.baseRef)
+                                        append(" · ")
+                                        append(ghDate(it))
+                                    }
+                                },
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+        com.coda.mobileui.core.GitHub.fetchBranches(this, repo.owner, repo.name) { ok, list, err ->
+            if (ok) branches = list else if (failMsg == null) failMsg = err
+            done += 1
+            tryRender()
+        }
+        com.coda.mobileui.core.GitHub.fetchPulls(this, repo.owner, repo.name) { ok, list, err ->
+            if (ok) pulls = list else if (failMsg == null) failMsg = err
+            done += 1
+            tryRender()
+        }
+    }
+
+    /** ISO 时间取日期部分。 */
+    private fun ghDate(iso: String): String = if (iso.length >= 10) iso.substring(0, 10) else iso
 
     /** 主色：色板选择 + 自定义颜色入口；选中即关闭自动取色、同步更换应用图标。 */
     private fun pickAccent() {
@@ -1405,6 +1747,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
         const val PAGE_COMPUTER = "computer"
+        const val PAGE_GITHUB = "github"
+        const val PAGE_INTEGRATIONS = "integrations"
+        const val PAGE_CLOUD = "cloud"
 
         /** 接入真实交互的设置键。 */
         const val KEY_AUTO_COLOR = "auto_color"

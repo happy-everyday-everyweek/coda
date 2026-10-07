@@ -51,6 +51,7 @@ class CodaSheet(private val activity: Activity) {
     private var secondaryText: String? = null
     private var secondaryBlock: ((CodaSheet) -> Unit)? = null
     private var contentBlock: ((LinearLayout) -> Unit)? = null
+    private var liveContentCol: LinearLayout? = null
     private var onDismissBlock: (() -> Unit)? = null
     private var compactMode = false
 
@@ -229,6 +230,7 @@ class CodaSheet(private val activity: Activity) {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24f), dp(8f), dp(24f), dp(20f))
         }
+        liveContentCol = contentCol
         val scroll: ScrollView = if (compactMode) {
             MaxHeightScrollView(activity).apply {
                 maxHeightPx = (screenH * COMPACT_MAX_RATIO).toInt()
@@ -449,6 +451,14 @@ class CodaSheet(private val activity: Activity) {
             .setDuration(220)
             .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
             .start()
+    }
+
+    /** 展示后更新内容（清空并重建；供异步加载完成后刷新用）。 */
+    fun refreshContent(block: (LinearLayout) -> Unit) {
+        contentBlock = block
+        val col = liveContentCol ?: return
+        col.removeAllViews()
+        block(col)
     }
 
     /** 关闭半屏卡片（播放退出动画后移除）。 */
