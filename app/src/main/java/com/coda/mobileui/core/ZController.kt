@@ -676,13 +676,15 @@ class ZController private constructor(private val app: Context) {
         if (sel != null) params.put("model", sel)
         runtime.call("session/create", params) { ok, body ->
             if (ok) {
-                post { applySnapshot(body) }
-                // 订阅并载入消息
-                val sid = ZParse.parseSessionIdFromSnapshot(body)
-                if (sid != null) openSession(sid, null)
-                cb?.invoke(true, "ok")
+                post {
+                    applySnapshot(body)
+                    // 订阅并载入消息；主线程、且 currentSessionId 就绪后再触发回调
+                    val sid = ZParse.parseSessionIdFromSnapshot(body)
+                    if (sid != null) openSession(sid, null)
+                    cb?.invoke(true, "ok")
+                }
             } else {
-                cb?.invoke(false, errMsg(body))
+                post { cb?.invoke(false, errMsg(body)) }
                 notif { onNotice("新建会话失败: ${errMsg(body)}") }
             }
         }
@@ -702,12 +704,13 @@ class ZController private constructor(private val app: Context) {
                         onSessionOpened(sessionId)
                         onStateChanged()
                     }
+                    // 主线程、且 currentSessionId 已就绪后再拉消息、再触发回调
+                    doRefreshMessages()
+                    cb?.invoke(true)
                 }
-                doRefreshMessages()
-                cb?.invoke(true)
             } else {
                 notif { onNotice("打开会话失败: ${errMsg(body)}") }
-                cb?.invoke(false)
+                post { cb?.invoke(false) }
             }
         }
     }

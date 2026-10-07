@@ -652,38 +652,37 @@ collapseFullDrawerThen { showConversation(conversation) }
         }
     }
 
-    /** 模式条浮出时让背景真正虚化，所有版本都可用。 */
-    @Suppress("unused")
+    /** 模式条浮出时让背景真正虚化：内容区截图 → 降采样 → 多次盒式模糊 → 覆盖显示，所有版本一致。 */
     private fun setBackdropBlur(enabled: Boolean) {
         // 只虚化对话内容区：发送按钮（长按期间显示为叉）与输入区保持清晰，
         // 使叉与模式条（点）处于同一视觉层级。
         val content = findViewById<View>(R.id.content_area) ?: return
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Android 12+：直接给内容视图挂 RenderEffect 高斯模糊
-            content.setRenderEffect(
-                if (enabled) {
-                    android.graphics.RenderEffect.createBlurEffect(
-                        dp(14).toFloat(),
-                        dp(14).toFloat(),
-                        android.graphics.Shader.TileMode.CLAMP,
-                    )
-                } else {
-                    null
-                },
-            )
+        if (!enabled) {
+            blurOverlay?.visibility = View.GONE
             return
         }
-
-        // 更低版本：把内容画进 Bitmap 自己做高斯模糊，再作为底层覆盖显示
+        val w = content.width
+        val h = content.height
+        if (w <= 0 || h <= 0) return
+        val full = runCatching {
+            android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                .also { content.draw(android.graphics.Canvas(it)) }
+        }.getOrNull() ?: return
+        // 降采样到 1/4 再模糊：速度快，模糊半径按比例取，视觉等价
+        val small = android.graphics.Bitmap.createScaledBitmap(
+            full,
+            (w / 4).coerceAtLeast(1),
+            (h / 4).coerceAtLeast(1),
+            true,
+        )
         val overlay = blurOverlay ?: ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_XY
             isClickable = false
             isFocusable = false
             visibility = View.GONE
-            (findViewById<View>(android.R.id.content) as? ViewGroup)?.addView(
+            // 挂在内容区内部最上层：精确覆盖内容区，且位于其他内容之上
+            (content as? ViewGroup)?.addView(
                 this,
-                0,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.MATCH_PARENT,
@@ -691,22 +690,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             )
             blurOverlay = this
         }
-
-        if (!enabled) {
-            overlay.visibility = View.GONE
-            return
-        }
-        if (content.width <= 0 || content.height <= 0) return
-
-        val snapshot = runCatching {
-            android.graphics.Bitmap.createBitmap(
-                content.width,
-                content.height,
-                android.graphics.Bitmap.Config.ARGB_8888,
-            ).also { content.draw(android.graphics.Canvas(it)) }
-        }.getOrNull() ?: return
-
-        overlay.setImageBitmap(blurBitmap(snapshot, 6))
+        overlay.setImageBitmap(blurBitmap(small, 6))
         overlay.visibility = View.VISIBLE
     }
 
@@ -1295,6 +1279,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                     inflater.inflate(R.layout.view_chat_message, host, false).apply {
                         (this as? LinearLayout)?.gravity = Gravity.END
                         val body = findViewById<TextView>(R.id.message_text)
+                        (body.layoutParams as? LinearLayout.LayoutParams)?.gravity = Gravity.END
                         body.text = fullText
                         body.setBackgroundResource(R.drawable.bg_bubble_user)
                         body.setPadding(dp(14), dp(10), dp(14), dp(10))
@@ -1316,6 +1301,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                     inflater.inflate(R.layout.view_chat_message, host, false).apply {
                         (this as? LinearLayout)?.gravity = Gravity.START
                         val body = findViewById<TextView>(R.id.message_text)
+                        (body.layoutParams as? LinearLayout.LayoutParams)?.gravity = Gravity.START
                         if (display.isNotEmpty()) {
                             markwon.setMarkdown(body, display)
                             body.setPadding(0, dp(6), 0, dp(6))
@@ -1351,14 +1337,24 @@ collapseFullDrawerThen { showConversation(conversation) }
         }
     }
 
-    /** 思考块：默认收起；思考中显示点阵与计时，完成后定格为简洁文字，点击文字展开内容。 */
+    /** 思考块：参考样式为「点阵动画 + Thinking + 实时用时」；点阵与标题、正文左对齐（12dp）。 */
     private fun buildReasoningBlock(messageId: String, text: String, streaming: Boolean): View {
+        val onSurface = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurface,
+            Color.BLACK,
+        )
         val neutral = com.google.android.material.color.MaterialColors.getColor(
             this,
             com.google.android.material.R.attr.colorOnSurfaceVariant,
             Color.GRAY,
         )
-        val collapsed = reasoningCollapsed[messageId] ?: true
+        // 默认展开：思考过程保持可见；点击标题行可收起
+        val collapsed = reasoningCollapsed[messageId] ?: false
+        val medium = android.graphics.Typeface.create(
+            "sans-serif-medium",
+            android.graphics.Typeface.NORMAL,
+        )
         val wrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -1373,10 +1369,18 @@ collapseFullDrawerThen { showConversation(conversation) }
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(2), 0, dp(2))
         }
-        val label = TextView(this).apply {
-            textSize = 12f
+        val title = TextView(this).apply {
+            this.text = "Thinking"
+            textSize = 15f
+            typeface = medium
+            setTextColor(onSurface)
+        }
+        val tick = TextView(this).apply {
+            textSize = 15f
+            typeface = medium
             setTextColor(neutral)
             fontFeatureSettings = "tnum"
+            visibility = View.GONE
         }
         if (streaming) {
             val start = reasoningStart.getOrPut(messageId) { System.currentTimeMillis() }
@@ -1385,9 +1389,12 @@ collapseFullDrawerThen { showConversation(conversation) }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { rightMargin = dp(8) }
+                ).apply { rightMargin = dp(10) }
             }
-            val showTick = { ms: Long -> label.text = "正在思考 ${fmtDur(ms)}" }
+            val showTick = { ms: Long ->
+                tick.visibility = View.VISIBLE
+                tick.text = fmtDur(ms)
+            }
             showTick(System.currentTimeMillis() - start)
             loader.onTick = showTick
             loader.start(System.currentTimeMillis() - start)
@@ -1396,12 +1403,18 @@ collapseFullDrawerThen { showConversation(conversation) }
             val start = reasoningStart[messageId]
             if (start != null) {
                 val doneAt = reasoningDone.getOrPut(messageId) { System.currentTimeMillis() }
-                label.text = "思考 ${fmtDur((doneAt - start).coerceAtLeast(0L))}"
-            } else {
-                label.text = "思考过程"
+                tick.visibility = View.VISIBLE
+                tick.text = fmtDur((doneAt - start).coerceAtLeast(0L))
             }
         }
-        header.addView(label)
+        header.addView(title)
+        header.addView(
+            tick,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { leftMargin = dp(8) },
+        )
         val body = TextView(this).apply {
             this.text = text
             textSize = 13f
@@ -1410,7 +1423,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             visibility = if (collapsed) View.GONE else View.VISIBLE
         }
         header.setOnClickListener {
-            val nowCollapsed = reasoningCollapsed[messageId] ?: true
+            val nowCollapsed = reasoningCollapsed[messageId] ?: false
             reasoningCollapsed[messageId] = !nowCollapsed
             body.visibility = if (nowCollapsed) View.VISIBLE else View.GONE
         }
@@ -1425,7 +1438,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(2), dp(4), 0, dp(8))
+            setPadding(dp(12), dp(4), 0, dp(8))
         }
         val loader = LatticeLoaderView(this).apply {
             setIndicatorColor(neutral)

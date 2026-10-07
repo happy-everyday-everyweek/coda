@@ -283,7 +283,11 @@ class CoreRuntime(private val ctx: Context) {
                     log("[proto] 非法帧: ${line.take(200)}")
                     continue
                 }
-                handleFrame(obj)
+                try {
+                    handleFrame(obj)
+                } catch (t: Throwable) {
+                    log("!! 帧处理异常: $t")
+                }
             }
         } catch (_: Throwable) {
         }
@@ -315,7 +319,16 @@ class CoreRuntime(private val ctx: Context) {
                 if (cb != null) {
                     val err = obj.optJSONObject("error")
                     val result = obj.optJSONObject("result") ?: JSONObject()
-                    cb(err == null, if (err == null) result else err)
+                    val ok = err == null
+                    val data = if (ok) result else err
+                    // 响应回调统一切到主线程：避免跨线程 UI 操作，且保证回调时序与主线程状态一致
+                    mainHandler.post {
+                        try {
+                            cb(ok, data)
+                        } catch (t: Throwable) {
+                            log("!! 回调查异常: $t")
+                        }
+                    }
                 }
             }
         }
