@@ -133,6 +133,11 @@ class MainActivity : BaseActivity() {
     private val reasoningDone = HashMap<String, Long>()
     /** 当前回合开始时间，用于“正在生成”指示的连续相位与计时。 */
     private var runningSince: Long? = null
+    /** 最近一次发送消息的时刻（思考/生成计时从这一刻起算）。 */
+    private var lastSendAt = 0L
+
+    /** 待办条目上次状态（按内容记录），用于列表重建时正确播放状态切换动画。 */
+    private val todoStatusCache = HashMap<String, String>()
     /** 待发送附件（选择后复制到缓存目录，发送时随消息携带）。 */
     private data class PendingAttach(
         val path: String,
@@ -615,8 +620,8 @@ collapseFullDrawerThen { showConversation(conversation) }
         send.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    sendModeIndex = DEFAULT_SEND_MODE
-                    mode.setSelected(DEFAULT_SEND_MODE)
+                    sendModeIndex = defaultSendModeIndex()
+                    mode.setSelected(sendModeIndex)
                     mode.beginDrag(event.x, event.y)
                     val runnable = Runnable {
                         pendingLongPress = null
@@ -642,7 +647,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                         setBackdropBlur(false)
                         sendMessage(SendModeView.MODES[sendModeIndex])
                     } else {
-                        sendMessage(SendModeView.MODES[DEFAULT_SEND_MODE])
+                        sendMessage(SendModeView.MODES[defaultSendModeIndex()])
                     }
                     true
                 }
@@ -818,11 +823,14 @@ collapseFullDrawerThen { showConversation(conversation) }
         }
         val protocolMode = SendModes.toProtocol(mode)
         zc.setDefaultMode(protocolMode)
-        zc.setMode(protocolMode)
         inputMessage.text?.clear()
         hideSettingsPage()
         val atts = buildAttachmentsJson()
         fun doSend() {
+            // 思考计时从发送那一刻开始
+            lastSendAt = System.currentTimeMillis()
+            todoStatusCache.clear()
+            maybeAutoScrollToBottom(true)
             zc.send(text, atts) { ok, msg ->
                 if (ok) {
                     pendingAttachments.clear()
@@ -832,13 +840,15 @@ collapseFullDrawerThen { showConversation(conversation) }
                 }
             }
         }
-
-        if (zc.currentSessionId == null) {
-            zc.newSession { ok, msg ->
-                if (ok) doSend() else snack("新建会话失败: $msg")
+        // 先设置发送模式（确保工具审批等策略在消息发出前生效），完成后再发送（设置失败也继续发送）
+        zc.setMode(protocolMode) { _, _ ->
+            if (zc.currentSessionId == null) {
+                zc.newSession { ok, msg ->
+                    if (ok) doSend() else snack("新建会话失败: $msg")
+                }
+            } else {
+                doSend()
             }
-        } else {
-            doSend()
         }
     }
     /** 附件导入：复制到应用缓存目录（内核进程可直接读取 localPath），加入待发送列表。 */
@@ -1187,7 +1197,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             override fun onReasoningDelta(assistantMessageId: String, text: String) {
                 val buf = liveReasoning.getOrPut(assistantMessageId) { StringBuilder() }
                 buf.append(text)
-                reasoningStart.getOrPut(assistantMessageId) { System.currentTimeMillis() }
+                reasoningStart.getOrPut(assistantMessageId) { reasoningStartFallback() }
                 if (reasoningViews[assistantMessageId] == null) {
                     // 思考块尚未建出：消息已在列表中时重建让其出现，否则等常规刷新
                     if (zc.messages.any { it.id == assistantMessageId }) renderChat()
@@ -1210,6 +1220,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             }
 
             override fun onSessionOpened(sessionId: String) {
+                todoStatusCache.clear()
                 renderFromController()
             }
         }
@@ -1335,9 +1346,30 @@ collapseFullDrawerThen { showConversation(conversation) }
         if (zc.running && !turnHasReasoning()) {
             host.addView(buildRunningIndicator(neutral))
         }
+        // 新内容到达：自动跟随到底部（可在设置关闭）
+        maybeAutoScrollToBottom(false)
     }
-
-    /** 思考块：参考样式为「点阵动画 + Thinking + 实时用时」；点阵与标题、正文左对齐（12dp）。 */
+    /** 默认发送模式（设置页可改；0=Yolo，1=Build，2=Chat）。 */
+    private fun defaultSendModeIndex(): Int =
+        SettingsStore.get(this).defaultSendMode.coerceIn(0, SendModeView.MODES.size - 1)
+    /** 自动滚动到底部（发送与生成时跟随；可在设置中关闭）。 */
+    private fun maybeAutoScrollToBottom(force: Boolean) {
+        if (!SettingsStore.get(this).chatAutoScroll) return
+        val sv = chatView as? android.widget.ScrollView ?: return
+        sv.post {
+            val child = sv.getChildAt(0) ?: return@post
+            val nearBottom = sv.height + sv.scrollY >= child.height - dp(200)
+            if (force || nearBottom) {
+                sv.fullScroll(View.FOCUS_DOWN)
+            }
+        }
+    }
+    /** 思考/生成计时起点：优先取最近一次发送消息的时刻（含等待与思考），否则用当前时间。 */
+    private fun reasoningStartFallback(): Long {
+        val t = lastSendAt
+        return if (t > 0 && System.currentTimeMillis() - t < 10 * 60 * 1000L) t else System.currentTimeMillis()
+    }
+    /** 思考块：参考样式「一行标题 + 用时 + 折叠箭头」；无底色，点阵/标题/正文左对齐（12dp）。 */
     private fun buildReasoningBlock(messageId: String, text: String, streaming: Boolean): View {
         val onSurface = com.google.android.material.color.MaterialColors.getColor(
             this,
@@ -1349,20 +1381,19 @@ collapseFullDrawerThen { showConversation(conversation) }
             com.google.android.material.R.attr.colorOnSurfaceVariant,
             Color.GRAY,
         )
-        // 默认展开：思考过程保持可见；点击标题行可收起
-        val collapsed = reasoningCollapsed[messageId] ?: false
+        // 默认收起：只显示一行标题，点击展开/收起
+        val collapsed = reasoningCollapsed[messageId] ?: true
         val medium = android.graphics.Typeface.create(
             "sans-serif-medium",
             android.graphics.Typeface.NORMAL,
         )
         val wrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            setBackgroundResource(R.drawable.bg_tool_card)
+            setPadding(dp(12), dp(2), dp(12), dp(2))
             layoutParams = LinearLayout.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = dp(6) }
+            ).apply { bottomMargin = dp(4) }
         }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1370,7 +1401,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             setPadding(0, dp(2), 0, dp(2))
         }
         val title = TextView(this).apply {
-            this.text = "Thinking"
+            this.text = if (streaming) "Thinking" else "Thought for"
             textSize = 15f
             typeface = medium
             setTextColor(onSurface)
@@ -1382,8 +1413,15 @@ collapseFullDrawerThen { showConversation(conversation) }
             fontFeatureSettings = "tnum"
             visibility = View.GONE
         }
+        val chevron = ImageView(this).apply {
+            setImageResource(R.drawable.ic_expand_more)
+            setColorFilter(neutral)
+            layoutParams = LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(2) }
+            rotation = if (collapsed) 0f else 180f
+        }
         if (streaming) {
-            val start = reasoningStart.getOrPut(messageId) { System.currentTimeMillis() }
+            // 思考计时从发送那一刻开始（含等待首 token 的时间）
+            val start = reasoningStart.getOrPut(messageId) { reasoningStartFallback() }
             val loader = LatticeLoaderView(this).apply {
                 setIndicatorColor(neutral)
                 layoutParams = LinearLayout.LayoutParams(
@@ -1405,6 +1443,8 @@ collapseFullDrawerThen { showConversation(conversation) }
                 val doneAt = reasoningDone.getOrPut(messageId) { System.currentTimeMillis() }
                 tick.visibility = View.VISIBLE
                 tick.text = fmtDur((doneAt - start).coerceAtLeast(0L))
+            } else {
+                title.text = "Thought"
             }
         }
         header.addView(title)
@@ -1415,6 +1455,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { leftMargin = dp(8) },
         )
+        header.addView(chevron)
         val body = TextView(this).apply {
             this.text = text
             textSize = 13f
@@ -1423,9 +1464,10 @@ collapseFullDrawerThen { showConversation(conversation) }
             visibility = if (collapsed) View.GONE else View.VISIBLE
         }
         header.setOnClickListener {
-            val nowCollapsed = reasoningCollapsed[messageId] ?: false
+            val nowCollapsed = reasoningCollapsed[messageId] ?: true
             reasoningCollapsed[messageId] = !nowCollapsed
             body.visibility = if (nowCollapsed) View.VISIBLE else View.GONE
+            chevron.rotation = if (nowCollapsed) 180f else 0f
         }
         wrap.addView(header)
         wrap.addView(body)
@@ -1447,7 +1489,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { rightMargin = dp(8) }
         }
-        val since = runningSince ?: System.currentTimeMillis().also { runningSince = it }
+        val since = runningSince ?: reasoningStartFallback().also { runningSince = it }
         loader.start(System.currentTimeMillis() - since)
         row.addView(loader)
         row.addView(
@@ -1567,6 +1609,11 @@ collapseFullDrawerThen { showConversation(conversation) }
             com.google.android.material.R.attr.colorOnSurfaceVariant,
             Color.GRAY,
         )
+        val onSurface = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurface,
+            Color.BLACK,
+        )
         val primary = com.google.android.material.color.MaterialColors.getColor(
             this,
             androidx.appcompat.R.attr.colorPrimary,
@@ -1591,22 +1638,55 @@ collapseFullDrawerThen { showConversation(conversation) }
             },
         )
         todos.take(12).forEach { t ->
-            val mark = when (t.status) {
-                "completed" -> "✓"
-                "in_progress" -> "◐"
-                else -> "○"
+            // 生命周期映射（参考 React Bits Status Mark）：pending 虚线环 / running 旋转弧 / done 勾 / cancelled 叉
+            val st = when (t.status) {
+                "completed" -> "done"
+                "in_progress" -> "running"
+                "cancelled" -> "cancelled"
+                "failed" -> "failed"
+                else -> "pending"
             }
-            wrap.addView(
-                TextView(this).apply {
-                    text = "$mark ${t.content}"
-                    textSize = 13f
-                    setTextColor(if (t.status == "in_progress") primary else neutral)
-                    setPadding(0, dp(2), 0, dp(2))
-                    if (t.status == "completed") {
-                        paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+            val prevSt = todoStatusCache[t.content]
+            todoStatusCache[t.content] = st
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(3), 0, dp(3))
+            }
+            row.addView(
+                StatusMarkView(this).apply {
+                    inkColor = if (st == "running") primary else neutral
+                    if (prevSt != null && prevSt != st) {
+                        // 重建后从上一状态平滑切换（对齐 React Bits 的原地 morph）
+                        setStatus(prevSt, animate = false)
+                        setStatus(st, animate = true)
+                    } else {
+                        setStatus(st, animate = false)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(dp(17), dp(17)).apply {
+                        topMargin = dp(2)
+                        rightMargin = dp(9)
                     }
                 },
             )
+            row.addView(
+                TextView(this).apply {
+                    this.text = t.content
+                    textSize = 13f
+                    setTextColor(if (st == "done" || st == "cancelled") neutral else onSurface)
+                    if (st == "done") {
+                        if (prevSt == "done") {
+                            paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+                        } else {
+                            // 刚完成：对齐原版，勾开始 60ms 后（即入场 180ms）划出删除线
+                            postDelayed({
+                                paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+                            }, 180)
+                        }
+                    }
+                },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            wrap.addView(row)
         }
         if (todos.size > 12) {
             wrap.addView(
@@ -1934,7 +2014,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             hideSlashPanel()
             return
         }
-        val matched = zc.slashCommands.filter { it.name.startsWith(query, true) }.take(6)
+        val matched = zc.slashCommands.filter { it.name.startsWith(query, true) }.take(8)
         if (matched.isEmpty()) {
             hideSlashPanel()
             return
@@ -1945,53 +2025,149 @@ collapseFullDrawerThen { showConversation(conversation) }
     private fun showSlashPanel(commands: List<com.coda.mobileui.core.ZSlashCommand>) {
         hideSlashPanel()
         val overlay = findViewById<View>(android.R.id.content) as? ViewGroup ?: return
-        val scroll = android.widget.HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-        }
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-        }
-        val chipBg = com.google.android.material.color.MaterialColors.getColor(
+        val store = SettingsStore.get(this)
+        val onSurface = com.google.android.material.color.MaterialColors.getColor(
             this,
-            com.google.android.material.R.attr.colorSurfaceContainerHighest,
-            0x22000000,
+            com.google.android.material.R.attr.colorOnSurface,
+            Color.BLACK,
         )
-        commands.forEach { cmd ->
-            val chip = TextView(this).apply {
-                text = "/" + cmd.name
-                textSize = 13f
-                setPadding(dp(10), dp(6), dp(10), dp(6))
-                setBackgroundColor(chipBg)
-                setOnClickListener {
-                    inputMessage.setText("/" + cmd.name + " ")
-                    inputMessage.setSelection(inputMessage.text.length)
-                    hideSlashPanel()
+        val secondary = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        val surfaceBg = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorSurfaceContainerHigh,
+            0xFFEFEFEF.toInt(),
+        )
+        val recent = store.slashRecent
+            .mapNotNull { n -> commands.find { it.name == n } }
+            .take(2)
+        val others = commands.filter { c -> recent.none { it.name == c.name } }.take(6)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(surfaceBg)
+            }
+            elevation = dp(8).toFloat()
+        }
+        fun addGroup(title: String) {
+            panel.addView(
+                TextView(this).apply {
+                    text = title
+                    textSize = 12f
+                    setTextColor(secondary)
+                    setPadding(dp(16), dp(7), dp(16), dp(2))
+                },
+            )
+        }
+        fun addCommandRow(cmd: com.coda.mobileui.core.ZSlashCommand, iconRes: Int) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(9), dp(16), dp(9))
+                val tv = android.util.TypedValue()
+                if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
+                    setBackgroundResource(tv.resourceId)
                 }
             }
             row.addView(
-                chip,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    .apply { rightMargin = dp(6) },
+                ImageView(this).apply {
+                    setImageResource(iconRes)
+                    setColorFilter(secondary)
+                    layoutParams = LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(12) }
+                },
+            )
+            row.addView(
+                TextView(this).apply {
+                    text = "/" + cmd.name
+                    textSize = 15f
+                    setTextColor(onSurface)
+                    maxLines = 1
+                },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+            )
+            if (cmd.description.isNotEmpty()) {
+                row.addView(
+                    TextView(this).apply {
+                        text = cmd.description
+                        textSize = 12f
+                        setTextColor(secondary)
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    },
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(10) },
+                )
+            }
+            row.setOnClickListener {
+                store.addSlashRecent(cmd.name)
+                inputMessage.setText("/" + cmd.name + " ")
+                inputMessage.setSelection(inputMessage.text.length)
+                hideSlashPanel()
+            }
+            panel.addView(
+                row,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
             )
         }
-        scroll.addView(row)
+        if (recent.isNotEmpty()) {
+            addGroup("最近使用")
+            recent.forEach { addCommandRow(it, R.drawable.ic_clock) }
+        }
+        if (others.isNotEmpty()) {
+            addGroup("命令")
+            others.forEach { addCommandRow(it, R.drawable.ic_command) }
+        }
+        // 底部分割线 + "输入搜索…" 提示（过滤随输入框实时进行）
+        panel.addView(
+            View(this).apply {
+                setBackgroundColor(androidx.core.graphics.ColorUtils.setAlphaComponent(secondary, 28))
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1),
+        )
+        panel.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(8), dp(16), dp(8))
+                addView(
+                    ImageView(this@MainActivity).apply {
+                        setImageResource(R.drawable.ic_search)
+                        setColorFilter(secondary)
+                        layoutParams = LinearLayout.LayoutParams(dp(13), dp(13)).apply { rightMargin = dp(8) }
+                    },
+                )
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = "输入搜索…"
+                        textSize = 12f
+                        setTextColor(secondary)
+                    },
+                )
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+        )
         val lp = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT,
         )
         lp.gravity = Gravity.BOTTOM or Gravity.START
-        scroll.layoutParams = lp
-        overlay.addView(scroll)
-        slashPanel = scroll
-        scroll.post {
+        lp.marginStart = dp(8)
+        lp.marginEnd = dp(8)
+        panel.layoutParams = lp
+        overlay.addView(panel)
+        slashPanel = panel
+        panel.post {
             val composer = findViewById<View>(R.id.composer_container) ?: return@post
             val cLoc = IntArray(2)
             val oLoc = IntArray(2)
             composer.getLocationOnScreen(cLoc)
             overlay.getLocationOnScreen(oLoc)
             lp.bottomMargin = (oLoc[1] + overlay.height - cLoc[1]).coerceAtLeast(0)
-            scroll.layoutParams = lp
+            panel.layoutParams = lp
         }
     }
 
@@ -2021,14 +2197,12 @@ collapseFullDrawerThen { showConversation(conversation) }
         animateDrawerWidth(dp(304), screenWidth, 240)
         setDrawerRounded(false)
 
-        // 半屏顶部的两个动作行在全屏里变成右上角图标，所以让它们淡出
+        // 半屏顶部的两个动作行在全屏里变成右上角图标：高度塌陷 + 淡出（避免下方列表突跳）
         host.findViewWithTag<View>("drawer_actions")?.let { actions ->
-            actions.animate().alpha(0f).setDuration(140).withEndAction {
-                actions.visibility = View.GONE
-            }.start()
+            collapseDrawerActions(actions, show = false)
         }
-        // 列表底部为搜索框让出空间
-        host.findViewById<View>(R.id.drawer_content)?.setPaddingRelative(0, dp(8), 0, dp(96))
+        // 列表底部为搜索框让出空间（平滑过渡）
+        animateDrawerContentPadding(host, dp(96))
 
         // 搜索框上浮出现
         view.findViewWithTag<View>("full_search")?.let { search ->
@@ -2062,6 +2236,55 @@ collapseFullDrawerThen { showConversation(conversation) }
             start()
         }
     }
+    /** 抽屉动作行（新对话/设置）收起或展开：高度动画，避免下方列表突跳。 */
+    private var drawerActionsFullHeight = 0
+    private fun collapseDrawerActions(actions: View, show: Boolean) {
+        actions.animate().cancel()
+        if (drawerActionsFullHeight <= 0) {
+            drawerActionsFullHeight = actions.height.takeIf { it > 0 } ?: dp(96)
+        }
+        val full = drawerActionsFullHeight
+        actions.visibility = View.VISIBLE
+        val from = if (show) 0 else (actions.height.takeIf { it > 0 } ?: full)
+        val to = if (show) full else 0
+        actions.alpha = if (show) 0f else 1f
+        val anim = ValueAnimator.ofInt(from, to).apply {
+            duration = 200
+            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { a ->
+                val h = a.animatedValue as Int
+                actions.layoutParams = actions.layoutParams.apply { height = h }
+                actions.requestLayout()
+            }
+        }
+        anim.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                if (show) {
+                    actions.layoutParams = actions.layoutParams.apply { height = ViewGroup.LayoutParams.WRAP_CONTENT }
+                    actions.requestLayout()
+                    actions.animate().alpha(1f).setDuration(120).start()
+                } else {
+                    actions.visibility = View.GONE
+                    actions.layoutParams = actions.layoutParams.apply { height = ViewGroup.LayoutParams.WRAP_CONTENT }
+                    actions.requestLayout()
+                    actions.alpha = 1f
+                }
+            }
+        })
+        anim.start()
+    }
+    /** 抽屉列表底部留白动画（半屏 ↔ 全屏为搜索框让位）。 */
+    private fun animateDrawerContentPadding(host: ViewGroup, targetBottom: Int) {
+        val content = host.findViewById<View>(R.id.drawer_content) ?: return
+        val anim = ValueAnimator.ofInt(content.paddingBottom, targetBottom).apply {
+            duration = 200
+            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { a ->
+                content.setPaddingRelative(content.paddingStart, content.paddingTop, content.paddingEnd, a.animatedValue as Int)
+            }
+        }
+        anim.start()
+    }
 
     /** 全屏抽屉顶部两个按钮：展开时从左侧滑到右上角，收起时反向滑回。 */
     private fun shiftHeaderButtons(view: View, fromLeft: Boolean) {
@@ -2094,13 +2317,12 @@ collapseFullDrawerThen { showConversation(conversation) }
             view.visibility = View.GONE
             view.findViewWithTag<View>("full_search")?.visibility = View.GONE
         }, duration)
-        // 半屏顶部的两个动作行淡入回来
+        // 半屏顶部的两个动作行淡入回来（高度展开）
         host.findViewWithTag<View>("drawer_actions")?.let { actions ->
-            actions.visibility = View.VISIBLE
-            actions.animate().alpha(1f).setDuration(180).start()
+            collapseDrawerActions(actions, show = true)
         }
         // 列表底部留白恢复
-        host.findViewById<View>(R.id.drawer_content)?.setPaddingRelative(0, dp(8), 0, dp(16))
+        animateDrawerContentPadding(host, dp(16))
         animateDrawerWidth(screenWidth, dp(304), duration)
         view.postDelayed({ setDrawerRounded(true) }, duration)
     }
@@ -2137,6 +2359,8 @@ collapseFullDrawerThen { showConversation(conversation) }
         host.findViewWithTag<View>("drawer_actions")?.let { actions ->
             actions.visibility = View.VISIBLE
             actions.alpha = 1f
+            actions.layoutParams = actions.layoutParams.apply { height = ViewGroup.LayoutParams.WRAP_CONTENT }
+            actions.requestLayout()
         }
         host.findViewById<View>(R.id.drawer_content)?.setPaddingRelative(0, dp(8), 0, dp(16))
         setDrawerRounded(true)

@@ -59,6 +59,23 @@ class SettingsStore private constructor(context: Context) {
     var codeThemeDarkIndex: Int
         get() = prefs.getInt(KEY_CODE_THEME_DARK, 0)
         set(value) = prefs.edit().putInt(KEY_CODE_THEME_DARK, value).apply()
+    /** 发送消息后自动滚动到底部。 */
+    var chatAutoScroll: Boolean
+        get() = prefs.getBoolean(KEY_CHAT_AUTO_SCROLL, true)
+        set(value) = prefs.edit().putBoolean(KEY_CHAT_AUTO_SCROLL, value).apply()
+    /** 默认发送模式（0=Yolo，1=Build，2=Chat）。 */
+    var defaultSendMode: Int
+        get() = prefs.getInt(KEY_DEFAULT_SEND_MODE, 1).coerceIn(0, 2)
+        set(value) = prefs.edit().putInt(KEY_DEFAULT_SEND_MODE, value.coerceIn(0, 2)).apply()
+    /** 斜杠命令最近使用（最多 5 个，逗号分隔存储）。 */
+    var slashRecent: List<String>
+        get() = (prefs.getString(KEY_SLASH_RECENT, "") ?: "")
+            .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        set(value) = prefs.edit().putString(KEY_SLASH_RECENT, value.take(5).joinToString(",")).apply()
+    /** 记录一次斜杠命令使用。 */
+    fun addSlashRecent(name: String) {
+        slashRecent = listOf(name) + slashRecent.filter { it != name }
+    }
 
     /** 主题模式对应的 AppCompat 夜间模式。 */
     val nightMode: Int
@@ -104,6 +121,9 @@ class SettingsStore private constructor(context: Context) {
         private const val KEY_CODE_FONT_SIZE = "code_font_size"
         private const val KEY_CODE_THEME_LIGHT = "code_theme_light"
         private const val KEY_CODE_THEME_DARK = "code_theme_dark"
+        private const val KEY_CHAT_AUTO_SCROLL = "chat_auto_scroll"
+        private const val KEY_DEFAULT_SEND_MODE = "default_send_mode"
+        private const val KEY_SLASH_RECENT = "slash_recent"
 
         const val MODE_SYSTEM = 0
         const val MODE_LIGHT = 1

@@ -180,6 +180,7 @@ class ZController private constructor(private val app: Context) {
         override fun onInteractiveReverse(requestId: Any, method: String, params: JSONObject): Boolean {
             return when (method) {
                 "interaction/requestPermission" -> {
+                    runtime.log("[perm] requestPermission tool=${params.optString("toolName")} mode=$mode")
                     if (mode == "yolo") {
                         // 全权模式：自动放行（优先使用选项里的允许应答）
                         val resp = findAllowResponse(params) ?: JSONObject().put("decision", "allow")
@@ -940,12 +941,32 @@ class ZController private constructor(private val app: Context) {
             cb?.invoke(true, "ok")
             return
         }
+        doSetMode(sid, protocolMode, retried = false, cb = cb)
+    }
+    /** 设置发送模式；冷会话失败时自动恢复一次后重试（与发送同策略）。 */
+    private fun doSetMode(
+        sid: String,
+        protocolMode: String,
+        retried: Boolean,
+        cb: ((Boolean, String) -> Unit)?,
+    ) {
         runtime.call("session/setMode", JSONObject().put("sessionId", sid).put("mode", protocolMode)) { ok, body ->
             if (ok) {
-                post { applySnapshot(body) }
+                post {
+                    mode = protocolMode
+                    applySnapshot(body)
+                }
                 cb?.invoke(true, "ok")
             } else {
-                cb?.invoke(false, errMsg(body))
+                val msg = errMsg(body)
+                if (!retried && msg.contains("not active", ignoreCase = true)) {
+                    resumeSession(sid) { rok, _ ->
+                        if (rok) doSetMode(sid, protocolMode, retried = true, cb = cb)
+                        else cb?.invoke(false, msg)
+                    }
+                } else {
+                    cb?.invoke(false, msg)
+                }
             }
         }
     }

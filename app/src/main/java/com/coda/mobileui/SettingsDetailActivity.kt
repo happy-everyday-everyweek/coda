@@ -114,6 +114,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     private fun currentPage(): SettingsPage = when (pageKey) {
         PAGE_APPEARANCE -> SettingsData.appearance(store)
+        PAGE_CHAT -> SettingsData.chat(store)
         PAGE_WORKSPACE -> SettingsData.workspace(store)
         PAGE_PROVIDERS -> SettingsData.providers(this)
         PAGE_SUBAGENTS -> SettingsData.subagents(this)
@@ -193,6 +194,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             applyPhoneControl(checked)
             return
         }
+        if (key == "chat_auto_scroll") {
+            store.chatAutoScroll = checked
+            renderPage()
+            return
+        }
         val needRecreate = when (key) {
             KEY_AUTO_COLOR -> {
                 store.autoColor = checked
@@ -214,7 +220,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     override fun onValueClick(key: String) {
         when {
-            key == KEY_ACCENT -> pickAccent()
+            key == "chat_default_send_mode" -> {
+            sheetPickList("默认发送模式", listOf("Yolo", "Build", "Chat"), store.defaultSendMode) { which ->
+                store.defaultSendMode = which
+                renderPage()
+            }
+        }
+        key == KEY_ACCENT -> pickAccent()
             key == KEY_FONT_SCALE -> pickFontScale()
             key == KEY_CODE_FONT_SIZE -> pickCodeFontSize()
             key == KEY_CODE_THEME_LIGHT ->
@@ -1736,6 +1748,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
         const val PAGE_SYSTEM = "system"
         const val PAGE_APPEARANCE = "appearance"
+        const val PAGE_CHAT = "chat"
         const val PAGE_WORKSPACE = "workspace"
         const val PAGE_PROVIDERS = "providers"
         const val PAGE_SUBAGENTS = "subagents"

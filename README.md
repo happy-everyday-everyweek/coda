@@ -6,7 +6,7 @@
 
 - 会话：新建 / 列表 / 打开历史 / 流式输出 / 工具调用展示 / Markdown 渲染 / 斜杠命令
 - 模型：供应商配置（API 端点 / 模型名 / Key）、模型切换、思考强度调节
-- 交互：Yolo / Build / Chat 发送模式（长按发送按钮）、权限弹窗、Agent 提问弹窗
+- 交互：Yolo / Build / Chat 发送模式（长按发送按钮，默认模式可在设置中配置）、权限弹窗、Agent 提问弹窗、发送后自动滚动到底部（可在设置关闭）
 - 设置系统：模型设置、子智能体、技能、命令（与桌面端同款文件格式与目录）、插件、MCP 服务器、定时任务、钩子、使用统计
 - 稳定性：崩溃拦截（落盘日志 + 崩溃页）、首装载荷解包提示
 
@@ -32,3 +32,4 @@
 本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0，比 GPL v3 更严格：通过计算机网络提供服务时同样要求提供源代码）。
 
 内置运行时载荷包含第三方组件（ZCode CLI 为 Apache-2.0，Node.js 为 MIT 等），其版权与许可声明归各上游项目所有，再分发时请一并保留。
+界面的任务状态标记样式参考 React Bits 的 Status Mark 组件（https://reactbits.dev ，github.com/DavidHDev/react-bits）实现，在此致谢；该组件的原始实现与文档版权归其作者所有。

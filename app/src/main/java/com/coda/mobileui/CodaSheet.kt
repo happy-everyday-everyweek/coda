@@ -488,7 +488,16 @@ class CodaSheet(private val activity: Activity) {
         cornerPx = radius
         panelView.invalidateOutline()
         panelView.elevation = dp(24f) * (1f - p)
-        grabberRow?.setPadding(0, (statusBarH * p).toInt(), 0, 0)
+        // 全屏态：把手等交互组件避让顶部状态栏/挖孔（对齐主界面控制栏的避让口径）
+        val topPad = ((safeTopInsetPx + dp(4f)) * p).toInt()
+        (grabberRow?.layoutParams as? LinearLayout.LayoutParams)?.let { glp ->
+            val gh = dp(20f) + topPad
+            if (glp.height != gh) {
+                glp.height = gh
+                grabberRow?.layoutParams = glp
+            }
+        }
+        grabberRow?.setPadding(0, topPad, 0, 0)
         footerRow?.setPadding(dp(20f), dp(10f), dp(20f), dp(24f) + (navBarH * p).toInt())
     }
 
@@ -568,6 +577,14 @@ class CodaSheet(private val activity: Activity) {
         scrimView?.animate()?.alpha(0f)?.setDuration(160)?.start()
     }
 
+    /** 顶部安全避让：状态栏与挖孔取较大值（对齐主界面 topSafeInset 口径）。 */
+    private val safeTopInsetPx: Int by lazy {
+        var cut = 0
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            cut = activity.window.decorView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
+        }
+        maxOf(statusBarHeightPx(), cut)
+    }
     private fun statusBarHeightPx(): Int = try {
         val id = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
         if (id > 0) activity.resources.getDimensionPixelSize(id) else dp(24f)

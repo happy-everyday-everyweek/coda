@@ -55,6 +55,7 @@ object SettingsData {
         SettingRow.Header("基础设置"),
         SettingRow.Category("system", "系统", "语言与当前窗口体验", R.drawable.ic_settings),
         SettingRow.Category("appearance", "外观", "主题、主色、界面字号与代码显示", R.drawable.ic_sun),
+        SettingRow.Category("chat", "聊天", "发送行为、默认模式与滚动", R.drawable.ic_chat),
         SettingRow.Category("providers", "模型设置", "管理自定义模型供应商", R.drawable.ic_logo_spark),
         SettingRow.Category("browser", "浏览器控制", "内置浏览器与浏览器数据", R.drawable.ic_globe),
         SettingRow.Category("computer", "手机控制", "Agent 操作本机屏幕（无障碍服务）", R.drawable.ic_monitor),
@@ -73,6 +74,28 @@ object SettingsData {
         SettingRow.Category("migration", "迁移", "Claude 历史迁移", R.drawable.ic_migration),
     )
 
+    /** 聊天页：发送行为与滚动偏好。 */
+    fun chat(store: SettingsStore): SettingsPage = SettingsPage(
+        "聊天",
+        listOf(
+            SettingRow.Header("发送"),
+            SettingRow.Value(
+                "默认发送模式",
+                when (store.defaultSendMode) {
+                    0 -> "Yolo"
+                    2 -> "Chat"
+                    else -> "Build"
+                },
+                "chat_default_send_mode",
+            ),
+            SettingRow.Toggle(
+                "发送后自动滚动到底部",
+                "关闭后发送与生成过程中不再自动滚动",
+                store.chatAutoScroll,
+                "chat_auto_scroll",
+            ),
+        ),
+    )
     /**
      * 外观页：全部是真实生效的设置。
      * 主题模式、主色、自动取色、界面字号会立即应用并持久化；代码显示项会被保存。
