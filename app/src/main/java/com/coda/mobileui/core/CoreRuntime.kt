@@ -433,6 +433,6 @@ class CoreRuntime(private val ctx: Context) {
     fun logSnapshot(): String = synchronized(logLock) { logBuf.toString() }
 
     companion object {
-        private const val MARKER = "m5"
+        private const val MARKER = "m6"
     }
 }
