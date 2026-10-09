@@ -71,6 +71,10 @@ class ZController private constructor(private val app: Context) {
         private set
     /** 子会话消息缓存（子代理半屏的整页会话视图用）。 */
     private val childMessages = HashMap<String, List<ZMessage>>()
+    /** 子会话消息读取失败过的会话 id（避免把「读失败」当成「确实为空」）。 */
+    private val childMessageFailures = HashSet<String>()
+    /** 正在读取中的子会话 id（同会话只保留一个在途请求）。 */
+    private val childLoading = HashSet<String>()
     /** 父 Agent 工具调用 id → 子会话 id（由流式事件的 parentToolUseId 解析而来）。 */
     private val parentCallToChild = HashMap<String, String>()
     /** 子工具调用 id → 父 Agent 工具调用 id。 */
@@ -516,17 +520,47 @@ class ZController private constructor(private val app: Context) {
      * 读取子代理子会话的消息（只读）。半屏的整页会话视图直接复用主界面渲染，因此这里取原始消息
      * 而不是摘要行；结果缓存在 childMessages 里，重渲染时无需再次请求内核。
      */
-    fun loadChildMessages(childSessionId: String, cb: ((List<ZMessage>) -> Unit)? = null) {
+    fun loadChildMessages(childSessionId: String, cb: ((List<ZMessage>?) -> Unit)? = null) {
         if (childSessionId.isEmpty()) {
             post { cb?.invoke(emptyList()) }
             return
         }
-        runtime.call("session/messages", JSONObject().put("sessionId", childSessionId)) { ok, body ->
-            val msgs = if (ok) ZParse.parseMessages(body) else emptyList()
+        // 同一子会话只允许一个在途读取：冷恢复可能耗时数秒，3 秒跟随刷新会重复触发同一会话。
+        if (!childLoading.add(childSessionId)) return
+        fun settle(msgs: List<ZMessage>?) {
             post {
-                childMessages[childSessionId] = msgs
+                childLoading.remove(childSessionId)
+                if (msgs != null) {
+                    childMessages[childSessionId] = msgs
+                    childMessageFailures.remove(childSessionId)
+                } else {
+                    childMessageFailures.add(childSessionId)
+                }
                 cb?.invoke(msgs)
             }
+        }
+        readChildMessages(childSessionId) { msgs ->
+            if (msgs != null) {
+                settle(msgs)
+                return@readChildMessages
+            }
+            // 子代理子会话是内核里的 detached child，不在协议层会话表里，直接读会返回
+            // 「Session is not active」。冷恢复（session/resume）会把它按 subagent_child 从
+            // session store 物化出来，之后 session/messages 才有数据。
+            resumeSession(childSessionId) { ok, _ ->
+                if (!ok) {
+                    settle(null)
+                    return@resumeSession
+                }
+                readChildMessages(childSessionId) { again -> settle(again) }
+            }
+        }
+    }
+
+    /** 单次 session/messages 读取；失败返回 null（区别于「读到了空列表」）。 */
+    private fun readChildMessages(childSessionId: String, cb: (List<ZMessage>?) -> Unit) {
+        runtime.call("session/messages", JSONObject().put("sessionId", childSessionId)) { ok, body ->
+            cb(if (ok) ZParse.parseMessages(body) else null)
         }
     }
 
@@ -534,6 +568,12 @@ class ZController private constructor(private val app: Context) {
     fun cachedChildMessages(childSessionId: String?): List<ZMessage>? {
         if (childSessionId.isNullOrEmpty()) return null
         return childMessages[childSessionId]
+    }
+
+    /** 该子会话消息读取失败过（多半是内核未激活该子会话），用于避免把失败当成「确实为空」。 */
+    fun childMessagesFailed(childSessionId: String?): Boolean {
+        if (childSessionId.isNullOrEmpty()) return false
+        return childMessageFailures.contains(childSessionId)
     }
 
     /**

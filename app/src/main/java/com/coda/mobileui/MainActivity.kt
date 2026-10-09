@@ -1718,9 +1718,20 @@ collapseFullDrawerThen { showConversation(conversation) }
         val messages = zc.cachedChildMessages(childSessionId)
         if (messages == null) {
             if (!prompt.isNullOrBlank()) addUserBubble(host, prompt)
-            host.addView(codaLine("加载子代理会话…", 12f, codaNeutral(), 6))
-            zc.loadChildMessages(childSessionId) {
-                fillSubagentConversation(host, prompt, childSessionId)
+            val failed = zc.childMessagesFailed(childSessionId)
+            host.addView(
+                codaLine(
+                    if (failed) "子会话消息读取失败" else "加载子代理会话…",
+                    12f,
+                    codaNeutral(),
+                    6,
+                ),
+            )
+            // 读失败后不在这里自动重试，避免渲染与读取互相触发；仍在运行的子代理由 3 秒跟随刷新重试。
+            if (!failed) {
+                zc.loadChildMessages(childSessionId) {
+                    fillSubagentConversation(host, prompt, childSessionId)
+                }
             }
             return
         }
