@@ -90,6 +90,34 @@ object ZWorkflowKit {
     private fun token(name: String?): String =
         name?.lowercase()?.filter { it.isLetterOrDigit() } ?: ""
 
+    /**
+     * 从部件/事件 JSON 里读 parentToolUseId（兼容 parentToolCallId，以及 _meta、_meta.zcode 两种包装）。
+     * 内核侧：镜像到父会话的子代理工具事件把父调用 id 放在 parentToolCallId，流式事件放在
+     * parentToolUseId / _meta.zcode.parentToolUseId。取不到返回空串。
+     */
+    fun parentToolUseIdOf(o: JSONObject?): String {
+        if (o == null) return ""
+        val direct = firstNonEmpty(
+            o.optString("parentToolUseId"),
+            o.optString("parentToolCallId"),
+        )
+        if (direct.isNotEmpty()) return direct
+        val meta = o.optJSONObject("_meta") ?: return ""
+        val fromMeta = firstNonEmpty(
+            meta.optString("parentToolUseId"),
+            meta.optString("parentToolCallId"),
+        )
+        if (fromMeta.isNotEmpty()) return fromMeta
+        val zcode = meta.optJSONObject("zcode") ?: return ""
+        return firstNonEmpty(
+            zcode.optString("parentToolUseId"),
+            zcode.optString("parentToolCallId"),
+        )
+    }
+
+    private fun firstNonEmpty(vararg values: String): String =
+        values.firstOrNull { it.isNotEmpty() } ?: ""
+
     fun isWorkflowTool(name: String?): Boolean = WORKFLOW_TOOLS.contains(token(name))
 
     fun isAgentTool(name: String?): Boolean = AGENT_TOOLS.contains(token(name))

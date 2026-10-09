@@ -69,6 +69,12 @@ class ZController private constructor(private val app: Context) {
     /** 当前工作区的动态工作流运行摘要（workflows/runs）。 */
     var workflowRuns: List<ZWorkflowRun> = emptyList()
         private set
+    /** 子会话消息缓存（子代理半屏的整页会话视图用）。 */
+    private val childMessages = HashMap<String, List<ZMessage>>()
+    /** 父 Agent 工具调用 id → 子会话 id（由流式事件的 parentToolUseId 解析而来）。 */
+    private val parentCallToChild = HashMap<String, String>()
+    /** 子工具调用 id → 父 Agent 工具调用 id。 */
+    private val toolCallToParentCall = HashMap<String, String>()
 
     private val listeners = CopyOnWriteArrayList<Listener>()
     private val main = Handler(Looper.getMainLooper())
@@ -360,6 +366,7 @@ class ZController private constructor(private val app: Context) {
                 val kind = payload.optString("kind")
                 val delta = payload.optString("delta")
                 val mid = payload.optString("assistantMessageId")
+                if (kind == "tool_input_delta") linkParentToolUse(payload)
                 when (kind) {
                     "text_delta" -> if (delta.isNotEmpty()) {
                         notif { onDelta(mid, delta) }
@@ -373,12 +380,29 @@ class ZController private constructor(private val app: Context) {
             }
 
             "tool.updated" -> {
+                linkParentToolUse(payload)
                 val kind = payload.optString("kind")
                 if (kind == "result" || kind == "error" || kind == "batch") {
                     scheduleRefreshSoon()
                 }
             }
         }
+    }
+
+    /**
+     * 解析流式事件里的 parentToolUseId 关联。镜像到父会话的子代理工具事件同时带 childSessionId 与
+     * parentToolCallId，因此可以直接建立「父 Agent 工具调用 ↔ 子会话」与「子工具调用 → 父调用」两种
+     * 映射；花名册刷新存在延迟或并发子代理时，靠这条映射仍能定位子会话。
+     */
+    private fun linkParentToolUse(payload: JSONObject) {
+        val parent = ZWorkflowKit.parentToolUseIdOf(payload)
+        if (parent.isEmpty()) return
+        val toolCallId = payload.optString("toolCallId")
+            .ifEmpty { payload.optString("childToolCallId") }
+            .ifEmpty { payload.optString("callID") }
+        if (toolCallId.isNotEmpty()) toolCallToParentCall[toolCallId] = parent
+        val childSessionId = payload.optString("childSessionId")
+        if (childSessionId.isNotEmpty()) parentCallToChild[parent] = childSessionId
     }
 
     /** 回合结束后的静默快照刷新（同步待办等快照级状态），不切换会话、不触发打开回调。 */
@@ -489,39 +513,44 @@ class ZController private constructor(private val app: Context) {
     }
 
     /**
-     * 读取子代理子会话的最近活动（只读）：工具步骤 + 文本片段，供半屏里展示「正在做的事」。
+     * 读取子代理子会话的消息（只读）。半屏的整页会话视图直接复用主界面渲染，因此这里取原始消息
+     * 而不是摘要行；结果缓存在 childMessages 里，重渲染时无需再次请求内核。
      */
-    fun loadChildActivity(childSessionId: String, cb: (List<String>) -> Unit) {
+    fun loadChildMessages(childSessionId: String, cb: ((List<ZMessage>) -> Unit)? = null) {
         if (childSessionId.isEmpty()) {
-            post { cb(emptyList()) }
+            post { cb?.invoke(emptyList()) }
             return
         }
         runtime.call("session/messages", JSONObject().put("sessionId", childSessionId)) { ok, body ->
-            val lines = ArrayList<String>()
-            if (ok) {
-                val msgs = ZParse.parseMessages(body)
-                msgs.takeLast(8).forEach { m ->
-                    m.parts.filterIsInstance<ZPart.ToolPart>().forEach { t ->
-                        val brief = (t.title ?: t.output ?: t.input ?: "")
-                            .replace('\n', ' ')
-                            .trim()
-                            .take(120)
-                        lines += buildString {
-                            append(t.tool)
-                            append(" · ")
-                            append(ZWorkflowKit.toolStatusLabel(t.status))
-                            if (brief.isNotEmpty()) {
-                                append(" · ")
-                                append(brief)
-                            }
-                        }
-                    }
-                    val text = m.text().trim()
-                    if (text.isNotEmpty()) lines += text.replace('\n', ' ').take(160)
-                }
+            val msgs = if (ok) ZParse.parseMessages(body) else emptyList()
+            post {
+                childMessages[childSessionId] = msgs
+                cb?.invoke(msgs)
             }
-            post { cb(lines) }
         }
+    }
+
+    /** 已缓存的子会话消息；未拉取过时返回 null（用于区分「加载中」与「确实为空」）。 */
+    fun cachedChildMessages(childSessionId: String?): List<ZMessage>? {
+        if (childSessionId.isNullOrEmpty()) return null
+        return childMessages[childSessionId]
+    }
+
+    /**
+     * 工具调用 → 子会话 id。优先用内核花名册，其次用流式事件里解析出的 parentToolCallId 关联，
+     * 两者都拿不到时返回 null。
+     */
+    fun childSessionIdForToolCall(callId: String?): String? {
+        val fromRoster = subagentForToolCall(callId)?.childSessionId
+        if (!fromRoster.isNullOrEmpty()) return fromRoster
+        if (callId.isNullOrEmpty()) return null
+        return parentCallToChild[callId]
+    }
+
+    /** 该工具调用所属的父 Agent 工具调用 id（由流式事件的 parentToolUseId 解析而来）。 */
+    fun parentCallOfToolCall(callId: String?): String? {
+        if (callId.isNullOrEmpty()) return null
+        return toolCallToParentCall[callId]
     }
 
     fun refreshSessions(cb: ((Boolean) -> Unit)?) {

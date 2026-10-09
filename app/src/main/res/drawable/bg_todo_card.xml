@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 待办清单卡：宽度、左右位置与圆角对齐输入框（左右各 12dp、圆角 28dp）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="?attr/colorSurfaceContainerLow" />
+    <corners android:radius="28dp" />
+</shape>

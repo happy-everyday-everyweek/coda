@@ -45,6 +45,8 @@ sealed class ZPart {
         var output: String?,
         var title: String?,
         var durationMs: Long?,
+        /** 所属父 Agent 工具调用 id：子代理内部产生的工具调用带此字段（协议 parentToolUseId）。 */
+        var parentToolUseId: String? = null,
     ) : ZPart()
     /** 附件部件（用户消息）：文件名 / MIME / 内容引用（本地路径或 zcode-artifact://）/ 大小与图片尺寸。 */
     class FilePart(
@@ -121,6 +123,11 @@ object ZParse {
                 output = output,
                 title = st?.optString("title")?.takeIf { it.isNotEmpty() },
                 durationMs = duration,
+                parentToolUseId = sequenceOf(
+                    ZWorkflowKit.parentToolUseIdOf(o),
+                    ZWorkflowKit.parentToolUseIdOf(o.optJSONObject("metadata")),
+                    ZWorkflowKit.parentToolUseIdOf(st),
+                ).firstOrNull { it.isNotEmpty() },
             )
         }
         "file" -> {

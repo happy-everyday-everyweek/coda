@@ -35,7 +35,6 @@ import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.ZModelLevel
 import com.coda.mobileui.core.ZParse
 import com.coda.mobileui.core.ZSessionInfo
-import com.coda.mobileui.core.ZSubagent
 import com.coda.mobileui.core.ZWorkflowActor
 import com.coda.mobileui.core.ZWorkflowKit
 import com.coda.mobileui.core.ZWorkflowPhase
@@ -1271,13 +1270,39 @@ collapseFullDrawerThen { showConversation(conversation) }
         host.removeAllViews()
         messageViews.clear()
         reasoningViews.clear()
+        val neutral = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        renderMessagesInto(host, zc.messages)
+        val todos = effectiveTodos()
+        if (todos.isNotEmpty()) {
+            host.addView(buildTodoCard(todos))
+        }
+        if (zc.running && !turnHasReasoning()) {
+            host.addView(buildRunningIndicator(neutral))
+        }
+        // 新内容到达：自动跟随到底部（可在设置关闭）
+        maybeAutoScrollToBottom(false)
+    }
+
+    /**
+     * 渲染一组消息。主界面（renderChat）与子代理半屏（整页会话视图）共用同一套渲染，
+     * 保证两处样式一致；trackViews 为 true 时登记正文视图，供流式增量原地更新。
+     */
+    private fun renderMessagesInto(
+        host: LinearLayout,
+        messages: List<com.coda.mobileui.core.ZMessage>,
+        trackViews: Boolean = true,
+    ) {
         val inflater = LayoutInflater.from(this)
         val neutral = com.google.android.material.color.MaterialColors.getColor(
             this,
             com.google.android.material.R.attr.colorOnSurfaceVariant,
             Color.GRAY,
         )
-        zc.messages.forEach { message ->
+        messages.forEach { message ->
             val fullText = message.text()
             val tools = message.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
             val partReasoning = message.parts
@@ -1290,17 +1315,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                 return@forEach
             }
             if (message.role == "user") {
-                host.addView(
-                    inflater.inflate(R.layout.view_chat_message, host, false).apply {
-                        (this as? LinearLayout)?.gravity = Gravity.END
-                        val body = findViewById<TextView>(R.id.message_text)
-                        (body.layoutParams as? LinearLayout.LayoutParams)?.gravity = Gravity.END
-                        body.text = fullText
-                        body.setBackgroundResource(R.drawable.bg_bubble_user)
-                        body.setPadding(dp(14), dp(10), dp(14), dp(10))
-                        if (fullText.isEmpty()) body.visibility = View.GONE
-                    },
-                )
+                addUserBubble(host, fullText)
                 files.forEach { f -> host.addView(buildAttachmentRow(f)) }
             } else {
                 val displayReasoning =
@@ -1323,45 +1338,54 @@ collapseFullDrawerThen { showConversation(conversation) }
                         } else {
                             body.text = "…"
                         }
-                        messageViews[message.id] = body
+                        if (trackViews) messageViews[message.id] = body
                     },
                 )
                 tools.forEach { tool ->
-                    // 首批专用展示：子代理与工作流不走通用工具卡（需要展开态与半屏详情）。
-                    when {
-                        ZWorkflowKit.isAgentTool(tool.tool) -> host.addView(buildSubagentCard(tool))
-                        ZWorkflowKit.isWorkflowTool(tool.tool) -> host.addView(buildWorkflowCard(tool))
-                        else -> {
-                            val row = inflater.inflate(R.layout.view_chat_tool, host, false)
-                            row.findViewById<TextView>(R.id.tool_name).text = toolLabel(tool.tool)
-                            row.findViewById<ImageView>(R.id.tool_icon).setImageResource(
-                                toolIcon(tool.tool),
-                            )
-                            row.findViewById<ImageView>(R.id.tool_icon).setColorFilter(neutral)
-                            row.findViewById<TextView>(R.id.tool_summary).text =
-                                (tool.output ?: tool.input ?: "").take(160)
-                            row.findViewById<TextView>(R.id.tool_detail).text = when (tool.status) {
-                                "running", "scheduled" -> getString(R.string.tool_state_running)
-                                "error", "denied" -> getString(R.string.tool_state_failed)
-                                else -> ""
-                            }
-                            row.setOnClickListener { showToolDetail(tool) }
-                            host.addView(row)
+                    // 工作流：折叠态本身就是时间轴两态组件，仍走专用卡。
+                    // 子代理：主界面保持 0.7.5 的通用工具卡不变，只有点击后打开的半屏不同。
+                    if (ZWorkflowKit.isWorkflowTool(tool.tool)) {
+                        host.addView(buildWorkflowCard(tool))
+                        return@forEach
+                    }
+                    val row = inflater.inflate(R.layout.view_chat_tool, host, false)
+                    row.findViewById<TextView>(R.id.tool_name).text = toolLabel(tool.tool)
+                    row.findViewById<ImageView>(R.id.tool_icon).setImageResource(toolIcon(tool.tool))
+                    row.findViewById<ImageView>(R.id.tool_icon).setColorFilter(neutral)
+                    row.findViewById<TextView>(R.id.tool_summary).text =
+                        (tool.output ?: tool.input ?: "").take(160)
+                    row.findViewById<TextView>(R.id.tool_detail).text = when (tool.status) {
+                        "running", "scheduled" -> getString(R.string.tool_state_running)
+                        "error", "denied" -> getString(R.string.tool_state_failed)
+                        else -> ""
+                    }
+                    row.setOnClickListener {
+                        if (ZWorkflowKit.isAgentTool(tool.tool)) {
+                            showSubagentSheet(tool)
+                        } else {
+                            showToolDetail(tool)
                         }
                     }
+                    host.addView(row)
                 }
             }
         }
-        val todos = effectiveTodos()
-        if (todos.isNotEmpty()) {
-            host.addView(buildTodoCard(todos))
-        }
-        if (zc.running && !turnHasReasoning()) {
-            host.addView(buildRunningIndicator(neutral))
-        }
-        // 新内容到达：自动跟随到底部（可在设置关闭）
-        maybeAutoScrollToBottom(false)
     }
+    /** 用户消息气泡（右对齐）。主界面与子代理半屏共用：AI 发给子代理的任务即以气泡呈现。 */
+    private fun addUserBubble(host: LinearLayout, text: String) {
+        host.addView(
+            LayoutInflater.from(this).inflate(R.layout.view_chat_message, host, false).apply {
+                (this as? LinearLayout)?.gravity = Gravity.END
+                val body = findViewById<TextView>(R.id.message_text)
+                (body.layoutParams as? LinearLayout.LayoutParams)?.gravity = Gravity.END
+                body.text = text
+                body.setBackgroundResource(R.drawable.bg_bubble_user)
+                body.setPadding(dp(14), dp(10), dp(14), dp(10))
+                if (text.isEmpty()) body.visibility = View.GONE
+            },
+        )
+    }
+
     /** 默认发送模式（设置页可改；0=Yolo，1=Build，2=Chat）。 */
     private fun defaultSendModeIndex(): Int =
         SettingsStore.get(this).defaultSendMode.coerceIn(0, SendModeView.MODES.size - 1)
@@ -1568,10 +1592,6 @@ collapseFullDrawerThen { showConversation(conversation) }
 
     // ------------------------------------------------------- 子代理 / 工作流专用展示
 
-    /** 子代理子会话活动缓存（childSessionId → 步骤行）与去重/节流状态。 */
-    private val childActivityCache = HashMap<String, List<String>>()
-    private val childActivityAt = HashMap<String, Long>()
-    private val childActivityInFlight = HashSet<String>()
 
     private fun codaNeutral(): Int = com.google.android.material.color.MaterialColors.getColor(
         this,
@@ -1627,154 +1647,78 @@ collapseFullDrawerThen { showConversation(conversation) }
     }
 
     /**
-     * 子代理卡：Agent 工具调用的专用展示。
-     * 折叠态给出「子代理类型 · 状态 · 正在做的事」，点开进入半屏看它正在进行的步骤与产物。
+     * 子代理半屏：与主界面几乎一致的整页会话视图，只是没有输入框。
+     * 父代理发给子代理的任务以用户消息气泡呈现，其余按子会话真实消息渲染（正文 / 思考 / 工具卡）。
+     * 主界面的工具卡本身不动，这里只决定点开后的内容。
      */
-    private fun buildSubagentCard(tool: com.coda.mobileui.core.ZPart.ToolPart): View {
-        val sub = zc.subagentForToolCall(tool.callId)
-        val input = codaJsonObject(tool.input)
-        val type = sub?.subagentType?.takeIf { it.isNotEmpty() }
-            ?: input?.optString("subagent_type")?.takeIf { it.isNotEmpty() }
-            ?: "子代理"
-        val title = sub?.title?.takeIf { it.isNotEmpty() }
-            ?: input?.optString("description")?.takeIf { it.isNotEmpty() }
-            ?: tool.title?.takeIf { it.isNotEmpty() }
-            ?: ""
-        val status = sub?.status ?: tool.status
-        val card = codaCard()
-        val head = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        head.addView(
-            StatusMarkView(this).apply {
-                inkColor = if (sub?.isActive == true) codaPrimary() else codaNeutral()
-                setStatus(ZWorkflowKit.actorMarkState(status), false)
-            },
-        )
-        head.addView(
-            codaLine("子代理", 12f, codaNeutral()).apply { setPadding(dp(8), 0, dp(6), 0) },
-        )
-        head.addView(
-            TextView(this).apply {
-                text = type
-                textSize = 13f
-                setTextColor(codaOnSurface())
-                typeface = android.graphics.Typeface.create(
-                    "sans-serif-medium",
-                    android.graphics.Typeface.NORMAL,
-                )
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-            },
-        )
-        head.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        head.addView(codaLine(ZWorkflowKit.subagentStatusLabel(status), 12f, codaNeutral()))
-        card.addView(head)
-        if (title.isNotEmpty()) {
-            card.addView(
-                codaLine(title, 13f, codaOnSurface(), 6).apply {
-                    maxLines = 2
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                },
-            )
-        }
-        card.addView(codaLine(subagentActivityLine(sub), 12f, codaNeutral(), 6))
-        card.setOnClickListener { showSubagentSheet(tool) }
-        return card
-    }
-
-    /** 子代理「正在做的事」一行：优先子会话最近步骤，其次内核给的 summary。 */
-    private fun subagentActivityLine(sub: ZSubagent?): String {
-        if (sub == null) return "等待内核上报子代理状态…"
-        val cached = childActivityCache[sub.childSessionId]?.lastOrNull()
-        if (!cached.isNullOrEmpty()) return "正在做：$cached"
-        if (!sub.isActive) {
-            val summary = sub.summary?.takeIf { it.isNotEmpty() }
-            return if (summary != null) "结果：$summary" else "已结束"
-        }
-        requestChildActivity(sub)
-        val summary = sub.summary?.takeIf { it.isNotEmpty() }
-        return if (summary != null) "正在做：$summary" else "运行中，等待子代理步骤上报…"
-    }
-
-    /** 拉子会话活动：4 秒 TTL + 在途去重，避免渲染循环。 */
-    private fun requestChildActivity(sub: ZSubagent) {
-        val id = sub.childSessionId
-        if (id.isEmpty() || childActivityInFlight.contains(id)) return
-        val now = System.currentTimeMillis()
-        val last = childActivityAt[id] ?: 0L
-        if (now - last < 4000L) return
-        childActivityInFlight.add(id)
-        childActivityAt[id] = now
-        zc.loadChildActivity(id) { lines ->
-            childActivityInFlight.remove(id)
-            childActivityAt[id] = System.currentTimeMillis()
-            if (lines.isNotEmpty()) {
-                childActivityCache[id] = lines
-                renderChat()
-            }
-        }
-    }
-
-    /** 子代理半屏：任务、正在进行的步骤、产物。 */
     private fun showSubagentSheet(tool: com.coda.mobileui.core.ZPart.ToolPart) {
         val sub = zc.subagentForToolCall(tool.callId)
         val input = codaJsonObject(tool.input)
         val type = sub?.subagentType?.takeIf { it.isNotEmpty() }
             ?: input?.optString("subagent_type")?.takeIf { it.isNotEmpty() }
             ?: "子代理"
-        val prompt = input?.optString("prompt")?.takeIf { it.isNotEmpty() }
-            ?: input?.optString("description")?.takeIf { it.isNotEmpty() }
+        val prompt = subagentTask(tool)
+        // 子会话定位：先按本次工具调用，再退回它所属的父 Agent 调用（parentToolUseId 关联）。
+        val anchor = tool.callId.takeIf { zc.childSessionIdForToolCall(it) != null }
+            ?: tool.parentToolUseId?.takeIf { zc.childSessionIdForToolCall(it) != null }
+            ?: zc.parentCallOfToolCall(tool.callId)?.takeIf { zc.childSessionIdForToolCall(it) != null }
+        val childSessionId = anchor?.let { zc.childSessionIdForToolCall(it) }
         val bits = mutableListOf(type)
         if (sub != null) bits += ZWorkflowKit.subagentStatusLabel(sub.status)
         if (sub != null && sub.startedAt > 0 && sub.endedAt > sub.startedAt) {
             bits += fmtDur(sub.endedAt - sub.startedAt)
         }
         CodaSheet(this)
-            .title(sub?.title?.takeIf { it.isNotEmpty() } ?: "子代理")
+            .title(sub?.title?.takeIf { it.isNotEmpty() } ?: type)
             .subtitle(bits.joinToString(" · "))
             .content { col ->
-                if (!prompt.isNullOrBlank()) {
-                    col.addView(sheetSectionLabel("任务"))
-                    col.addView(sheetCodeBlock(prompt))
-                }
-                col.addView(sheetSectionLabel("正在进行的步骤"))
-                val activityCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                col.addView(activityCol)
-                val cached = sub?.let { childActivityCache[it.childSessionId] }
-                fillActivity(activityCol, cached)
-                if (sub != null && cached == null && !sub.childSessionId.isEmpty()) {
-                    fillActivity(activityCol, null)
-                    zc.loadChildActivity(sub.childSessionId) { lines ->
-                        childActivityCache[sub.childSessionId] = lines
-                        childActivityAt[sub.childSessionId] = System.currentTimeMillis()
-                        fillActivity(activityCol, lines)
-                        renderChat()
-                    }
-                }
-                val out = tool.output?.trim()
-                if (!out.isNullOrEmpty()) {
-                    col.addView(sheetSectionLabel("产物 / 结果"))
-                    col.addView(sheetCodeBlock(out.take(6000)))
-                }
+                val host = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                col.addView(host)
+                fillSubagentConversation(host, prompt, childSessionId)
             }
             .show()
     }
 
-    private fun fillActivity(col: LinearLayout, lines: List<String>?) {
-        col.removeAllViews()
-        if (lines == null) {
-            col.addView(codaLine("加载中…", 12f, codaNeutral()))
+    /** 父代理下发给子代理的任务文本（Agent 工具的 prompt / description）。 */
+    private fun subagentTask(tool: com.coda.mobileui.core.ZPart.ToolPart): String? {
+        val input = codaJsonObject(tool.input) ?: return null
+        return input.optString("prompt").takeIf { it.isNotBlank() }
+            ?: input.optString("description").takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * 子会话整页会话视图：先出任务气泡，再按子会话消息渲染。消息尚未缓存时先请求内核，回来后重渲染。
+     */
+    private fun fillSubagentConversation(
+        host: LinearLayout,
+        prompt: String?,
+        childSessionId: String?,
+    ) {
+        host.removeAllViews()
+        if (childSessionId.isNullOrEmpty()) {
+            if (!prompt.isNullOrBlank()) addUserBubble(host, prompt)
+            host.addView(codaLine("未找到该子代理的子会话（内核尚未上报）", 12f, codaNeutral(), 6))
             return
         }
-        if (lines.isEmpty()) {
-            col.addView(codaLine("暂无步骤记录", 12f, codaNeutral()))
+        val messages = zc.cachedChildMessages(childSessionId)
+        if (messages == null) {
+            if (!prompt.isNullOrBlank()) addUserBubble(host, prompt)
+            host.addView(codaLine("加载子代理会话…", 12f, codaNeutral(), 6))
+            zc.loadChildMessages(childSessionId) {
+                fillSubagentConversation(host, prompt, childSessionId)
+            }
             return
         }
-        lines.takeLast(12).forEach { line ->
-            col.addView(codaLine("· $line", 12f, codaNeutral(), 3))
-        }
+        if (!prompt.isNullOrBlank() && !childHasTask(messages, prompt)) addUserBubble(host, prompt)
+        renderMessagesInto(host, messages, trackViews = false)
+        if (messages.isEmpty()) host.addView(codaLine("子代理暂无消息", 12f, codaNeutral()))
+    }
+
+    /** 子会话里首条用户消息是否就是父代理下发的任务（避免同一条任务展示两次）。 */
+    private fun childHasTask(messages: List<com.coda.mobileui.core.ZMessage>, prompt: String): Boolean {
+        val first = messages.firstOrNull { it.role == "user" }?.text()?.trim() ?: return false
+        if (first.isEmpty()) return false
+        return first.startsWith(prompt.trim().take(60))
     }
 
     /**
@@ -2107,11 +2051,16 @@ collapseFullDrawerThen { showConversation(conversation) }
         val wrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundResource(R.drawable.bg_tool_card)
+            setBackgroundResource(R.drawable.bg_todo_card)
+            // 宽度与左右位置对齐输入框（composer_container 左右各 12dp），圆角同为 28dp。
             layoutParams = LinearLayout.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = dp(8) }
+            ).apply {
+                leftMargin = dp(12)
+                rightMargin = dp(12)
+                bottomMargin = dp(8)
+            }
         }
         wrap.addView(
             TextView(this).apply {
