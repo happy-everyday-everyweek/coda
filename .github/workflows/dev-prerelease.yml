@@ -40,7 +40,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "24.18.0"
           cache: pnpm
           cache-dependency-path: kernel/zcode/pnpm-lock.yaml
 
@@ -49,7 +49,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      # 不用 android-actions/setup-android：它的 sdkmanager --licenses 在新版 cmdline-tools
+      # 下会停在交互确认（Accept? y/N）并让整步失败。这里改用 runner 预装的 cmdline-tools。
+      - name: 准备 Android SDK
+        run: |
+          SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | sort -V | tail -1)"
+          fi
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "build-tools;36.0.0" > /dev/null 2>&1 || true
+          ls "$ANDROID_HOME/build-tools" 2>/dev/null || true
 
       # 载荷每次都在 CI 内重建，不复用任何缓存，避免发出陈旧的内核二进制。
       - name: 重建内核二进制载荷
@@ -57,9 +68,12 @@ jobs:
 
       - name: 打包 debug APK
         run: |
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          [ -x "$AAPT2" ] || AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)"
+          echo "aapt2: $AAPT2"
           ./gradlew :app:assembleDebug \
             -PcodaVersionName="$CODA_VERSION_NAME" \
-            -Pandroid.aapt2FromMavenOverride="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+            -Pandroid.aapt2FromMavenOverride="$AAPT2"
 
       - name: 收集产物
         run: |
