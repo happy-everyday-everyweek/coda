@@ -35,6 +35,10 @@ import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.ZModelLevel
 import com.coda.mobileui.core.ZParse
 import com.coda.mobileui.core.ZSessionInfo
+import com.coda.mobileui.core.ZSubagent
+import com.coda.mobileui.core.ZWorkflowActor
+import com.coda.mobileui.core.ZWorkflowKit
+import com.coda.mobileui.core.ZWorkflowPhase
 
 /** 会话状态：Working 用灰、待您操作（含错误）用黄、已完成未读用绿、已读则整行不显示。 */
 private enum class ConvStatus { WORKING, WAITING, DONE_UNREAD, NONE }
@@ -1323,19 +1327,28 @@ collapseFullDrawerThen { showConversation(conversation) }
                     },
                 )
                 tools.forEach { tool ->
-                    val row = inflater.inflate(R.layout.view_chat_tool, host, false)
-                    row.findViewById<TextView>(R.id.tool_name).text = toolLabel(tool.tool)
-                    row.findViewById<ImageView>(R.id.tool_icon).setImageResource(toolIcon(tool.tool))
-                    row.findViewById<ImageView>(R.id.tool_icon).setColorFilter(neutral)
-                    row.findViewById<TextView>(R.id.tool_summary).text =
-                        (tool.output ?: tool.input ?: "").take(160)
-                    row.findViewById<TextView>(R.id.tool_detail).text = when (tool.status) {
-                        "running", "scheduled" -> getString(R.string.tool_state_running)
-                        "error", "denied" -> getString(R.string.tool_state_failed)
-                        else -> ""
+                    // 首批专用展示：子代理与工作流不走通用工具卡（需要展开态与半屏详情）。
+                    when {
+                        ZWorkflowKit.isAgentTool(tool.tool) -> host.addView(buildSubagentCard(tool))
+                        ZWorkflowKit.isWorkflowTool(tool.tool) -> host.addView(buildWorkflowCard(tool))
+                        else -> {
+                            val row = inflater.inflate(R.layout.view_chat_tool, host, false)
+                            row.findViewById<TextView>(R.id.tool_name).text = toolLabel(tool.tool)
+                            row.findViewById<ImageView>(R.id.tool_icon).setImageResource(
+                                toolIcon(tool.tool),
+                            )
+                            row.findViewById<ImageView>(R.id.tool_icon).setColorFilter(neutral)
+                            row.findViewById<TextView>(R.id.tool_summary).text =
+                                (tool.output ?: tool.input ?: "").take(160)
+                            row.findViewById<TextView>(R.id.tool_detail).text = when (tool.status) {
+                                "running", "scheduled" -> getString(R.string.tool_state_running)
+                                "error", "denied" -> getString(R.string.tool_state_failed)
+                                else -> ""
+                            }
+                            row.setOnClickListener { showToolDetail(tool) }
+                            host.addView(row)
+                        }
                     }
-                    row.setOnClickListener { showToolDetail(tool) }
-                    host.addView(row)
                 }
             }
         }
@@ -1551,6 +1564,477 @@ collapseFullDrawerThen { showConversation(conversation) }
                 }
             }
             .show()
+    }
+
+    // ------------------------------------------------------- 子代理 / 工作流专用展示
+
+    /** 子代理子会话活动缓存（childSessionId → 步骤行）与去重/节流状态。 */
+    private val childActivityCache = HashMap<String, List<String>>()
+    private val childActivityAt = HashMap<String, Long>()
+    private val childActivityInFlight = HashSet<String>()
+
+    private fun codaNeutral(): Int = com.google.android.material.color.MaterialColors.getColor(
+        this,
+        com.google.android.material.R.attr.colorOnSurfaceVariant,
+        Color.GRAY,
+    )
+
+    private fun codaOnSurface(): Int = com.google.android.material.color.MaterialColors.getColor(
+        this,
+        com.google.android.material.R.attr.colorOnSurface,
+        Color.BLACK,
+    )
+
+    private fun codaPrimary(): Int = com.google.android.material.color.MaterialColors.getColor(
+        this,
+        androidx.appcompat.R.attr.colorPrimary,
+        codaNeutral(),
+    )
+
+    private fun tintAlpha(color: Int, alpha: Float): Int = Color.argb(
+        (alpha.coerceIn(0f, 1f) * 255).toInt(),
+        Color.red(color),
+        Color.green(color),
+        Color.blue(color),
+    )
+
+    /** 卡片容器：与其它工具卡同一底色、内边距与下间距。 */
+    private fun codaCard(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        setBackgroundResource(R.drawable.bg_tool_card)
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(8) }
+    }
+
+    private fun codaLine(text: String, size: Float, color: Int, topPad: Int = 0): TextView =
+        TextView(this).apply {
+            this.text = text
+            textSize = size
+            setTextColor(color)
+            setPadding(0, dp(topPad), 0, 0)
+        }
+
+    private fun codaJsonObject(text: String?): org.json.JSONObject? {
+        if (text.isNullOrBlank()) return null
+        return try {
+            org.json.JSONObject(text)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * 子代理卡：Agent 工具调用的专用展示。
+     * 折叠态给出「子代理类型 · 状态 · 正在做的事」，点开进入半屏看它正在进行的步骤与产物。
+     */
+    private fun buildSubagentCard(tool: com.coda.mobileui.core.ZPart.ToolPart): View {
+        val sub = zc.subagentForToolCall(tool.callId)
+        val input = codaJsonObject(tool.input)
+        val type = sub?.subagentType?.takeIf { it.isNotEmpty() }
+            ?: input?.optString("subagent_type")?.takeIf { it.isNotEmpty() }
+            ?: "子代理"
+        val title = sub?.title?.takeIf { it.isNotEmpty() }
+            ?: input?.optString("description")?.takeIf { it.isNotEmpty() }
+            ?: tool.title?.takeIf { it.isNotEmpty() }
+            ?: ""
+        val status = sub?.status ?: tool.status
+        val card = codaCard()
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(
+            StatusMarkView(this).apply {
+                inkColor = if (sub?.isActive == true) codaPrimary() else codaNeutral()
+                setStatus(ZWorkflowKit.actorMarkState(status), false)
+            },
+        )
+        head.addView(
+            codaLine("子代理", 12f, codaNeutral()).apply { setPadding(dp(8), 0, dp(6), 0) },
+        )
+        head.addView(
+            TextView(this).apply {
+                text = type
+                textSize = 13f
+                setTextColor(codaOnSurface())
+                typeface = android.graphics.Typeface.create(
+                    "sans-serif-medium",
+                    android.graphics.Typeface.NORMAL,
+                )
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            },
+        )
+        head.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        head.addView(codaLine(ZWorkflowKit.subagentStatusLabel(status), 12f, codaNeutral()))
+        card.addView(head)
+        if (title.isNotEmpty()) {
+            card.addView(
+                codaLine(title, 13f, codaOnSurface(), 6).apply {
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                },
+            )
+        }
+        card.addView(codaLine(subagentActivityLine(sub), 12f, codaNeutral(), 6))
+        card.setOnClickListener { showSubagentSheet(tool) }
+        return card
+    }
+
+    /** 子代理「正在做的事」一行：优先子会话最近步骤，其次内核给的 summary。 */
+    private fun subagentActivityLine(sub: ZSubagent?): String {
+        if (sub == null) return "等待内核上报子代理状态…"
+        val cached = childActivityCache[sub.childSessionId]?.lastOrNull()
+        if (!cached.isNullOrEmpty()) return "正在做：$cached"
+        if (!sub.isActive) {
+            val summary = sub.summary?.takeIf { it.isNotEmpty() }
+            return if (summary != null) "结果：$summary" else "已结束"
+        }
+        requestChildActivity(sub)
+        val summary = sub.summary?.takeIf { it.isNotEmpty() }
+        return if (summary != null) "正在做：$summary" else "运行中，等待子代理步骤上报…"
+    }
+
+    /** 拉子会话活动：4 秒 TTL + 在途去重，避免渲染循环。 */
+    private fun requestChildActivity(sub: ZSubagent) {
+        val id = sub.childSessionId
+        if (id.isEmpty() || childActivityInFlight.contains(id)) return
+        val now = System.currentTimeMillis()
+        val last = childActivityAt[id] ?: 0L
+        if (now - last < 4000L) return
+        childActivityInFlight.add(id)
+        childActivityAt[id] = now
+        zc.loadChildActivity(id) { lines ->
+            childActivityInFlight.remove(id)
+            childActivityAt[id] = System.currentTimeMillis()
+            if (lines.isNotEmpty()) {
+                childActivityCache[id] = lines
+                renderChat()
+            }
+        }
+    }
+
+    /** 子代理半屏：任务、正在进行的步骤、产物。 */
+    private fun showSubagentSheet(tool: com.coda.mobileui.core.ZPart.ToolPart) {
+        val sub = zc.subagentForToolCall(tool.callId)
+        val input = codaJsonObject(tool.input)
+        val type = sub?.subagentType?.takeIf { it.isNotEmpty() }
+            ?: input?.optString("subagent_type")?.takeIf { it.isNotEmpty() }
+            ?: "子代理"
+        val prompt = input?.optString("prompt")?.takeIf { it.isNotEmpty() }
+            ?: input?.optString("description")?.takeIf { it.isNotEmpty() }
+        val bits = mutableListOf(type)
+        if (sub != null) bits += ZWorkflowKit.subagentStatusLabel(sub.status)
+        if (sub != null && sub.startedAt > 0 && sub.endedAt > sub.startedAt) {
+            bits += fmtDur(sub.endedAt - sub.startedAt)
+        }
+        CodaSheet(this)
+            .title(sub?.title?.takeIf { it.isNotEmpty() } ?: "子代理")
+            .subtitle(bits.joinToString(" · "))
+            .content { col ->
+                if (!prompt.isNullOrBlank()) {
+                    col.addView(sheetSectionLabel("任务"))
+                    col.addView(sheetCodeBlock(prompt))
+                }
+                col.addView(sheetSectionLabel("正在进行的步骤"))
+                val activityCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                col.addView(activityCol)
+                val cached = sub?.let { childActivityCache[it.childSessionId] }
+                fillActivity(activityCol, cached)
+                if (sub != null && cached == null && !sub.childSessionId.isEmpty()) {
+                    fillActivity(activityCol, null)
+                    zc.loadChildActivity(sub.childSessionId) { lines ->
+                        childActivityCache[sub.childSessionId] = lines
+                        childActivityAt[sub.childSessionId] = System.currentTimeMillis()
+                        fillActivity(activityCol, lines)
+                        renderChat()
+                    }
+                }
+                val out = tool.output?.trim()
+                if (!out.isNullOrEmpty()) {
+                    col.addView(sheetSectionLabel("产物 / 结果"))
+                    col.addView(sheetCodeBlock(out.take(6000)))
+                }
+            }
+            .show()
+    }
+
+    private fun fillActivity(col: LinearLayout, lines: List<String>?) {
+        col.removeAllViews()
+        if (lines == null) {
+            col.addView(codaLine("加载中…", 12f, codaNeutral()))
+            return
+        }
+        if (lines.isEmpty()) {
+            col.addView(codaLine("暂无步骤记录", 12f, codaNeutral()))
+            return
+        }
+        lines.takeLast(12).forEach { line ->
+            col.addView(codaLine("· $line", 12f, codaNeutral(), 3))
+        }
+    }
+
+    /**
+     * 工作流卡：首个「折叠态与展开态内容不同」的组件。
+     * 折叠态只有时间轴 + 当前步骤；展开态（半屏）保留时间轴，并列出当前步骤正在跑的子智能体。
+     */
+    private fun buildWorkflowCard(tool: com.coda.mobileui.core.ZPart.ToolPart): View {
+        val run = zc.workflowRunForToolCall(tool.callId)
+        val snapshot = codaWorkflowText(tool)
+        val phases = ZWorkflowKit.parsePhases(snapshot)
+        val current = ZWorkflowKit.currentPhase(phases)
+        val card = codaCard()
+        val running = run?.status == "running" || run?.status == "pending" ||
+            tool.status == "running" || tool.status == "scheduled"
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(
+            StatusMarkView(this).apply {
+                inkColor = if (running) codaPrimary() else codaNeutral()
+                setStatus(workflowMarkState(run?.status, tool.status), false)
+            },
+        )
+        head.addView(
+            codaLine(ZWorkflowKit.workflowToolLabel(tool.tool), 12f, codaNeutral())
+                .apply { setPadding(dp(8), 0, dp(6), 0) },
+        )
+        head.addView(
+            TextView(this).apply {
+                text = run?.name ?: tool.title?.takeIf { it.isNotEmpty() } ?: "工作流"
+                textSize = 13f
+                setTextColor(codaOnSurface())
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            },
+        )
+        head.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        head.addView(codaLine(workflowStatusWord(run?.status, tool.status), 12f, codaNeutral()))
+        card.addView(head)
+
+        if (phases.isEmpty()) {
+            card.addView(codaLine("等待阶段信息（内核上报后出现时间轴）", 12f, codaNeutral(), 8))
+        } else {
+            card.addView(
+                buildWorkflowTimeline(phases, current),
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(8) },
+            )
+            card.addView(codaLine(currentStepText(phases, current, snapshot), 12f, codaPrimary(), 6))
+        }
+        card.setOnClickListener { showWorkflowSheet(tool) }
+        return card
+    }
+
+    /** 当前步骤一行：序号/总数 · 名称 · 状态 · 结算比例 · 在跑的子智能体数。 */
+    private fun currentStepText(
+        phases: List<ZWorkflowPhase>,
+        current: ZWorkflowPhase?,
+        text: String?,
+    ): String {
+        if (current == null) return "当前步骤：等待阶段上报"
+        val actors = ZWorkflowKit.parseActors(text)
+        val active = ZWorkflowKit.activeActorCount(actors, current)
+        val bits = mutableListOf(
+            "当前步骤 ${current.index}/${phases.size}",
+            current.name,
+            ZWorkflowKit.phaseStateLabel(current.state),
+        )
+        val progress = ZWorkflowKit.stepProgressLabel(current)
+        if (progress.isNotEmpty()) bits += progress
+        if (active > 0) bits += "$active 个子智能体在跑"
+        return bits.joinToString(" · ")
+    }
+
+    /** 时间轴块：状态点 + 竖线 + 步骤名 + 状态词（进度竖线由每行的线拼成）。 */
+    private fun buildWorkflowTimeline(
+        phases: List<ZWorkflowPhase>,
+        current: ZWorkflowPhase?,
+    ): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val rowH = dp(30)
+        phases.forEachIndexed { i, ph ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val rail = FrameLayout(this)
+            // 竖线：最后一行不画（避免尾部悬空），其余行铺满行高
+            if (i < phases.size - 1) {
+                rail.addView(
+                    View(this).apply { setBackgroundColor(tintAlpha(codaNeutral(), 0.35f)) },
+                    FrameLayout.LayoutParams(dp(2), ViewGroup.LayoutParams.MATCH_PARENT).apply {
+                        gravity = Gravity.CENTER_HORIZONTAL
+                    },
+                )
+            }
+            rail.addView(
+                StatusMarkView(this).apply {
+                    inkColor = if (ph.isCurrent) codaPrimary() else codaNeutral()
+                    setStatus(ZWorkflowKit.phaseMarkState(ph.state), false)
+                },
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { gravity = Gravity.CENTER },
+            )
+            row.addView(rail, LinearLayout.LayoutParams(dp(22), rowH))
+            val texts = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            texts.addView(
+                codaLine(
+                    "${ph.index}. ${ph.name}",
+                    13f,
+                    if (ph.isCurrent) codaOnSurface() else codaNeutral(),
+                ).apply {
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                },
+            )
+            val bits = mutableListOf(ZWorkflowKit.phaseStateLabel(ph.state))
+            if (ph.rounds > 1) bits += "第 ${ph.rounds} 轮"
+            val progress = ZWorkflowKit.stepProgressLabel(ph)
+            if (progress.isNotEmpty()) bits += progress
+            if (ph.duration.isNotEmpty()) bits += ph.duration
+            texts.addView(codaLine(bits.joinToString(" · "), 11f, codaNeutral()))
+            row.addView(texts, LinearLayout.LayoutParams(0, rowH, 1f))
+            col.addView(row)
+        }
+        return col
+    }
+
+    /** 工作流的阶段/花名册文本：优先本工具输出，否则取会话里最近一次带块标记的输出。 */
+    private fun codaWorkflowText(tool: com.coda.mobileui.core.ZPart.ToolPart): String? {
+        val own = tool.output
+        if (!own.isNullOrBlank() &&
+            (own.contains("<phases>") || own.contains("<subagents>"))
+        ) {
+            return own
+        }
+        var best: String? = null
+        zc.messages.forEach { m ->
+            m.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>().forEach { t ->
+                val out = t.output
+                if (!out.isNullOrBlank() &&
+                    (out.contains("<phases>") || out.contains("<subagents>"))
+                ) {
+                    best = out
+                }
+            }
+        }
+        return best ?: own
+    }
+
+    private fun workflowStatusWord(runStatus: String?, toolStatus: String): String =
+        if (runStatus != null) {
+            ZWorkflowKit.runStatusLabel(runStatus)
+        } else {
+            ZWorkflowKit.toolStatusLabel(toolStatus)
+        }
+
+    private fun workflowMarkState(runStatus: String?, toolStatus: String): String = when {
+        runStatus == "running" || runStatus == "pending" -> "running"
+        runStatus == "completed" -> "done"
+        runStatus == "errored" -> "failed"
+        runStatus == "stopped" -> "cancelled"
+        toolStatus == "running" || toolStatus == "scheduled" -> "running"
+        toolStatus == "error" || toolStatus == "denied" -> "failed"
+        else -> "done"
+    }
+
+    /** 工作流半屏（展开态）：保留时间轴与当前步骤，追加当前步骤正在跑的子智能体。 */
+    private fun showWorkflowSheet(tool: com.coda.mobileui.core.ZPart.ToolPart) {
+        val run = zc.workflowRunForToolCall(tool.callId)
+        val text = codaWorkflowText(tool)
+        val phases = ZWorkflowKit.parsePhases(text)
+        val actors = ZWorkflowKit.parseActors(text)
+        val current = ZWorkflowKit.currentPhase(phases)
+        val bits = mutableListOf(ZWorkflowKit.workflowToolLabel(tool.tool))
+        run?.let { bits += ZWorkflowKit.runStatusLabel(it.status) }
+        run?.let { if (it.spentTokens > 0) bits += "${formatCharCount(it.spentTokens.toInt())} tokens" }
+        CodaSheet(this)
+            .title(run?.name ?: tool.title?.takeIf { it.isNotEmpty() } ?: "工作流")
+            .subtitle(bits.joinToString(" · "))
+            .content { col ->
+                col.addView(sheetSectionLabel("阶段轨"))
+                if (phases.isEmpty()) {
+                    col.addView(codaLine("内核尚未提供阶段信息（调用 GetWorkflowRun 后出现）", 12f, codaNeutral()))
+                } else {
+                    col.addView(buildWorkflowTimeline(phases, current))
+                    col.addView(codaLine(currentStepText(phases, current, text), 12f, codaPrimary(), 8))
+                }
+                val onStep = ZWorkflowKit.actorsOfPhase(actors, current)
+                val active = onStep.count { it.isActive }
+                col.addView(
+                    sheetSectionLabel(
+                        if (active > 0) "当前步骤正在运行的子智能体（$active）" else "当前步骤的子智能体",
+                    ),
+                )
+                if (onStep.isEmpty()) {
+                    col.addView(codaLine("本步骤暂无子智能体记录", 12f, codaNeutral()))
+                } else {
+                    onStep.forEach { a -> col.addView(buildActorRow(a)) }
+                }
+                val others = actors.filter { it.isActive && it.phaseName != current?.name }
+                if (others.isNotEmpty()) {
+                    col.addView(sheetSectionLabel("其它步骤仍在跑（${others.size}）"))
+                    others.forEach { a -> col.addView(buildActorRow(a)) }
+                }
+                val out = tool.output?.trim()
+                if (!out.isNullOrEmpty()) {
+                    col.addView(sheetSectionLabel("工具输出"))
+                    col.addView(sheetCodeBlock(out.take(6000)))
+                }
+            }
+            .show()
+    }
+
+    /** 工作流子智能体一行：状态点 + 名称 · 地址 · 状态 · 阶段，下列活动与任务。 */
+    private fun buildActorRow(actor: ZWorkflowActor): View {
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(6), 0, dp(6))
+        }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(
+            StatusMarkView(this).apply {
+                inkColor = if (actor.isActive) codaPrimary() else codaNeutral()
+                setStatus(ZWorkflowKit.actorMarkState(actor.state), false)
+            },
+        )
+        head.addView(
+            TextView(this).apply {
+                text = actor.name.ifEmpty { actor.address.ifEmpty { "actor" } }
+                textSize = 13f
+                setTextColor(codaOnSurface())
+                setPadding(dp(8), 0, dp(6), 0)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            },
+        )
+        val bits = mutableListOf<String>()
+        if (actor.address.isNotEmpty()) bits += actor.address
+        bits += ZWorkflowKit.actorStateLabel(actor.state)
+        actor.phaseName?.takeIf { it.isNotEmpty() }?.let { bits += "阶段 $it" }
+        if (actor.tokens.isNotEmpty()) bits += actor.tokens
+        head.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        head.addView(codaLine(bits.joinToString(" · "), 11f, codaNeutral()))
+        wrap.addView(head)
+        if (actor.activity.isNotEmpty()) {
+            wrap.addView(codaLine(actor.activity, 11f, codaNeutral(), 2))
+        }
+        actor.task?.takeIf { it.isNotEmpty() }?.let {
+            wrap.addView(codaLine("任务：$it", 11f, codaNeutral(), 2))
+        }
+        return wrap
     }
 
     private fun sheetSectionLabel(text: String): TextView {

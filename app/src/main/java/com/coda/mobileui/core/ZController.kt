@@ -63,6 +63,12 @@ class ZController private constructor(private val app: Context) {
     /** 当前会话待办列表（随会话快照同步）。 */
     var todos: List<ZParse.ZTodo> = emptyList()
         private set
+    /** 当前会话的子代理（session/subagents：运行中 + 已结束一页）。 */
+    var subagents: List<ZSubagent> = emptyList()
+        private set
+    /** 当前工作区的动态工作流运行摘要（workflows/runs）。 */
+    var workflowRuns: List<ZWorkflowRun> = emptyList()
+        private set
 
     private val listeners = CopyOnWriteArrayList<Listener>()
     private val main = Handler(Looper.getMainLooper())
@@ -276,6 +282,9 @@ class ZController private constructor(private val app: Context) {
         if (sc.isNotEmpty()) slashCommands = sc
         todos = ZParse.parseTodos(root)
         notif { onStateChanged() }
+        // 子代理与工作流运行态是独立查询面（不在会话快照里），打开/恢复会话后各拉一次。
+        refreshSubagents()
+        refreshWorkflowRuns()
     }
 
     private fun handleStateUpdated(params: JSONObject) {
@@ -419,11 +428,99 @@ class ZController private constructor(private val app: Context) {
                     messages = list.toMutableList()
                     for (l in listeners) l.onStateChanged()
                 }
+                // 工具结果变化往往意味着子代理起停，顺手对齐一次花名册。
+                refreshSubagents()
             }
             if (refreshAgain) {
                 refreshAgain = false
                 scheduleRefreshSoon()
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- 子代理 / 工作流
+
+    /**
+     * 拉取当前会话的子代理清单（session/subagents）。
+     * 子代理卡靠 toolCallId 把 Agent 工具调用与子会话对齐，从而能展示「子代理正在进行的事」。
+     */
+    fun refreshSubagents() {
+        val sid = currentSessionId ?: return
+        val params = JSONObject()
+            .put("sessionId", sid)
+            .put("endedLimit", 20)
+        runtime.call("session/subagents", params) { ok, body ->
+            if (ok) {
+                val list = ZWorkflowKit.parseSubagents(body)
+                post {
+                    subagents = list
+                    for (l in listeners) l.onStateChanged()
+                }
+            }
+        }
+    }
+
+    /** 拉取当前工作区的工作流运行摘要（workflows/runs）。 */
+    fun refreshWorkflowRuns() {
+        val params = JSONObject()
+            .put("workspace", workspaceRef())
+            .put("limit", 20)
+        runtime.call("workflows/runs", params) { ok, body ->
+            if (ok) {
+                val list = ZWorkflowKit.parseWorkflowRuns(body)
+                post {
+                    workflowRuns = list
+                    for (l in listeners) l.onStateChanged()
+                }
+            }
+        }
+    }
+
+    /** Agent 工具调用 → 对应子代理（按 toolCallId 联接）。 */
+    fun subagentForToolCall(callId: String?): ZSubagent? {
+        if (callId.isNullOrEmpty()) return null
+        return subagents.firstOrNull { it.toolCallId == callId }
+    }
+
+    /** CreateWorkflow 工具调用 → 对应运行摘要（按 toolCallId 联接）。 */
+    fun workflowRunForToolCall(callId: String?): ZWorkflowRun? {
+        if (callId.isNullOrEmpty()) return null
+        return workflowRuns.firstOrNull { it.toolCallId == callId }
+    }
+
+    /**
+     * 读取子代理子会话的最近活动（只读）：工具步骤 + 文本片段，供半屏里展示「正在做的事」。
+     */
+    fun loadChildActivity(childSessionId: String, cb: (List<String>) -> Unit) {
+        if (childSessionId.isEmpty()) {
+            post { cb(emptyList()) }
+            return
+        }
+        runtime.call("session/messages", JSONObject().put("sessionId", childSessionId)) { ok, body ->
+            val lines = ArrayList<String>()
+            if (ok) {
+                val msgs = ZParse.parseMessages(body)
+                msgs.takeLast(8).forEach { m ->
+                    m.parts.filterIsInstance<ZPart.ToolPart>().forEach { t ->
+                        val brief = (t.title ?: t.output ?: t.input ?: "")
+                            .replace('\n', ' ')
+                            .trim()
+                            .take(120)
+                        lines += buildString {
+                            append(t.tool)
+                            append(" · ")
+                            append(ZWorkflowKit.toolStatusLabel(t.status))
+                            if (brief.isNotEmpty()) {
+                                append(" · ")
+                                append(brief)
+                            }
+                        }
+                    }
+                    val text = m.text().trim()
+                    if (text.isNotEmpty()) lines += text.replace('\n', ' ').take(160)
+                }
+            }
+            post { cb(lines) }
         }
     }
 
