@@ -31,6 +31,7 @@ import androidx.transition.AutoTransition
 import androidx.transition.TransitionManager
 import com.google.android.material.snackbar.Snackbar
 import com.coda.mobileui.core.SendModes
+import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.ZModelLevel
 import com.coda.mobileui.core.ZParse
@@ -1087,7 +1088,7 @@ collapseFullDrawerThen { showConversation(conversation) }
     private fun openImagePreview(f: com.coda.mobileui.core.ZPart.FilePart) {
         fun show(bytes: ByteArray?) {
             if (bytes == null) {
-                snack("图片不可用（可能已过期或未妥善保存）")
+                snack("图片不可用，可能已过期或未妥善保存")
                 return
             }
             val bmp = try {
@@ -1122,7 +1123,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                 runOnUiThread { show(bytes) }
             }.start()
         } else {
-            snack("图片不可用（本地文件已清理）")
+            snack("图片不可用，本地文件已清理")
         }
     }
 
@@ -1162,6 +1163,7 @@ collapseFullDrawerThen { showConversation(conversation) }
     // ------------------------------------------------------------ 运行时对接
 
     override fun onDestroy() {
+        BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
         super.onDestroy()
@@ -1230,7 +1232,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         zListener = listener
         zc.addListener(listener)
         if (!java.io.File(filesDir, "core/.ready").exists()) {
-            snack("首次启动：正在解包核心运行时（约 1-2 分钟），完成后自动可用…")
+            snack("首次启动：正在解包核心运行时，约 1-2 分钟，完成后自动可用…")
         }
         zc.ensureStarted { ok, msg ->
             if (!ok) {
@@ -1712,7 +1714,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         host.removeAllViews()
         if (childSessionId.isNullOrEmpty()) {
             if (!prompt.isNullOrBlank()) addUserBubble(host, prompt)
-            host.addView(codaLine("未找到该子代理的子会话（内核尚未上报）", 12f, codaNeutral(), 6))
+            host.addView(codaLine("未找到该子代理的子会话，内核尚未上报", 12f, codaNeutral(), 6))
             return
         }
         val messages = zc.cachedChildMessages(childSessionId)
@@ -1787,7 +1789,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         card.addView(head)
 
         if (phases.isEmpty()) {
-            card.addView(codaLine("等待阶段信息（内核上报后出现时间轴）", 12f, codaNeutral(), 8))
+            card.addView(codaLine("等待阶段信息，内核上报后出现时间轴", 12f, codaNeutral(), 8))
         } else {
             card.addView(
                 buildWorkflowTimeline(phases, current),
@@ -1933,7 +1935,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             .content { col ->
                 col.addView(sheetSectionLabel("阶段轨"))
                 if (phases.isEmpty()) {
-                    col.addView(codaLine("内核尚未提供阶段信息（调用 GetWorkflowRun 后出现）", 12f, codaNeutral()))
+                    col.addView(codaLine("内核尚未提供阶段信息，调用 GetWorkflowRun 后出现", 12f, codaNeutral()))
                 } else {
                     col.addView(buildWorkflowTimeline(phases, current))
                     col.addView(codaLine(currentStepText(phases, current, text), 12f, codaPrimary(), 8))
@@ -3025,6 +3027,8 @@ collapseFullDrawerThen { showConversation(conversation) }
 
     override fun onResume() {
         super.onResume()
+        // 浏览器控制引擎需要 Activity 承载隐藏 WebView。
+        BrowserControl.attachActivity(this)
         if (pendingOpenDrawer) {
             pendingOpenDrawer = false
             drawerLayout.openDrawer(Gravity.START)

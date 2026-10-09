@@ -11,14 +11,31 @@ android {
         applicationId = "com.coda.mobileui"
         minSdk = 26
         targetSdk = 28
-        versionCode = 23
-        versionName = "0.7.8-core"
+        // 允许 CI 用 -PcodaVersionCode/-PcodaVersionName 覆盖，Tag 打包即用 Tag 号。
+        versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt() ?: 24
+        versionName = (project.findProperty("codaVersionName") as String?) ?: "0.8.0-core"
     }
-
+    signingConfigs {
+        // 本地或 CI 提供密钥时才启用；否则 release 复用 debug 签名，保证产物可安装。
+        val ksPath = System.getenv("CODA_KEYSTORE_PATH")
+        if (!ksPath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("CODA_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("CODA_KEY_ALIAS")
+                keyPassword = System.getenv("CODA_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
+    }
+    lint {
+        // targetSdk 固定 28 是本项目的有意选择，按项关掉这条政策告警，其余致命检查保留。
+        disable += "ExpiredTargetSdkVersion"
     }
 
     compileOptions {

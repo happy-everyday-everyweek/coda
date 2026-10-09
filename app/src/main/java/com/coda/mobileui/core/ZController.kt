@@ -175,7 +175,7 @@ class ZController private constructor(private val app: Context) {
             exitCount += 1
             if (exitCount <= 5 && !autoRestartScheduled) {
                 autoRestartScheduled = true
-                notif { onNotice("核心进程意外退出（code=$code），正在自动重启…") }
+                notif { onNotice("核心进程意外退出，code=$code，正在自动重启…") }
                 main.postDelayed({
                     autoRestartScheduled = false
                     ensureStarted { ok, msg ->
@@ -188,7 +188,7 @@ class ZController private constructor(private val app: Context) {
                     }
                 }, 1200)
             } else {
-                notif { onNotice("核心进程已退出（code=$code）") }
+                notif { onNotice("核心进程已退出，code=$code") }
             }
             notif { onStateChanged() }
         }
@@ -223,6 +223,8 @@ class ZController private constructor(private val app: Context) {
 
                 else -> {
                     if (AutomationHost.get(app).handleReverse(runtime, this@ZController, requestId, method, params)) {
+                        true
+                    } else if (BrowserControl.handleReverse(runtime, requestId, method, params)) {
                         true
                     } else {
                         false

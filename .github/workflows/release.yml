@@ -1,0 +1,101 @@
+name: Release
+
+# 打 Tag 即出正式发行版本：先重建内核二进制，再打 release APK，最后挂到 Release。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的 Tag，例如 v0.8.0-core
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: 取源码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: 解析版本号
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "CODA_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "CODA_VERSION_NAME=${TAG#v}" >> "$GITHUB_ENV"
+          echo "CODA_VERSION_CODE=$(( 10000 + ${{ github.run_number }} ))" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: kernel/zcode/pnpm-lock.yaml
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      # 载荷每次都在 CI 内重建，不复用任何缓存，避免发出陈旧的内核二进制。
+      - name: 重建内核二进制载荷
+        run: tools/build-core-payload.sh
+
+      - name: 准备发布签名
+        env:
+          KEYSTORE_B64: ${{ secrets.CODA_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.CODA_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.CODA_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.CODA_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "未配置 CODA_KEYSTORE_BASE64，release 将回落到 debug 签名"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/coda-release.jks"
+          {
+            echo "CODA_KEYSTORE_PATH=$RUNNER_TEMP/coda-release.jks"
+            echo "CODA_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "CODA_KEY_ALIAS=$KEY_ALIAS"
+            echo "CODA_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: 打包 release APK
+        run: |
+          ./gradlew :app:assembleRelease \
+            -PcodaVersionName="$CODA_VERSION_NAME" \
+            -PcodaVersionCode="$CODA_VERSION_CODE" \
+            -Pandroid.aapt2FromMavenOverride="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+
+      - name: 收集产物
+        run: |
+          APK="$(ls app/build/outputs/apk/release/*.apk | head -1)"
+          cp "$APK" "coda-$CODA_VERSION_NAME.apk"
+          sha256sum "coda-$CODA_VERSION_NAME.apk" | tee sha256.txt
+          cat app/build/outputs/apk/release/output-metadata.json
+
+      - name: 发布 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$CODA_TAG" \
+            "coda-$CODA_VERSION_NAME.apk" \
+            sha256.txt \
+            --title "Coda $CODA_VERSION_NAME" \
+            --generate-notes

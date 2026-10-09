@@ -2,6 +2,8 @@ package com.coda.mobileui
 
 import android.content.Context
 import com.coda.mobileui.core.AgentAssets
+import com.coda.mobileui.core.BrowserControl
+import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.PhoneAccessibilityService
@@ -53,13 +55,12 @@ object SettingsData {
 
     val home: List<SettingRow> = listOf(
         SettingRow.Header("基础设置"),
-        SettingRow.Category("system", "系统", "语言与当前窗口体验", R.drawable.ic_settings),
+        SettingRow.Category("system", "系统", "运行状态、存储与日志", R.drawable.ic_settings),
+        SettingRow.Category("general", "通用", "界面语言与交互行为", R.drawable.ic_chat),
         SettingRow.Category("appearance", "外观", "主题、主色、界面字号与代码显示", R.drawable.ic_sun),
-        SettingRow.Category("chat", "聊天", "发送行为、默认模式与滚动", R.drawable.ic_chat),
         SettingRow.Category("providers", "模型设置", "管理自定义模型供应商", R.drawable.ic_logo_spark),
         SettingRow.Category("browser", "浏览器控制", "内置浏览器与浏览器数据", R.drawable.ic_globe),
-        SettingRow.Category("computer", "手机控制", "Agent 操作本机屏幕（无障碍服务）", R.drawable.ic_monitor),
-        SettingRow.Category("shortcuts", "键盘快捷键", "命令键位绑定", R.drawable.ic_keyboard),
+        SettingRow.Category("computer", "手机控制", "Agent 操作本机屏幕，需开启无障碍服务", R.drawable.ic_monitor),
         SettingRow.Category("integrations", "集成", "云服务与第三方平台连接", R.drawable.ic_integrations),
         SettingRow.Header("Agent 能力"),
         SettingRow.Category("subagents", "子智能体", "管理用户级子智能体 Markdown 文件", R.drawable.ic_hierarchy),
@@ -72,13 +73,17 @@ object SettingsData {
         SettingRow.Header("数据与统计"),
         SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
         SettingRow.Category("migration", "迁移", "Claude 历史迁移", R.drawable.ic_migration),
+        SettingRow.Header("其它"),
+        SettingRow.Category("about", "关于", "版本、开源许可与项目主页", R.drawable.ic_info),
     )
 
-    /** 聊天页：发送行为与滚动偏好。 */
-    fun chat(store: SettingsStore): SettingsPage = SettingsPage(
-        "聊天",
+    /** 通用页：界面语言与交互行为。 */
+    fun general(store: SettingsStore): SettingsPage = SettingsPage(
+        "通用",
         listOf(
-            SettingRow.Header("发送"),
+            SettingRow.Header("语言"),
+            SettingRow.Value("界面语言", Locale.getDefault().displayName),
+            SettingRow.Header("交互"),
             SettingRow.Value(
                 "默认发送模式",
                 when (store.defaultSendMode) {
@@ -294,7 +299,7 @@ object SettingsData {
         } else {
             rows += SettingRow.Value("GitHub", "未连接 · 点击连接", "cloud_github")
         }
-        rows += SettingRow.Value("添加云服务提供商", "选择要连接的云平台（GitHub）", "cloud_add")
+        rows += SettingRow.Value("添加云服务提供商", "选择要连接的云平台", "cloud_add")
         return SettingsPage("云服务", rows)
     }
 
@@ -310,7 +315,7 @@ object SettingsData {
             rows += SettingRow.Header("账号")
             rows += SettingRow.Value("已登录：@$login", "Coda 已连接到你的 GitHub", "")
             rows += SettingRow.Header("浏览")
-            rows += SettingRow.Value("仓库", "查看你的仓库列表（含分支与 PR）", "github_repos")
+            rows += SettingRow.Value("仓库", "查看仓库列表、分支与 PR", "github_repos")
             rows += SettingRow.Header("管理")
             rows += SettingRow.Value("退出登录", "清除本机保存的访问令牌", "github_logout")
         }
@@ -355,17 +360,73 @@ object SettingsData {
             }
         }
         rows += SettingRow.Header("插件市场")
-        rows += SettingRow.Value("浏览插件市场", "查看可用插件并安装", "plugins_market")
-        rows += SettingRow.Value("添加插件市场源", "从 Git 仓库或 URL 添加", "plugins_add_market")
-        if (ov.marketplaces.isNotEmpty()) {
-            rows += SettingRow.Value(
-                "已配置 ${ov.marketplaces.size} 个市场",
-                ov.marketplaces.joinToString("、") { it.name },
-                "",
-            )
+        rows += SettingRow.Value("浏览插件市场", "打开全页查看市场源与可用插件", "plugins_market")
+        rows += SettingRow.Value(
+            "已配置的插件市场源",
+            if (ov.marketplaces.isEmpty()) {
+                "尚未配置，点开后可以新增"
+            } else {
+                "${ov.marketplaces.size} 个源 · 点开后可以管理或新增"
+            },
+            "plugins_market_sources",
+        )
+        val pending = BuiltinMarketplaces.all.filterNot { it.isConfigured(ov.marketplaces) }
+        if (pending.isNotEmpty()) {
+            rows += SettingRow.Header("推荐市场源")
+            pending.forEach { b ->
+                rows += SettingRow.Value(b.title, b.summary, "plugins_add_builtin:${b.source}")
+            }
         }
         rows += SettingRow.Value("刷新", "重新读取插件列表与市场", "extras_refresh:plugins")
         return SettingsPage("插件", rows)
+    }
+
+    /** 插件市场全页：市场源列表、可用插件安装与索引刷新。 */
+    fun pluginMarket(ctx: Context, data: JSONObject?): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        val ov = CodaExtras.parsePluginsOverview(data)
+        if (ov == null) {
+            rows += SettingRow.Header("市场源")
+            rows += SettingRow.Value("正在读取…", "从运行时获取市场数据")
+            return SettingsPage("插件市场", rows)
+        }
+        rows += SettingRow.Header("市场源")
+        if (ov.marketplaces.isEmpty()) {
+            rows += SettingRow.Value("尚未配置市场源", "在插件页的「已配置的插件市场源」中新增")
+        } else {
+            ov.marketplaces.forEach { m ->
+                val detail = buildString {
+                    append(m.pluginCount).append(" 个插件")
+                    if (m.isOfficial) append(" · 官方")
+                    m.lastUpdated?.let { append(" · 更新于 ").append(it) }
+                    m.refreshFailure?.let { append(" · 刷新失败：").append(it) }
+                }
+                rows += SettingRow.Value(m.name, detail)
+            }
+        }
+        rows += SettingRow.Value("更新市场索引", "重新拉取全部市场源的插件索引", "market_refresh")
+        rows += SettingRow.Value("管理市场源", "新增或移除已配置的市场源", "plugins_market_sources")
+        rows += SettingRow.Header("可用插件")
+        if (ov.available.isEmpty()) {
+            rows += SettingRow.Value("没有可用插件", "先添加市场源，再更新索引")
+        } else {
+            ov.available.forEach { p ->
+                val detail = buildString {
+                    append(p.marketplace)
+                    p.version?.let { append(" · v").append(it) }
+                    if (p.installed) append(" · 已安装")
+                }
+                rows += SettingRow.Value(p.name, detail, "market_install:${p.name}|${p.marketplace}")
+            }
+        }
+        if (ov.restorable.isNotEmpty()) {
+            rows += SettingRow.Header("可恢复的内置插件")
+            ov.restorable.forEach { p ->
+                rows += SettingRow.Value(p.name, "点击恢复内置插件", "plugins_restore:${p.id}")
+            }
+        }
+        rows += SettingRow.Value("刷新", "重新读取市场数据", "extras_refresh:plugins")
+        return SettingsPage("插件市场", rows)
     }
 
     /** MCP 服务器页：数据来自运行时 mcp/list（界面层异步加载后传入）。 */
@@ -528,18 +589,29 @@ object SettingsData {
         }
         rows += SettingRow.Value("核心状态", coreState)
         rows += SettingRow.Value("重启核心", "重新启动运行时；供应商等配置变更后生效", "system_restart")
-        rows += SettingRow.Header("通用")
-        rows += SettingRow.Value("界面语言", Locale.getDefault().displayName)
-        rows += SettingRow.Value("数据存储路径", "应用私有目录 files/zcode-data")
         rows += SettingRow.Header("存储与日志")
+        rows += SettingRow.Value("数据存储路径", "应用私有目录 files/zcode-data")
         rows += SettingRow.Value("清理临时文件", "删除运行时临时目录中的缓存文件", "system_clear_tmp")
         rows += SettingRow.Value("日志位置", "复制日志目录路径到剪贴板", "system_copy_logs")
-        rows += SettingRow.Header("关于")
-        rows += SettingRow.Value("应用版本", appVersion(ctx))
-        rows += SettingRow.Value("开源许可", "AGPL-3.0 · 内核来自 zCode 开源项目（Apache-2.0）", "system_license")
-        rows += SettingRow.Value("项目主页", "github.com/happy-everyday-everyweek/coda", "system_github")
         return SettingsPage("系统", rows)
     }
+
+    /** 关于页：版本、开源许可与项目信息（作为设置一级界面）。 */
+    fun about(ctx: Context): SettingsPage = SettingsPage(
+        "关于",
+        listOf(
+            SettingRow.Header("应用"),
+            SettingRow.Value("版本", appVersion(ctx)),
+            SettingRow.Value("构建号", appBuild(ctx)),
+            SettingRow.Value("包名", "com.coda.mobileui"),
+            SettingRow.Header("开源许可"),
+            SettingRow.Value("Coda 许可", "AGPL-3.0"),
+            SettingRow.Value("内置内核", "来自 zCode 开源项目，Apache-2.0 许可", "system_license"),
+            SettingRow.Header("项目"),
+            SettingRow.Value("项目主页", "github.com/happy-everyday-everyweek/coda", "system_github"),
+            SettingRow.Value("分支说明", "开发在 dev 分支，main 分支只保留说明", ""),
+        ),
+    )
 
     private fun appVersion(ctx: Context): String = try {
         ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "—"
@@ -547,37 +619,27 @@ object SettingsData {
         "—"
     }
 
+    private fun appBuild(ctx: Context): String = try {
+        val code = ctx.packageManager.getPackageInfo(ctx.packageName, 0).longVersionCode
+        code.toString()
+    } catch (_: Throwable) {
+        "—"
+    }
+
+    /** 浏览器控制页：开关、引擎状态与数据清理，均由 BrowserControl 提供真实状态。 */
+    fun browser(ctx: Context): SettingsPage {
+        val enabled = BrowserControl.isEnabled(ctx)
+        val rows = ArrayList<SettingRow>()
+        rows.add(SettingRow.Toggle("开启浏览器控制", "允许 Agent 驱动内置浏览器访问网页", enabled, "browser_enabled"))
+        rows.add(SettingRow.Header("状态"))
+        rows.add(SettingRow.Value("当前状态", BrowserControl.statusText(ctx)))
+        rows.add(SettingRow.Value("引擎标识", "coda-webview"))
+        rows.add(SettingRow.Header("数据"))
+        rows.add(SettingRow.Value("清除浏览器数据", "清除", "browser_clear_data"))
+        return SettingsPage("浏览器控制", rows)
+    }
+
     val pages: Map<String, SettingsPage> = mapOf(
-        "browser" to SettingsPage(
-            "浏览器控制",
-            listOf(
-                SettingRow.Toggle("开启内置浏览器控制", "启用 Browser Use 插件，让新会话可访问网页", true),
-                SettingRow.Header("安全"),
-                SettingRow.Toggle("忽略证书校验", "不再校验 HTTPS 证书，仅影响内置浏览器", false),
-                SettingRow.Header("浏览器数据"),
-                SettingRow.Value("导入 Chrome 登录状态", "导入浏览器数据"),
-                SettingRow.Value("清除内置浏览器缓存", "清除缓存"),
-                SettingRow.Value("清除全部浏览器数据", "清除全部"),
-            ),
-        ),
-        "shortcuts" to SettingsPage(
-            "键盘快捷键",
-            listOf(
-                SettingRow.Header("命令"),
-                SettingRow.Value("新建任务", "全局"),
-                SettingRow.Value("发送消息", "输入框"),
-                SettingRow.Value("输入框换行", "输入框"),
-                SettingRow.Value("打开工作区", "全局"),
-                SettingRow.Value("切换左侧栏", "全局"),
-                SettingRow.Value("切换右侧面板", "全局"),
-                SettingRow.Value("切换终端", "全局"),
-                SettingRow.Value("任务内查找", "全局"),
-                SettingRow.Value("打开命令中心", "全局"),
-                SettingRow.Value("打开设置", "全局"),
-                SettingRow.Header("桌面端"),
-                SettingRow.Value("全部恢复默认", "清除所有自定义键位覆盖"),
-            ),
-        ),
         "migration" to SettingsPage(
             "迁移",
             listOf(

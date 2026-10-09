@@ -23,7 +23,9 @@ import com.google.android.material.color.MaterialColors
 import com.google.android.material.snackbar.Snackbar
 import com.coda.mobileui.core.AgentAssets
 import com.coda.mobileui.core.AutomationSchedule
+import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.AutomationStore
+import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.PhoneControl
@@ -40,6 +42,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     private lateinit var store: SettingsStore
     private var pageKey: String = PAGE_SYSTEM
     private var firstResume = true
+    /** 进入插件页时的一次性内置市场源同步标记。 */
+    private var marketSyncedOnEnter = false
 
     /** 供应商配置防抖重启（连续保存合并为一次）。 */
     private val providerRestartHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -85,6 +89,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         findViewById<View>(R.id.detail_root).applySystemBarsInset()
         findViewById<View>(R.id.btn_back).setOnClickListener { finish() }
         renderPage()
+        // 进入插件页时自动写入内置市场源并刷新市场索引。
+        syncMarketplacesOnEnter()
     }
 
     override fun onResume() {
@@ -101,7 +107,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         if (pageKey == PAGE_PROVIDERS || pageKey == PAGE_SUBAGENTS ||
             pageKey == PAGE_SKILLS || pageKey == PAGE_COMMANDS ||
             pageKey == PAGE_AUTOMATIONS || pageKey == PAGE_HOOKS || pageKey == PAGE_COMPUTER ||
-            pageKey == PAGE_GITHUB
+            pageKey == PAGE_GITHUB || pageKey == PAGE_BROWSER
         ) {
             renderPage()
         }
@@ -114,7 +120,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     private fun currentPage(): SettingsPage = when (pageKey) {
         PAGE_APPEARANCE -> SettingsData.appearance(store)
-        PAGE_CHAT -> SettingsData.chat(store)
+        PAGE_GENERAL -> SettingsData.general(store)
+        PAGE_ABOUT -> SettingsData.about(this)
+        PAGE_PLUGIN_MARKET -> {
+            ensureExtrasLoaded("plugins")
+            SettingsData.pluginMarket(this, extrasCache["plugins"])
+        }
         PAGE_WORKSPACE -> SettingsData.workspace(store)
         PAGE_PROVIDERS -> SettingsData.providers(this)
         PAGE_SUBAGENTS -> SettingsData.subagents(this)
@@ -138,6 +149,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         PAGE_AUTOMATIONS -> SettingsData.automations(this)
         PAGE_HOOKS -> SettingsData.hooks(this, ZController.get(this).workspacePath())
         PAGE_COMPUTER -> SettingsData.phoneControl(this)
+        PAGE_BROWSER -> SettingsData.browser(this)
         PAGE_SYSTEM -> SettingsData.system(this)
         else -> SettingsData.pages[pageKey] ?: SettingsData.system(this)
     }
@@ -194,6 +206,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             applyPhoneControl(checked)
             return
         }
+        if (key == "browser_enabled") {
+            BrowserControl.setEnabled(this, checked)
+            renderPage()
+            return
+        }
         if (key == "chat_auto_scroll") {
             store.chatAutoScroll = checked
             renderPage()
@@ -225,6 +242,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 store.defaultSendMode = which
                 renderPage()
             }
+        }
+        key == "browser_clear_data" -> {
+            BrowserControl.clearData(this)
+            snack("已清除浏览器数据")
+            renderPage()
         }
         key == KEY_ACCENT -> pickAccent()
             key == KEY_FONT_SCALE -> pickFontScale()
@@ -274,8 +296,18 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 snack("已重新写入内核 MCP 配置")
                 renderPage()
             }
-            key == "plugins_market" -> openPluginMarket()
-            key == "plugins_add_market" -> addMarketplaceDialog()
+            key == "plugins_market" -> openSettingsPage(PAGE_PLUGIN_MARKET)
+            key == "plugins_market_sources" -> openMarketplaceManager()
+            key == "market_refresh" -> refreshMarketplaces()
+            key.startsWith("market_install:") -> {
+                val rest = key.removePrefix("market_install:")
+                val name = rest.substringBefore('|')
+                val market = rest.substringAfter('|', "")
+                if (name.isNotEmpty()) installFromMarket(name, market) else renderPage()
+            }
+            key.startsWith("plugins_add_builtin:") -> {
+                addBuiltinMarketplace(key.removePrefix("plugins_add_builtin:"))
+            }
             key.startsWith("plugins_detail:") -> openPluginDetail(key.removePrefix("plugins_detail:"))
             key.startsWith("plugins_restore:") -> restoreBuiltinPlugin(key.removePrefix("plugins_restore:"))
             key == "github_login" -> startGitHubLogin()
@@ -602,131 +634,88 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             setOnClickListener { onClick() }
         }
 
-    /** 插件市场：市场列表 + 可用插件 + 安装。 */
-    private fun openPluginMarket() {
-        ZController.get(this).fetchPluginsOverview { ok, data ->
+    /** 刷新市场索引（插件页与市场全页共用）。 */
+    private fun refreshMarketplaces() {
+        snack("正在刷新市场索引…")
+        ZController.get(this).updatePluginMarketplace(null) { ok, msg ->
             runOnUiThread {
-                if (!ok || data == null) {
-                    snack("读取插件市场失败")
+                if (ok) {
+                    snack("市场索引已更新")
+                    extrasCache.remove("plugins")
+                    renderPage()
                 } else {
-                    val ov = CodaExtras.parsePluginsOverview(data)
-                    if (ov == null) snack("插件市场数据解析失败") else showPluginMarketSheet(ov)
+                    snack("更新失败: $msg")
                 }
             }
         }
     }
 
-    /** 市场半屏卡：市场源信息、可用插件安装、刷新索引。 */
-    private fun showPluginMarketSheet(ov: CodaExtras.PluginOverview) {
-        val sheet = CodaSheet(this).title("插件市场")
-        sheet.content { col ->
-            col.addView(sheetSectionLabel("市场源"))
-            if (ov.marketplaces.isEmpty()) {
-                col.addView(sheetBodyText("尚未配置市场源。通过下方「添加市场」引入。"))
-            } else {
-                ov.marketplaces.forEach { m ->
-                    col.addView(
-                        sheetBodyText(
-                            buildString {
-                                append(m.name)
-                                append(" · ${m.pluginCount} 个插件")
-                                if (m.isOfficial) append(" · 官方")
-                                m.lastUpdated?.let { append(" · 更新于 $it") }
-                                m.refreshFailure?.let { append("\n刷新失败：$it") }
-                            },
-                        ),
-                    )
-                }
-                col.addView(
-                    sheetWideButton("更新市场索引") {
-                        snack("正在刷新市场索引…")
-                        ZController.get(this).updatePluginMarketplace(null) { ok, msg ->
-                            runOnUiThread {
-                                if (ok) {
-                                    snack("市场索引已更新")
-                                    extrasCache.remove("plugins")
-                                    renderPage()
-                                } else {
-                                    snack("更新失败: $msg")
+    /** 市场源管理半屏：列出已配置的市场源，支持移除与新增。 */
+    private fun openMarketplaceManager() {
+        val render: (CodaExtras.PluginOverview?) -> Unit = { ov ->
+            val sheet = CodaSheet(this).title("插件市场源")
+            sheet.content { col ->
+                col.addView(sheetSectionLabel("已配置的市场源"))
+                if (ov == null || ov.marketplaces.isEmpty()) {
+                    col.addView(sheetBodyText("尚未配置市场源，可点击下方按钮新增。"))
+                } else {
+                    ov.marketplaces.forEach { m ->
+                        col.addView(
+                            sheetBodyText(
+                                buildString {
+                                    append(m.name)
+                                    append(" · ${m.pluginCount} 个插件")
+                                    if (m.isOfficial) append(" · 官方")
+                                },
+                            ),
+                        )
+                        col.addView(
+                            sheetWideButton("移除「${m.name}」") {
+                                ZController.get(this).removePluginMarketplace(m.id) { ok, msg ->
+                                    runOnUiThread {
+                                        snack(if (ok) "已移除市场源" else "移除失败: $msg")
+                                        if (ok) {
+                                            extrasCache.remove("plugins")
+                                            sheet.dismiss()
+                                            renderPage()
+                                        }
+                                    }
                                 }
-                            }
-                        }
+                            },
+                        )
+                    }
+                }
+                col.addView(sheetSectionLabel("新增市场源"))
+                col.addView(
+                    sheetWideButton("添加插件市场源") {
+                        sheet.dismiss()
+                        addMarketplaceDialog()
                     },
                 )
             }
-            col.addView(sheetSectionLabel("可用插件"))
-            if (ov.available.isEmpty()) {
-                col.addView(sheetBodyText("没有可用插件。先添加市场源或刷新索引。"))
-            } else {
-                ov.available.forEach { p ->
-                    col.addView(
-                        buildMarketPluginRow(p) {
-                            sheet.dismiss()
-                            installFromMarket(p)
-                        },
-                    )
-                }
-            }
-            if (ov.restorable.isNotEmpty()) {
-                col.addView(sheetSectionLabel("可恢复的内置插件"))
-                ov.restorable.forEach { p ->
-                    col.addView(
-                        sheetWideButton("恢复「${p.name}」") { restoreBuiltinPlugin(p.id) },
-                    )
-                }
+            sheet.primaryAction("关闭") { it.dismiss() }
+            sheet.show()
+        }
+        val cached = extrasCache["plugins"]?.let { CodaExtras.parsePluginsOverview(it) }
+        if (cached != null) {
+            render(cached)
+        } else {
+            ZController.get(this).fetchPluginsOverview { ok, data ->
+                val ov = if (ok) CodaExtras.parsePluginsOverview(data) else null
+                runOnUiThread { render(ov) }
             }
         }
-        sheet.primaryAction("添加市场") { s ->
-            s.dismiss()
-            addMarketplaceDialog()
-        }
-        sheet.show()
     }
 
-    /** 市场内单个可安装插件的行：名称、描述与安装按钮。 */
-    private fun buildMarketPluginRow(p: CodaExtras.PluginCandidate, onInstall: () -> Unit): View {
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, dp(2))
-        }
-        col.addView(
-            TextView(this).apply {
-                text = buildString {
-                    append(p.name)
-                    p.version?.let { append("  v$it") }
-                    if (p.installed) append("（已安装）")
-                }
-                textSize = 14f
-                typeface = android.graphics.Typeface.create(
-                    "sans-serif-medium",
-                    android.graphics.Typeface.NORMAL,
-                )
-            },
-        )
-        p.description?.let { col.addView(sheetBodyText(it)) }
-        if (p.componentTypes.isNotEmpty()) {
-            col.addView(
-                sheetBodyText(p.componentTypes.joinToString("·") { CodaExtras.componentKindLabel(it) }),
-            )
-        }
-        col.addView(
-            sheetWideButton(if (p.installed) "已安装" else "安装") {
-                if (!p.installed) onInstall()
-            },
-        )
-        return col
-    }
-
-    /** 从市场安装插件（面板先关闭，安装完成后重开刷新）。 */
-    private fun installFromMarket(p: CodaExtras.PluginCandidate) {
-        snack("正在安装 ${p.name}…")
-        ZController.get(this).installPlugin(p.name, p.marketplace) { ok, msg ->
+    /** 从市场安装插件。 */
+    private fun installFromMarket(name: String, marketplace: String) {
+        snack("正在安装 $name…")
+        ZController.get(this).installPlugin(name, marketplace) { ok, msg ->
             runOnUiThread {
                 if (ok) {
-                    snack("已安装 ${p.name}")
+                    snack("已安装 $name")
                     extrasCache.remove("plugins")
                     renderPage()
-                    openPluginMarket()
                 } else {
                     snack("安装失败: $msg")
                 }
@@ -734,10 +723,60 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
+    /** 手动添加一个内置市场源，成功后刷新索引。 */
+    private fun addBuiltinMarketplace(source: String) {
+        snack("正在添加市场源…")
+        ZController.get(this).addPluginMarketplace(source) { ok, msg ->
+            runOnUiThread {
+                snack(if (ok) "已添加市场源" else "添加失败: $msg")
+                if (ok) {
+                    extrasCache.remove("plugins")
+                    ZController.get(this).updatePluginMarketplace(null) { _, _ ->
+                        runOnUiThread { renderPage() }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 进入插件页时：写入内置市场源并刷新市场索引。 */
+    private fun syncMarketplacesOnEnter() {
+        if (marketSyncedOnEnter || pageKey != PAGE_PLUGINS) return
+        marketSyncedOnEnter = true
+        val zc = ZController.get(this)
+        zc.fetchPluginsOverview { ok, data ->
+            val ov = if (ok) CodaExtras.parsePluginsOverview(data) else null
+            val pending = BuiltinMarketplaces.all.filterNot { it.isConfigured(ov?.marketplaces.orEmpty()) }
+            addBuiltinsSequentially(pending, 0) {
+                zc.updatePluginMarketplace(null) { _, _ ->
+                    runOnUiThread {
+                        extrasCache.remove("plugins")
+                        renderPage()
+                    }
+                }
+            }
+        }
+    }
+
+    /** 依次添加内置市场源，全部完成后回调。 */
+    private fun addBuiltinsSequentially(
+        items: List<BuiltinMarketplaces.Builtin>,
+        index: Int,
+        done: () -> Unit,
+    ) {
+        if (index >= items.size) {
+            done()
+            return
+        }
+        ZController.get(this).addPluginMarketplace(items[index].source) { _, _ ->
+            runOnUiThread { addBuiltinsSequentially(items, index + 1, done) }
+        }
+    }
+
     /** 添加市场源：输入 Git 仓库或 URL。 */
     private fun addMarketplaceDialog() {
         val input = EditText(this).apply {
-            hint = "Git 仓库（owner/repo）或 URL"
+            hint = "Git 仓库或 URL，如 owner/repo"
         }
         val sheet = CodaSheet(this)
             .compact()
@@ -845,7 +884,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             .title("连接 GitHub")
             .subtitle("代码已复制，粘贴到浏览器完成授权")
         sheet.content { col ->
-            col.addView(sheetBodyText("1. 在打开的浏览器页面（github.com/login/device）粘贴代码"))
+            col.addView(sheetBodyText("1. 在打开的浏览器页面粘贴代码：github.com/login/device"))
             col.addView(sheetBodyText("2. 点击继续并确认授权"))
             col.addView(
                 TextView(this).apply {
@@ -1236,7 +1275,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 供应商编辑（添加 / 修改）：保存后重启核心使配置生效。 */
     private fun editProvider(existing: ProviderStore.Provider?) {
         val idInput = EditText(this).apply {
-            hint = "供应商 ID（英文，如 myai）"
+            hint = "供应商 ID，仅英文，如 myai"
             setText(existing?.id ?: "")
             isEnabled = existing == null
         }
@@ -1245,7 +1284,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             setText(existing?.name ?: "")
         }
         val urlInput = EditText(this).apply {
-            hint = "API 端点（如 https://api.example.com/v1）"
+            hint = "API 端点，如 https://api.example.com/v1"
             setText(existing?.baseUrl ?: "")
             inputType = InputType.TYPE_TEXT_VARIATION_URI
         }
@@ -1254,11 +1293,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             setText(existing?.apiKey ?: "")
         }
         val modelsInput = EditText(this).apply {
-            hint = "模型名（多个用英文逗号分隔）"
+            hint = "模型名，多个用英文逗号分隔"
             setText(existing?.models?.joinToString(",") ?: "")
         }
         val apiTypeInput = EditText(this).apply {
-            hint = "接口类型（默认 openai-chat-completions）"
+            hint = "接口类型，默认 openai-chat-completions"
             setText(existing?.apiType ?: "openai-chat-completions")
         }
         val sheet = CodaSheet(this)
@@ -1337,7 +1376,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 子智能体 / 技能 / 命令 的编辑对话框（与设置系统其它对话框同套组件）。 */
     private fun editAsset(kind: AgentAssets.Kind, item: AgentAssets.Item?) {
         val nameInput = EditText(this).apply {
-            hint = "名称（字母 / 数字 / - / _，用于文件名）"
+            hint = "名称，仅字母、数字、- 与 _"
             setText(item?.name ?: "")
             isEnabled = item == null
         }
@@ -1346,7 +1385,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             setText(item?.description ?: "")
         }
         val bodyInput = EditText(this).apply {
-            hint = "正文（Markdown）"
+            hint = "正文，支持 Markdown"
             setText(item?.body ?: "")
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = 6
@@ -1535,9 +1574,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             append("来源：").append(entry.source.relPath).append('\n')
             append("信任：").append(
                 when {
-                    !isProject -> "用户级（不可在此信任）"
+                    !isProject -> "用户级，不可在此信任"
                     trusted -> "已信任"
-                    else -> "未信任（运行时不会执行）"
+                    else -> "未信任，运行时不会执行"
                 },
             )
         }
@@ -1589,7 +1628,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     if (ok) {
                         "已授予信任"
                     } else {
-                        "未授予: ${reason ?: "未知原因"}（可尝试重新打开本页后重试）"
+                        "未授予: ${reason ?: "未知原因"}，可尝试重新打开本页后重试"
                     },
                 )
                 renderPage()
@@ -1607,14 +1646,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     private fun addHookInputDialog(event: String) {
-        val matcherInput = EditText(this).apply { hint = "匹配（可选，如工具名前缀）" }
+        val matcherInput = EditText(this).apply { hint = "匹配条件，可选，如工具名前缀" }
         val commandInput = EditText(this).apply {
-            hint = "命令（如 echo hook-ok）"
+            hint = "命令，如 echo hook-ok"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = 2
         }
         val timeoutInput = EditText(this).apply {
-            hint = "超时毫秒（可选，默认 60000）"
+            hint = "超时毫秒，可选，默认 60000"
             inputType = InputType.TYPE_CLASS_NUMBER
         }
         val sheet = CodaSheet(this)
@@ -1696,7 +1735,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     TextView(this).apply {
                         text =
                             "Coda 以 AGPL-3.0 许可证发布。\n\n" +
-                                "内置运行时内核来自 zCode 开源项目（Apache-2.0），版权归其各自作者所有；" +
+                                "内置运行时内核来自 zCode 开源项目，遵循 Apache-2.0 许可，版权归其各自作者所有；" +
                                 "再分发时保留上游许可与声明。\n\n" +
                                 "完整许可证文本见项目仓库 LICENSE 文件。"
                         textSize = 14f
@@ -1748,7 +1787,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
         const val PAGE_SYSTEM = "system"
         const val PAGE_APPEARANCE = "appearance"
-        const val PAGE_CHAT = "chat"
+        const val PAGE_GENERAL = "general"
+        const val PAGE_ABOUT = "about"
+        const val PAGE_PLUGIN_MARKET = "plugin_market"
         const val PAGE_WORKSPACE = "workspace"
         const val PAGE_PROVIDERS = "providers"
         const val PAGE_SUBAGENTS = "subagents"
@@ -1763,6 +1804,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_GITHUB = "github"
         const val PAGE_INTEGRATIONS = "integrations"
         const val PAGE_CLOUD = "cloud"
+        const val PAGE_BROWSER = "browser"
 
         /** 接入真实交互的设置键。 */
         const val KEY_AUTO_COLOR = "auto_color"
