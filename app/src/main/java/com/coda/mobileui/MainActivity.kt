@@ -1668,15 +1668,30 @@ collapseFullDrawerThen { showConversation(conversation) }
         if (sub != null && sub.startedAt > 0 && sub.endedAt > sub.startedAt) {
             bits += fmtDur(sub.endedAt - sub.startedAt)
         }
-        CodaSheet(this)
+        val host = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val sheet = CodaSheet(this)
             .title(sub?.title?.takeIf { it.isNotEmpty() } ?: type)
             .subtitle(bits.joinToString(" · "))
             .content { col ->
-                val host = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
                 col.addView(host)
                 fillSubagentConversation(host, prompt, childSessionId)
             }
-            .show()
+        // 子代理仍在运行时跟随刷新：3 秒一轮，关闭半屏立即停止。只更新内容，不动容器。
+        var ticker: Runnable? = null
+        if (sub?.isActive == true && !childSessionId.isNullOrEmpty()) {
+            ticker = object : Runnable {
+                override fun run() {
+                    zc.loadChildMessages(childSessionId) {
+                        fillSubagentConversation(host, prompt, childSessionId)
+                    }
+                    ui.postDelayed(this, 3000)
+                }
+            }
+            ui.postDelayed(ticker, 3000)
+        }
+        val stopTicker = ticker
+        sheet.onDismiss { stopTicker?.let { ui.removeCallbacks(it) } }
+        sheet.show()
     }
 
     /** 父代理下发给子代理的任务文本（Agent 工具的 prompt / description）。 */
