@@ -107,9 +107,34 @@ console.log("   已为宿主 node "+version+" 登记许可证来源（复用 "+b
 ' "$KERNEL/third-party/runtime/sources.json" "$NODE_VER" "$KERNEL"
 fi
 echo "== [3/3] 生成 SEA 二进制"
-run node "$CLI_PKG/scripts/build-sea.mjs" \
-  --target "$SEA_TARGET" \
-  --node-binary "$SEA_TARGET=$NODE_BASE"
+# SEA 的资源闭包会用到仓库根 packages/* 下的 workspace 包，而它们不在
+# apps/zcode-cli 这个 turbo 范围里，可能缺 dist。缺哪个就补编哪个，最多补 4 轮。
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  run node "$CLI_PKG/scripts/build-sea.mjs" \
+    --target "$SEA_TARGET" \
+    --node-binary "$SEA_TARGET=$NODE_BASE"
+else
+  SEA_LOG="$(mktemp)"
+  attempt=1
+  while :; do
+    if node "$CLI_PKG/scripts/build-sea.mjs" \
+      --target "$SEA_TARGET" \
+      --node-binary "$SEA_TARGET=$NODE_BASE" 2>&1 | tee "$SEA_LOG"; then
+      break
+    fi
+    missing="$(grep -oE 'Missing @zcode/[a-z0-9-]+ dist files' "$SEA_LOG" | tail -1 | sed -E 's/^Missing //; s/ dist files$//')"
+    if [ -z "$missing" ] || [ "$attempt" -ge 4 ]; then
+      echo "!! SEA 生成失败" >&2
+      tail -20 "$SEA_LOG" >&2
+      rm -f "$SEA_LOG"
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    echo "== 补齐根 workspace 包：$missing"
+    pnpm --dir "$KERNEL" exec tsc -p "packages/${missing#@zcode/}/tsconfig.json"
+  done
+  rm -f "$SEA_LOG"
+fi
 
 if [ "${DRY_RUN:-0}" != "1" ] && [ ! -f "$SEA_OUT" ]; then
   echo "!! SEA 二进制未生成：$SEA_OUT" >&2
