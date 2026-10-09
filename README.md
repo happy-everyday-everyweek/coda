@@ -19,7 +19,15 @@
 ## 构建
 
 - JDK 17 + Android SDK（compileSdk 36，minSdk 26）
-- `./gradlew assembleDebug`（wrapper 首次运行会下载 Gradle；国内可用腾讯镜像，见 gradle-wrapper.properties 注释）
+- 构建前先重建内核二进制载荷：`tools/build-core-payload.sh`，细节见 `docs/kernel-build.md`
+- 然后 `./gradlew assembleDebug`（wrapper 首次运行会下载 Gradle；国内可用腾讯镜像，见 gradle-wrapper.properties 注释）
+
+## 分支与发布
+
+- `main`：只放这份仓库说明，不放代码。
+- `dev`：全部源码与开发提交，日常改动落在这里。
+- 在 `dev` 上打 `v*` Tag 出正式发行版本：CI 先重建内核二进制载荷，再打 release 变体，挂到对应 Release。
+- `dev` 每次推送出预发行版本：用 debug 变体打包，滚动覆盖到 `dev-latest` 这一个预发行版本。
 
 ## 说明
 

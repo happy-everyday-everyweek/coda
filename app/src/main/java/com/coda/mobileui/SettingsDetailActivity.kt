@@ -1021,7 +1021,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             TextView(this).apply {
                 text = buildString {
                     append(repo.name)
-                    if (repo.privateRepo) append("（私有）")
+                    if (repo.privateRepo) append(" · 私有")
                 }
                 textSize = 15f
                 typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)

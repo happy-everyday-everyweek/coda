@@ -186,7 +186,7 @@ class MainActivity : BaseActivity() {
                 ChatMessage(
                     false,
                     "找到了，在 values-night 里，现在核对对比度数值。",
-                    tools = listOf(ToolCall("Read", "res/values-night/colors.xml（37 行）")),
+                    tools = listOf(ToolCall("Read", "res/values-night/colors.xml · 37 行")),
                 ),
                 ChatMessage(
                     false,
@@ -272,7 +272,7 @@ class MainActivity : BaseActivity() {
                     "初稿已生成，含清单与调用示例。",
                     tools = listOf(
                         ToolCall("Write", "docs/mcp-tools.md"),
-                        ToolCall("WebSearch", "zcode 工具清单（官方文档）"),
+                        ToolCall("WebSearch", "zcode 工具清单 · 官方文档"),
                         ToolCall("TodoWrite", "4 项任务"),
                         ToolCall("Skill", "tools-md · 生成文档骨架"),
                     ),

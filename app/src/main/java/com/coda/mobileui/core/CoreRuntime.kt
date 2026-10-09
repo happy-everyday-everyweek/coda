@@ -112,7 +112,7 @@ class CoreRuntime(private val ctx: Context) {
         ) {
             return true
         }
-        log("开始解包内置载荷（首次约需 1-2 分钟）...")
+        log("开始解包内置载荷，首次约需 1-2 分钟...")
         deleteRecursive(coreDir)
         coreDir.mkdirs()
         try {
