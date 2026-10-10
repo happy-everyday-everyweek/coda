@@ -168,6 +168,7 @@ object GitHub {
         val number: Int,
         val title: String,
         val state: String,
+        val merged: Boolean = false,
         val draft: Boolean,
         val user: String,
         val headRef: String,
@@ -231,6 +232,7 @@ object GitHub {
                         number = p.optInt("number"),
                         title = p.optString("title"),
                         state = p.optString("state"),
+                        merged = p.optBoolean("merged", false) || p.optString("merged_at").isNotEmpty(),
                         draft = p.optBoolean("draft", false),
                         user = p.optJSONObject("user")?.optString("login").orEmpty(),
                         headRef = p.optJSONObject("head")?.optString("ref").orEmpty(),
@@ -243,6 +245,57 @@ object GitHub {
                 ui { cb(false, null, e.message ?: "网络错误") }
             }
         }.start()
+    }
+
+    // ---------------------------------------------------------------- 分支关联 PR
+
+    /** 分支 → 关联 PR 的缓存：抽屉重绘较频繁，避免重复请求。 */
+    private val pullByBranch = HashMap<String, Pair<Long, Pull?>>()
+    private const val PULL_TTL_MS = 60_000L
+
+    /** 按 head 分支查关联 PR（含已关闭与已合并）；没有关联 PR 时回调 null，结果同样进缓存。 */
+    fun fetchPullForBranch(ctx: Context, owner: String, repo: String, branch: String, cb: (Pull?) -> Unit) {
+        if (owner.isEmpty() || repo.isEmpty() || branch.isEmpty()) return ui { cb(null) }
+        val token = token(ctx) ?: return ui { cb(null) }
+        val key = "$owner/$repo#$branch"
+        val now = System.currentTimeMillis()
+        synchronized(pullByBranch) {
+            pullByBranch[key]?.let { (at, pull) ->
+                if (now - at < PULL_TTL_MS) return ui { cb(pull) }
+            }
+        }
+        Thread {
+            var found: Pull? = null
+            try {
+                val url = "https://api.github.com/repos/$owner/$repo/pulls" +
+                    "?state=all&head=${enc("$owner:$branch")}&per_page=10"
+                val arr = JSONArray(get(url, token))
+                for (i in 0 until arr.length()) {
+                    val p = arr.optJSONObject(i) ?: continue
+                    if (p.optJSONObject("head")?.optString("ref") != branch) continue
+                    found = Pull(
+                        number = p.optInt("number"),
+                        title = p.optString("title"),
+                        state = p.optString("state"),
+                        merged = p.optBoolean("merged", false) || p.optString("merged_at").isNotEmpty(),
+                        draft = p.optBoolean("draft", false),
+                        user = p.optJSONObject("user")?.optString("login").orEmpty(),
+                        headRef = branch,
+                        baseRef = p.optJSONObject("base")?.optString("ref").orEmpty(),
+                        updatedAt = p.optString("updated_at").takeIf { it.isNotEmpty() },
+                    )
+                    break
+                }
+            } catch (_: Throwable) {
+            }
+            synchronized(pullByBranch) { pullByBranch[key] = System.currentTimeMillis() to found }
+            ui { cb(found) }
+        }.start()
+    }
+
+    /** 清空分支 PR 缓存（重新登录、手动刷新时用）。 */
+    fun invalidatePullCache() {
+        synchronized(pullByBranch) { pullByBranch.clear() }
     }
 
     // ---------------------------------------------------------------- HTTP
