@@ -20,8 +20,8 @@ android {
         // versionCode 与 versionName 同步递增，只增不减（覆盖安装依赖它单调）。
         //
         // 允许 CI 用 -PcodaVersionCode/-PcodaVersionName 覆盖，Tag 打包即用 Tag 号。
-        versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt() ?: 25
-        versionName = (project.findProperty("codaVersionName") as String?) ?: "0.8.1-core"
+        versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt() ?: 26
+        versionName = (project.findProperty("codaVersionName") as String?) ?: "0.8.2-core"
     }
     signingConfigs {
         // 本地或 CI 提供密钥时才启用；否则 release 复用 debug 签名，保证产物可安装。

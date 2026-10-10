@@ -7,6 +7,9 @@ app/build/
 # 本地环境配置
 local.properties
 
+# 载荷清单，由 tools/build-core-payload.sh 生成
+app/src/main/assets/core/payload.txt
+
 # 工作区状态目录
 .coda/
 

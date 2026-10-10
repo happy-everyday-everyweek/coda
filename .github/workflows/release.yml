@@ -67,6 +67,9 @@ jobs:
       # 载荷每次都在 CI 内重建，不复用任何缓存，避免发出陈旧的内核二进制。
       - name: 重建内核二进制载荷
         run: tools/build-core-payload.sh
+      # 注入写坏的载荷装到设备上只会以信号退出，看不出原因；这里先核对结构，坏了当场失败。
+      - name: 核对内核载荷结构
+        run: python3 tools/verify-sea-payload.py app/src/main/assets/core/zcode
 
       - name: 准备发布签名
         env:

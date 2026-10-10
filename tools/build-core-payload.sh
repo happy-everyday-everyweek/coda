@@ -38,6 +38,22 @@ run() {
   "$@"
 }
 
+# 输出载荷清单的一行：文件名 字节数 sha256。应用按这份清单核对解包结果。
+payload_line() {
+  local file="$ASSETS/$1" size sha
+  if [ ! -f "$file" ]; then
+    echo "!! 载荷文件缺失：$file" >&2
+    exit 1
+  fi
+  size="$(wc -c < "$file" | tr -d ' ')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha="$(sha256sum "$file" | cut -d' ' -f1)"
+  else
+    sha="$(shasum -a 256 "$file" | cut -d' ' -f1)"
+  fi
+  printf '%s %s %s\n' "$1" "$size" "$sha"
+}
+
 echo "== 内核载荷重建开始"
 echo "   仓库根   : $ROOT"
 echo "   内核      : $KERNEL"
@@ -146,9 +162,20 @@ run cp "$BUNDLE" "$ASSETS/zcode.cjs"
 run cp "$SEA_OUT" "$ASSETS/zcode"
 run chmod 0755 "$ASSETS/zcode" "$ASSETS/zcode.cjs"
 
+# 载荷清单：应用解包后据此核对 files/core 里的文件就是随包这一份，字节数或摘要对不上就重新
+# 解包。少了它，应用只能凭一个固定标记判断，换了载荷也可能继续沿用上一版解出来的二进制。
+if [ "${DRY_RUN:-0}" != "1" ]; then
+  {
+    payload_line zcode
+    payload_line zcode.cjs
+    payload_line node
+    payload_line rg
+  } > "$ASSETS/payload.txt"
+fi
+
 if [ "${DRY_RUN:-0}" != "1" ]; then
   echo "== 校验"
-  ls -l "$ASSETS/zcode" "$ASSETS/zcode.cjs"
+  ls -l "$ASSETS/zcode" "$ASSETS/zcode.cjs" "$ASSETS/payload.txt"
   grep -aq 'NODE_SEA_FUSE_' "$ASSETS/zcode" || { echo "!! SEA fuse 缺失，二进制不可用" >&2; exit 1; }
   grep -aq 'zcode-node-license' "$ASSETS/zcode" || echo "  提示：未检测到内嵌资源键，可能是资源收集未启用"
   echo "== 完成"

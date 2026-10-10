@@ -14,6 +14,7 @@
 | `core/lib/*.so` | 上述 node 的共享库，运行时经 `LD_LIBRARY_PATH` 加载 | 否，固定跟踪 |
 | `core/rg` | 原生搜索工具 | 否，固定跟踪 |
 | `core/provider/zcode-builtin.json` | 内核内置 provider 清单 | 否，固定跟踪 |
+| `core/payload.txt` | 载荷清单，记录各载荷文件的字节数与 sha256 | 是，随重建生成 |
 
 ## 重建流程
 
@@ -33,6 +34,10 @@ tools/build-core-payload.sh
 
 可选环境变量：`SKIP_INSTALL=1` 跳过依赖安装，`DRY_RUN=1` 只打印将执行的命令，
 `CODA_NODE_BASE` 指定其他基础镜像，`CODA_SEA_TARGET` 改目标名。
+
+回填时会一并写出 `assets/core/payload.txt`。应用解包后按这份清单核对字节数与 sha256，清单一变
+就重新解包，因此换了载荷不会继续沿用上一版解出来的内核二进制，半截文件也会在启动前被发现。
+清单本身是构建产物，不入库。
 
 ## 为什么目标名是 linux-arm64
 

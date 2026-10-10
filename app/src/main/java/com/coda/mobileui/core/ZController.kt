@@ -171,11 +171,17 @@ class ZController private constructor(private val app: Context) {
             started = false
             running = false
             val now = System.currentTimeMillis()
-            if (now - lastStartAt > 120_000L) exitCount = 0
+            val ranFor = if (lastStartAt > 0L) now - lastStartAt else -1L
+            if (ranFor > 120_000L) exitCount = 0
             exitCount += 1
-            if (exitCount <= 5 && !autoRestartScheduled) {
+            val reason = CoreRuntime.describeExit(code)
+            runtime.log("[core] 退出：$reason，本次运行 ${ranFor}ms，连续第 $exitCount 次")
+            // 刚拉起就被信号带走的进程，重启只会把同样的退出再演一遍，几秒里刷出十几次相同记录，
+            // 真正的原因反被淹没。第二次起不再自动重启，把原因留在提示与日志里。
+            val hopeless = ranFor >= 0L && ranFor <= 10_000L && code > 128 && exitCount >= 2
+            if (exitCount <= 5 && !autoRestartScheduled && !hopeless) {
                 autoRestartScheduled = true
-                notif { onNotice("核心进程意外退出，code=$code，正在自动重启…") }
+                notif { onNotice("核心进程意外退出：$reason，正在自动重启…") }
                 main.postDelayed({
                     autoRestartScheduled = false
                     ensureStarted { ok, msg ->
@@ -187,8 +193,10 @@ class ZController private constructor(private val app: Context) {
                         }
                     }
                 }, 1200)
+            } else if (hopeless) {
+                notif { onNotice("核心进程启动即退出：$reason，已停止自动重启，原因见运行日志") }
             } else {
-                notif { onNotice("核心进程已退出，code=$code") }
+                notif { onNotice("核心进程已退出，$reason") }
             }
             notif { onStateChanged() }
         }

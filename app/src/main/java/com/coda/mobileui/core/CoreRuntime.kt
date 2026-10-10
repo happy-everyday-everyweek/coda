@@ -11,6 +11,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -108,24 +109,89 @@ class CoreRuntime(private val ctx: Context) {
         val marker = File(coreDir, ".ready")
         val bin = File(coreDir, "zcode")
         val builtin = File(coreDir, "provider/zcode-builtin.json")
-        if (marker.exists() && marker.readText().trim() == MARKER &&
-            bin.exists() && bin.length() > 10_000_000L && builtin.exists()
-        ) {
-            return true
-        }
+        val manifest = payloadManifest
+        val stamp = payloadStamp(manifest)
+        val declared = manifest["zcode"]
+        val reuse = runCatching { marker.readText().trim() }.getOrNull() == stamp &&
+            bin.isFile && bin.length() > 10_000_000L && builtin.isFile &&
+            (declared == null || declared.first == bin.length())
+        if (reuse) return true
+
         log("开始解包内置载荷，首次约需 1-2 分钟...")
-        deleteRecursive(coreDir)
-        coreDir.mkdirs()
-        try {
-            copyAssetDir("core", coreDir)
-        } catch (t: Throwable) {
-            log("!! 解包失败: $t")
-            return false
+        repeat(2) { attempt ->
+            deleteRecursive(coreDir)
+            coreDir.mkdirs()
+            try {
+                copyAssetDir("core", coreDir)
+            } catch (t: Throwable) {
+                log("!! 解包失败: $t")
+                return false
+            }
+            chmodTree(coreDir)
+            val bad = verifyPayload(manifest)
+            if (bad == null) {
+                marker.writeText(stamp)
+                log("解包完成")
+                return true
+            }
+            log("!! 第 ${attempt + 1} 次解包校验未通过：$bad")
         }
-        chmodTree(coreDir)
-        marker.writeText(MARKER)
-        log("解包完成")
-        return true
+        log("!! 载荷校验始终未通过，内核无法启动，需要重装应用以重新解包")
+        return false
+    }
+
+    /**
+     * 载荷清单：记录各载荷文件的大小与 sha256。
+     *
+     * 用它判断 files/core 里的解包结果是否就是当前 APK 携带的那一份。载荷重建过，或者上一版
+     * 解包出来的文件不完整，都会在这里被发现并重新解包，不会拿着旧二进制或半截文件去启动内核。
+     */
+    private val payloadManifest: Map<String, Pair<Long, String>> by lazy { readPayloadManifest() }
+
+    private fun readPayloadManifest(): Map<String, Pair<Long, String>> = try {
+        ctx.assets.open(PAYLOAD_MANIFEST).use { input ->
+            String(input.readBytes(), Charsets.UTF_8)
+        }.lineSequence().mapNotNull { line ->
+            val parts = line.trim().split(' ').filter { it.isNotEmpty() }
+            val size = parts.getOrNull(1)?.toLongOrNull()
+            if (parts.size >= 3 && size != null) parts[0] to (size to parts[2].lowercase()) else null
+        }.toMap()
+    } catch (_: Throwable) {
+        emptyMap()
+    }
+
+    /** 解包标记：清单内容一变，标记跟着变，上一版的解包结果自然失效。 */
+    private fun payloadStamp(manifest: Map<String, Pair<Long, String>>): String {
+        if (manifest.isEmpty()) return MARKER
+        val text = manifest.entries.sortedBy { it.key }
+            .joinToString("\n") { "${it.key} ${it.value.first} ${it.value.second}" }
+        val hex = MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+        return "$MARKER-${hex.take(16)}"
+    }
+
+    /** 校验解包结果与清单是否一致；全部一致返回 null，否则返回第一处不一致。 */
+    private fun verifyPayload(manifest: Map<String, Pair<Long, String>>): String? {
+        for ((name, expected) in manifest) {
+            val file = File(coreDir, name)
+            if (!file.isFile) return "$name 缺失"
+            if (file.length() != expected.first) {
+                return "$name 大小 ${file.length()} 与清单 ${expected.first} 不符"
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            val actual = digest.digest()
+                .joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+            if (actual != expected.second) return "$name 内容摘要不符"
+        }
+        return null
     }
 
     private fun copyAssetDir(assetPath: String, dest: File) {
@@ -195,6 +261,10 @@ class CoreRuntime(private val ctx: Context) {
                     msg = "载荷解包失败"
                 } else {
                     openLogFile()
+                    log(
+                        "[core] 内核二进制=" + File(coreDir, "zcode").length() + "B 载荷戳记=" +
+                            runCatching { File(coreDir, ".ready").readText().trim() }.getOrNull(),
+                    )
                     val cmd = listOf(File(coreDir, "zcode").absolutePath, "app-server", "--stdio")
                     val pb = ProcessBuilder(cmd)
                     pb.directory(workDir)
@@ -254,7 +324,7 @@ class CoreRuntime(private val ctx: Context) {
                             writer = null
                         }
                         log(
-                            "[core] 进程退出，退出码=$code" +
+                            "[core] 进程退出，" + describeExit(code) +
                                 if (isCurrent) "" else "（非当前进程，忽略）",
                         )
                         if (isCurrent) mainHandler.post { events?.onExit(code) }
@@ -462,5 +532,32 @@ class CoreRuntime(private val ctx: Context) {
 
     companion object {
         private const val MARKER = "m6"
+
+        /** 载荷清单：由 tools/build-core-payload.sh 生成，记录各载荷文件的大小与摘要。 */
+        private const val PAYLOAD_MANIFEST = "core/payload.txt"
+
+        /**
+         * 退出码的可读描述。
+         *
+         * 大于 128 的退出码表示进程被信号带走，退出码减去 128 就是信号编号：139 即 11 号
+         * 的 SIGSEGV。这类退出发生在 native 层，日志里必须先说清楚是哪种信号。
+         */
+        fun describeExit(code: Int): String {
+            val signal = if (code > 128) code - 128 else 0
+            val name = when (signal) {
+                4 -> "SIGILL"
+                5 -> "SIGTRAP"
+                6 -> "SIGABRT"
+                7 -> "SIGBUS"
+                8 -> "SIGFPE"
+                9 -> "SIGKILL"
+                11 -> "SIGSEGV"
+                13 -> "SIGPIPE"
+                15 -> "SIGTERM"
+                31 -> "SIGSYS"
+                else -> ""
+            }
+            return if (name.isEmpty()) "退出码=$code" else "退出码=$code，被 $name 终止"
+        }
     }
 }

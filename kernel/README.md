@@ -16,6 +16,7 @@ Coda 内置的 Agent 内核源码，与 `app/src/main/assets/core/` 的运行时
 
 - `assets/core/zcode.cjs` — 内核 bundle
 - `assets/core/zcode` — SEA 可执行文件
+- `assets/core/payload.txt` — 载荷清单，记录各载荷文件的字节数与 sha256
 - `assets/core/provider/zcode-builtin.json` — 内置 provider 清单
 
 ## 构建
