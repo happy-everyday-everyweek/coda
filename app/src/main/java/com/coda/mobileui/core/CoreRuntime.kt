@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.system.Os
+import com.coda.mobileui.ext.Extensions
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
@@ -209,6 +210,20 @@ class CoreRuntime(private val ctx: Context) {
                     env["PATH"] = "/system/bin:/system/xbin:/vendor/bin:/product/bin"
                     env["TERM"] = "xterm-256color"
                     env["LANG"] = "C.UTF-8"
+                    // 终端由拓展分类提供，内核不再自己探测环境里的可用终端。
+                    // 这里把拓展声明的 shell 与工具目录注入内核进程，未启用终端拓展时不注入。
+                    val terminal = try {
+                        Extensions.terminal(ctx)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    if (terminal != null) {
+                        for ((key, value) in terminal.env()) env[key] = value
+                        val entries = terminal.pathEntries
+                        if (entries.isNotEmpty()) {
+                            env["PATH"] = (entries + (env["PATH"] ?: "")).joinToString(":")
+                        }
+                    }
                     val p = pb.start()
                     process = p
                     writer = OutputStreamWriter(p.outputStream, Charsets.UTF_8)

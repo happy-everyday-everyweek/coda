@@ -2,6 +2,7 @@ package com.coda.mobileui
 import android.app.Application
 import androidx.appcompat.app.AppCompatDelegate
 import com.coda.mobileui.core.PhoneControl
+import com.coda.mobileui.ext.Extensions
 /**
  * 启动时应用用户选择的主题模式（浅色 / 深色 / 跟随系统）。
  * 动态取色与自定义主色由 BaseActivity 按设置开关处理。
@@ -15,6 +16,11 @@ class CodaApp : Application() {
         // 手机控制：开关开启时恢复本地 MCP 服务器（供内核连接）
         try {
             PhoneControl.startIfEnabled(this)
+        } catch (_: Throwable) {
+        }
+        // 拓展：登记已开放分类并完成首次装载；内置拓展的二进制在这一步释放到运行目录
+        try {
+            Extensions.engine(this)
         } catch (_: Throwable) {
         }
     }
