@@ -195,9 +195,18 @@ function resolveFallbackUtf8Locale(env: NodeJS.ProcessEnv): string {
   return process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 }
 
-function resolveTerminalEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function resolveTerminalEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { containerized?: boolean } = {},
+): NodeJS.ProcessEnv {
   const nextEnv = { ...env };
   const fallbackLocale = resolveFallbackUtf8Locale(env);
+
+  if (options.containerized) {
+    // 宿主进程带的是应用运行时的库搜索路径（core/lib），启动器会拿它去找宿主库而撞库；
+    // 容器里的解析完全由启动器自身的 RUNPATH 负责，这里直接清掉。
+    delete nextEnv.LD_LIBRARY_PATH;
+  }
 
   // macOS 从 Dock/Finder/登录项启动 Electron 时，父进程通常只带 /usr/bin:/bin:/usr/sbin:/sbin，
   // 甚至缺失 PATH；内置终端虽然打开了登录 shell，但 zsh/bash 仍会先继承这个过窄 PATH，
@@ -234,15 +243,16 @@ function resolveTerminalEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
 function spawnTerminalProcess(params: {
   nodePty: NodePtyModule;
   shell: string;
+  args: string[];
   cols: number;
   rows: number;
   cwd: string;
   env: NodeJS.ProcessEnv;
 }): IPty {
-  const { nodePty, shell, cols, rows, cwd, env } = params;
+  const { nodePty, shell, args, cols, rows, cwd, env } = params;
 
   if (process.platform !== "win32") {
-    return nodePty.spawn(shell, [], {
+    return nodePty.spawn(shell, args, {
       name: "xterm-256color",
       cols,
       rows,
@@ -280,6 +290,37 @@ function spawnTerminalProcess(params: {
       useConptyDll: false,
     });
   }
+}
+
+/**
+ * 宿主的终端分类拓展可以声明一层启动器包裹（例如 PRoot 进入内置 Linux 环境）。
+ *
+ * 声明后终端面板的 argv 是「启动器 + prefix + entry + 登录标记」，与 Bash 工具路径同一套拼法；
+ * 没声明时仍是原来的"直接跑 shell"。
+ */
+interface TerminalLauncher {
+  entry: string[];
+  prefix: string[];
+}
+
+function parseLauncherArgv(raw: string | undefined): string[] {
+  const text = raw?.trim();
+  if (!text) return [];
+
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.every((item) => typeof item === "string") ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function resolveTerminalLauncher(): TerminalLauncher | undefined {
+  const prefix = parseLauncherArgv(process.env.ZCODE_TERMINAL_LAUNCH_PREFIX);
+  const entry = parseLauncherArgv(process.env.ZCODE_TERMINAL_LAUNCH_ENTRY);
+  if (prefix.length === 0 && entry.length === 0) return undefined;
+  return { entry, prefix };
 }
 
 function resolveTerminalShell(): string {
@@ -360,9 +401,13 @@ export function createTerminalService(dependencies: {
       windowsPty?: TerminalWindowsPtyInfo;
     }> {
       const id = String(nextId++);
+      const launcher = resolveTerminalLauncher();
       const shell = resolveTerminalShell();
       const cwd = resolveTerminalCwd(params.cwd);
-      const env = resolveTerminalEnv();
+      const env = resolveTerminalEnv(process.env, { containerized: launcher !== undefined });
+      // 启动器包裹的终端里 shell 不在宿主路径上，argv 由启动器参数加固定入口拼成。
+      // 交互终端带登录标记，容器内的 PATH 与 locale 由 profile 兜底。
+      const args = launcher ? [...launcher.prefix, ...launcher.entry, "-l"] : [];
       const terminalProfileSettings = await dependencies.settingService.get().catch(() => ({
         terminalFontFamily: undefined,
         terminalInheritSystemProfile: true,
@@ -381,6 +426,7 @@ export function createTerminalService(dependencies: {
         p = spawnTerminalProcess({
           nodePty,
           shell,
+          args,
           cols: params.cols,
           rows: params.rows,
           cwd,

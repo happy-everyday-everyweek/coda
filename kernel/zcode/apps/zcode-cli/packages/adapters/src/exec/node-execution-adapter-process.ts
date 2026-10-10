@@ -5,6 +5,7 @@ import { createCwdCapturePlan } from "./cwd-capture.js";
 import {
   applyResolvedShellCommand,
   buildExecutionEnv,
+  isLauncherShell,
   resolveExecutionCommand,
   setResolvedShellLoginMode,
 } from "./execution-command.js";
@@ -80,6 +81,8 @@ export class NodeExecutionAdapterProcess extends NodeExecutionAdapterResults {
       request.command.mode === "shell" &&
       request.command.shellProfile === "posix-bash" &&
       resolvedCommand.shell === false &&
+      // 启动器包裹的 shell（PRoot 之类）不能用 file + ["-c", ...] 直接跑，快照会失败。
+      !isLauncherShell(resolvedCommand) &&
       supportsShellInitSnapshot(resolvedCommand.cwdDialect)
         ? await revalidateShellInitSnapshotForExecution(
             await this.shellInitSnapshots.getOrCreate({

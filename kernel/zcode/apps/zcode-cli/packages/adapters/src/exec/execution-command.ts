@@ -16,12 +16,26 @@ import type {
 
 const WINDOWS_COMMAND_SHIM_EXTENSIONS = new Set([".cmd", ".bat"]);
 
+/**
+ * shell 形态命令的 argv 组装信息。
+ *
+ * 原来的实现靠 `args[0] === "-c"` / `args[1] === "-l"` 反推 argv 形状，一旦 shell 前面插入
+ * 一层启动器（PRoot 之类），这个判断就会失效。这里把形状显式记下来：`prefix` 是启动器参数，
+ * `entry` 是启动器之后到命令之前的固定 argv，`login` 记录当前是否带登录标记。
+ */
+export interface ResolvedShellLaunch {
+  entry?: string[];
+  login: boolean;
+  prefix: string[];
+}
+
 export interface ResolvedSpawnCommand {
   args: string[];
   cwdDialect: ExecutionShellDialect;
   envOverlay?: Record<string, string>;
   file: string;
   shell: boolean | string;
+  shellLaunch?: ResolvedShellLaunch;
   usesLoginShell?: boolean;
 }
 
@@ -153,27 +167,47 @@ function createShellProviderCommand(
     };
   }
 
+  const shellLaunch: ResolvedShellLaunch = {
+    entry: provider.entryArgs,
+    login: provider.loginShell !== false,
+    prefix: provider.prefixArgs ?? [],
+  };
   return {
-    args: ["-c", "-l", command],
+    args: buildShellLaunchArgs(shellLaunch, command),
     cwdDialect: provider.dialect,
     envOverlay: provider.envOverlay,
     file: provider.file,
     shell: provider.shell,
+    shellLaunch,
     usesLoginShell: true,
   };
+}
+
+/**
+ * 命令是否由启动器包裹（例如 PRoot 进入内置 Linux 环境）。
+ *
+ * 这类形态的 file 不是 shell 本身，任何"直接 execFile(file, ["-c", ...])"的旁路都必须跳过，
+ * 目前只有终端初始化快照走这种旁路。
+ */
+export function isLauncherShell(resolved: ResolvedSpawnCommand): boolean {
+  const launch = resolved.shellLaunch;
+  return launch !== undefined && (launch.prefix.length > 0 || (launch.entry?.length ?? 0) > 0);
 }
 
 export function setResolvedShellLoginMode(
   resolved: ResolvedSpawnCommand,
   useLoginShell: boolean,
 ): ResolvedSpawnCommand {
-  if (resolved.shell !== false || resolved.args[0] !== "-c") return resolved;
-  if (resolved.usesLoginShell !== true) return resolved;
+  const launch = shellLaunchOf(resolved);
+  if (resolved.shell !== false || !launch || resolved.usesLoginShell !== true) return resolved;
+  if (launch.login === useLoginShell) return resolved;
 
   const command = resolved.args.at(-1) ?? "";
+  const nextLaunch: ResolvedShellLaunch = { ...launch, login: useLoginShell };
   return {
     ...resolved,
-    args: useLoginShell ? ["-c", "-l", command] : ["-c", command],
+    args: buildShellLaunchArgs(nextLaunch, command),
+    shellLaunch: nextLaunch,
   };
 }
 
@@ -189,11 +223,11 @@ export function applyResolvedShellCommand(
     };
   }
 
-  if (resolved.shell === false && resolved.args[0] === "-c" && resolved.usesLoginShell === true) {
-    const useLoginShell = resolved.args[1] === "-l";
+  const launch = shellLaunchOf(resolved);
+  if (resolved.shell === false && launch && resolved.usesLoginShell === true) {
     return {
       ...resolved,
-      args: useLoginShell ? ["-c", "-l", command] : ["-c", command],
+      args: buildShellLaunchArgs(launch, command),
     };
   }
 
@@ -202,6 +236,27 @@ export function applyResolvedShellCommand(
     args: [],
     file: command,
   };
+}
+
+function buildShellLaunchArgs(launch: ResolvedShellLaunch, command: string): string[] {
+  return [
+    ...launch.prefix,
+    ...(launch.entry ?? []),
+    "-c",
+    ...(launch.login ? ["-l"] : []),
+    command,
+  ];
+}
+
+/**
+ * 取 argv 形状。旧形状（argv 直接是 `-c` / `-c -l`）不带 shellLaunch，
+ * 这里按空前缀补出来，让既有调用方与测试里手写的字面量仍走同一条路径。
+ */
+function shellLaunchOf(resolved: ResolvedSpawnCommand): ResolvedShellLaunch | undefined {
+  if (resolved.shellLaunch) return resolved.shellLaunch;
+  if (resolved.shell !== false || resolved.usesLoginShell !== true) return undefined;
+  if (resolved.args[0] !== "-c") return undefined;
+  return { login: resolved.args[1] === "-l", prefix: [] };
 }
 
 export const applyResolvedShellCommandForTest = applyResolvedShellCommand;
