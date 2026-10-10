@@ -86,16 +86,44 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="dev-latest"
-          NOTES="$(printf '%s\n' \
-            '自动构建产物，随 dev 分支滚动更新，始终只有这一个预发行版本。' \
-            '' \
-            "- 提交：$GITHUB_SHA" \
-            "- 构建：run #${{ github.run_number }}" \
-            "- 变体：debug" \
-            "- 版本名：${CODA_VERSION_NAME}+dev.${{ github.run_number }}")"
+          HEAD_SHORT="$(git rev-parse --short "$GITHUB_SHA")"
+          HEAD_SUBJECT="$(git log -1 --format=%s "$GITHUB_SHA")"
+          SINCE="$(date -u +%F)T00:00:00Z"
+
+          # 近期变更：当天（UTC）的全部提交；当天只有这一条时就是它自己。
+          RECENT="$(git log --since="$SINCE" --format='%h %s' "$GITHUB_SHA")"
+          [ -n "$RECENT" ] || RECENT="$(git log -1 --format='%h %s' "$GITHUB_SHA")"
+
+          # 关联的 ISSUE：提交信息里出现过的 #编号，取标题附在近期变更末尾。
+          ISSUE_LINES=""
+          for NUMBER in $(git log --since="$SINCE" --format='%s%n%b' "$GITHUB_SHA" \
+            | grep -oE '#[0-9]+' | tr -d '#' | sort -un); do
+            TITLE="$(gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER" --jq .title 2>/dev/null || true)"
+            [ -n "$TITLE" ] && ISSUE_LINES="${ISSUE_LINES}- Issue #$NUMBER $TITLE"$'\n'
+          done
+
+          {
+            echo '自动构建产物，随 dev 分支滚动更新，始终只有这一个预发行版本。'
+            echo
+            echo '## 本次变更'
+            echo
+            echo "- \`$HEAD_SHORT\` $HEAD_SUBJECT"
+            echo
+            echo '## 近期变更'
+            echo
+            echo "$RECENT" | sed -E 's/^([0-9a-f]+) /- `\1` /'
+            if [ -n "$ISSUE_LINES" ]; then
+              echo
+              printf '%s' "$ISSUE_LINES"
+            fi
+          } > notes.md
+
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" coda-dev.apk sha256.txt \
             --prerelease \
             --target "$GITHUB_SHA" \
-            --title "开发预览版（dev）" \
-            --notes "$NOTES"
+            --title "开发预览版" \
+            --notes-file notes.md
+
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
