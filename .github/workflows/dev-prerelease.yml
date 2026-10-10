@@ -103,8 +103,6 @@ jobs:
           done
 
           {
-            echo '自动构建产物，随 dev 分支滚动更新，始终只有这一个预发行版本。'
-            echo
             echo '## 本次变更'
             echo
             echo "- \`$HEAD_SHORT\` $HEAD_SUBJECT"
