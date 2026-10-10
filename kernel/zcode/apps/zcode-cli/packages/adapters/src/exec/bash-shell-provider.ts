@@ -1,6 +1,5 @@
 import { accessSync, constants as fsConstants } from "node:fs";
-import { basename, delimiter, join, win32 } from "node:path";
-import { windowsExecutableCandidates } from "./windows-executable.js";
+import { basename } from "node:path";
 import { type ExecutionShellDialect, type ExecutionShellSelection } from "@zcode/contracts";
 
 type PosixShellKind = "bash" | "zsh";
@@ -12,17 +11,28 @@ type EffectiveBashShellResolveOptions = {
   override?: ExecutionShellSelection;
 };
 
-const FIXED_POSIX_SHELL_DIRS = ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"];
-const WINDOWS_GIT_BASH_PATHS = [
-  "C:\\Program Files\\Git\\bin\\bash.exe",
-  "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-] as const;
+/**
+ * 终端拓展注入的环境变量。
+ *
+ * 新架构里"有哪些终端"由宿主的终端分类拓展决定：拓展自带 shell 可执行文件与工具目录，
+ * 宿主启动内核时用这几个变量声明。内核不再扫描目录猜测环境里有什么 shell——那种探测依赖
+ * 具体设备的布局（Android 上既没有 /bin/bash 也没有 /bin/sh），且在拓展体系下属于重复判断。
+ * 既没有用户指定、也没有拓展声明时退回 legacy shell，与旧调用方保持兼容。
+ */
+const EXTENSION_SHELL = "ZCODE_TERMINAL_SHELL";
+const EXTENSION_DIALECT = "ZCODE_TERMINAL_DIALECT";
+const EXTENSION_LOGIN = "ZCODE_TERMINAL_LOGIN";
 
 export interface BashShellProvider {
   dialect: ExecutionShellDialect;
   envOverlay?: Record<string, string>;
   file: string;
   shell: boolean | string;
+  /**
+   * 是否以登录 shell 执行。拓展可以声明不需要登录 shell（例如 busybox ash），
+   * 未声明时按登录 shell 处理，与内核原有行为一致。
+   */
+  loginShell?: boolean;
 }
 
 interface EffectiveBashShellResolution {
@@ -38,77 +48,125 @@ export function resolveEffectiveBashShellSelection(
     return snapshotResolution;
   }
 
-  return options.platform === "win32"
-    ? resolveEffectiveWindowsBashShellSelection(options)
-    : resolveEffectivePosixBashShellSelection(options);
+  const configuredResolution = resolveConfiguredShellSelection(options);
+  if (configuredResolution) {
+    return configuredResolution;
+  }
+
+  // 可用的终端由宿主的终端拓展提供，内核不再探测环境里有哪些 shell。
+  const extensionResolution = resolveExtensionShellSelection(options);
+  if (extensionResolution) {
+    return extensionResolution;
+  }
+
+  return legacyShellSelection();
 }
 
-function resolvePosixBashShell(
-  env: NodeJS.ProcessEnv,
-  exists?: ExecutableCheck,
-): string | undefined {
-  const candidates: string[] = [];
-  const shell = env.SHELL;
-
-  if (shell && posixShellKind(shell)) {
-    candidates.push(shell);
+/** 用户在设置里显式指定的 shell 优先于拓展声明。 */
+function resolveConfiguredShellSelection(
+  options: EffectiveBashShellResolveOptions,
+): EffectiveBashShellResolution | undefined {
+  const override = options.override;
+  if (override?.source !== "user-config" || !override.path) {
+    return undefined;
   }
 
-  for (const kind of preferredPosixShellKinds(env)) {
-    candidates.push(...pathCandidates(kind, env));
-    candidates.push(...fixedPosixShellCandidates(kind));
+  if (override.dialect === "git-bash" && isExecutableCandidate(override.path, options.exists)) {
+    return {
+      provider: createGitBashProvider(override.path),
+      selection: shellSelection({
+        dialect: "git-bash",
+        displayName: "Git Bash",
+        id: override.id,
+        label: override.label,
+        path: override.path,
+        source: "user-config",
+      }),
+    };
   }
 
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    if (seen.has(candidate)) continue;
-    seen.add(candidate);
-    if (isExecutableCandidate(candidate, exists)) {
-      return candidate;
+  if (override.dialect === "cmd") {
+    const cmdPath = resolveWindowsCmdOverridePath(override.path, options.exists);
+    if (!cmdPath) {
+      return undefined;
     }
+    return {
+      provider: createWindowsCmdProvider(cmdPath),
+      selection: shellSelection({
+        dialect: "cmd",
+        displayName: "CMD",
+        id: override.id,
+        label: override.label,
+        path: cmdPath,
+        source: "user-config",
+      }),
+    };
+  }
+
+  if (override.dialect === "posix" && isExecutableCandidate(override.path, options.exists)) {
+    return {
+      provider: createPosixShellProvider(override.path),
+      selection: shellSelection({
+        dialect: "posix",
+        displayName: basename(override.path) || "sh",
+        id: override.id,
+        label: override.label,
+        path: override.path,
+        source: "user-config",
+      }),
+    };
   }
 
   return undefined;
 }
 
-function resolveWindowsGitBashShell(
-  env: NodeJS.ProcessEnv,
-  exists?: ExecutableCheck,
-): string | undefined {
-  for (const candidate of WINDOWS_GIT_BASH_PATHS) {
-    if (isExecutableCandidate(candidate, exists)) return candidate;
+/** 终端拓展声明的 shell。 */
+function resolveExtensionShellSelection(
+  options: EffectiveBashShellResolveOptions,
+): EffectiveBashShellResolution | undefined {
+  const shellPath = options.env[EXTENSION_SHELL]?.trim();
+  if (!shellPath) {
+    return undefined;
   }
 
-  const gitExe = windowsExecutableCandidates("git", env).find((candidate) =>
-    isExecutableCandidate(candidate, exists),
-  );
-  if (!gitExe) return undefined;
+  const dialect = options.env[EXTENSION_DIALECT]?.trim().toLowerCase();
+  if (dialect === "cmd") {
+    const cmdPath = resolveWindowsCmdOverridePath(shellPath, options.exists);
+    if (!cmdPath) {
+      return undefined;
+    }
+    return {
+      provider: createWindowsCmdProvider(cmdPath),
+      selection: shellSelection({
+        dialect: "cmd",
+        displayName: "CMD",
+        id: "extension:cmd",
+        label: `终端拓展：${cmdPath}`,
+        path: cmdPath,
+        source: "extension",
+      }),
+    };
+  }
 
-  const inferred = inferWindowsGitBashPathsFromGitExe(gitExe);
-  return inferred.find((candidate) => isExecutableCandidate(candidate, exists));
-}
+  if (!isExecutableCandidate(shellPath, options.exists)) {
+    return undefined;
+  }
 
-function createGitBashProvider(shellPath: string): BashShellProvider {
+  const loginShell = options.env[EXTENSION_LOGIN]?.trim() !== "0";
+  const gitBash = dialect === "git-bash";
+  const name = basename(shellPath) || (gitBash ? "bash" : "sh");
   return {
-    dialect: "git-bash",
-    envOverlay: {
-      GIT_EDITOR: "true",
-      SHELL: shellPath,
-    },
-    file: shellPath,
-    shell: false,
-  };
-}
-
-function createPosixShellProvider(shellPath: string): BashShellProvider {
-  return {
-    dialect: "posix",
-    envOverlay: {
-      GIT_EDITOR: "true",
-      SHELL: shellPath,
-    },
-    file: shellPath,
-    shell: false,
+    provider: gitBash
+      ? createGitBashProvider(shellPath, loginShell)
+      : createPosixShellProvider(shellPath, loginShell),
+    selection: shellSelection({
+      dialect: gitBash ? "git-bash" : "posix",
+      displayName: name,
+      id: `extension:${name}`,
+      label: `终端拓展：${shellPath}`,
+      path: shellPath,
+      source: "extension",
+    }),
   };
 }
 
@@ -140,83 +198,56 @@ function createShellProviderFromSelection(
   return undefined;
 }
 
-function resolveEffectiveWindowsBashShellSelection(
-  options: EffectiveBashShellResolveOptions,
-): EffectiveBashShellResolution {
-  const override = options.override;
-  if (override?.source === "user-config") {
-    if (
-      override.dialect === "git-bash" &&
-      override.path &&
-      isExecutableCandidate(override.path, options.exists)
-    ) {
-      return {
-        provider: createGitBashProvider(override.path),
-        selection: shellSelection({
-          dialect: "git-bash",
-          displayName: "Git Bash",
-          id: override.id,
-          label: override.label,
-          path: override.path,
-          source: "user-config",
-        }),
-      };
-    }
-    if (override.dialect === "cmd") {
-      const cmdPath = resolveWindowsCmdOverridePath(override.path ?? "cmd.exe", options.exists);
-      if (cmdPath) {
-        return {
-          provider: createWindowsCmdProvider(cmdPath),
-          selection: shellSelection({
-            dialect: "cmd",
-            displayName: "CMD",
-            id: override.id,
-            label: override.label,
-            path: cmdPath,
-            source: "user-config",
-          }),
-        };
-      }
-    }
-  }
-
-  const gitBash = resolveWindowsGitBashShell(options.env, options.exists);
-  if (gitBash) {
-    return {
-      provider: createGitBashProvider(gitBash),
-      selection: shellSelection({
-        dialect: "git-bash",
-        displayName: "Git Bash",
-        id: "auto:git-bash",
-        label: "Git Bash",
-        path: gitBash,
-        source: "auto-detected",
-      }),
-    };
-  }
-
-  return legacyShellSelection();
+function createGitBashProvider(shellPath: string, loginShell?: boolean): BashShellProvider {
+  return {
+    dialect: "git-bash",
+    envOverlay: {
+      GIT_EDITOR: "true",
+      SHELL: shellPath,
+    },
+    file: shellPath,
+    shell: false,
+    loginShell,
+  };
 }
 
-function resolveEffectivePosixBashShellSelection(
-  options: EffectiveBashShellResolveOptions,
-): EffectiveBashShellResolution {
-  const bashShell = resolvePosixBashShell(options.env, options.exists);
-  if (!bashShell) {
-    return legacyShellSelection();
-  }
-  const kind = posixShellKind(bashShell) ?? "bash";
+function createPosixShellProvider(shellPath: string, loginShell?: boolean): BashShellProvider {
   return {
-    provider: createPosixShellProvider(bashShell),
-    selection: shellSelection({
-      dialect: "posix",
-      displayName: kind,
-      id: `auto:${kind}`,
-      label: kind,
-      path: bashShell,
-      source: "auto-detected",
-    }),
+    dialect: "posix",
+    envOverlay: {
+      GIT_EDITOR: "true",
+      SHELL: shellPath,
+    },
+    file: shellPath,
+    shell: false,
+    loginShell,
   };
+}
+
+function createWindowsCmdProvider(shellPath: string): BashShellProvider {
+  return {
+    dialect: "cmd",
+    file: shellPath,
+    shell: shellPath,
+  };
+}
+
+function resolveWindowsCmdOverridePath(
+  shellPath: string,
+  exists?: ExecutableCheck,
+): string | undefined {
+  if (isExecutableCandidate(shellPath, exists)) {
+    return shellPath;
+  }
+  // 设置页在 ComSpec 缺失时会暴露系统默认 cmd.exe fallback；它和 generic
+  // Windows shell fallback 一样不能依赖 accessSync 预校验，否则用户显式选择会被忽略。
+  return isWindowsCmdFallback(shellPath) ? shellPath : undefined;
+}
+
+function isWindowsCmdFallback(shellPath: string): boolean {
+  return (
+    !shellPath.includes("\\") && !shellPath.includes("/") && shellPath.toLowerCase() === "cmd.exe"
+  );
 }
 
 function shellSelection(options: {
@@ -225,7 +256,7 @@ function shellSelection(options: {
   id?: string;
   label?: string;
   path: string;
-  source: "auto-detected" | "user-config";
+  source: "user-config" | "extension";
 }): ExecutionShellSelection {
   return {
     dialect: options.dialect,
@@ -245,61 +276,6 @@ function legacyShellSelection(): EffectiveBashShellResolution {
       source: "legacy-fallback",
     },
   };
-}
-
-function inferWindowsGitBashPathsFromGitExe(gitExe: string): string[] {
-  const gitDir = win32.dirname(gitExe);
-  return [
-    win32.normalize(win32.join(gitDir, "..", "bin", "bash.exe")),
-    win32.normalize(win32.join(gitDir, "..", "..", "bin", "bash.exe")),
-  ];
-}
-
-function createWindowsCmdProvider(shellPath: string): BashShellProvider {
-  return {
-    dialect: "cmd",
-    file: shellPath,
-    shell: shellPath,
-  };
-}
-
-function resolveWindowsCmdOverridePath(
-  shellPath: string,
-  exists?: ExecutableCheck,
-): string | undefined {
-  if (isExecutableCandidate(shellPath, exists)) {
-    return shellPath;
-  }
-  // 设置页在 ComSpec 缺失时会暴露系统默认 cmd.exe fallback；它和 generic
-  // Windows shell fallback 一样不能依赖 accessSync 预校验，否则用户显式选择会被 Git Bash 抢走。
-  return isWindowsCmdFallback(shellPath) ? shellPath : undefined;
-}
-
-function isWindowsCmdFallback(shellPath: string): boolean {
-  return (
-    !shellPath.includes("\\") && !shellPath.includes("/") && shellPath.toLowerCase() === "cmd.exe"
-  );
-}
-
-function preferredPosixShellKinds(env: NodeJS.ProcessEnv): PosixShellKind[] {
-  if (env.SHELL && posixShellKind(env.SHELL) === "bash") {
-    return ["bash", "zsh"];
-  }
-  return ["zsh", "bash"];
-}
-
-function pathCandidates(kind: PosixShellKind, env: NodeJS.ProcessEnv): string[] {
-  const pathValue = env.PATH;
-  if (!pathValue) return [];
-
-  return pathValue
-    .split(delimiter)
-    .filter(Boolean)
-    .map((entry) => join(entry, kind));
-}
-
-function fixedPosixShellCandidates(kind: PosixShellKind): string[] {
-  return FIXED_POSIX_SHELL_DIRS.map((dir) => join(dir, kind));
 }
 
 function posixShellKind(path: string): PosixShellKind | undefined {

@@ -29,7 +29,17 @@ export type ExecutionCommand =
 
 export type ExecutionShellDialect = "cmd" | "posix" | "git-bash";
 
-export type ExecutionShellSource = "auto-detected" | "user-config" | "legacy-fallback";
+/**
+ * Why a selection exists.
+ *
+ * `auto-detected` 是旧架构的产物：内核自己扫描环境找 shell。新架构里终端由宿主的终端分类拓展提供，
+ * 统一标记为 `extension`；`legacy-fallback` 仅在没有配置也没有拓展时兜底。
+ */
+export type ExecutionShellSource =
+  | "auto-detected"
+  | "user-config"
+  | "legacy-fallback"
+  | "extension";
 
 export interface ExecutionShellDisplay {
   /**

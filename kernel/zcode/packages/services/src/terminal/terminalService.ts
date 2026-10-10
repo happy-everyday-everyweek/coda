@@ -283,10 +283,13 @@ function spawnTerminalProcess(params: {
 }
 
 function resolveTerminalShell(): string {
+  // 终端面板与 Bash 工具消费的是同一个"终端"：由宿主的终端分类拓展声明，
+  // 拓展把自带的可执行文件路径通过环境变量交给内核，内核不再扫描目录猜测有哪些 shell。
+  const extensionShell = process.env.ZCODE_TERMINAL_SHELL?.trim();
+  if (extensionShell && isExecutable(extensionShell)) return extensionShell;
+
   if (process.platform === "win32") {
-    // Windows PowerShell 5.1 的 PSReadLine 在 ConPTY 下更容易把输入行空白重绘成 ANSI black 背景。
-    // PowerShell 7+ 的终端兼容性更接近桌面端，优先使用已安装的 pwsh，找不到再回退到系统自带 shell。
-    const candidates = ["pwsh.exe", "powershell.exe", process.env.ComSpec, "cmd.exe"];
+    const candidates = [process.env.ComSpec, "cmd.exe"];
 
     for (const candidate of candidates) {
       if (candidate && isExecutable(candidate)) return candidate;
@@ -297,12 +300,9 @@ function resolveTerminalShell(): string {
 
   // 之前直接信任 SHELL 环境变量，外部环境如果残留了一个不存在的 shell 路径，
   // node-pty 底层会把这个坏路径直接交给 posix_spawnp，终端创建时就会报错。
-  // 这里先校验 SHELL 是否真的可执行，不可用时再按常见 shell 顺序回退，避免启动直接失败。
-  const candidates = [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"];
-
-  for (const candidate of candidates) {
-    if (candidate && isExecutable(candidate)) return candidate;
-  }
+  // 这里仍然先校验 SHELL 是否真的可执行，不可用时直接报错，避免把坏路径交给底层。
+  const shell = process.env.SHELL;
+  if (shell && isExecutable(shell)) return shell;
 
   throw new Error("No usable shell found for terminal startup");
 }
