@@ -5,11 +5,13 @@
 ## 功能
 
 - 与 Coda 聊天并持续推进任务
+- 工作台：以标签页组织概览、文件、Git 与终端，可从主界面的工作台按钮进入，也可在主界面左滑进入
 
 ## 结构
 
 - `app/src/main/java/com/coda/mobileui/` — 界面
   - `core/` — 运行时客户端
+  - `workspace/` — 工作台页面与容器
 - `app/src/main/assets/core/` — 内置运行时载荷
 - `app/src/main/assets/linux/` — 内置 Linux 环境，详见 `docs/linux-env.md`
 

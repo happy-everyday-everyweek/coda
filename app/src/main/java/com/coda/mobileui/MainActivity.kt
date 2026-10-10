@@ -41,6 +41,7 @@ import com.coda.mobileui.core.ZSessionInfo
 import com.coda.mobileui.core.ZWorkflowActor
 import com.coda.mobileui.core.ZWorkflowKit
 import com.coda.mobileui.core.ZWorkflowPhase
+import com.coda.mobileui.workspace.WorkspaceActivity
 
 /** 会话状态：Working 用灰、待您操作（含错误）用黄、已完成未读用绿、已读则整行不显示。 */
 private enum class ConvStatus { WORKING, WAITING, DONE_UNREAD, NONE }
@@ -391,10 +392,7 @@ class MainActivity : BaseActivity() {
         }
 
         findViewById<ImageButton>(R.id.btn_workspace).setOnClickListener {
-            startActivity(
-                Intent(this, SettingsDetailActivity::class.java)
-                    .putExtra(SettingsDetailActivity.EXTRA_PAGE, SettingsDetailActivity.PAGE_WORKSPACE),
-            )
+            openWorkspace()
         }
 
         buildDrawer()
@@ -3067,8 +3065,13 @@ collapseFullDrawerThen { showConversation(conversation) }
                     } else {
                         drawerLayout.openDrawer(Gravity.START)
                     }
-                } else if (dx < -dp(48) && -dx > dy && drawerLayout.isDrawerOpen(Gravity.START)) {
-                    drawerLayout.closeDrawer(Gravity.START)
+                } else if (dx < -dp(48) && -dx > dy) {
+                    if (drawerLayout.isDrawerOpen(Gravity.START)) {
+                        drawerLayout.closeDrawer(Gravity.START)
+                    } else if (-dx > dp(96)) {
+                        // 主界面左滑进入工作台
+                        openWorkspace()
+                    }
                 }
             }
         }
@@ -3083,6 +3086,11 @@ collapseFullDrawerThen { showConversation(conversation) }
             pendingOpenDrawer = false
             drawerLayout.openDrawer(Gravity.START)
         }
+    }
+
+    /** 进入工作台。 */
+    private fun openWorkspace() {
+        startActivity(WorkspaceActivity.intent(this))
     }
 
     /** 打开设置：主区域换页 + 抽屉收起（与新对话同一层级，不新开页面）。 */

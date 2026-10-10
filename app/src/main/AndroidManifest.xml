@@ -25,6 +25,10 @@
             android:name=".SettingsDetailActivity"
             android:exported="false" />
         <activity
+            android:name=".workspace.WorkspaceActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".CrashActivity"
             android:exported="false"
             android:process=":crash"

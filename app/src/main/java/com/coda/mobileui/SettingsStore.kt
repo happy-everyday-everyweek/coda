@@ -76,6 +76,10 @@ class SettingsStore private constructor(context: Context) {
     fun addSlashRecent(name: String) {
         slashRecent = listOf(name) + slashRecent.filter { it != name }
     }
+    /** 工作区根目录；为空表示尚未选定，由默认位置接管。 */
+    var workspaceRoot: String
+        get() = prefs.getString(KEY_WORKSPACE_ROOT, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_WORKSPACE_ROOT, value).apply()
 
     /** 主题模式对应的 AppCompat 夜间模式。 */
     val nightMode: Int
@@ -132,6 +136,7 @@ class SettingsStore private constructor(context: Context) {
         private const val KEY_CHAT_AUTO_SCROLL = "chat_auto_scroll"
         private const val KEY_DEFAULT_SEND_MODE = "default_send_mode"
         private const val KEY_SLASH_RECENT = "slash_recent"
+        private const val KEY_WORKSPACE_ROOT = "workspace_root"
         private const val KEY_SESSION_SEEN = "session_seen_"
 
         const val MODE_SYSTEM = 0

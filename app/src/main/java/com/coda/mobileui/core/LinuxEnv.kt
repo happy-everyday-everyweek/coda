@@ -256,6 +256,64 @@ class LinuxEnv(private val ctx: Context) {
         )
     }
 
+    /** 宿主路径换算成容器内路径：按当前绑定表取最长前缀匹配，未绑定的路径原样返回。 */
+    fun guestPath(hostPath: String): String {
+        val absolute = File(hostPath).absolutePath
+        var bestLength = -1
+        var best = absolute
+        for ((source, target) in activeBinds()) {
+            val prefix = source.trimEnd('/')
+            if (absolute != prefix && !absolute.startsWith("$prefix/")) continue
+            if (prefix.length <= bestLength) continue
+            bestLength = prefix.length
+            best = if (target == null) absolute else target.trimEnd('/') + absolute.removePrefix(prefix)
+        }
+        return best
+    }
+
+    /**
+     * 容器内执行一条命令的进程构造器。
+     *
+     * 进容器的开关统一走进程环境，命令行走 proot 参数加一个 env -i 的干净入口；宿主继承来的
+     * LD_LIBRARY_PATH 必须清掉，否则动态加载器会先去那里找库。
+     */
+    fun builder(guestArgv: List<String>, extraEnv: Map<String, String> = emptyMap()): ProcessBuilder {
+        val command = mutableListOf(prootPath)
+        command += launchPrefix()
+        command += "/usr/bin/env"
+        command += "-i"
+        command += "HOME=/root"
+        command += "SHELL=/bin/bash"
+        command += "TERM=xterm-256color"
+        command += "LANG=C.UTF-8"
+        command += "PATH=$GUEST_PATH"
+        for ((key, value) in extraEnv) command += "$key=$value"
+        command += guestArgv
+
+        val builder = ProcessBuilder(command)
+        builder.directory(home)
+        val environment = builder.environment()
+        environment.remove("LD_LIBRARY_PATH")
+        environment["PROOT_LOADER"] = loaderPath
+        environment["PROOT_TMP_DIR"] = tmpDir.absolutePath
+        return builder
+    }
+
+    /** 一次容器内命令的执行结果。 */
+    data class ShellResult(val ok: Boolean, val code: Int, val output: String)
+
+    /** 容器内跑一条命令并读回合并后的输出；调用方负责放到后台线程。 */
+    fun exec(guestArgv: List<String>, timeoutMs: Long = 60_000L): ShellResult = try {
+        val process = builder(guestArgv).redirectErrorStream(true).start()
+        val output = process.inputStream.use { String(it.readBytes(), Charsets.UTF_8) }
+        val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!finished) process.destroy()
+        val code = if (finished) process.exitValue() else -1
+        ShellResult(code == 0, code, output)
+    } catch (t: Throwable) {
+        ShellResult(false, -1, t.message ?: "执行失败")
+    }
+
     // ---------------------------------------------------------------- 装配
 
     private fun assetVersion(): String? = try {

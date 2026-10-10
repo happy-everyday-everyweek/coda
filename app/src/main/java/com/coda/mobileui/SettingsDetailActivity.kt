@@ -34,8 +34,7 @@ import com.coda.mobileui.core.ZController
 import java.io.File
 
 /**
- * 二级页面：既承载设置的二级页，也承载工作区页（EXTRA_PAGE = "workspace"）。
- * 其中外观页与工作区记忆开关是真实生效的设置。
+ * 设置的二级页面。外观页与代码设置页接入真实设置。
  */
 class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
@@ -126,7 +125,6 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             ensureExtrasLoaded("plugins")
             SettingsData.pluginMarket(this, extrasCache["plugins"])
         }
-        PAGE_WORKSPACE -> SettingsData.workspace(store)
         PAGE_PROVIDERS -> SettingsData.providers(this)
         PAGE_SUBAGENTS -> SettingsData.subagents(this)
         PAGE_SKILLS -> SettingsData.skills(this)
@@ -1790,7 +1788,6 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_GENERAL = "general"
         const val PAGE_ABOUT = "about"
         const val PAGE_PLUGIN_MARKET = "plugin_market"
-        const val PAGE_WORKSPACE = "workspace"
         const val PAGE_PROVIDERS = "providers"
         const val PAGE_SUBAGENTS = "subagents"
         const val PAGE_SKILLS = "skills"

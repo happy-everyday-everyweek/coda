@@ -829,24 +829,7 @@ class ZController private constructor(private val app: Context) {
     }
     // ---------------------------------------------------------------- 会话操作
 
-    fun workspacePath(): String {
-        // 品牌目录迁移（一次性）：旧的 /sdcard/ZCode 改名为 /sdcard/Coda
-        val brandDir = File("/sdcard/Coda")
-        val legacy = File("/sdcard/ZCode")
-        if (!brandDir.exists() && legacy.exists()) {
-            try {
-                legacy.renameTo(brandDir)
-            } catch (_: Throwable) {
-            }
-        }
-        val f = File(brandDir, "workspace")
-        return try {
-            if (f.exists() || f.mkdirs()) f.absolutePath
-            else File(app.filesDir, "workspace").apply { mkdirs() }.absolutePath
-        } catch (_: Throwable) {
-            File(app.filesDir, "workspace").apply { mkdirs() }.absolutePath
-        }
-    }
+    fun workspacePath(): String = Workspaces.root(app).absolutePath
 
     fun newSession(cb: ((Boolean, String) -> Unit)?) {
         val wp = workspacePath()

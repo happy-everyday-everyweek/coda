@@ -48,7 +48,7 @@ data class SettingsPage(val title: String, val rows: List<SettingRow>)
 /**
  * 设置数据。
  *
- * 一级列表对齐桌面端的分区；工作区搜索范围与记忆属于工作区能力，放在工作区页。
+ * 一级列表对齐桌面端的分区。
  * 外观页已接入真实设置（主题模式、主色、自动取色、界面字号、代码显示）。
  */
 object SettingsData {
@@ -128,33 +128,6 @@ object SettingsData {
             SettingRow.Value("代码字号", store.codeFontSizeName(), "code_font_size"),
             SettingRow.Toggle("显示行号", "在代码内容和差异视图中显示行号", store.showLineNumbers, "code_line_numbers"),
             SettingRow.Toggle("长行自动换行", "代码内容过长时自动换行", store.wrapLongLines, "code_wrap"),
-        ),
-    )
-
-    /** 工作区页：当前工作区状态、变更文件，以及工作区级的搜索范围与记忆。 */
-    fun workspace(store: SettingsStore): SettingsPage = SettingsPage(
-        "工作区",
-        listOf(
-            SettingRow.Header("当前工作区"),
-            SettingRow.Value("工作区", "zcode-app"),
-            SettingRow.Value("路径", "~/projects/zcode-app"),
-            SettingRow.Value("当前分支", "main"),
-            SettingRow.Value("未提交变更", "+123K -100K"),
-            SettingRow.Value("关联拉取请求", "15 · 开放"),
-            SettingRow.Header("变更文件"),
-            SettingRow.Value("SettingsViewBuilder.kt", "+8K -2K"),
-            SettingRow.Value("activity_main.xml", "+3K -1K"),
-            SettingRow.Value("themes_accent.xml", "+65K -0K"),
-            SettingRow.Header("搜索范围"),
-            SettingRow.Value("忽略规则", ".zcodeignore", "ws_ignore"),
-            SettingRow.Value("从 .gitignore 同步", "立即同步", "ws_ignore_sync"),
-            SettingRow.Value("恢复默认规则", "恢复", "ws_ignore_reset"),
-            SettingRow.Header("记忆"),
-            SettingRow.Toggle("工作区记忆", "在当前工作区保存并复用长期上下文", true, "ws_memory"),
-            SettingRow.Value("已保存的记忆", "12 条"),
-            SettingRow.Header("终端"),
-            SettingRow.Value("打开终端", "集成终端", "ws_terminal"),
-            SettingRow.Value("集成终端 Shell", "自动选择"),
         ),
     )
 
