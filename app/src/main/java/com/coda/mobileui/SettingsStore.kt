@@ -105,6 +105,14 @@ class SettingsStore private constructor(context: Context) {
     fun fontScaleName(): String =
         FONT_SCALE_NAMES[fontScaleIndex.coerceIn(FONT_SCALE_NAMES.indices)]
 
+    /** 会话最近一次被看到的时间（抽屉里的「已完成」标记据此判断未读）。 */
+    fun sessionSeenAt(sessionId: String): Long = prefs.getLong(KEY_SESSION_SEEN + sessionId, 0L)
+
+    /** 记录会话已被看到。 */
+    fun markSessionSeen(sessionId: String, at: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong(KEY_SESSION_SEEN + sessionId, at).apply()
+    }
+
     /** 当前代码字号名称。 */
     fun codeFontSizeName(): String =
         CODE_FONT_SIZE_NAMES[codeFontSizeIndex.coerceIn(CODE_FONT_SIZE_NAMES.indices)]
@@ -124,6 +132,7 @@ class SettingsStore private constructor(context: Context) {
         private const val KEY_CHAT_AUTO_SCROLL = "chat_auto_scroll"
         private const val KEY_DEFAULT_SEND_MODE = "default_send_mode"
         private const val KEY_SLASH_RECENT = "slash_recent"
+        private const val KEY_SESSION_SEEN = "session_seen_"
 
         const val MODE_SYSTEM = 0
         const val MODE_LIGHT = 1

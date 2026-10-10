@@ -33,6 +33,8 @@ import com.google.android.material.snackbar.Snackbar
 import com.coda.mobileui.core.SendModes
 import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.ZController
+import com.coda.mobileui.core.GitHub
+import com.coda.mobileui.core.GitWorkspace
 import com.coda.mobileui.core.ZModelLevel
 import com.coda.mobileui.core.ZParse
 import com.coda.mobileui.core.ZSessionInfo
@@ -2228,16 +2230,16 @@ collapseFullDrawerThen { showConversation(conversation) }
         session: ZSessionInfo,
     ): View {
         val row = inflater.inflate(R.layout.view_drawer_conversation, container, false)
-        val status = when (session.status) {
-            "running" -> ConvStatus.WORKING
-            "waiting" -> ConvStatus.WAITING
-            else -> ConvStatus.NONE
-        }
+        row.tag = session.id
+        // 正在查看的会话即时算已读；其余按完成时间与上次查看时间判断是否未读。
+        if (session.id == zc.currentSessionId) SettingsStore.get(this).markSessionSeen(session.id)
+        val status = sessionConvStatus(session)
         row.findViewById<TextView>(R.id.conv_status).apply {
             val label = when (status) {
                 ConvStatus.WORKING -> getString(R.string.conv_status_working)
                 ConvStatus.WAITING -> getString(R.string.conv_status_waiting)
-                else -> null
+                ConvStatus.DONE_UNREAD -> getString(R.string.conv_status_done)
+                ConvStatus.NONE -> null
             }
             if (label == null) {
                 visibility = View.GONE
@@ -2247,17 +2249,22 @@ collapseFullDrawerThen { showConversation(conversation) }
                 setTextColor(
                     ContextCompat.getColor(
                         context,
-                        if (status == ConvStatus.WORKING) R.color.status_working else R.color.status_waiting,
+                        when (status) {
+                            ConvStatus.WORKING -> R.color.status_working
+                            ConvStatus.WAITING -> R.color.status_waiting
+                            else -> R.color.status_done
+                        },
                     ),
                 )
             }
         }
         row.findViewById<TextView>(R.id.conv_title).text = session.title.ifEmpty { "未命名会话" }
+        val git = GitWorkspace.inspect(session.workspacePath)
         row.findViewById<TextView>(R.id.conv_summary).text =
-            session.workspacePath ?: session.mode
-        row.findViewById<ImageView>(R.id.conv_pr_icon).visibility = View.GONE
-        row.findViewById<TextView>(R.id.conv_pr_number).visibility = View.GONE
+            git?.branch ?: session.workspacePath ?: session.mode
+        bindSessionPull(row, git)
         row.setOnClickListener {
+            SettingsStore.get(this).markSessionSeen(session.id)
             collapseFullDrawerThen {
                 liveText.clear()
                 messageViews.clear()
@@ -2274,6 +2281,49 @@ collapseFullDrawerThen { showConversation(conversation) }
             }
         }
         return row
+    }
+
+    /** 真实会话状态 → 抽屉状态：运行中、待您操作、已完成未读，其余不显示。 */
+    private fun sessionConvStatus(session: ZSessionInfo): ConvStatus = when (session.status) {
+        "running" -> ConvStatus.WORKING
+        "waiting", "paused" -> ConvStatus.WAITING
+        "completed", "error" ->
+            if (session.updatedAt > SettingsStore.get(this).sessionSeenAt(session.id)) {
+                ConvStatus.DONE_UNREAD
+            } else {
+                ConvStatus.NONE
+            }
+        else -> ConvStatus.NONE
+    }
+
+    /** 右侧 PR 标记：工作区有远端仓库且已登录 GitHub 时，按当前分支查关联 PR。 */
+    private fun bindSessionPull(row: View, git: GitWorkspace.Info?) {
+        val owner = git?.owner
+        val repo = git?.repo
+        val branch = git?.branch
+        if (owner.isNullOrEmpty() || repo.isNullOrEmpty() || branch.isNullOrEmpty()) return
+        if (GitHub.loginName(this) == null) return
+        val sessionId = row.tag as? String
+        GitHub.fetchPullForBranch(this, owner, repo, branch) { pull ->
+            if (pull == null || row.tag != sessionId) return@fetchPullForBranch
+            val color = ContextCompat.getColor(
+                this,
+                when {
+                    pull.merged -> R.color.pr_merged
+                    pull.state == "closed" -> R.color.md3_error
+                    else -> R.color.status_done
+                },
+            )
+            row.findViewById<ImageView>(R.id.conv_pr_icon).apply {
+                visibility = View.VISIBLE
+                setColorFilter(color)
+            }
+            row.findViewById<TextView>(R.id.conv_pr_number).apply {
+                visibility = View.VISIBLE
+                text = pull.number.toString()
+                setTextColor(color)
+            }
+        }
     }
 
     /** 权限请求对话框：选项直接来自协议（options[].response 用于应答）。 */
