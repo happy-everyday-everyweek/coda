@@ -13,10 +13,11 @@ import sys
 MACHINE_AARCH64 = 0xB7
 MACHINE_X86_64 = 0x3E
 
-# 安卓 bionic 兼容修复的落点：回调入口的首条指令、被跳板替换的指令、承载修复代码的零填充区。
-BIONIC_PATCH_ANCHOR = 0x1812888
-BIONIC_PATCH_PC = 0x181288C
-BIONIC_PATCH_CAVE = 0x2169C5C
+# 安卓 bionic 兼容修复在注入产物里的落点：回调入口的首条指令、被跳板替换的指令、
+# 承载修复代码的零填充区。注入会把基础镜像的内容整体后移一页，这里用的是产物地址。
+BIONIC_PATCH_ANCHOR = 0x1813888
+BIONIC_PATCH_PC = 0x181388C
+BIONIC_PATCH_CAVE = 0x216AC5C
 BTI_C = 0xD503245F
 
 
