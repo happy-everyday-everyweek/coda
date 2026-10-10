@@ -11,6 +11,12 @@ import android.widget.TextView
 import com.coda.mobileui.CodaSheet
 import org.json.JSONObject
 
+/** 布局宽度常量。 */
+internal const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+
+/** 布局高度常量。 */
+internal const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+
 /**
  * 标签页内容的公共基类。
  *
@@ -172,9 +178,4 @@ abstract class WorkspacePage(protected val host: WorkspaceActivity) {
         label(text, size, tint).apply { typeface = Typeface.MONOSPACE }
 
     protected fun sheet(): CodaSheet = CodaSheet(host)
-
-    companion object {
-        const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
-        const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
-    }
 }

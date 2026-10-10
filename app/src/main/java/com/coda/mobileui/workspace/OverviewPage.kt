@@ -33,7 +33,7 @@ class OverviewPage(
     override val kind: String = WorkspaceTabs.OVERVIEW
     override val title: String = "概览"
 
-    private lateinit var column: LinearLayout
+    private lateinit var body: LinearLayout
     private var snapshot: Snapshot? = null
     private var loading = false
 
@@ -47,7 +47,7 @@ class OverviewPage(
 
     override fun build(): View {
         val scroll = scrolling()
-        column = scrollColumn(scroll)
+        body = scrollColumn(scroll)
         render()
         return scroll
     }
@@ -110,30 +110,30 @@ class OverviewPage(
     }
 
     private fun render() {
-        if (!::column.isInitialized) return
-        column.removeAllViews()
-        column.addView(locationCard())
-        column.addView(sectionHeader("任务"))
+        if (!::body.isInitialized) return
+        body.removeAllViews()
+        body.addView(locationCard())
+        body.addView(sectionHeader("任务"))
         renderTasks()
-        column.addView(sectionHeader("最近提交"))
+        body.addView(sectionHeader("最近提交"))
         renderCommits()
-        column.addView(sectionHeader("打开"))
-        column.addView(
+        body.addView(sectionHeader("打开"))
+        body.addView(
             listRow(R.drawable.ic_folder, "文件", "浏览与管理工作区文件") {
                 host.openPage(WorkspaceTabs.FILES)
             },
         )
-        column.addView(
+        body.addView(
             listRow(R.drawable.ic_branch, "Git", "提交图与分支操作") {
                 host.openPage(WorkspaceTabs.GIT)
             },
         )
-        column.addView(
+        body.addView(
             listRow(R.drawable.ic_terminal, "终端", "在工作区里开一个终端") {
                 host.openPage(WorkspaceTabs.TERMINAL)
             },
         )
-        column.addView(View(host).apply { minimumHeight = dp(28f) })
+        body.addView(View(host).apply { minimumHeight = dp(28f) })
     }
 
     private fun locationCard(): View {
@@ -160,7 +160,7 @@ class OverviewPage(
     private fun renderTasks() {
         val todos: List<ZParse.ZTodo> = controller.todos
         if (todos.isEmpty()) {
-            column.addView(hint("没有进行中的任务"))
+            body.addView(hint("没有进行中的任务"))
             return
         }
         for (todo in todos) {
@@ -170,7 +170,7 @@ class OverviewPage(
                 "failed", "error" -> R.drawable.ic_state_error
                 else -> R.drawable.ic_state_pending
             }
-            column.addView(
+            body.addView(
                 listRow(icon, todo.content, null, null, 44) {
                     host.openPage(WorkspaceTabs.TERMINAL)
                 },
@@ -181,14 +181,14 @@ class OverviewPage(
     private fun renderCommits() {
         val list = snapshot?.commits.orEmpty()
         if (list.isEmpty()) {
-            column.addView(hint(if (loading) "读取中…" else "没有可展示的提交"))
+            body.addView(hint(if (loading) "读取中…" else "没有可展示的提交"))
             return
         }
         val formatter = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
         for (commit in list) {
             val detail = commit.hash.take(8) + " · " + commit.author +
                 if (commit.refs.isEmpty()) "" else " · " + commit.refs
-            column.addView(
+            body.addView(
                 listRow(
                     R.drawable.ic_commit,
                     commit.subject.ifEmpty { commit.hash.take(7) },

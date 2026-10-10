@@ -1,6 +1,6 @@
 package com.coda.mobileui.workspace
 
-import android.content.Context
+import android.app.Activity
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -17,16 +17,16 @@ import java.io.File
  */
 object DirectoryPicker {
 
-    fun show(context: Context, caption: String, startAt: File, onPicked: (File) -> Unit) {
+    fun show(activity: Activity, caption: String, startAt: File, onPicked: (File) -> Unit) {
         var current = if (startAt.isDirectory) startAt else startAt.parentFile ?: File("/")
-        val sheet = CodaSheet(context).title(caption)
+        val sheet = CodaSheet(activity).title(caption)
         var render: (LinearLayout) -> Unit = {}
         render = { column ->
             column.removeAllViews()
-            column.addView(pathLabel(context, current))
+            column.addView(pathLabel(activity, current))
             val parent = current.parentFile
             if (parent != null) {
-                column.addView(entry(context, "上一级", true) {
+                column.addView(entry(activity, "上一级", true) {
                     current = parent
                     sheet.refreshContent { refreshed -> render(refreshed) }
                 })
@@ -36,10 +36,10 @@ object DirectoryPicker {
                 ?.sortedBy { it.name.lowercase() }
                 ?: emptyList()
             if (children.isEmpty()) {
-                column.addView(entry(context, "此目录下没有子目录", false) {})
+                column.addView(entry(activity, "此目录下没有子目录", false) {})
             }
             for (dir in children) {
-                column.addView(entry(context, dir.name, true) {
+                column.addView(entry(activity, dir.name, true) {
                     current = dir
                     sheet.refreshContent { refreshed -> render(refreshed) }
                 })
@@ -53,7 +53,7 @@ object DirectoryPicker {
         sheet.show()
     }
 
-    private fun pathLabel(context: Context, path: File): TextView = TextView(context).apply {
+    private fun pathLabel(activity: Activity, path: File): TextView = TextView(activity).apply {
         text = path.absolutePath
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         maxLines = 2
@@ -61,8 +61,8 @@ object DirectoryPicker {
         setPadding(0, 0, 0, 8)
     }
 
-    private fun entry(context: Context, name: String, enabled: Boolean, click: () -> Unit): View {
-        val row = TextView(context).apply {
+    private fun entry(activity: Activity, name: String, enabled: Boolean, click: () -> Unit): View {
+        val row = TextView(activity).apply {
             text = name
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             gravity = Gravity.CENTER_VERTICAL
