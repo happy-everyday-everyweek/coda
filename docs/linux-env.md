@@ -57,7 +57,7 @@ proot 内置了两个默认 loader 路径（`/data/data/com.termux/files/usr/lib
 
 ### 4.1 随包内置
 
-引导集放 `assets/linux/bin/` 与 `assets/linux/lib/`，rootfs 归档放 `assets/linux/rootfs.tar.gz`，由 `CoreRuntime.ensureExtracted()` 一并释放到 `files/linux/`。它现有的 `copyAssetDir` 与 `chmodTree`（整棵树 0755）正好覆盖这个需求，不用改解包逻辑。
+引导集放 `assets/linux/bin/` 与 `assets/linux/lib/`，rootfs 归档在仓库里是 gzip 压缩的 `assets/linux/rootfs.tar.gz`，装配时释放到 `files/linux/`。已打出的 APK 里这一项的资产名是 `assets/linux/rootfs.tar`，内容也已经是不带 gzip 的 tar，说明打包链路改过它的名字与形态。装配因此按候选名逐个尝试，并读首两个字节判断是否还需要解压，两种形态都能用。
 
 需要留意的一点：assets 里的文件在 APK 中默认是压缩的，安装后没有可执行位，必须靠释放后的 `chmodTree` 补上。Operit 用 jniLibs 就是为了省掉这一步。两条路都可行，先按 Coda 现有的一致性走 assets；如果实测出现权限或加载失败，再把 proot、loader 挪到 jniLibs 做成 `lib*.so`。
 

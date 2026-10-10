@@ -35,7 +35,16 @@ class LinuxEnv(private val ctx: Context) {
 
         private const val ASSET_ROOT = "linux"
         private const val VERSION_ASSET = "$ASSET_ROOT/version.txt"
-        private const val ROOTFS_ASSET = "$ASSET_ROOT/rootfs.tar.gz"
+
+        /**
+         * 根文件系统归档的候选资产名。
+         *
+         * 仓库里存的是 gzip 压缩的 `rootfs.tar.gz`，但打包链路会在打 APK 时把它解压掉并去掉
+         * `.gz` 扩展名，最终包内出现的是 `rootfs.tar`。两个名字都作为候选，读取时按魔数判断
+         * 是否还需要解压，名字变了也不会让装配失败。
+         */
+        private val ROOTFS_ASSETS = listOf("$ASSET_ROOT/rootfs.tar", "$ASSET_ROOT/rootfs.tar.gz")
+
         private const val MARKER = ".installed"
         private const val LOCK = ".installing"
         private const val LINK2SYMLINK_MARK = ".link2symlink"
@@ -338,14 +347,39 @@ class LinuxEnv(private val ctx: Context) {
         val staging = File(home, "rootfs.staging")
         deleteRecursive(staging)
         staging.mkdirs()
-        ctx.assets.open(ROOTFS_ASSET).use { raw ->
-            GZIPInputStream(BufferedInputStream(raw, 1 shl 16)).use { gz -> untar(gz, staging) }
-        }
+        openRootfsArchive().use { archive -> untar(archive, staging) }
         deleteRecursive(rootfs)
         if (!staging.renameTo(rootfs)) {
             deleteRecursive(staging)
             throw IllegalStateException("根文件系统无法就位")
         }
+    }
+
+    /**
+     * 打开根文件系统归档。
+     *
+     * 按内容判断要不要解压：前两个字节是 gzip 魔数就套一层 GZIPInputStream，否则当裸 tar 读。
+     * 两个候选名都没命中时抛出带候选清单的异常，装配失败日志里直接能看到缺的是哪个资产。
+     */
+    private fun openRootfsArchive(): InputStream {
+        for (asset in ROOTFS_ASSETS) {
+            val raw = try {
+                ctx.assets.open(asset)
+            } catch (_: Throwable) {
+                continue
+            }
+            val buffered = BufferedInputStream(raw, 1 shl 16)
+            buffered.mark(2)
+            val first = buffered.read()
+            val second = buffered.read()
+            buffered.reset()
+            return if (first == 0x1f && second == 0x8b) {
+                GZIPInputStream(buffered)
+            } else {
+                buffered
+            }
+        }
+        throw java.io.FileNotFoundException("根文件系统归档缺失，候选：${ROOTFS_ASSETS.joinToString("、")}")
     }
 
     /** 精简 ustar 解包器：归档只含常规文件、目录与符号链接，不带 pax 扩展头。 */
