@@ -11,6 +11,14 @@ android {
         applicationId = "com.coda.mobileui"
         minSdk = 26
         targetSdk = 28
+        // 版本号遵循语义化版本（SemVer）：MAJOR.MINOR.PATCH。
+        //   PATCH：缺陷修复、内部重构、构建与资源调整，以及既有能力的实现替换（用户可见能力不变）。
+        //   MINOR：新增一条独立、完整的向后兼容功能线。
+        //   MAJOR：出现不向后兼容的变更，并在提交信息里写明破坏点。
+        // 前两位数字不随日常提交递增：升级必须能在提交信息里说清依据，且一次只升最低必要的那一位。
+        // versionName 的 -core 后缀表示"内核载荷随包内置"的构建线，不参与 SemVer 比较。
+        // versionCode 与 versionName 同步递增，只增不减（覆盖安装依赖它单调）。
+        //
         // 允许 CI 用 -PcodaVersionCode/-PcodaVersionName 覆盖，Tag 打包即用 Tag 号。
         versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt() ?: 25
         versionName = (project.findProperty("codaVersionName") as String?) ?: "0.8.1-core"
