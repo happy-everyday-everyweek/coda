@@ -13,6 +13,16 @@ import sys
 MACHINE_AARCH64 = 0xB7
 MACHINE_X86_64 = 0x3E
 
+# 安卓 bionic 兼容修复的落点：回调入口的首条指令、被跳板替换的指令、承载修复代码的零填充区。
+BIONIC_PATCH_ANCHOR = 0x1812888
+BIONIC_PATCH_PC = 0x181288C
+BIONIC_PATCH_CAVE = 0x2169C5C
+BTI_C = 0xD503245F
+
+
+def branch_encoding(pc, target):
+    return 0x14000000 | (((target - pc) >> 2) & 0x3FFFFFF)
+
 
 def main(path):
     with open(path, "rb") as f:
@@ -58,15 +68,20 @@ def main(path):
         problems.append("没有覆盖内核 blob 的 note 段，注入没有写进去")
     else:
         off, length = blob_note
-        print("   blob note 偏移=%d 长度=%d 结束于 %d" % (off, length, off + length))
+        print("   blob note 段 偏移=%d 长度=%d 结束于 %d" % (off, length, off + length))
         if off + length > size:
-            problems.append("blob note 越过文件尾，文件被截断")
+            problems.append("blob note 段越过文件尾，文件被截断")
         elif not any(o <= off and o + l >= off + length for o, l in loads):
-            problems.append("blob note 没有被可加载段覆盖，运行期读不到")
-        elif e_shoff != off + length:
-            problems.append("节头表没有紧跟 blob note，注入布局异常")
-        elif b"NODE_SEA_BLOB" not in data[off:off + 512]:
-            problems.append("note 段开头没有 NODE_SEA_BLOB 记录，node 读不到内核 blob")
+            problems.append("blob note 段没有被可加载段覆盖，运行期读不到")
+        else:
+            name, desc_len = find_note(data, off, off + length, b"NODE_SEA_BLOB")
+            if name is None:
+                problems.append("note 段里没有 NODE_SEA_BLOB 记录，node 找不到内核 blob")
+            else:
+                print("   note %s 数据 %d 字节" % (name.decode("latin1"), desc_len))
+        # 节头表只要落在 note 段之后即可，注入工具会按需要留出对齐间隙。
+        if e_shoff < off + length:
+            problems.append("节头表落在 blob note 段里面，注入布局异常")
 
     if not e_shoff or e_shoff + e_shnum * e_shentsize > size:
         problems.append("节头表越出文件尾")
@@ -94,7 +109,38 @@ def main(path):
         if not fuse.endswith(":1"):
             problems.append("fuse 没有打开，node 不会进入单文件模式")
 
+    # 安卓 bionic 兼容修复：跳板与修复代码必须就位，缺了内核在 Android 上启动即被信号杀死。
+    if size > BIONIC_PATCH_CAVE + 4:
+        anchor = struct.unpack_from("<I", data, BIONIC_PATCH_ANCHOR)[0]
+        patch = struct.unpack_from("<I", data, BIONIC_PATCH_PC)[0]
+        cave_head = struct.unpack_from("<I", data, BIONIC_PATCH_CAVE)[0]
+        if anchor != BTI_C:
+            problems.append("回调入口不是 bti c，补丁定位与基础镜像不符")
+        elif patch != branch_encoding(BIONIC_PATCH_PC, BIONIC_PATCH_CAVE):
+            problems.append("回调里没有跳板，内核在 Android 上会以 139 退出")
+        elif cave_head != BTI_C:
+            problems.append("修复代码没有写入代码洞")
+        else:
+            print("   bionic 修复：跳板与修复代码就位")
+    else:
+        problems.append("文件太短，读不到 bionic 修复的落点")
+
     return report(problems)
+
+
+def find_note(data, start, end, wanted):
+    """在 note 段里按 ELF note 的排布逐条查找，命中时返回名字与数据长度。"""
+    p = start
+    while p + 12 <= end:
+        namesz, descsz, _ = struct.unpack_from("<III", data, p)
+        if namesz == 0 and descsz == 0:
+            return (None, 0)
+        name = data[p + 12:p + 12 + namesz].rstrip(b"\x00")
+        desc = p + 12 + ((namesz + 3) // 4) * 4
+        if name == wanted:
+            return (name, descsz)
+        p = desc + ((descsz + 3) // 4) * 4
+    return (None, 0)
 
 
 def report(problems):

@@ -21,4 +21,4 @@ Coda 内置的 Agent 内核源码，与 `app/src/main/assets/core/` 的运行时
 
 ## 构建
 
-- 构建前先重建内核二进制载荷：`tools/build-core-payload.sh`，细节见 `docs/kernel-build.md`
+- 构建前先重建内核二进制载荷：`tools/build-core-payload.sh`，其中包含安卓 bionic 兼容修复，细节见 `docs/kernel-build.md`
