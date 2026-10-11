@@ -72,6 +72,10 @@ class CoreRuntime(private val ctx: Context) {
     private val logLock = Object()
     private val logBuf = StringBuilder()
 
+    /** 本次进程是否已经跑过内核自检；见 start() 里的说明。 */
+    @Volatile
+    private var selfChecked = false
+
     @Volatile
     private var logFile: File? = null
 
@@ -277,11 +281,11 @@ class CoreRuntime(private val ctx: Context) {
                                 declaredZcode?.let { "${it.first}B/${it.second.take(12)}" } ?: "无"
                                 ),
                     )
-                    // 每次安装只自检一次：正常时白等三秒没必要，出问题时这一行才是关键证据。
-                    val selfCheckMark = File(workDir, ".selfcheck")
-                    if (!selfCheckMark.isFile) {
+                    // 每次进程运行只自检一次。用内存标志而不是磁盘标记：磁盘标记会跨安装保留，
+                    // 覆盖安装后就不自检了，正好把最需要的那条结论省掉。
+                    if (!selfChecked) {
+                        selfChecked = true
                         runSelfCheck(File(coreDir, "zcode"))
-                        runCatching { selfCheckMark.writeText("1") }
                     }
                     val cmd = listOf(File(coreDir, "zcode").absolutePath, "app-server", "--stdio")
                     val pb = ProcessBuilder(cmd)
@@ -560,7 +564,24 @@ class CoreRuntime(private val ctx: Context) {
         } ?: File(localLogDir, "core-latest.log")
         f.parentFile?.mkdirs()
         logFile = f
+        // 建文件之前写过的行只在内存里，这里先补写进文件。启动来源、解包结论都发生在建文件之前，
+        // 只落盘之后的行会让日志正好缺掉最关键的开头一段，事后只能靠猜。
+        val backlog = synchronized(logLock) { logBuf.toString() }
+        try {
+            f.writeText(backlog)
+        } catch (_: Throwable) {
+        }
         log("[log] 日志文件: ${f.absolutePath}")
+        log("[log] 应用版本 ${appVersion()}，载荷标记 $MARKER")
+    }
+
+    /** 版本名与 versionCode。装错包时，这一行就能看出来，不必再比对行为猜版本。 */
+    private fun appVersion(): String = try {
+        val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        val code = runCatching { info.longVersionCode }.getOrElse { info.versionCode.toLong() }
+        "${info.versionName} ($code)"
+    } catch (_: Throwable) {
+        "未知"
     }
 
     fun log(line: String) {
