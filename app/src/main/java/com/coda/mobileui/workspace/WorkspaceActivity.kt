@@ -12,7 +12,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -41,6 +40,11 @@ import java.util.concurrent.Executors
 class WorkspaceActivity : BaseActivity() {
 
     companion object {
+        /** 终端风格的底栏配色。 */
+        private val BAR_BACKGROUND = 0xFF000000.toInt()
+        private val BAR_FOREGROUND = 0xFFE0E0E0.toInt()
+        private val BAR_DIVIDER = 0xFF2A2A2A.toInt()
+
         fun intent(context: Context): Intent = Intent(context, WorkspaceActivity::class.java)
     }
 
@@ -64,13 +68,11 @@ class WorkspaceActivity : BaseActivity() {
     lateinit var bottomBar: View
         private set
 
-    /** 底部工具条的当前高度。 */
-    fun bottomBarHeight(): Int = if (::bottomBar.isInitialized) bottomBar.height else dp(92f)
+    /** 底部操作栏的当前高度。 */
+    fun bottomBarHeight(): Int = if (::bottomBar.isInitialized) bottomBar.height else dp(53f)
 
     private lateinit var container: FrameLayout
     private lateinit var pageHost: FrameLayout
-    private lateinit var stripScroll: HorizontalScrollView
-    private lateinit var stripRow: LinearLayout
     private lateinit var backButton: ImageButton
     private lateinit var aheadButton: ImageButton
     private lateinit var countButton: TextView
@@ -223,16 +225,9 @@ class WorkspaceActivity : BaseActivity() {
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(BAR_BACKGROUND)
             layoutParams = FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM)
         }
-        stripRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        stripScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            clipToPadding = false
-            addView(stripRow, ViewGroup.LayoutParams(WRAP, MATCH))
-            layoutParams = LinearLayout.LayoutParams(MATCH, dp(40f))
-        }
-        bottom.addView(stripScroll)
         bottom.addView(line())
         bottom.addView(toolRow())
         bottomBar = bottom
@@ -266,11 +261,15 @@ class WorkspaceActivity : BaseActivity() {
         countButton = TextView(this).apply {
             text = "1"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setTextColor(onSurface)
+            setTextColor(BAR_FOREGROUND)
             gravity = Gravity.CENTER
-            background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_tab_count)
+            background = pill(0xFF1F1F1F.toInt())
             isClickable = true
             setOnClickListener { toggleOverview() }
+            setOnLongClickListener {
+                activeId?.let { showTabActions(it) }
+                true
+            }
             layoutParams = FrameLayout.LayoutParams(dp(40f), dp(28f), Gravity.CENTER)
         }
         row.addView(slot(countButton))
@@ -285,8 +284,8 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun toolButton(iconRes: Int, click: () -> Unit): ImageButton = ImageButton(this).apply {
         setImageResource(iconRes)
-        setColorFilter(onSurface)
-        background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_pill)
+        setColorFilter(BAR_FOREGROUND)
+        background = null
         scaleType = ImageView.ScaleType.CENTER_INSIDE
         val size = dp(40f)
         layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
@@ -295,9 +294,16 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun line(): View = View(this).apply {
-        setBackgroundColor(outline)
+        setBackgroundColor(BAR_DIVIDER)
         layoutParams = LinearLayout.LayoutParams(MATCH, dp(0.7f))
     }
+
+    private fun pill(fill: Int): android.graphics.drawable.GradientDrawable =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = dp(8f).toFloat()
+            setColor(fill)
+        }
 
     // ---------------------------------------------------------------- 标签
 
@@ -417,45 +423,6 @@ class WorkspaceActivity : BaseActivity() {
         aheadButton.isEnabled = canAhead
         aheadButton.alpha = if (canAhead) 1f else 0.35f
         countButton.text = tabs.size.toString()
-        rebuildStrip()
-    }
-
-    private fun rebuildStrip() {
-        stripRow.removeAllViews()
-        for (entry in tabs) {
-            val selected = entry.data.id == activeId
-            val chip = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(10f), dp(6f), dp(12f), dp(6f))
-                background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_pill)
-                layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply {
-                    leftMargin = dp(8f)
-                    rightMargin = dp(2f)
-                }
-                alpha = if (selected) 1f else 0.65f
-                setOnClickListener { selectTab(entry.data.id) }
-                setOnLongClickListener {
-                    showTabActions(entry.data.id)
-                    true
-                }
-            }
-            chip.addView(ImageView(this).apply {
-                setImageResource(iconFor(entry.data.kind))
-                setColorFilter(if (selected) primary else onSurfaceVariant)
-                layoutParams = LinearLayout.LayoutParams(dp(15f), dp(15f)).apply { rightMargin = dp(6f) }
-            })
-            chip.addView(TextView(this).apply {
-                text = WorkspaceTabs.label(entry.data.kind)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-                setTextColor(if (selected) primary else onSurfaceVariant)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                maxWidth = dp(140f)
-            })
-            stripRow.addView(chip)
-        }
-        stripScroll.visibility = if (tabs.size > 1) View.VISIBLE else View.GONE
     }
 
     private fun persist() {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
@@ -19,10 +20,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import com.coda.mobileui.R
 import org.json.JSONObject
 import java.io.InputStreamReader
 import java.io.OutputStream
@@ -31,9 +30,10 @@ import kotlin.concurrent.thread
 /**
  * 终端标签页。
  *
- * 界面按 Termux 的口径组织：整屏终端区加底部一行附加键区，不自建标题栏。
- * 容器里没有伪终端，会话是常驻 shell，输入直接写入它的标准输入，输出按行渲染。
- * 多会话沿用容器底部标签栏，本页不再自建标签条，避免与底部工具条重叠或抢手势。
+ * 界面按 Termux 的口径组织：黑底浅字、整屏终端区、底部一行附加键区，不自建标题栏。
+ * 容器里没有伪终端，会话是常驻 shell，输入直接写入它的标准输入，输出按行渲染，
+ * 并自绘一个闪烁块光标，因为管道没有 tty，系统不会给光标。
+ * 多会话沿用容器原有标签页系统，本页不自建标签条。
  */
 class TerminalPage(
     host: WorkspaceActivity,
@@ -63,12 +63,24 @@ class TerminalPage(
     private var ctrlArmed = false
     private var altArmed = false
     private var keyboardShown = false
+    private var cursorOn = true
     private var keyDownY = 0f
+    private var touchDownX = 0f
+    private var touchDownY = 0f
+    private var touchDownAt = 0L
+
+    private val blink = object : Runnable {
+        override fun run() {
+            cursorOn = !cursorOn
+            render()
+            main.postDelayed(this, BLINK_MS)
+        }
+    }
 
     override fun build(): View {
         content = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(surface)
+            setBackgroundColor(terminalBackground)
         }
         content.addView(terminalArea(), LinearLayout.LayoutParams(MATCH, 0, 1f))
         content.addView(keyArea())
@@ -77,7 +89,7 @@ class TerminalPage(
         return content
     }
 
-    /** 底部工具条是浮层，这里留出它的高度，附加键区才不会被压住。 */
+    /** 底部操作栏是浮层，这里留出它的高度，附加键区才不会被压住。 */
     private fun syncBottomInset() {
         if (!::content.isInitialized) return
         val padding = host.bottomBarHeight()
@@ -87,9 +99,16 @@ class TerminalPage(
     override fun onShown() {
         syncBottomInset()
         start()
+        main.removeCallbacks(blink)
+        main.post(blink)
+    }
+
+    override fun onHidden() {
+        main.removeCallbacks(blink)
     }
 
     override fun onClosed() {
+        main.removeCallbacks(blink)
         stop()
     }
 
@@ -103,7 +122,7 @@ class TerminalPage(
     override fun onMenuItem(label: String) {
         when (label) {
             "清屏" -> clear()
-            "重开会话" -> restart()
+            "重开会话", "刷新" -> restart()
             "发送中断" -> writeRaw("\u0003")
         }
     }
@@ -114,13 +133,33 @@ class TerminalPage(
         transcript = TextView(host).apply {
             typeface = Typeface.MONOSPACE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            setTextColor(onSurface)
+            setTextColor(terminalForeground)
+            setBackgroundColor(terminalBackground)
             setTextIsSelectable(true)
             setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
-            setOnClickListener { toggleKeyboard() }
+            setOnTouchListener { _, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchDownX = event.x
+                        touchDownY = event.y
+                        touchDownAt = SystemClock.uptimeMillis()
+                        false
+                    }
+
+                    MotionEvent.ACTION_UP -> {
+                        val moved = kotlin.math.abs(event.x - touchDownX) + kotlin.math.abs(event.y - touchDownY)
+                        val quick = SystemClock.uptimeMillis() - touchDownAt < 300
+                        if (moved < dp(10f).toFloat() && quick) toggleKeyboard()
+                        false
+                    }
+
+                    else -> false
+                }
+            }
         }
         scroll = ScrollView(host).apply {
             isFillViewport = true
+            setBackgroundColor(terminalBackground)
             addView(transcript, ViewGroup.LayoutParams(MATCH, WRAP))
             setOnScrollChangeListener { _, _, _, _, _ -> follow = atBottom() }
         }
@@ -132,12 +171,13 @@ class TerminalPage(
                 insets
             }
         }
-        status = label("正在启动会话", 12.5f, onSurfaceVariant).apply {
+        status = label("正在启动会话", 12.5f, terminalMuted).apply {
             gravity = Gravity.CENTER
             setPadding(dp(16f), dp(10f), dp(16f), dp(10f))
-            background = ContextCompat.getDrawable(host, R.drawable.bg_tool_card)
+            background = pill(0xFF141414.toInt())
         }
         val area = FrameLayout(host)
+        area.setBackgroundColor(terminalBackground)
         area.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
         area.addView(input, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
         area.addView(status, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
@@ -148,8 +188,8 @@ class TerminalPage(
     private fun keyArea(): View {
         val bar = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(surface)
-            setPadding(dp(4f), dp(4f), dp(4f), dp(6f))
+            setBackgroundColor(terminalBackground)
+            setPadding(dp(4f), dp(2f), dp(4f), dp(4f))
         }
         bar.addView(keyRow(firstRow))
         bar.addView(keyRow(secondRow))
@@ -159,7 +199,7 @@ class TerminalPage(
     private fun keyRow(keys: List<KeySpec>): View {
         val row = LinearLayout(host).apply { orientation = LinearLayout.HORIZONTAL }
         for (spec in keys) {
-            row.addView(keyCell(spec), LinearLayout.LayoutParams(0, dp(36f), 1f))
+            row.addView(keyCell(spec), LinearLayout.LayoutParams(0, dp(34f), 1f))
         }
         return row
     }
@@ -168,7 +208,7 @@ class TerminalPage(
         val cell = TextView(host).apply {
             text = spec.label
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            setTextColor(onSurfaceVariant)
+            setTextColor(terminalForeground)
             gravity = Gravity.CENTER
             isClickable = true
         }
@@ -209,7 +249,7 @@ class TerminalPage(
     private fun paintModifiers() {
         for ((cell, name) in modifierKeys) {
             val armed = if (name == "ctrl") ctrlArmed else altArmed
-            cell.setTextColor(if (armed) primary else onSurfaceVariant)
+            cell.setTextColor(if (armed) terminalAccent else terminalForeground)
         }
     }
 
@@ -246,6 +286,8 @@ class TerminalPage(
             manager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
             keyboardShown = true
         }
+        cursorOn = true
+        render()
     }
 
     /** 终端区的 IME 目标：把键盘输入按字节送进 shell。 */
@@ -306,6 +348,7 @@ class TerminalPage(
                 }
             }
         }
+        cursorOn = true
         render()
     }
 
@@ -313,6 +356,7 @@ class TerminalPage(
         lines.append(PROMPT).append(echo).append('\n')
         echo.setLength(0)
         writeRaw("\n")
+        cursorOn = true
         render()
     }
 
@@ -472,11 +516,19 @@ class TerminalPage(
         }
         val tail = buildString {
             append(pending)
-            if (echo.isNotEmpty()) append(PROMPT).append(echo)
+            append(PROMPT).append(echo)
+            append(if (cursorOn) CURSOR else ' ')
         }
         transcript.text = lines.toString() + tail
         if (follow) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
+
+    private fun pill(fill: Int): android.graphics.drawable.GradientDrawable =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = dp(8f).toFloat()
+            setColor(fill)
+        }
 
     private class KeySpec(
         val label: String,
@@ -485,8 +537,15 @@ class TerminalPage(
         val special: String? = null,
     )
 
+    private val terminalBackground = 0xFF000000.toInt()
+    private val terminalForeground = 0xFFE0E0E0.toInt()
+    private val terminalMuted = 0xFF7A7A7A.toInt()
+    private val terminalAccent = 0xFF8AB4F8.toInt()
+
     private companion object {
         const val PROMPT = "\u203a "
+        const val CURSOR = "\u2588"
+        const val BLINK_MS = 530L
         const val MAX_CHARS = 120_000
 
         val firstRow = listOf(
