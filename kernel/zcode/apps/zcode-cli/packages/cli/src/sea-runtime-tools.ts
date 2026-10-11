@@ -258,8 +258,12 @@ function markerFor(manifest: SeaRuntimeToolManifest, tool: SeaRuntimeTool): Runt
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): string {
-  const releasePlatform = platform === "win32" ? "win" : platform;
-  if (!["darwin", "linux", "win", "android"].includes(releasePlatform) || !["arm64", "x64"].includes(arch)) {
+  // Android 上跑的是构建时按 linux-arm64 注入的 SEA 二进制，包内 manifest 的 target 也写着
+  // linux-arm64。这里必须把 android 归一到 linux：只把它当作独立目标会在启动时就抛
+  // "target mismatch" 并退出，而两者用的其实是同一套 arm64 资产。
+  const releasePlatform =
+    platform === "win32" ? "win" : platform === "android" ? "linux" : platform;
+  if (!["darwin", "linux", "win"].includes(releasePlatform) || !["arm64", "x64"].includes(arch)) {
     throw new Error(`Unsupported SEA runtime target ${platform}-${arch}.`);
   }
   return `${releasePlatform}-${arch}`;
