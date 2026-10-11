@@ -55,7 +55,10 @@ const buildCaveCode = (cave, getauxvalPlt) => {
     0x52800060, // mov w0, #3        取 AT_PHDR
     null, // bl getauxval
     0xaa0003f4, // mov x20, x0
-    0x528000a0, // mov w0, #5        取 AT_PHNUM
+    // 这里取的是 auxv 第 4 项（AT_PHENT，程序头表项大小），与首次移植落地并被真机验证
+    // 通过的那版补丁逐字节一致。它跟 AT_PHNUM（第 5 项）都能让 node 扫到 PT_NOTE，
+    // 但真机上唯一跑通过的是这一版，所以按原有实现对齐，不自创写法。
+    0x52800080,
     null, // bl getauxval
     0x2a0003ec, // mov w12, w0
     0xf9400a8a, // ldr x10, [x20, #16]  程序头表首项的 p_vaddr
