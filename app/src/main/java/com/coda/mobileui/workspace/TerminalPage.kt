@@ -72,7 +72,7 @@ class TerminalPage(
         }
         content.addView(terminalArea(), LinearLayout.LayoutParams(MATCH, 0, 1f))
         content.addView(keyArea())
-        host.bottomBar.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> syncBottomInset() }
+        content.viewTreeObserver.addOnGlobalLayoutListener { syncBottomInset() }
         syncBottomInset()
         return content
     }
