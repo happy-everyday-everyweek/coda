@@ -60,6 +60,13 @@ class WorkspaceActivity : BaseActivity() {
     private val worker = Executors.newFixedThreadPool(3)
     private val main = Handler(Looper.getMainLooper())
 
+    /** 底部工具条，标签页用它避让底部区域。 */
+    lateinit var bottomBar: View
+        private set
+
+    /** 底部工具条的当前高度。 */
+    fun bottomBarHeight(): Int = if (::bottomBar.isInitialized) bottomBar.height else dp(92f)
+
     private lateinit var container: FrameLayout
     private lateinit var pageHost: FrameLayout
     private lateinit var stripScroll: HorizontalScrollView
@@ -228,6 +235,7 @@ class WorkspaceActivity : BaseActivity() {
         bottom.addView(stripScroll)
         bottom.addView(line())
         bottom.addView(toolRow())
+        bottomBar = bottom
         container.addView(bottom)
 
         statusView = TextView(this).apply {
