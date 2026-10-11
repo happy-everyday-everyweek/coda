@@ -187,25 +187,28 @@ class LinuxEnv(private val ctx: Context) {
     }
 
     /**
-     * 把 GitHub 令牌同步进容器。
+     * 把 GitHub 令牌同步进容器，并写容器内的 Git 全局配置。
      *
      * gh 与 git 共用同一份认证：gh 读 hosts.yml，git 的凭据助手直接转调 gh，
      * 这样拿到令牌后两边的 push 与 api 调用都能用。
+     *
+     * 没有令牌时也照样写 .gitconfig：安全目录这一项与认证无关，缺了它工作区会被 git 判成
+     * 属主可疑，读操作全部失败，而写操作照常成功，表现就是初始化完成后界面一直说没初始化。
      */
     fun syncGitHubCredentials() {
         if (!rootfs.isDirectory) return
         val token = GitHub.token(ctx)
-        if (token.isNullOrEmpty()) return
         val login = GitHub.loginName(ctx).orEmpty()
 
-        val ghDir = File(rootfs, "root/.config/gh")
-        val hosts = buildString {
-            append("github.com:\n")
-            append("    oauth_token: ").append(token).append('\n')
-            append("    git_protocol: https\n")
-            if (login.isNotEmpty()) append("    user: ").append(login).append('\n')
+        if (!token.isNullOrEmpty()) {
+            val hosts = buildString {
+                append("github.com:\n")
+                append("    oauth_token: ").append(token).append('\n')
+                append("    git_protocol: https\n")
+                if (login.isNotEmpty()) append("    user: ").append(login).append('\n')
+            }
+            writeFile(File(rootfs, "root/.config/gh/hosts.yml"), hosts, MODE_PRIVATE)
         }
-        writeFile(File(ghDir, "hosts.yml"), hosts, MODE_PRIVATE)
 
         val gitConfig = buildString {
             append("[credential \"https://github.com\"]\n")
@@ -214,6 +217,10 @@ class LinuxEnv(private val ctx: Context) {
             append("\thelper = !gh auth git-credential\n")
             append("[init]\n")
             append("\tdefaultBranch = main\n")
+            // 容器里的进程身份是伪造的 root，宿主 /sdcard 上的文件属主却是应用自身。
+            // 不开这个口子，git 会把工作区判成属主可疑：init 成功，status、rev-parse、log 全挂。
+            append("[safe]\n")
+            append("\tdirectory = *\n")
             if (login.isNotEmpty()) {
                 append("[user]\n")
                 append("\tname = ").append(login).append('\n')

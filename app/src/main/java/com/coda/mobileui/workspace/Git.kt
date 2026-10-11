@@ -21,6 +21,15 @@ object Git {
     private val FIELD = "\u001f"
     private val RECORD = "\u001e"
 
+    /**
+     * 每次调用都显式放开安全目录。
+     *
+     * 容器里的进程身份是伪造的 root，而宿主 /sdcard 上的文件属主是应用自身。这种不一致会让
+     * git 把工作区判成「属主可疑」：写操作（init、add、commit）照样成功，读操作
+     * （rev-parse、status、log）一律 fatal。表现就是初始化完成了，界面却一直说没初始化。
+     */
+    private val SAFE_DIRECTORY = listOf("-c", "safe.directory=*")
+
     /** 一个提交。 */
     data class Commit(
         val hash: String,
@@ -32,13 +41,27 @@ object Git {
     )
 
     private fun run(env: LinuxEnv, root: File, args: List<String>): Result {
-        val result = env.exec(listOf("git", "-C", env.guestPath(root.absolutePath)) + args)
+        val result = env.exec(
+            listOf("git") + SAFE_DIRECTORY + listOf("-C", env.guestPath(root.absolutePath)) + args,
+        )
         return Result(result.ok, result.output.trimEnd())
     }
 
     /** 目录是否是 Git 仓库。 */
-    fun isRepo(env: LinuxEnv, root: File): Boolean =
-        run(env, root, listOf("rev-parse", "--is-inside-work-tree")).output.trim() == "true"
+    fun isRepo(env: LinuxEnv, root: File): Boolean = probe(env, root).first
+
+    /**
+     * 探测目录是否在仓库内，并带回原始输出。
+     *
+     * 判据不是「整段输出等于 true」：命令输出里可能混入容器或 git 自己的提示行，只有精确比对
+     * 会让判定永久为假。这里逐行找 true，同时要求命令本身成功。第二个返回值在不成立时给出
+     * 原始输出，界面可以直接把它显示出来，不必再靠猜。
+     */
+    fun probe(env: LinuxEnv, root: File): Pair<Boolean, String> {
+        val result = run(env, root, listOf("rev-parse", "--is-inside-work-tree"))
+        val inside = result.output.lineSequence().any { it.trim() == "true" }
+        return (result.ok && inside) to result.output.trim()
+    }
 
     /** 初始化仓库。 */
     fun init(env: LinuxEnv, root: File): Result =
