@@ -115,7 +115,13 @@ class CoreRuntime(private val ctx: Context) {
         val reuse = runCatching { marker.readText().trim() }.getOrNull() == stamp &&
             bin.isFile && bin.length() > 10_000_000L && builtin.isFile &&
             (declared == null || declared.first == bin.length())
-        if (reuse) return true
+        if (reuse) {
+            log(
+                "载荷解包结果复用：戳记=$stamp，内核二进制=${bin.length()}B" +
+                    (declared?.let { "，清单声明=${it.first}B" } ?: "，清单无 zcode 条目"),
+            )
+            return true
+        }
 
         log("开始解包内置载荷，首次约需 1-2 分钟...")
         repeat(2) { attempt ->
@@ -131,7 +137,7 @@ class CoreRuntime(private val ctx: Context) {
             val bad = verifyPayload(manifest)
             if (bad == null) {
                 marker.writeText(stamp)
-                log("解包完成")
+                log("解包完成：戳记=$stamp，内核二进制=${bin.length()}B")
                 return true
             }
             log("!! 第 ${attempt + 1} 次解包校验未通过：$bad")
@@ -257,14 +263,26 @@ class CoreRuntime(private val ctx: Context) {
                     },
                 )
                 initDirs()
+                // 日志文件在解包之前就建好：解包要释放并校验两百多 MB，耗时以分钟计，
+                // 排在它后面的话这段时间在磁盘上没有任何痕迹，出事只能靠猜。
+                openLogFile()
                 if (!ensureExtracted()) {
                     msg = "载荷解包失败"
                 } else {
-                    openLogFile()
+                    val declaredZcode = payloadManifest["zcode"]
                     log(
                         "[core] 内核二进制=" + File(coreDir, "zcode").length() + "B 载荷戳记=" +
-                            runCatching { File(coreDir, ".ready").readText().trim() }.getOrNull(),
+                            runCatching { File(coreDir, ".ready").readText().trim() }.getOrNull() +
+                            " 清单=" + (
+                                declaredZcode?.let { "${it.first}B/${it.second.take(12)}" } ?: "无"
+                                ),
                     )
+                    // 每次安装只自检一次：正常时白等三秒没必要，出问题时这一行才是关键证据。
+                    val selfCheckMark = File(workDir, ".selfcheck")
+                    if (!selfCheckMark.isFile) {
+                        runSelfCheck(File(coreDir, "zcode"))
+                        runCatching { selfCheckMark.writeText("1") }
+                    }
                     val cmd = listOf(File(coreDir, "zcode").absolutePath, "app-server", "--stdio")
                     val pb = ProcessBuilder(cmd)
                     pb.directory(workDir)
@@ -364,6 +382,36 @@ class CoreRuntime(private val ctx: Context) {
         try {
             p?.destroy()
         } catch (_: Throwable) {
+        }
+    }
+    // ---------------------------------------------------------------- 自检
+
+    /**
+     * 内核自检：单独跑一次 `--version`，把退出码与输出记进日志。
+     *
+     * node 若扫不到自己的 SEA blob，会在这一步就无声地被信号杀死（退出码 139），
+     * 与后面 app-server 阶段的崩在日志里区分开：有信号的是自检，没信号还起不来的是另一回事。
+     */
+    private fun runSelfCheck(binary: File) {
+        val started = System.currentTimeMillis()
+        try {
+            val pb = ProcessBuilder(binary.absolutePath, "--version")
+            pb.directory(workDir)
+            pb.redirectErrorStream(true)
+            val env = pb.environment()
+            env["LD_LIBRARY_PATH"] = File(coreDir, "lib").absolutePath
+            env["HOME"] = homeDir.absolutePath
+            env["TMPDIR"] = tmpDir.absolutePath
+            env["PATH"] = "/system/bin:/system/xbin:/vendor/bin:/product/bin"
+            val process = pb.start()
+            val output = process.inputStream.bufferedReader().readText().trim()
+            val code = process.waitFor()
+            log(
+                "[core] 自检 --version：" + describeExit(code) + "，耗时 " +
+                    (System.currentTimeMillis() - started) + "ms，输出=" + output.take(160),
+            )
+        } catch (t: Throwable) {
+            log("!! 自检异常: $t")
         }
     }
 
@@ -531,7 +579,14 @@ class CoreRuntime(private val ctx: Context) {
     fun logSnapshot(): String = synchronized(logLock) { logBuf.toString() }
 
     companion object {
-        private const val MARKER = "m6"
+        /**
+         * 解包标记前缀。清单内容一变，标记跟着变，上一版的解包结果自然失效。
+         *
+         * 前缀本身在需要强制重解包时手动递增：m6 那批包不带载荷清单，解包标记只会是裸的 m6，
+         * 新旧包之间看不出差别，设备上很容易继续跑旧解出来的内核二进制（症状就是启动即被信号杀死）。
+         * 提到 m7 后，之前所有解包结果一律失效，装上新包必然重解一次。
+         */
+        private const val MARKER = "m7"
 
         /** 载荷清单：由 tools/build-core-payload.sh 生成，记录各载荷文件的大小与摘要。 */
         private const val PAYLOAD_MANIFEST = "core/payload.txt"
