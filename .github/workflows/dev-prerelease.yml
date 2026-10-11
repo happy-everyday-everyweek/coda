@@ -28,6 +28,8 @@ jobs:
         run: |
           BASE="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)"
           echo "CODA_VERSION_NAME=${BASE:-dev}" >> "$GITHUB_ENV"
+          # 仓库内固定密钥（keystore/coda-debug.jks）的证书摘要，核对步骤用它比对。
+          echo "CODA_SIGNER_SHA256=05011c837e7fd75ae390c9f5d627f4618324676896ff0fbe04146607db841c35" >> "$GITHUB_ENV"
           {
             echo "dev 构建使用 debug 变体。"
             echo ""
@@ -83,6 +85,22 @@ jobs:
           APK="$(ls app/build/outputs/apk/debug/*.apk | head -1)"
           cp "$APK" "coda-dev.apk"
           sha256sum coda-dev.apk | tee sha256.txt
+
+      # 签名必须每次都一样：签名一换，设备上就装不上新版本，只能卸载重装。
+      # 这里把证书摘要打出来并与仓库固定密钥比对，不一致当场失败。
+      - name: 核对签名
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          [ -x "$APKSIGNER" ] || APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          echo "apksigner: $APKSIGNER"
+          "$APKSIGNER" verify --print-certs coda-dev.apk
+          SIGNER="$("$APKSIGNER" verify --print-certs coda-dev.apk \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ':' | tr 'A-Z' 'a-z')"
+          echo "签名摘要 $SIGNER"
+          if [ "$SIGNER" != "$CODA_SIGNER_SHA256" ]; then
+            echo "!! 签名与仓库固定密钥不一致：期望 $CODA_SIGNER_SHA256" >&2
+            exit 1
+          fi
 
       - name: 更新唯一的预发行版本
         env:

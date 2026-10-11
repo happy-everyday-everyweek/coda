@@ -20,8 +20,8 @@ android {
         // versionCode 与 versionName 同步递增，只增不减（覆盖安装依赖它单调）。
         //
         // 允许 CI 用 -PcodaVersionCode/-PcodaVersionName 覆盖，Tag 打包即用 Tag 号。
-        versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt() ?: 27
-        versionName = (project.findProperty("codaVersionName") as String?) ?: "0.8.3-core"
+        versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt() ?: 28
+        versionName = (project.findProperty("codaVersionName") as String?) ?: "0.8.4-core"
     }
     signingConfigs {
         // 本地或 CI 提供密钥时才启用；否则 release 复用 debug 签名，保证产物可安装。
@@ -32,6 +32,17 @@ android {
                 storePassword = System.getenv("CODA_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("CODA_KEY_ALIAS")
                 keyPassword = System.getenv("CODA_KEY_PASSWORD")
+            }
+        }
+        // 固定调试密钥。CI 每次在全新 runner 上自动生成一把临时 debug keystore，签名一次一换，
+        // 上一版装得上、下一版装不上，也没法覆盖安装；这里固定成仓库自带密钥，本机与 CI 一致。
+        val repoDebug = rootProject.file("keystore/coda-debug.jks")
+        if (repoDebug.isFile) {
+            getByName("debug").apply {
+                storeFile = repoDebug
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
             }
         }
     }

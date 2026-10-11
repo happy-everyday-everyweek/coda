@@ -35,6 +35,8 @@ jobs:
           echo "CODA_TAG=$TAG" >> "$GITHUB_ENV"
           echo "CODA_VERSION_NAME=${TAG#v}" >> "$GITHUB_ENV"
           echo "CODA_VERSION_CODE=$(( 10000 + ${{ github.run_number }} ))" >> "$GITHUB_ENV"
+          # 仓库内固定密钥（keystore/coda-debug.jks）的证书摘要，核对步骤用它比对。
+          echo "CODA_SIGNER_SHA256=05011c837e7fd75ae390c9f5d627f4618324676896ff0fbe04146607db841c35" >> "$GITHUB_ENV"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -79,7 +81,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.CODA_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_B64" ]; then
-            echo "未配置 CODA_KEYSTORE_BASE64，release 将回落到 debug 签名"
+            echo "未配置 CODA_KEYSTORE_BASE64，release 回落到仓库内固定密钥（keystore/coda-debug.jks）"
             exit 0
           fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/coda-release.jks"
@@ -106,6 +108,22 @@ jobs:
           cp "$APK" "coda-$CODA_VERSION_NAME.apk"
           sha256sum "coda-$CODA_VERSION_NAME.apk" | tee sha256.txt
           cat app/build/outputs/apk/release/output-metadata.json
+
+      # 正式版同样要求签名固定：签名一换，老用户就装不上新版本。
+      # 未配置 CODA_KEYSTORE_BASE64 时用的是仓库内固定密钥，摘要与下面一致。
+      - name: 核对签名
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          [ -x "$APKSIGNER" ] || APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          echo "apksigner: $APKSIGNER"
+          "$APKSIGNER" verify --print-certs "coda-$CODA_VERSION_NAME.apk"
+          SIGNER="$("$APKSIGNER" verify --print-certs "coda-$CODA_VERSION_NAME.apk" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ':' | tr 'A-Z' 'a-z')"
+          echo "签名摘要 $SIGNER"
+          if [ "$SIGNER" != "$CODA_SIGNER_SHA256" ] && [ -z "$CODA_KEYSTORE_PATH" ]; then
+            echo "!! 签名与仓库固定密钥不一致：期望 $CODA_SIGNER_SHA256" >&2
+            exit 1
+          fi
 
       - name: 发布 GitHub Release
         env:
