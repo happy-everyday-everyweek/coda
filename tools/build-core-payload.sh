@@ -157,14 +157,6 @@ if [ "${DRY_RUN:-0}" != "1" ] && [ ! -f "$SEA_OUT" ]; then
   exit 1
 fi
 
-# 4) 安卓 bionic 兼容修复。
-# postject 的 ELF 查找回调假定 dl_iterate_phdr 的第一个对象是主程序，取到就停；
-# bionic 的第一个对象是静态 libdl_info，主程序排在第二个，于是回调拿到的程序头表里
-# 没有 PT_NOTE，内核 blob 永远扫不到，进程启动即被 SIGSEGV 杀死。这一步把回调改成
-# 用 AT_PHDR 直接定位，不再依赖遍历顺序。脚本按固定布局逐项断言后写入，布局变化会报错。
-echo "== 写入 bionic 兼容修复"
-run python3 "$ROOT/tools/patch-sea-bionic.py" "$SEA_OUT"
-
 echo "== 回填到 assets/core"
 run cp "$BUNDLE" "$ASSETS/zcode.cjs"
 run cp "$SEA_OUT" "$ASSETS/zcode"

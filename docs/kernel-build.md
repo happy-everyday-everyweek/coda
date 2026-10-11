@@ -28,9 +28,9 @@ tools/build-core-payload.sh
 
 1. `pnpm install --frozen-lockfile` 安装内核依赖。
 2. 构建 workspace 依赖包，再用 esbuild 把 CLI 打成单文件 `apps/zcode-cli/packages/cli/dist/zcode.cjs`。
-3. 调内核自己的 `scripts/build-sea.mjs`，把 bundle 与内嵌资源注入 node 基础镜像：
-   `--target linux-arm64 --node-binary linux-arm64=app/src/main/assets/core/node`。
-4. 对注入结果写入安卓 bionic 兼容修复，然后把产物回填到 `assets/core/zcode` 与 `assets/core/zcode.cjs`。
+3. 调内核自己的 `scripts/build-sea.mjs`，把 bundle 与内嵌资源注入 node 基础镜像，并在注入之后
+   写入安卓 bionic 兼容修复：`--target linux-arm64 --node-binary linux-arm64=app/src/main/assets/core/node`。
+4. 把产物回填到 `assets/core/zcode` 与 `assets/core/zcode.cjs`。
 
 可选环境变量：`SKIP_INSTALL=1` 跳过依赖安装，`DRY_RUN=1` 只打印将执行的命令，
 `CODA_NODE_BASE` 指定其他基础镜像，`CODA_SEA_TARGET` 改目标名。
@@ -47,11 +47,14 @@ postject 的 ELF 查找回调假定 `dl_iterate_phdr` 遍历到的第一个对�
 `SIGSEGV` 杀死，应用侧看到退出码 139。glibc 保证第一个对象是主程序，所以同一份二进制在桌面
 Linux 上正常，问题只在 Android 上出现。
 
-`tools/patch-sea-bionic.py` 用一条跳转替换回调里的 `mov` 指令，跳到 `.text` 中的零填充区，
+修复写在内核自己的 SEA 构建里，位于 `kernel/zcode/apps/zcode-cli/packages/cli/scripts/`：
+`sea-android-bionic-fix.mjs` 负责写入，`build-sea.mjs` 在 postject 注入之后、签名之前调用它，
+且只对 `linux-arm64` 目标生效。它用一条跳转替换回调里的 `mov` 指令，跳到 `.text` 中的零填充区，
 在那段代码里用 `getauxval` 取 `AT_PHDR` 与 `AT_PHNUM`，并由程序头表首项的 `p_vaddr` 反推
-主程序基址，直接填出 `dl_phdr_info`，不再依赖遍历顺序。脚本按固定布局逐项断言原始字节，
-基础镜像或布局变化会直接报错退出。重建后 `tools/verify-sea-payload.py` 会确认跳板与修复
-代码确实写进了产物。
+主程序基址，直接填出 `dl_phdr_info`，不再依赖遍历顺序。注入会把基础镜像内容整体后移一页，
+模块按入口地址换算落点，写入前逐项断言原始字节，基础镜像或布局变化会直接抛错，不会产出
+半成品二进制，重复执行则跳过。重建后 `tools/verify-sea-payload.py` 会确认跳板与修复代码
+确实写进了产物。
 
 ## 为什么目标名是 linux-arm64
 

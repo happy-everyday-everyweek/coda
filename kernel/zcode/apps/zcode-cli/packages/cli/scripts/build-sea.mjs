@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveSpawnRuntimeOptions } from "../../../../../scripts/spawn-command.mjs";
 import { resolveDownloadedNodeBinary } from "./sea-node-download.mjs";
+import { applyAndroidBionicFix } from "./sea-android-bionic-fix.mjs";
 import { stageNodeNotices } from "../../../../../scripts/third-party-notices.mjs";
 import {
   adHocCodesignArgs,
@@ -288,6 +289,11 @@ const buildTarget = async ({ nodeBinaries, nodeVersion, postjectBin, target }) =
   removeMacSignatureForInjection(target, binaryPath);
   await removeWindowsSignatureForInjection(target, binaryPath);
   run(postjectBin, postjectArgsForTarget({ binaryPath, seaBlob, sentinelFuse, target }));
+  // 安卓的 bionic 里 dl_iterate_phdr 的首个对象不是主程序，node 内嵌的 SEA 查找会拿不到
+  // 内核 blob，进程启动即被信号杀死。这一步必须跟在注入之后，落点随注入位移一页。
+  if (target === "linux-arm64") {
+    await applyAndroidBionicFix({ binaryPath });
+  }
   adHocSignMacBinary(target, binaryPath);
   await smokeTestHostTarget(target, binaryPath);
   console.log(`[sea] binary written to ${binaryPath}`);
