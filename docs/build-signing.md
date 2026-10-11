@@ -18,6 +18,14 @@ CI 每次都在全新 runner 上跑，Gradle 会当场生成一把临时 debug k
 
 可选的正式发行密钥走环境变量：CI 从 secrets 的 `CODA_KEYSTORE_BASE64`、`CODA_KEYSTORE_PASSWORD`、`CODA_KEY_ALIAS`、`CODA_KEY_PASSWORD` 还原 `CODA_KEYSTORE_PATH`。这套配置只在仓库 secrets 里存在时才生效，没有时自动回落到仓库内固定密钥。换用外部密钥会让摘要变化，届时需要同步改工作流里的期望值。
 
+## 签名方案
+
+`signingConfigs` 里显式打开了 v1、v2、v3 三个方案（`enableV1Signing`、`enableV2Signing`、`enableV3Signing`）。
+
+原因：`minSdk 26` 时 AGP 默认只写 v2 签名，不生成 v1（JAR 签名，即 `META-INF/*.RSA`）。这样的包在 Android 8 以上能正常安装，但只认 v1 的检查工具（`jarsigner -verify`、部分 APK 签名查看器）会把它判成“未签名”。三个方案全开后，任何工具看到的签名者都是上面那把固定密钥。
+
+用 apksigner 核对时，正确的输出应同时满足：v1 为 true、v2 为 true、v3 为 true，且第一签名者证书 SHA-256 摘要为 `05011c83…841c35`。只出现 v2 为 true 而 v1 为 false，说明签名方案开关没生效。
+
 ## 核对
 
 `.github/workflows/dev-prerelease.yml` 与 `release.yml` 在收集产物后都有一步“核对签名”：用 apksigner 打印证书并取第一签名者的 SHA-256 摘要，与 `CODA_SIGNER_SHA256` 比对，不一致直接失败。签名换了，流水线当场报错，不会等到装不上才发现。

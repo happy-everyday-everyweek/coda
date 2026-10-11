@@ -32,6 +32,10 @@ android {
                 storePassword = System.getenv("CODA_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("CODA_KEY_ALIAS")
                 keyPassword = System.getenv("CODA_KEY_PASSWORD")
+                // 见下方 debug 配置里的说明：三个签名方案全部显式打开。
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
         // 固定调试密钥。CI 每次在全新 runner 上自动生成一把临时 debug keystore，签名一次一换，
@@ -43,6 +47,13 @@ android {
                 storePassword = "android"
                 keyAlias = "androiddebugkey"
                 keyPassword = "android"
+                // minSdk 26 时 AGP 默认只写 v2 签名，v1（JAR 签名）不生成；
+                // 而只认 META-INF/*.RSA 那一套的检查工具（jarsigner -verify、部分签名查看器）
+                // 会把这种包判成"未签名"。这里三个方案全开：v1 给老工具看，v2 给 Android 7+ 用，
+                // v3 给新版系统做密钥轮换校验。签名者始终是仓库内那把固定密钥。
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
