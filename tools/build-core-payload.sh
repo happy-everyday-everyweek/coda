@@ -14,10 +14,15 @@
 #   assets/core/rg             原生搜索工具
 #   assets/core/provider/zcode-builtin.json
 #
+# 重建前先算一遍输入指纹：内核源码、SEA 基础镜像与脚本自身。指纹与上次构建记下的一致，
+# 且载荷产物都在时直接跳过，只重写载荷清单，没有内核改动的提交不必重复重建。
+#
 # 用法：
-#   tools/build-core-payload.sh                # 完整：装依赖 → 编 bundle → 注入 SEA
-#   SKIP_INSTALL=1 tools/build-core-payload.sh # 已 pnpm install 过，跳过安装
-#   DRY_RUN=1 tools/build-core-payload.sh      # 只打印将执行的命令
+#   tools/build-core-payload.sh                 # 指纹有变才完整重建
+#   tools/build-core-payload.sh --fingerprint   # 只打印输入指纹，供 CI 当缓存键
+#   FORCE_REBUILD=1 tools/build-core-payload.sh # 指纹一致也强制重建
+#   SKIP_INSTALL=1 tools/build-core-payload.sh  # 已 pnpm install 过，跳过安装
+#   DRY_RUN=1 tools/build-core-payload.sh       # 只打印将执行的命令
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,11 +36,43 @@ SEA_TARGET="${CODA_SEA_TARGET:-linux-arm64}"
 NODE_BASE="${CODA_NODE_BASE:-$ASSETS/node}"
 BUNDLE="$CLI_PKG/dist/zcode.cjs"
 SEA_OUT="$CLI_PKG/dist/zcode-$SEA_TARGET"
-
 run() {
   echo "+ $*"
   if [ "${DRY_RUN:-0}" = "1" ]; then return 0; fi
   "$@"
+}
+
+file_digest() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+stream_digest() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -d' ' -f1
+  else
+    shasum -a 256 | cut -d' ' -f1
+  fi
+}
+
+# 输入指纹只取仓库跟踪的内核源文件，加上 SEA 基础镜像与脚本自身。dist 与 node_modules 是
+# 构建产物，不参与计算，因此同一个提交在本地与 CI 上得到的值一致，可以直接当缓存键。
+kernel_inputs_fingerprint() {
+  {
+    printf 'script %s\n' "$(file_digest "$ROOT/tools/build-core-payload.sh")"
+    printf 'node-base %s\n' "$(file_digest "$NODE_BASE")"
+    git -C "$ROOT" ls-files -z -- kernel/zcode \
+      | LC_ALL=C sort -z \
+      | while IFS= read -r -d '' path; do
+          case "$path" in
+            */dist/*|*/node_modules/*|*.tsbuildinfo) continue ;;
+          esac
+          printf '%s %s\n' "$path" "$(file_digest "$ROOT/$path")"
+        done
+  } | stream_digest
 }
 
 # 输出载荷清单的一行：文件名 字节数 sha256。应用按这份清单核对解包结果。
@@ -46,13 +83,32 @@ payload_line() {
     exit 1
   fi
   size="$(wc -c < "$file" | tr -d ' ')"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha="$(sha256sum "$file" | cut -d' ' -f1)"
-  else
-    sha="$(shasum -a 256 "$file" | cut -d' ' -f1)"
-  fi
+  sha="$(file_digest "$file")"
   printf '%s %s %s\n' "$1" "$size" "$sha"
 }
+
+# 载荷清单：应用解包后据此核对 files/core 里的文件就是随包这一份，字节数或摘要对不上就重新
+# 解包。少了它，应用只能凭一个固定标记判断，换了载荷也可能继续沿用上一版解出来的二进制。
+write_payload_manifest() {
+  {
+    payload_line zcode
+    payload_line zcode.cjs
+    payload_line node
+    payload_line rg
+  } > "$ASSETS/payload.txt"
+  echo "   已写出载荷清单 payload.txt"
+}
+
+
+# CI 用这个模式取缓存键，输出必须只有一行指纹，所以放在任何提示之前。
+if [ "${1:-}" = "--fingerprint" ]; then
+  if [ ! -f "$NODE_BASE" ]; then
+    echo "!! 缺少 SEA 基础镜像：$NODE_BASE" >&2
+    exit 1
+  fi
+  kernel_inputs_fingerprint
+  exit 0
+fi
 
 echo "== 内核载荷重建开始"
 echo "   仓库根   : $ROOT"
@@ -67,6 +123,19 @@ fi
 if [ ! -f "$ASSETS/provider/zcode-builtin.json" ]; then
   echo "!! 缺少内置 provider 清单：$ASSETS/provider/zcode-builtin.json" >&2
   exit 1
+fi
+
+# 审查这一步：内核源码与基础镜像都没变、载荷产物也都在时，跳过整套重建。CI 按同一个指纹
+# 缓存载荷，跳过时取回的就是上一次用同样输入构建出来的产物，不存在陈旧二进制的问题。
+INPUTS_FINGERPRINT="$(kernel_inputs_fingerprint)"
+STAMP="$ASSETS/kernel.stamp"
+if [ "${DRY_RUN:-0}" != "1" ] && [ "${FORCE_REBUILD:-0}" != "1" ] \
+  && [ -f "$STAMP" ] && [ -f "$ASSETS/zcode" ] && [ -f "$ASSETS/zcode.cjs" ] \
+  && [ "$(head -n 1 "$STAMP")" = "$INPUTS_FINGERPRINT" ]; then
+  echo "== 内核源码与基础镜像均未变更，跳过重建"
+  echo "   输入指纹 : $INPUTS_FINGERPRINT"
+  write_payload_manifest
+  exit 0
 fi
 
 command -v pnpm >/dev/null 2>&1 || { echo "!! 需要 pnpm（建议通过 corepack 启用）" >&2; exit 1; }
@@ -162,15 +231,9 @@ run cp "$BUNDLE" "$ASSETS/zcode.cjs"
 run cp "$SEA_OUT" "$ASSETS/zcode"
 run chmod 0755 "$ASSETS/zcode" "$ASSETS/zcode.cjs"
 
-# 载荷清单：应用解包后据此核对 files/core 里的文件就是随包这一份，字节数或摘要对不上就重新
-# 解包。少了它，应用只能凭一个固定标记判断，换了载荷也可能继续沿用上一版解出来的二进制。
 if [ "${DRY_RUN:-0}" != "1" ]; then
-  {
-    payload_line zcode
-    payload_line zcode.cjs
-    payload_line node
-    payload_line rg
-  } > "$ASSETS/payload.txt"
+  write_payload_manifest
+  printf '%s\n' "$INPUTS_FINGERPRINT" > "$STAMP"
 fi
 
 if [ "${DRY_RUN:-0}" != "1" ]; then

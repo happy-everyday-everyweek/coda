@@ -9,6 +9,8 @@ local.properties
 
 # 载荷清单，由 tools/build-core-payload.sh 生成
 app/src/main/assets/core/payload.txt
+# 载荷构建指纹，由 tools/build-core-payload.sh 生成（内核源码没变就跳过重建用）
+app/src/main/assets/core/kernel.stamp
 
 # 工作区状态目录
 .coda/
