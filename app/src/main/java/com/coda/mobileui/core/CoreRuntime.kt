@@ -387,6 +387,16 @@ class CoreRuntime(private val ctx: Context) {
             p?.destroy()
         } catch (_: Throwable) {
         }
+        // destroy 只杀进程，不保证 Java 侧这两条管道立即回收；显式关闭，
+        // 与 readLoop/errLoop 的 use{} 一起构成完整的 fd 释放路径。
+        try {
+            p?.inputStream?.close()
+        } catch (_: Throwable) {
+        }
+        try {
+            p?.errorStream?.close()
+        } catch (_: Throwable) {
+        }
     }
     // ---------------------------------------------------------------- 自检
 
@@ -422,21 +432,24 @@ class CoreRuntime(private val ctx: Context) {
     // ---------------------------------------------------------------- 帧收发
 
     private fun readLoop(p: Process) {
+        // 用 use{} 收口 reader：循环 break、解析异常或进程结束时都要关掉底层 fd，
+        // 否则内核每次自动重启都泄漏一条管道，累计到进程 fd 上限后 MCP 通信直接中断。
         try {
-            val br = BufferedReader(InputStreamReader(p.inputStream, Charsets.UTF_8))
-            while (true) {
-                val line = br.readLine() ?: break
-                if (line.isBlank()) continue
-                val obj = try {
-                    JSONObject(line)
-                } catch (_: Throwable) {
-                    log("[proto] 非法帧: ${line.take(200)}")
-                    continue
-                }
-                try {
-                    handleFrame(obj)
-                } catch (t: Throwable) {
-                    log("!! 帧处理异常: $t")
+            BufferedReader(InputStreamReader(p.inputStream, Charsets.UTF_8)).use { br ->
+                while (true) {
+                    val line = br.readLine() ?: break
+                    if (line.isBlank()) continue
+                    val obj = try {
+                        JSONObject(line)
+                    } catch (_: Throwable) {
+                        log("[proto] 非法帧: ${line.take(200)}")
+                        continue
+                    }
+                    try {
+                        handleFrame(obj)
+                    } catch (t: Throwable) {
+                        log("!! 帧处理异常: $t")
+                    }
                 }
             }
         } catch (_: Throwable) {
@@ -445,10 +458,11 @@ class CoreRuntime(private val ctx: Context) {
 
     private fun errLoop(p: Process) {
         try {
-            val br = BufferedReader(InputStreamReader(p.errorStream, Charsets.UTF_8))
-            while (true) {
-                val line = br.readLine() ?: break
-                log("[core] $line")
+            BufferedReader(InputStreamReader(p.errorStream, Charsets.UTF_8)).use { br ->
+                while (true) {
+                    val line = br.readLine() ?: break
+                    log("[core] $line")
+                }
             }
         } catch (_: Throwable) {
         }
