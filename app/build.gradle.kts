@@ -78,6 +78,13 @@ android {
     }
 }
 
+// 显式声明构建工具链，不再依赖构建机的 JAVA_HOME。
+// AGP 8.13 与 Gradle 8.13 的运行要求同为 JDK 17（与上面的编译目标一致），
+// 声明后本地与 CI 行为一致；缺了它，构建机 JDK 版本不同就会在同步阶段直接失败。
+kotlin {
+    jvmToolchain(17)
+}
+
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")
