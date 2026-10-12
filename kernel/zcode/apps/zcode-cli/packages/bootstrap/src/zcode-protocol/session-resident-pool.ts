@@ -133,6 +133,13 @@ export class SessionResidentPool {
     }
   }
 
+  /**
+   * 只读转发 host 的常驻事实：给协议操作做忙闲预检用。
+   * 不 touch、不改水位，也不参与 pool 的回收决策，因此不会影响常驻池的回收时机。
+   */
+  readResidencyFacts(sessionId: string): SessionResidencyFacts | null {
+    return this.host.readResidencyFacts(sessionId);
+  }
   touch(sessionId: string, usedAt = this.now()): void {
     if (!Number.isFinite(usedAt)) return;
     const previous = this.lastTouchedAt.get(sessionId);
