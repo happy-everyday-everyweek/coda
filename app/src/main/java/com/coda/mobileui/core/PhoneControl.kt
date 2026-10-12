@@ -585,7 +585,11 @@ object PhoneMcp {
     private fun screenshot(ctx: Context, inline: Boolean): ToolOutput {
         val bmp = service().screenshotBitmap()
             ?: throw ToolException("截图失败（需要 Android 11+，且无障碍服务已授权）")
-        val dir = File("/sdcard/Coda/workspace/.coda/screenshots")
+        // 落到应用自己的外部私有目录：Android 10 起普通应用无权在 /sdcard 下任意建目录，
+        // 原硬编码 /sdcard/Coda/workspace/.coda/screenshots 会在 FileOutputStream 打开时抛异常，
+        // 被上层 catch 成"截图保存失败"，Agent 再也拿不到图。
+        // 该目录在容器内同样可见（LinuxEnv 的绑定表把 /storage/emulated/0 挂成 /sdcard）。
+        val dir = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "screenshots")
         dir.mkdirs()
         val f = File(dir, "screen-${System.currentTimeMillis()}.png")
         try {
