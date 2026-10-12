@@ -349,17 +349,29 @@ class LinuxEnv(private val ctx: Context) {
         }
     }
 
-    /** 解归档到临时目录再整体就位，中途失败不会破坏上一次可用的环境。 */
+    /**
+     * 解归档到临时目录再整体就位。
+     *
+     * 旧环境先原子改名成 rootfs.bak，新目录 rename 成功后才删备份；rename 失败则把备份改名回来。
+     * 之前的写法是"先 deleteRecursive(rootfs) 再 rename"，而 Android 上 File.renameTo 会因
+     * 跨存储、目标被占用、SELinux 标签差异等原因静默失败，那一刻旧环境已经删掉了，容器永久损坏。
+     */
     private fun extractRootfs() {
         val staging = File(home, "rootfs.staging")
+        val backup = File(home, "rootfs.bak")
         deleteRecursive(staging)
         staging.mkdirs()
         openRootfsArchive().use { archive -> untar(archive, staging) }
-        deleteRecursive(rootfs)
-        if (!staging.renameTo(rootfs)) {
+        deleteRecursive(backup)
+        if (rootfs.exists() && !rootfs.renameTo(backup)) {
             deleteRecursive(staging)
-            throw IllegalStateException("根文件系统无法就位")
+            throw IllegalStateException("无法备份旧根文件系统，已保留原环境")
         }
+        if (!staging.renameTo(rootfs)) {
+            if (backup.exists()) backup.renameTo(rootfs)
+            throw IllegalStateException("根文件系统无法就位，已回退到上一版")
+        }
+        deleteRecursive(backup)
     }
 
     /**
