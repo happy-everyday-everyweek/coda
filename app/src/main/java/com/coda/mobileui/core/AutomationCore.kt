@@ -602,7 +602,7 @@ object AutomationHost {
         params: JSONObject,
     ): Boolean {
         if (!method.startsWith("automation/")) return false
-        Thread({
+        Bg.run {
             try {
                 when (method) {
                     "automation/create" -> {
@@ -632,7 +632,7 @@ object AutomationHost {
             } catch (t: Throwable) {
                 rt.respondError(id, -32603, t.toString())
             }
-        }, "coda-automation-reverse").start()
+        }
         return true
     }
 
@@ -848,12 +848,12 @@ class AutomationScheduler private constructor(private val ctrl: ZController) {
 
     private val tick = object : Runnable {
         override fun run() {
-            Thread({
+            Bg.run {
                 try {
                     runDue()
                 } catch (_: Throwable) {
                 }
-            }, "coda-automation-tick").start()
+            }
             handler.postDelayed(this, 30_000)
         }
     }

@@ -1,6 +1,7 @@
 package com.coda.mobileui
 
 import android.content.ClipData
+import com.coda.mobileui.core.Bg
 import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.drawable.Drawable
@@ -1488,7 +1489,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     private fun toggleAutomation(id: String, enable: Boolean) {
-        Thread({
+        Bg.run {
             val store = AutomationStore(applicationContext)
             val row = store.getRow(id)
             val next: Long? = if (enable && row != null) {
@@ -1508,18 +1509,18 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 snack(if (ok) (if (enable) "已启用" else "已停用") else "操作失败")
                 renderPage()
             }
-        }, "coda-auto-toggle").start()
+        }
     }
 
     private fun confirmDeleteAutomation(id: String, title: String) {
         sheetConfirm("删除任务", "确定删除「$title」？此操作不可恢复。", "删除") {
-            Thread({
+            Bg.run {
                 val ok = AutomationStore(applicationContext).delete(id)
                 runOnUiThread {
                     snack(if (ok) "已删除" else "删除失败")
                     renderPage()
                 }
-            }, "coda-auto-del").start()
+            }
         }
     }
 
@@ -1683,7 +1684,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     // ------------------------------------------------------------ 系统页操作
 
     private fun clearTmp() {
-        Thread({
+        Bg.run {
             val tmp = File(filesDir, "tmp")
             var freed = 0L
             var count = 0
@@ -1700,7 +1701,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             runOnUiThread {
                 snack(String.format(java.util.Locale.US, "已清理 %d 个文件，释放 %.1f MB", count, mb))
             }
-        }, "coda-clear-tmp").start()
+        }
     }
 
     private fun copyLogsPath() {

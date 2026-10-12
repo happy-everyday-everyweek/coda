@@ -1,6 +1,7 @@
 package com.coda.mobileui
 
 import android.content.Context
+import com.coda.mobileui.core.Bg
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -857,7 +858,7 @@ collapseFullDrawerThen { showConversation(conversation) }
     }
     /** 附件导入：复制到应用缓存目录（内核进程可直接读取 localPath），加入待发送列表。 */
     private fun importAttachment(uri: android.net.Uri) {
-        Thread {
+        Bg.run {
             try {
                 var name = "attachment"
                 var declaredSize = -1L
@@ -884,7 +885,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             } catch (e: Throwable) {
                 runOnUiThread { snack("添加附件失败: ${e.message}") }
             }
-        }.start()
+        }
     }
 
     /** 附件 MIME 兜底（按扩展名）。 */
@@ -1061,7 +1062,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         if (url.isEmpty()) return
         if (!url.startsWith("zcode-artifact://")) {
             if (java.io.File(url).exists()) {
-                Thread {
+                Bg.run {
                     val bmp = decodeSampledFile(url, 128)
                     if (bmp != null) {
                         runOnUiThread {
@@ -1069,7 +1070,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                             into.setImageBitmap(bmp)
                         }
                     }
-                }.start()
+                }
             }
             return
         }
@@ -1114,14 +1115,14 @@ collapseFullDrawerThen { showConversation(conversation) }
             snack("正在加载图片…")
             zc.readAttachment(url) { ok, bytes -> show(if (ok) bytes else null) }
         } else if (java.io.File(url).exists()) {
-            Thread {
+            Bg.run {
                 val bytes = try {
                     java.io.File(url).readBytes()
                 } catch (e: Throwable) {
                     null
                 }
                 runOnUiThread { show(bytes) }
-            }.start()
+            }
         } else {
             snack("图片不可用，本地文件已清理")
         }

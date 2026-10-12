@@ -49,7 +49,7 @@ object GitHub {
     )
 
     fun requestDeviceCode(cb: (Boolean, DeviceCode?, String?) -> Unit) {
-        Thread {
+        Bg.run {
             val result = try {
                 val resp = postForm(
                     "https://github.com/login/device/code",
@@ -77,12 +77,12 @@ object GitHub {
                 Triple(false, null, e.message ?: "网络错误")
             }
             ui { cb(result.first, result.second, result.third) }
-        }.start()
+        }
     }
 
     /** 单次轮询。status：ok / pending / slow_down / expired / denied / error。 */
     fun pollAccessToken(ctx: Context, deviceCode: String, cb: (String, String?, String?) -> Unit) {
-        Thread {
+        Bg.run {
             var status = "error"
             var token: String? = null
             var message: String? = null
@@ -127,7 +127,7 @@ object GitHub {
             val tk = token
             val msg = message
             ui { cb(st, tk, msg) }
-        }.start()
+        }
     }
 
     // ---------------------------------------------------------------- 用户
@@ -135,7 +135,7 @@ object GitHub {
 
     fun fetchUser(ctx: Context, cb: (Boolean, GhUser?, String?) -> Unit) {
         val token = token(ctx) ?: return ui { cb(false, null, "未登录") }
-        Thread {
+        Bg.run {
             try {
                 val j = JSONObject(get("https://api.github.com/user", token))
                 val u = GhUser(
@@ -148,7 +148,7 @@ object GitHub {
             } catch (e: Throwable) {
                 ui { cb(false, null, e.message ?: "网络错误") }
             }
-        }.start()
+        }
     }
 
     // ---------------------------------------------------------------- 仓库 / 分支 / PR
@@ -178,7 +178,7 @@ object GitHub {
 
     fun fetchRepos(ctx: Context, cb: (Boolean, List<Repo>?, String?) -> Unit) {
         val token = token(ctx) ?: return ui { cb(false, null, "未登录") }
-        Thread {
+        Bg.run {
             try {
                 val arr = JSONArray(get("https://api.github.com/user/repos?sort=pushed&per_page=50", token))
                 val out = mutableListOf<Repo>()
@@ -198,12 +198,12 @@ object GitHub {
             } catch (e: Throwable) {
                 ui { cb(false, null, e.message ?: "网络错误") }
             }
-        }.start()
+        }
     }
 
     fun fetchBranches(ctx: Context, owner: String, repo: String, cb: (Boolean, List<Branch>?, String?) -> Unit) {
         val token = token(ctx) ?: return ui { cb(false, null, "未登录") }
-        Thread {
+        Bg.run {
             try {
                 val arr = JSONArray(get("https://api.github.com/repos/$owner/$repo/branches?per_page=50", token))
                 val out = mutableListOf<Branch>()
@@ -215,12 +215,12 @@ object GitHub {
             } catch (e: Throwable) {
                 ui { cb(false, null, e.message ?: "网络错误") }
             }
-        }.start()
+        }
     }
 
     fun fetchPulls(ctx: Context, owner: String, repo: String, cb: (Boolean, List<Pull>?, String?) -> Unit) {
         val token = token(ctx) ?: return ui { cb(false, null, "未登录") }
-        Thread {
+        Bg.run {
             try {
                 val arr = JSONArray(
                     get("https://api.github.com/repos/$owner/$repo/pulls?state=all&sort=updated&per_page=30", token),
@@ -244,7 +244,7 @@ object GitHub {
             } catch (e: Throwable) {
                 ui { cb(false, null, e.message ?: "网络错误") }
             }
-        }.start()
+        }
     }
 
     // ---------------------------------------------------------------- 分支关联 PR
@@ -264,7 +264,7 @@ object GitHub {
                 if (now - at < PULL_TTL_MS) return ui { cb(pull) }
             }
         }
-        Thread {
+        Bg.run {
             var found: Pull? = null
             try {
                 val url = "https://api.github.com/repos/$owner/$repo/pulls" +
@@ -290,7 +290,7 @@ object GitHub {
             }
             synchronized(pullByBranch) { pullByBranch[key] = System.currentTimeMillis() to found }
             ui { cb(found) }
-        }.start()
+        }
     }
 
     /** 清空分支 PR 缓存（重新登录、手动刷新时用）。 */
