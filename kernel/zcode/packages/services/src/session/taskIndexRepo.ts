@@ -1563,6 +1563,216 @@ export class TaskIndexRepo {
     });
   }
 
+  /**
+   * 确保目标工作区的 workspace group（含分组顺序与 bootstrap 记账）存在。
+   * 分组 id、标题、颜色都由 workspaceKey 派生，与 grouped workspace bootstrap 同口径。
+   */
+  private ensureWorkspaceGroupReady(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    now: number;
+  }): string {
+    const key = workspaceKey(params);
+    const groupId = workspaceGroupId(key);
+    const database = this.getDatabase();
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO task_groups (
+          group_id,
+          title,
+          color,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        groupId,
+        workspaceGroupTitle(params.workspacePath),
+        workspaceGroupColor(key),
+        params.now,
+        params.now,
+      );
+    const hasOrder = database
+      .prepare(
+        `SELECT 1 AS found
+        FROM task_group_view_node_orders
+        WHERE node_type = 'group' AND node_key = ?`,
+      )
+      .get(groupId) as { found: number } | undefined;
+    if (!hasOrder) {
+      const maxOrderRow = database
+        .prepare(
+          `SELECT MAX(sort_order) AS max_sort_order
+          FROM task_group_view_node_orders`,
+        )
+        .get() as { max_sort_order: number | null } | undefined;
+      this.upsertGroupedTopOrder({
+        nodeType: "group",
+        nodeKey: groupId,
+        sortOrder: (maxOrderRow?.max_sort_order ?? 0) + GROUPED_TASK_ORDER_STEP,
+        now: params.now,
+      });
+    }
+    database
+      .prepare(
+        `INSERT INTO task_group_workspace_bootstraps (
+          workspace_key,
+          group_id,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(workspace_key) DO UPDATE SET
+          group_id = excluded.group_id,
+          updated_at = excluded.updated_at`,
+      )
+      .run(key, groupId, params.now, params.now);
+    return groupId;
+  }
+
+  /**
+   * 会话改绑工作区：把任务索引行从旧工作区分区搬到目标工作区分区。
+   *
+   * tasks 主键是 (workspace_key, task_id)，分组引用与视图顺序同样按 workspace_key 加键，
+   * 所以改绑必须整体重新加键：只改其中一处会让同一条任务在两个分区里各留半条记录。
+   * 事务内只搬归属与分组引用，标题、状态、置顶、归档、全文索引文本原样带过去。
+   */
+  async moveTaskWorkspace(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    taskId: string;
+    toWorkspacePath: string;
+    toWorkspaceIdentity?: string;
+  }): Promise<ZCodeTaskMeta | null> {
+    await this.ensureReady();
+    const from = {
+      workspacePath: params.workspacePath,
+      workspaceIdentity: params.workspaceIdentity?.trim() || undefined,
+    };
+    const to = {
+      workspacePath: params.toWorkspacePath,
+      workspaceIdentity: params.toWorkspaceIdentity?.trim() || undefined,
+    };
+    const fromKey = workspaceKey(from);
+    const toKey = workspaceKey(to);
+    return this.enqueueWrite({ ...from, taskId: params.taskId }, () => {
+      const database = this.getDatabase();
+      const source = this.getTaskRow({ ...from, taskId: params.taskId });
+      // 同分区重绑是空操作：真实归属由 session 行的 CAS 负责，索引不自行改路径。
+      if (!source) {
+        return null;
+      }
+      if (fromKey === toKey) {
+        return rowToMeta(source);
+      }
+      const now = Date.now();
+      const oldGroupId = workspaceGroupId(fromKey);
+      const newGroupId = workspaceGroupId(toKey);
+      const memberships = database
+        .prepare(
+          `SELECT group_id, sort_order, added_at, created_at
+          FROM task_group_members
+          WHERE workspace_key = ? AND task_id = ?`,
+        )
+        .all(fromKey, params.taskId) as Array<{
+        group_id: string;
+        sort_order: number;
+        added_at: number;
+        created_at: number;
+      }>;
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        // 先按目标主键写新行，再摘旧行：writeRecord 的 upsert 只认目标键。
+        // 反过来先删后写的话，写入失败会让任务在索引里彻底丢失。
+        const moved = this.writeRecord({
+          meta: {
+            ...rowToMeta(source),
+            workspacePath: to.workspacePath,
+            workspaceIdentity: to.workspaceIdentity,
+          },
+          pinned: source.pinned === 1,
+          archived: source.archived === 1,
+          deleted: source.deleted === 1,
+          titleOverridden: source.title_overridden === 1,
+          searchableText: source.searchable_text,
+        });
+        this.deleteTaskGroupingReferencesReady(fromKey, params.taskId);
+        database
+          .prepare(`DELETE FROM tasks WHERE workspace_key = ? AND task_id = ?`)
+          .run(fromKey, params.taskId);
+        if (memberships.length > 0) {
+          // workspace group 是路径派生分组，必须换成目标 id；cron/off-peak/自定义分组
+          // 与路径无关，沿用原 group_id 只换键，避免改绑把任务踢出它原有的分组。
+          if (memberships.some((membership) => membership.group_id === oldGroupId)) {
+            this.ensureWorkspaceGroupReady({ ...to, now });
+          }
+          const insertMember = database.prepare(
+            `INSERT INTO task_group_members (
+              group_id,
+              workspace_key,
+              workspace_path,
+              workspace_identity,
+              task_id,
+              sort_order,
+              added_at,
+              created_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_key, task_id) DO UPDATE SET
+              group_id = excluded.group_id,
+              workspace_path = excluded.workspace_path,
+              workspace_identity = excluded.workspace_identity,
+              sort_order = excluded.sort_order,
+              updated_at = excluded.updated_at`,
+          );
+          for (const membership of memberships) {
+            insertMember.run(
+              membership.group_id === oldGroupId ? newGroupId : membership.group_id,
+              toKey,
+              to.workspacePath,
+              to.workspaceIdentity ?? null,
+              params.taskId,
+              membership.sort_order,
+              membership.added_at,
+              membership.created_at,
+              now,
+            );
+          }
+        }
+        // 改绑是用户显式动作，任务在目标工作区排到最前，与 syncTaskMetaAtGroupedTop 同口径。
+        this.upsertGroupedTopOrder({
+          nodeType: "task",
+          nodeKey: taskOrderNodeKey({ ...to, taskId: params.taskId }),
+          sortOrder: this.getNextGroupedTopSortOrder(),
+          now,
+        });
+        // 旧 workspace group 变空时按 id 精确回收，不做全局空分组清理，
+        // 否则会连带删掉用户手建但暂时没有任务的分组。
+        const oldGroupStillUsed = database
+          .prepare(
+            `SELECT 1 AS found
+            FROM task_group_members
+            WHERE group_id = ?
+            LIMIT 1`,
+          )
+          .get(oldGroupId) as { found: number } | undefined;
+        if (!oldGroupStillUsed) {
+          database.prepare(`DELETE FROM task_groups WHERE group_id = ?`).run(oldGroupId);
+          database
+            .prepare(
+              `DELETE FROM task_group_view_node_orders
+              WHERE node_type = 'group' AND node_key = ?`,
+            )
+            .run(oldGroupId);
+        }
+        database.exec("COMMIT");
+        return moved;
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
   async updateTaskState(params: {
     workspacePath: string;
     workspaceIdentity?: string;
