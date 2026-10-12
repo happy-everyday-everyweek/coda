@@ -38,6 +38,7 @@ import {
   readEvents,
   readMessages,
   readSession,
+  rebindSessionWorkspace,
   resumeSession,
   sendPrompt,
   setMode,
@@ -572,6 +573,8 @@ export class ZCodeProtocolAgentServer {
         return await resumeSession(this.context, request.params);
       case zcodeProtocolMethods.sessionList:
         return await listSessions(this.context, request.params);
+      case zcodeProtocolMethods.sessionRebindWorkspace:
+        return await rebindSessionWorkspace(this.context, request.params);
       case zcodeProtocolMethods.sessionSubagents:
         return await listSessionSubagents(this.context, request.params);
       case zcodeProtocolMethods.sessionRead:

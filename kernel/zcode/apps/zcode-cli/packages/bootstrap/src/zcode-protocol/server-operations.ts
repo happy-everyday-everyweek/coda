@@ -55,6 +55,7 @@ import {
   zcodeSessionListParamsSchema,
   zcodeSessionMessagesParamsSchema,
   zcodeSessionReadParamsSchema,
+  zcodeSessionRebindWorkspaceParamsSchema,
   zcodeSessionRuntimePreferencesResultSchema,
   zcodeSessionResumeParamsSchema,
   zcodeSessionSendParamsSchema,
@@ -1668,6 +1669,90 @@ export async function listSessions(context: ZCodeProtocolAgentServerContext, raw
     );
   }
   return { sessions };
+}
+
+/**
+ * session/rebindWorkspace：把会话改绑到目标工作区。
+ *
+ * 工作区是会话的附属产物，改绑只改 session 行的归属字段，不新造工作区实体。旧归属只从
+ * 持久化行读取，所以并发改绑里第二次会 CAS 失败而不是双写。已激活会话的 runtime 与
+ * event store 都按旧工作区建立，必须整体拆除，让下次 resume 按新工作区冷恢复。
+ */
+export async function rebindSessionWorkspace(
+  context: ZCodeProtocolAgentServerContext,
+  rawParams: unknown,
+) {
+  const params = parseParams(zcodeSessionRebindWorkspaceParamsSchema, rawParams);
+  const store = context.deps.sessionStore;
+  const rebind = store?.rebindSessionWorkspace?.bind(store);
+  const sessionId = params.sessionId as SessionId;
+  if (!store || !rebind) {
+    throw new ProtocolRequestError(
+      zcodeProtocolErrorCodes.sessionUnavailable,
+      `Session store does not support workspace rebind: ${params.sessionId}`,
+    );
+  }
+  const persisted = await store.getSession(sessionId);
+  if (!persisted) {
+    throw new ProtocolRequestError(
+      zcodeProtocolErrorCodes.sessionUnavailable,
+      `Session not found: ${params.sessionId}`,
+    );
+  }
+  const target = params.workspace;
+  const targetKey = target.workspaceIdentity?.trim() || target.workspacePath;
+  // 改绑前的归属只认持久化行：客户端传的旧值可能与并发写入分叉，不能作为 CAS 依据。
+  const previousWorkspaceKey =
+    persisted.workspaceID?.trim() || persisted.path || persisted.directory;
+
+  // 运行中的回合与待应答交互不能被改绑顺手打断，先让用户停掉再重试。
+  const live = context.sessions.get(sessionId);
+  let closedActiveSession = false;
+  if (live) {
+    const facts = context.sessionResidentPool?.readResidencyFacts(sessionId);
+    if (facts?.hasResidencyBlockingWork || facts?.hasPendingInteractions) {
+      throw new ProtocolRequestError(
+        zcodeProtocolErrorCodes.sessionUnavailable,
+        `Session is busy: ${params.sessionId}`,
+      );
+    }
+    const closed = await closeSession(context, {
+      sessionId: params.sessionId,
+      expectedPersistence: live.persistence,
+    });
+    closedActiveSession = closed.closed;
+  }
+
+  if (previousWorkspaceKey !== targetKey) {
+    const updated = await rebind({
+      sessionID: sessionId,
+      expectedWorkspaceID: persisted.workspaceID ?? null,
+      expectedDirectory: persisted.directory,
+      expectedPath: persisted.path ?? null,
+      projectID: projectIdFromDirectory(target.workspacePath),
+      workspaceID: targetKey as WorkspaceId,
+      workspacePath: target.workspacePath,
+      timeUpdated: Date.now(),
+    });
+    if (!updated) {
+      throw new ProtocolRequestError(
+        zcodeProtocolErrorCodes.sessionUnavailable,
+        `Session workspace changed concurrently: ${params.sessionId}`,
+      );
+    }
+  }
+  const session = (await store.getSession(sessionId)) ?? persisted;
+  return {
+    session: mapSessionInfo({
+      session,
+      workspace: buildWorkspaceRef({
+        workspacePath: target.workspacePath,
+        workspaceIdentity: target.workspaceIdentity,
+      }),
+    }),
+    closedActiveSession,
+    previousWorkspaceKey,
+  };
 }
 
 export async function listSessionSubagents(

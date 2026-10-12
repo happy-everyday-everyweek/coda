@@ -1518,6 +1518,35 @@ export const zcodeSessionListResultSchema = z
   })
   .strict();
 
+/**
+ * session/rebindWorkspace：把一个既有会话改绑到另一个工作区。
+ *
+ * 工作区是会话的附属产物，改绑只转移归属：目标工作区由 Host 完整给出，旧归属由服务端
+ * 读持久化行取得并做 CAS，客户端不能自行指定旧值。
+ */
+export const zcodeSessionRebindWorkspaceParamsSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    workspace: zcodeWorkspaceRefSchema,
+  })
+  .strict();
+export type ZCodeSessionRebindWorkspaceParams = z.infer<
+  typeof zcodeSessionRebindWorkspaceParamsSchema
+>;
+
+export const zcodeSessionRebindWorkspaceResultSchema = z
+  .object({
+    session: zcodeSessionInfoSchema,
+    /** 改绑前的 workspaceKey，供 Host 收敛旧工作区视图。 */
+    previousWorkspaceKey: nonEmptyString,
+    /** 已激活会话在改绑前被拆除：runtime 不允许继续留在旧工作区上。 */
+    closedActiveSession: z.boolean(),
+  })
+  .strict();
+export type ZCodeSessionRebindWorkspaceResult = z.infer<
+  typeof zcodeSessionRebindWorkspaceResultSchema
+>;
+
 const zcodeSessionSubagentBaseSchema = z
   .object({
     childSessionId: nonEmptyString,
@@ -3566,6 +3595,8 @@ export const zcodeProtocolMethods = {
   sessionCreate: "session/create",
   sessionResume: "session/resume",
   sessionList: "session/list",
+  /** 会话改绑工作区：工作区是会话的附属产物，这里只转移归属，不新增独立工作区实体。 */
+  sessionRebindWorkspace: "session/rebindWorkspace",
   sessionSubagents: "session/subagents",
   sessionRequestRuntimePreferences: "session/requestRuntimePreferences",
   sessionRead: "session/read",
