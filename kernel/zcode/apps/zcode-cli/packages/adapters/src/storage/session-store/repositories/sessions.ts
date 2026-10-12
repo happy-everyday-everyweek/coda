@@ -5,6 +5,7 @@ import {
   type CreateSessionInput,
   type FileDiff,
   type ListSessionsInput,
+  type RebindSessionWorkspaceInput,
   type RepairLegacyRemoteSessionWorkspaceInput,
   type RepairRemoteSessionPathsInput,
   type SessionId,
@@ -299,6 +300,39 @@ export function repairRemoteSessionPaths(
       input.timeUpdated,
       input.sessionID,
       input.workspaceID,
+      input.expectedDirectory,
+      input.expectedPath,
+      input.expectedPath,
+    );
+  return Number(result.changes) === 1;
+}
+
+export function rebindSessionWorkspace(
+  db: DatabaseSync,
+  input: RebindSessionWorkspaceInput,
+): boolean {
+  // 工作区是会话的附属产物，改绑只转移归属。这里复用全字段 updateSession 会把调用方
+  // 快照里的标题、权限、回滚和归档状态盖到并发新值上，所以只拥有
+  // project_id/workspace_id/directory/path 与单调 time_updated，并用完整旧归属做 CAS。
+  const result = db
+    .prepare(
+      `update session
+       set project_id = ?, workspace_id = ?, directory = ?, path = ?,
+           time_updated = max(time_updated, ?)
+       where id = ?
+         and ((? is null and workspace_id is null) or workspace_id = ?)
+         and directory = ?
+         and ((? is null and path is null) or path = ?)`,
+    )
+    .run(
+      input.projectID,
+      input.workspaceID,
+      input.workspacePath,
+      input.workspacePath,
+      input.timeUpdated,
+      input.sessionID,
+      input.expectedWorkspaceID,
+      input.expectedWorkspaceID,
       input.expectedDirectory,
       input.expectedPath,
       input.expectedPath,

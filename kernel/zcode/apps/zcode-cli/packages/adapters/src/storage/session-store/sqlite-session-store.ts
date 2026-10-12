@@ -5,6 +5,7 @@ import type {
   ClaimLegacySessionWorkspaceInput,
   RepairLegacyRemoteSessionWorkspaceInput,
   RepairRemoteSessionPathsInput,
+  RebindSessionWorkspaceInput,
   CreateScriptWorkflowActivityInput,
   CreateScriptWorkflowRunInput,
   CreateSessionTaskLinkInput,
@@ -604,6 +605,11 @@ export class SqliteSessionStore
   async repairRemoteSessionPaths(input: RepairRemoteSessionPathsInput): Promise<boolean> {
     this.throwBeforeWrite();
     return sessionRepository.repairRemoteSessionPaths(this.db, input);
+  }
+
+  async rebindSessionWorkspace(input: RebindSessionWorkspaceInput): Promise<boolean> {
+    this.throwBeforeWrite();
+    return sessionRepository.rebindSessionWorkspace(this.db, input);
   }
 
   async saveMessage(

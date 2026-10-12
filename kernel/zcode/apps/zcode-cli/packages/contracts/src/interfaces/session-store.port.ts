@@ -329,6 +329,26 @@ export interface RepairRemoteSessionPathsInput {
   timeUpdated: number;
 }
 
+/**
+ * 「会话改绑工作区」的输入。
+ *
+ * 工作区是会话的附属产物，会话的可信归属只落在 `session.workspace_id` 与
+ * `session.directory/path`。因此改绑必须同时给出目标归属与旧归属，实现用旧归属做 CAS，
+ * 并且只允许改写归属字段。
+ */
+export interface RebindSessionWorkspaceInput {
+  sessionID: SessionId;
+  /** 旧归属，用于 CAS；任一字段不匹配即拒绝改绑。 */
+  expectedWorkspaceID: WorkspaceId | null;
+  expectedDirectory: string;
+  expectedPath: string | null;
+  /** 目标归属；workspacePath 同时充当新的 directory 与 path。 */
+  projectID: ProjectId;
+  workspaceID: WorkspaceId;
+  workspacePath: string;
+  timeUpdated: number;
+}
+
 export type OutputFormat =
   | { type: "text" }
   | { type: "json_schema"; schema: Record<string, unknown>; retryCount?: number };
@@ -1117,6 +1137,12 @@ export interface SessionStorePort {
    * 实现只能更新 directory、path 和单调 time_updated，禁止写回其它 session 元数据。
    */
   repairRemoteSessionPaths?(input: RepairRemoteSessionPathsInput): Promise<boolean>;
+  /**
+   * 把既有 session 从旧工作区改绑到目标工作区（会话改绑工作区的唯一落点）。
+   * 实现必须用 expected* 做 CAS，只允许改写 project_id、workspace_id、directory、path
+   * 与单调 time_updated，禁止连带覆盖标题、权限、回滚、归档等业务字段，也禁止批量迁移。
+   */
+  rebindSessionWorkspace?(input: RebindSessionWorkspaceInput): Promise<boolean>;
   saveMessage(input: MessageInfo, copyFrom?: { sessionID: SessionId; id: string }): Promise<void>;
   removeMessage(input: { sessionID: SessionId; messageID: MessageId }): Promise<void>;
   savePart(input: MessagePart, copyFrom?: { sessionID: SessionId; id: string }): Promise<void>;
