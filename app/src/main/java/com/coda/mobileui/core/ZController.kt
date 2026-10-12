@@ -934,6 +934,40 @@ class ZController private constructor(private val app: Context) {
         return JSONObject().put("workspacePath", wp).put("workspaceKey", wp)
     }
 
+    /**
+     * 变更会话所属的工作区。工作区是会话的附属产物，改绑只改会话的归属字段，不新建工作区实体。
+     *
+     * 旧归属由内核从持久化行读取并做 CAS（客户端不传旧值）；已激活会话会被内核整体拆除，
+     * 拆除后事件流与 runtime 都按旧工作区建立，不能续用，故客户端同步放开当前会话。
+     * 回调第二参：ok / closed（原会话被拆除）/ 错误文本。
+     */
+    fun rebindSessionWorkspace(
+        sessionId: String,
+        targetWorkspacePath: String,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
+        val path = targetWorkspacePath.trim()
+        if (path.isEmpty()) {
+            cb?.invoke(false, "工作区路径为空")
+            return
+        }
+        val params = JSONObject()
+            .put("sessionId", sessionId)
+            .put("workspace", JSONObject().put("workspacePath", path).put("workspaceKey", path))
+        runtime.call("session/rebindWorkspace", params) { ok, body ->
+            if (!ok) {
+                post { cb?.invoke(false, errMsg(body)) }
+                return@call
+            }
+            val closedActive = body.optBoolean("closedActiveSession", false)
+            post {
+                if (closedActive && currentSessionId == sessionId) currentSessionId = null
+                refreshSessions(null)
+                cb?.invoke(true, if (closedActive) "closed" else "ok")
+            }
+        }
+    }
+
     fun closeSession(sessionId: String, cb: ((Boolean) -> Unit)? = null) {
         runtime.call("session/close", JSONObject().put("sessionId", sessionId)) { _, _ ->
             if (currentSessionId == sessionId) currentSessionId = null

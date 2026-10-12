@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
+import android.text.TextUtils
 import android.animation.ValueAnimator
 import android.graphics.Color
 import android.view.Gravity
@@ -42,7 +43,9 @@ import com.coda.mobileui.core.ZSessionInfo
 import com.coda.mobileui.core.ZWorkflowActor
 import com.coda.mobileui.core.ZWorkflowKit
 import com.coda.mobileui.core.ZWorkflowPhase
+import com.coda.mobileui.workspace.DirectoryPicker
 import com.coda.mobileui.workspace.WorkspaceActivity
+import java.io.File
 
 /** 会话状态：Working 用灰、待您操作（含错误）用黄、已完成未读用绿、已读则整行不显示。 */
 private enum class ConvStatus { WORKING, WAITING, DONE_UNREAD, NONE }
@@ -2279,7 +2282,97 @@ collapseFullDrawerThen { showConversation(conversation) }
                 hideSettingsPage()
             }
         }
+        // 长按进入会话的次级操作（目前是变更所属工作区）。
+        row.setOnLongClickListener {
+            showSessionWorkspaceSheet(session)
+            true
+        }
         return row
+    }
+
+    /**
+     * 会话行的长按弹层：变更该会话所属的工作区。
+     *
+     * 工作区是会话的附属产物而非独立功能，所以入口挂在会话行上，也不新造工作区。
+     */
+    private fun showSessionWorkspaceSheet(session: ZSessionInfo) {
+        if (isFinishing || isDestroyed) return
+        val current = zc.workspacePath()
+        val bound = session.workspacePath?.takeIf { it.isNotEmpty() }
+        val sheet = CodaSheet(this)
+            .compact()
+            .title(session.title.ifEmpty { "未命名会话" })
+            .subtitle("所属工作区：${bound ?: current}")
+        val onSurface = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurface,
+            Color.BLACK,
+        )
+        sheet.content { col ->
+            if (bound != null && bound != current) {
+                col.addView(
+                    sheetAction("改绑到当前工作区", current, onSurface) {
+                        sheet.dismiss()
+                        applySessionWorkspace(session, current)
+                    },
+                )
+            }
+            col.addView(
+                sheetAction("选择其他目录…", null, onSurface) {
+                    sheet.dismiss()
+                    DirectoryPicker.show(this, "选择会话所属的工作区", File(bound ?: current)) { picked ->
+                        applySessionWorkspace(session, picked.absolutePath)
+                    }
+                },
+            )
+        }
+        sheet.show()
+    }
+
+    /** 弹层里的一行操作：主标题 + 可选灰字说明。 */
+    private fun sheetAction(text: String, hint: String?, color: Int, click: () -> Unit): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), dp(14), dp(2), dp(14))
+            addView(
+                TextView(this@MainActivity).apply {
+                    this.text = text
+                    textSize = 16f
+                    setTextColor(color)
+                },
+            )
+            if (!hint.isNullOrEmpty()) {
+                addView(
+                    TextView(this@MainActivity).apply {
+                        this.text = hint
+                        textSize = 12f
+                        alpha = 0.6f
+                        setTextColor(color)
+                        maxLines = 1
+                        ellipsize = TextUtils.TruncateAt.MIDDLE
+                    },
+                )
+            }
+            setOnClickListener { click() }
+        }
+
+    /** 把会话改绑到目标工作区；成功后内核侧会重建归属，客户端刷新列表。 */
+    private fun applySessionWorkspace(session: ZSessionInfo, targetPath: String) {
+        if (targetPath == session.workspacePath) {
+            snack("该会话已在此工作区")
+            return
+        }
+        zc.rebindSessionWorkspace(session.id, targetPath) { ok, msg ->
+            if (!ok) {
+                snack("改绑失败：$msg")
+                return@rebindSessionWorkspace
+            }
+            if (msg == "closed") {
+                snack("已改绑到 $targetPath，会话已停止运行，重新打开后按新工作区继续")
+            } else {
+                snack("已改绑到 $targetPath")
+            }
+        }
     }
 
     /** 真实会话状态 → 抽屉状态：运行中、待您操作、已完成未读，其余不显示。 */
