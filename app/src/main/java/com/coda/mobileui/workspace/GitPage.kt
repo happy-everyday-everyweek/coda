@@ -137,7 +137,9 @@ class GitPage(
         content.removeAllViews()
         val current = snapshot
         content.addView(statusCard(current))
-        content.addView(actionRow(current))
+        content.addView(groupSpacing())
+        content.addViews(actionRow(current))
+        content.addView(groupSpacing())
         if (current != null && current.repo) {
             content.addView(graph)
         } else {
@@ -146,55 +148,47 @@ class GitPage(
     }
 
     private fun statusCard(current: Snapshot?): View {
-        val card = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16f), dp(16f), dp(16f), dp(12f))
+        val title = when {
+            current == null -> "读取中…"
+            else -> current.branch.ifEmpty { "无分支" }
         }
-        val first = label(
-            if (current == null) "读取中…" else current.branch.ifEmpty { "无分支" },
-            16f,
-            onSurface,
+        val lines = ArrayList<String>(2)
+        lines.add(
+            when {
+                current == null -> host.root.absolutePath
+                !current.repo -> "当前目录不是 Git 仓库"
+                current.changes.isEmpty() -> "${host.root.absolutePath} · 无未提交变更"
+                else -> "${host.root.absolutePath} · ${current.changes.size} 个未提交变更"
+            },
         )
-        card.addView(first)
-        val detail = when {
-            current == null -> host.root.absolutePath
-            !current.repo -> "当前目录不是 Git 仓库"
-            current.changes.isEmpty() -> "${host.root.absolutePath} · 无未提交变更"
-            else -> "${host.root.absolutePath} · ${current.changes.size} 个未提交变更"
-        }
-        card.addView(label(detail, 12f, onSurfaceVariant).apply {
-            setPadding(0, dp(4f), 0, 0)
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-        })
         val locale = current?.locals.orEmpty()
         val remote = current?.remotes.orEmpty()
         if (locale.isNotEmpty() || remote.isNotEmpty()) {
-            card.addView(label("本地 ${locale.size} 个分支 · 远端 ${remote.size} 个分支", 12f, onSurfaceVariant).apply {
-                setPadding(0, dp(2f), 0, 0)
-            })
+            lines.add("本地 ${locale.size} 个分支 · 远端 ${remote.size} 个分支")
         }
-        card.setOnClickListener { showChanges() }
-        return card
+        return infoCard(R.drawable.ic_branch, title, lines, click = { showChanges() })
     }
 
-    private fun actionRow(current: Snapshot?): View {
-        val row = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12f), 0, dp(12f), dp(10f))
-        }
+    /**
+     * 操作按钮：与设置页同形的分组卡片，一行一项。
+     * 未初始化时只留"初始化仓库"。
+     */
+    private fun actionRow(current: Snapshot?): List<View> {
+        val rows = ArrayList<View>()
         if (current == null || !current.repo) {
-            row.addView(pill("初始化仓库") { operate("初始化") { Git.init(host.env, host.root) } })
-            return row
+            rows.add(cardRow(R.drawable.ic_commit, "初始化仓库") { operate("初始化") { Git.init(host.env, host.root) } })
+            return cardGroup(rows)
         }
-        row.addView(pill("提交") { commitDialog() })
-        row.addView(pill("分支") { showBranches() })
-        row.addView(pill("拉取") { operate("拉取") { Git.pull(host.env, host.root) } })
-        row.addView(pill("推送") { operate("推送") { Git.push(host.env, host.root) } })
+        rows.add(cardRow(R.drawable.ic_commit, "提交") { commitDialog() })
+        rows.add(cardRow(R.drawable.ic_branch, "分支") { showBranches() })
+        rows.add(cardRow(R.drawable.ic_arrow_up, "拉取") { operate("拉取") { Git.pull(host.env, host.root) } })
+        rows.add(cardRow(R.drawable.ic_arrow_up, "推送") { operate("推送") { Git.push(host.env, host.root) } })
         if (!current.stateIgnored) {
-            row.addView(pill("忽略 ${Workspaces.STATE_DIR}") { ignoreStateDir() })
+            rows.add(
+                cardRow(R.drawable.ic_file_add, "忽略 ${Workspaces.STATE_DIR}") { ignoreStateDir() },
+            )
         }
-        return row
+        return cardGroup(rows)
     }
 
     private fun placeholder(current: Snapshot?): View {
@@ -208,18 +202,8 @@ class GitPage(
             if (current == null) "正在读取仓库" else "这个目录还不是仓库，初始化后就能看到提交图",
             13f,
             onSurfaceVariant,
-        ).apply { gravity = Gravity.CENTER })
+        }).apply { gravity = Gravity.CENTER })
         return box
-    }
-
-    private fun pill(text: String, click: () -> Unit): TextView = label(text, 13f, onSurfaceVariant).apply {
-        setTextColor(onSurfaceVariant)
-        gravity = Gravity.CENTER
-        setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
-        background = androidx.core.content.ContextCompat.getDrawable(host, R.drawable.bg_tool_card)
-        layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = dp(8f) }
-        isClickable = true
-        setOnClickListener { click() }
     }
 
     // ---------------------------------------------------------------- 变更

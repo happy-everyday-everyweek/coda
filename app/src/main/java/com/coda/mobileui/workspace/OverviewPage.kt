@@ -113,48 +113,45 @@ class OverviewPage(
         if (!::body.isInitialized) return
         body.removeAllViews()
         body.addView(locationCard())
-        body.addView(sectionHeader("任务"))
+        body.addView(groupSpacing())
+        body.addView(groupHeader("任务"))
         renderTasks()
-        body.addView(sectionHeader("最近提交"))
+        body.addView(groupSpacing())
+        body.addView(groupHeader("最近提交"))
         renderCommits()
-        body.addView(sectionHeader("打开"))
-        body.addView(
-            listRow(R.drawable.ic_folder, "文件", "浏览与管理工作区文件") {
-                host.openPage(WorkspaceTabs.FILES)
-            },
+        body.addView(groupSpacing())
+        body.addView(groupHeader("打开"))
+        body.addViews(
+            cardGroup(
+                listOf(
+                    cardRow(R.drawable.ic_folder, "文件", "浏览与管理工作区文件") {
+                        host.openPage(WorkspaceTabs.FILES)
+                    },
+                    cardRow(R.drawable.ic_branch, "Git", "提交图与分支操作") {
+                        host.openPage(WorkspaceTabs.GIT)
+                    },
+                    cardRow(R.drawable.ic_terminal, "终端", "在工作区里开一个终端") {
+                        host.openPage(WorkspaceTabs.TERMINAL)
+                    },
+                ),
+            ),
         )
-        body.addView(
-            listRow(R.drawable.ic_branch, "Git", "提交图与分支操作") {
-                host.openPage(WorkspaceTabs.GIT)
-            },
-        )
-        body.addView(
-            listRow(R.drawable.ic_terminal, "终端", "在工作区里开一个终端") {
-                host.openPage(WorkspaceTabs.TERMINAL)
-            },
-        )
-        body.addView(View(host).apply { minimumHeight = dp(28f) })
+        body.addView(groupSpacing())
     }
 
     private fun locationCard(): View {
-        val card = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16f), dp(16f), dp(16f), dp(12f))
-        }
-        card.addView(label(host.root.absolutePath, 13f, onSurface).apply {
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-            maxLines = 2
-        })
         val current = snapshot
         val detail = when {
-            loading && current == null -> "读取中…"
             current == null -> "读取中…"
             current.repo -> "${current.branch} · ${current.summary}"
             else -> "当前目录不是 Git 仓库"
         }
-        card.addView(label(detail, 12f, onSurfaceVariant).apply { setPadding(0, dp(4f), 0, 0) })
-        card.setOnClickListener { pickRoot() }
-        return card
+        return infoCard(
+            R.drawable.ic_folder,
+            host.root.name.ifEmpty { host.root.absolutePath },
+            listOf(host.root.absolutePath, detail),
+            click = { pickRoot() },
+        )
     }
 
     private fun renderTasks() {
@@ -163,19 +160,18 @@ class OverviewPage(
             body.addView(hint("没有进行中的任务"))
             return
         }
-        for (todo in todos) {
+        val rows = todos.map { todo ->
             val icon = when (todo.status) {
                 "completed", "done" -> R.drawable.ic_state_done
                 "in_progress", "running" -> R.drawable.ic_state_current
                 "failed", "error" -> R.drawable.ic_state_error
                 else -> R.drawable.ic_state_pending
             }
-            body.addView(
-                listRow(icon, todo.content, null, null, 44) {
-                    host.openPage(WorkspaceTabs.TERMINAL)
-                },
-            )
+            cardRow(icon, todo.content, null, null, 56) {
+                host.openPage(WorkspaceTabs.TERMINAL)
+            }
         }
+        body.addViews(cardGroup(rows))
     }
 
     private fun renderCommits() {
@@ -185,21 +181,20 @@ class OverviewPage(
             return
         }
         val formatter = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-        for (commit in list) {
+        val rows = list.map { commit ->
             val detail = commit.hash.take(8) + " · " + commit.author +
                 if (commit.refs.isEmpty()) "" else " · " + commit.refs
-            body.addView(
-                listRow(
-                    R.drawable.ic_commit,
-                    commit.subject.ifEmpty { commit.hash.take(7) },
-                    detail,
-                    formatter.format(Date(commit.time * 1000L)),
-                    48,
-                ) {
-                    showCommit(commit)
-                },
-            )
+            cardRow(
+                R.drawable.ic_commit,
+                commit.subject.ifEmpty { commit.hash.take(7) },
+                detail,
+                formatter.format(Date(commit.time * 1000L)),
+                64,
+            ) {
+                showCommit(commit)
+            }
         }
+        body.addViews(cardGroup(rows))
     }
 
     private fun showCommit(commit: Git.Commit) {
@@ -215,7 +210,8 @@ class OverviewPage(
         )
     }
 
+    /** 分组内的空态提示：与卡片同一档留白，不抢视线。 */
     private fun hint(text: String): TextView = label(text, 13f, onSurfaceVariant).apply {
-        setPadding(dp(16f), dp(4f), dp(16f), dp(8f))
+        setPadding(dp(32f), dp(2f), dp(16f), dp(10f))
     }
 }

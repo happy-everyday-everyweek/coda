@@ -102,7 +102,19 @@ class FilesPage(
         if (!::listColumn.isInitialized) return
         listColumn.removeAllViews()
         listColumn.addView(pathCard())
-        listColumn.addView(actionRow())
+        listColumn.addView(groupSpacing())
+        listColumn.addViews(
+            cardGroup(
+                listOf(
+                    cardRow(R.drawable.ic_arrow_up, "上一级") {
+                        current.parentFile?.let { open(it) } ?: toast("已是设备根目录")
+                    },
+                    cardRow(R.drawable.ic_file_add, "新建文件") { newFile() },
+                    cardRow(R.drawable.ic_folder_add, "新建文件夹") { newFolder() },
+                ),
+            ),
+        )
+        listColumn.addView(groupSpacing())
         val children = runCatching {
             current.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
         }.getOrNull()
@@ -114,14 +126,15 @@ class FilesPage(
         val dirs = children.filter { it.isDirectory }
         val files = children.filterNot { it.isDirectory }
         if (dirs.isNotEmpty()) {
-            listColumn.addView(sectionHeader("目录"))
-            for (dir in dirs) listColumn.addView(entryRow(dir, true))
+            listColumn.addView(groupHeader("目录"))
+            listColumn.addViews(cardGroup(dirs.map { entryRow(it, true) }))
+            listColumn.addView(groupSpacing())
         }
-        listColumn.addView(sectionHeader("文件"))
+        listColumn.addView(groupHeader("文件"))
         if (files.isEmpty()) {
             listColumn.addView(hint("此目录下没有文件"))
         } else {
-            for (file in files) listColumn.addView(entryRow(file, false))
+            listColumn.addViews(cardGroup(files.map { entryRow(it, false) }))
         }
         listColumn.addView(tail())
     }
@@ -129,47 +142,13 @@ class FilesPage(
     private fun tail(): View = View(host).apply { minimumHeight = dp(28f) }
 
     private fun pathCard(): View {
-        val card = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16f), dp(16f), dp(16f), dp(12f))
-        }
-        card.addView(label(current.name.ifEmpty { current.absolutePath }, 15f, onSurface).apply {
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-        })
         val count = runCatching { current.list()?.size ?: 0 }.getOrDefault(0)
-        card.addView(label("${current.absolutePath} · $count 项", 12f, onSurfaceVariant).apply {
-            setPadding(0, dp(4f), 0, 0)
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-            maxLines = 2
-        })
-        card.setOnClickListener {
-            DirectoryPicker.show(host, "跳转到目录", current) { open(it) }
-        }
-        return card
-    }
-
-    private fun actionRow(): View {
-        val row = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12f), 0, dp(12f), dp(8f))
-        }
-        row.addView(
-            actionPill("上一级") { current.parentFile?.let { open(it) } ?: toast("已是设备根目录") },
+        return infoCard(
+            R.drawable.ic_folder,
+            current.name.ifEmpty { current.absolutePath },
+            listOf("${current.absolutePath} · $count 项"),
+            click = { DirectoryPicker.show(host, "跳转到目录", current) { open(it) } },
         )
-        row.addView(actionPill("新建文件") { newFile() })
-        row.addView(actionPill("新建文件夹") { newFolder() })
-        return row
-    }
-
-    private fun actionPill(text: String, click: () -> Unit): TextView = label(text, 13f, onSurfaceVariant).apply {
-        setTextColor(onSurfaceVariant)
-        gravity = Gravity.CENTER
-        setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
-        background = androidx.core.content.ContextCompat.getDrawable(host, R.drawable.bg_tool_card)
-        layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = dp(8f) }
-        isClickable = true
-        setOnClickListener { click() }
     }
 
     private fun entryRow(file: File, isDir: Boolean): View {
@@ -181,14 +160,14 @@ class FilesPage(
         } else {
             "${readableSize(file.length())} · ${timeFormat.format(Date(file.lastModified()))}"
         }
-        return listRow(
+        return cardRow(
             icon,
             file.name,
             detail,
             trailing,
-            48,
-            longClick = { showActions(file) },
+            minHeightDp = 64,
             click = { if (isDir) open(file) else openFile(file) },
+            longClick = { showActions(file) },
         )
     }
 
@@ -534,7 +513,7 @@ class FilesPage(
     }
 
     private fun hint(text: String): TextView = label(text, 13f, onSurfaceVariant).apply {
-        setPadding(dp(16f), dp(6f), dp(16f), dp(8f))
+        setPadding(dp(32f), dp(2f), dp(16f), dp(10f))
     }
 
     private fun toast(text: String) {
