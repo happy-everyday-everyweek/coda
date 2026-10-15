@@ -1,5 +1,6 @@
 package com.coda.mobileui.workspace
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -11,6 +12,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -44,6 +46,9 @@ class WorkspaceActivity : BaseActivity() {
         private val BAR_BACKGROUND = 0xFF000000.toInt()
         private val BAR_FOREGROUND = 0xFFE0E0E0.toInt()
         private val BAR_DIVIDER = 0xFF2A2A2A.toInt()
+
+        /** 进入工作区的展开时长，与抽屉展开的缓动节奏一致。 */
+        private const val ENTER_EXPAND_DURATION_MS = 260L
 
         fun intent(context: Context): Intent = Intent(context, WorkspaceActivity::class.java)
     }
@@ -96,6 +101,7 @@ class WorkspaceActivity : BaseActivity() {
         root = Workspaces.root(this)
         setContentView(buildContainer())
         restoreTabs()
+        enterFromDrawerShape()
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
@@ -211,6 +217,38 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     // ---------------------------------------------------------------- 装配
+
+    /**
+     * 进入工作区的动画：对齐抽屉展开成全屏的语言，但从"完全没有"直接展开到整屏。
+     *
+     * 起点宽度为 0，面板自左侧边缘向右生长到整屏；内容在整个生长过程中保持不透明，
+     * 不做淡入，避免出现"先淡出再淡入"的分段感。缓动曲线与时长沿用抽屉展开那一套，
+     * 从抽屉滑到工作区时观感连续。
+     */
+    private fun enterFromDrawerShape() {
+        val screenWidth = resources.displayMetrics.widthPixels
+        if (screenWidth <= 0) return
+        container.layoutParams = container.layoutParams.apply { width = 0 }
+        container.requestLayout()
+        val anim = ValueAnimator.ofInt(0, screenWidth).apply {
+            duration = ENTER_EXPAND_DURATION_MS
+            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { a ->
+                container.layoutParams = container.layoutParams.apply {
+                    this.width = a.animatedValue as Int
+                }
+                container.requestLayout()
+            }
+        }
+        anim.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                // 展开到位后把宽度交回匹配父布局，避免旋转或分屏后尺寸被固定值锁死。
+                container.layoutParams = container.layoutParams.apply { width = MATCH }
+                container.requestLayout()
+            }
+        })
+        anim.start()
+    }
 
     private fun buildContainer(): View {
         container = FrameLayout(this).apply {
@@ -349,6 +387,7 @@ class WorkspaceActivity : BaseActivity() {
         ahead.clear()
         setActive(id)
         persist()
+        if (overview != null) fillGrid()
     }
 
     /** 不记历史的切换。 */
@@ -360,6 +399,10 @@ class WorkspaceActivity : BaseActivity() {
                 previous.page.onHidden()
             }
             next.page.view.visibility = View.VISIBLE
+            // 轻量淡入：切页时给一次明确的"内容换了"的反馈，不做位移动画以免与
+            // 各页自身的滚动位置打架。
+            next.page.view.alpha = 0f
+            next.page.view.animate().alpha(1f).setDuration(140).start()
             activeId = id
             next.page.onShown()
         }
@@ -386,6 +429,7 @@ class WorkspaceActivity : BaseActivity() {
         val index = tabs.indexOfFirst { it.data.id == id }
         if (index < 0) return
         val entry = tabs.removeAt(index)
+        entry.page.view.animate().cancel()
         pageHost.removeView(entry.page.view)
         entry.page.onClosed()
         history.remove(id)
@@ -402,6 +446,9 @@ class WorkspaceActivity : BaseActivity() {
         }
         updateBar()
         persist()
+        // 总览就是标签管理页：关掉标签后必须重建网格，否则卡片仍停在原处，
+        // 点关闭看起来像没反应。
+        if (overview != null) fillGrid()
     }
 
     private fun closeOthers(keep: String) {
@@ -497,7 +544,10 @@ class WorkspaceActivity : BaseActivity() {
         scrim.addView(panel)
         container.addView(scrim)
         overview = scrim
+        // 遮罩淡入 + 面板轻微上移，给"管理页被拉起"的方向感。
+        panel.translationY = dp(24f).toFloat()
         scrim.animate().alpha(1f).setDuration(160).start()
+        panel.animate().translationY(0f).setDuration(200).start()
     }
 
     private fun fillGrid() {
@@ -536,6 +586,16 @@ class WorkspaceActivity : BaseActivity() {
                 selectTab(entry.data.id)
                 hideOverview()
             }
+        }
+        // 按下轻微缩放：卡片是管理页里唯一的可点对象，给一次即时反馈。
+        // 返回 false 让点击与关闭按钮继续照常派发。
+        card.setOnTouchListener { v, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(90).start()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            }
+            false
         }
         val head = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -580,7 +640,15 @@ class WorkspaceActivity : BaseActivity() {
         val view = overview ?: return
         overview = null
         overviewGrid = null
-        container.removeView(view)
+        // 淡出后再摘除；期间新开的遮罩以 alpha 动画覆盖，不做等待。
+        view.animate()
+            .alpha(0f)
+            .setDuration(140)
+            .withEndAction {
+                if (view.parent === container) container.removeView(view)
+            }
+            .start()
+        view.isClickable = false
     }
 
     // -------------------------------------------------------------- 弹出面板
