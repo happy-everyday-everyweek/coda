@@ -198,11 +198,13 @@ class GitPage(
             setPadding(dp(24f), dp(48f), dp(24f), dp(24f))
             layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
         }
-        box.addView(label(
-            if (current == null) "正在读取仓库" else "这个目录还不是仓库，初始化后就能看到提交图",
-            13f,
-            onSurfaceVariant,
-        }).apply { gravity = Gravity.CENTER })
+        box.addView(
+            label(
+                if (current == null) "正在读取仓库" else "这个目录还不是仓库，初始化后就能看到提交图",
+                13f,
+                onSurfaceVariant,
+            ).apply { gravity = Gravity.CENTER },
+        )
         return box
     }
 
