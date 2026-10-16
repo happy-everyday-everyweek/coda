@@ -42,10 +42,11 @@ import java.util.concurrent.Executors
 class WorkspaceActivity : BaseActivity() {
 
     companion object {
-        /** 终端风格的底栏配色。 */
-        private val BAR_BACKGROUND = 0xFF000000.toInt()
-        private val BAR_FOREGROUND = 0xFFE0E0E0.toInt()
-        private val BAR_DIVIDER = 0xFF2A2A2A.toInt()
+        /** 终端底栏的沉浸配色：只有终端页用，进入终端时底栏整条转黑。 */
+        private val terminalBarBackground = 0xFF000000.toInt()
+        private val terminalBarForeground = 0xFFE0E0E0.toInt()
+        private val terminalBarDivider = 0xFF2A2A2A.toInt()
+        private val terminalBarPill = 0xFF1F1F1F.toInt()
 
         /** 进入工作区的展开时长，与抽屉展开的缓动节奏一致。 */
         private const val ENTER_EXPAND_DURATION_MS = 260L
@@ -95,6 +96,10 @@ class WorkspaceActivity : BaseActivity() {
     private lateinit var aheadButton: ImageButton
     private lateinit var countButton: TextView
     private lateinit var statusView: TextView
+    private lateinit var dividerLine: View
+
+    /** 底栏里的图标按钮，切页换配色时统一改它们的着色。 */
+    private val toolButtons = mutableListOf<ImageButton>()
 
     private var activeId: String? = null
     private var overview: View? = null
@@ -276,13 +281,14 @@ class WorkspaceActivity : BaseActivity() {
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(BAR_BACKGROUND)
             layoutParams = FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM)
         }
-        bottom.addView(line())
+        dividerLine = line()
+        bottom.addView(dividerLine)
         bottom.addView(toolRow())
         bottomBar = bottom
         container.addView(bottom)
+        applyBottomBarPalette()
 
         statusView = TextView(this).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
@@ -308,13 +314,13 @@ class WorkspaceActivity : BaseActivity() {
         aheadButton = toolButton(R.drawable.ic_arrow_forward) { if (ahead.isNotEmpty()) stepAhead() }
         row.addView(slot(backButton))
         row.addView(slot(aheadButton))
-        row.addView(slot(toolButton(R.drawable.ic_add) { showNewTabSheet() }))
+        val addButton = toolButton(R.drawable.ic_add) { showNewTabSheet() }
+        val moreButton = toolButton(R.drawable.ic_more_vert) { showMenu() }
+        row.addView(slot(addButton))
         countButton = TextView(this).apply {
             text = "1"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setTextColor(BAR_FOREGROUND)
             gravity = Gravity.CENTER
-            background = pill(0xFF1F1F1F.toInt())
             isClickable = true
             setOnClickListener { toggleOverview() }
             setOnLongClickListener {
@@ -324,8 +330,27 @@ class WorkspaceActivity : BaseActivity() {
             layoutParams = FrameLayout.LayoutParams(dp(40f), dp(28f), Gravity.CENTER)
         }
         row.addView(slot(countButton))
-        row.addView(slot(toolButton(R.drawable.ic_more_vert) { showMenu() }))
+        row.addView(slot(moreButton))
+        // 只登记底栏自己的按钮：toolButton 也被标签总览的头部用到，在那里换色会把
+        // 总览面板里的关闭图标改成深灰，在面板底色上看不见。
+        toolButtons += listOf(backButton, aheadButton, addButton, moreButton)
         return row
+    }
+
+    /**
+     * 底栏配色跟随当前页面：终端页用纯黑底加浅色字，进入沉浸状态；其他页面用主题的
+     * 卡片底色与前景色，和页面内容同一套色调，不再出现只有终端才该有的黑条。
+     */
+    private fun applyBottomBarPalette() {
+        if (!::bottomBar.isInitialized) return
+        val terminal = tabs.firstOrNull { it.data.id == activeId }?.page?.kind == WorkspaceTabs.TERMINAL
+        val background = if (terminal) terminalBarBackground else surfaceContainerLow
+        val foreground = if (terminal) terminalBarForeground else onSurfaceVariant
+        bottomBar.setBackgroundColor(background)
+        dividerLine.setBackgroundColor(if (terminal) terminalBarDivider else outline)
+        countButton.setTextColor(foreground)
+        countButton.background = pill(if (terminal) terminalBarPill else surfaceContainerHigh)
+        for (button in toolButtons) button.setColorFilter(foreground)
     }
 
     private fun slot(child: View): View = FrameLayout(this).apply {
@@ -335,7 +360,8 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun toolButton(iconRes: Int, click: () -> Unit): ImageButton = ImageButton(this).apply {
         setImageResource(iconRes)
-        setColorFilter(BAR_FOREGROUND)
+        // 默认按主题前景着色：底栏会在切页时再覆盖，标签总览头部的图标则用这个默认值。
+        setColorFilter(onSurface)
         background = null
         scaleType = ImageView.ScaleType.CENTER_INSIDE
         val size = dp(40f)
@@ -345,7 +371,6 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun line(): View = View(this).apply {
-        setBackgroundColor(BAR_DIVIDER)
         layoutParams = LinearLayout.LayoutParams(MATCH, dp(0.7f))
     }
 
@@ -483,6 +508,7 @@ class WorkspaceActivity : BaseActivity() {
         aheadButton.isEnabled = canAhead
         aheadButton.alpha = if (canAhead) 1f else 0.35f
         countButton.text = tabs.size.toString()
+        applyBottomBarPalette()
     }
 
     private fun persist() {
@@ -861,6 +887,12 @@ class WorkspaceActivity : BaseActivity() {
 
     private val onSurfaceVariant: Int
         get() = color(com.google.android.material.R.attr.colorOnSurfaceVariant)
+
+    private val surfaceContainerLow: Int
+        get() = color(com.google.android.material.R.attr.colorSurfaceContainerLow)
+
+    private val surfaceContainerHigh: Int
+        get() = color(com.google.android.material.R.attr.colorSurfaceContainerHigh)
 
     private val onPrimary: Int get() = color(com.google.android.material.R.attr.colorOnPrimary)
 

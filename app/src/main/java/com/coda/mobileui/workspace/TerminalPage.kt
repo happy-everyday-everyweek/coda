@@ -99,6 +99,12 @@ class TerminalPage(
     override fun onShown() {
         syncBottomInset()
         start()
+        // 打开终端就直接把焦点与键盘备好，不必先点一下屏幕才开始能打字。
+        input.post {
+            refocusInput()
+            val manager = host.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            manager?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
         main.removeCallbacks(blink)
         main.post(blink)
     }
@@ -136,6 +142,9 @@ class TerminalPage(
             setTextColor(terminalForeground)
             setBackgroundColor(terminalBackground)
             setTextIsSelectable(true)
+            // 只保留长按选择，不让它在触摸模式下拿焦点：否则手指一按输出区就把输入法
+            // 拽到自己身上，隐藏的输入视图再也收不到字符。
+            isFocusableInTouchMode = false
             setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
             setOnTouchListener { _, event ->
                 when (event.actionMasked) {
@@ -149,8 +158,11 @@ class TerminalPage(
                     MotionEvent.ACTION_UP -> {
                         val moved = kotlin.math.abs(event.x - touchDownX) + kotlin.math.abs(event.y - touchDownY)
                         val quick = SystemClock.uptimeMillis() - touchDownAt < 300
-                        if (moved < dp(10f).toFloat() && quick) toggleKeyboard()
-                        false
+                        val tap = moved < dp(10f).toFloat() && quick
+                        if (tap) toggleKeyboard()
+                        // 轻点必须消费掉：这个输出区是可选中文本，按下时它会把焦点抢过去，
+                        // 若把抬手继续交给它，输入法就会绑在输出区上，键盘输入再也进不了会话。
+                        tap
                     }
 
                     else -> false
@@ -266,6 +278,9 @@ class TerminalPage(
 
     /** 附加键发出的内容：单字符在 CTRL 生效时转成控制码，ALT 生效时前置 ESC。 */
     private fun sendKey(bytes: String) {
+        // 先把焦点拉回输入视图：功能键按下会移动触摸焦点，焦点一旦离开，
+        // 输入法就会跟着走，键盘看起来像被莫名收起。
+        refocusInput()
         var out = bytes
         if (ctrlArmed && out.length == 1) out = controlCode(out[0]).toString()
         if (altArmed) out = "\u001b$out"
@@ -275,19 +290,31 @@ class TerminalPage(
 
     // ---------------------------------------------------------------- 输入
 
-    /** 点终端区弹出或收起软键盘，按键直接进会话，不再有独立输入框。 */
+    /**
+     * 点终端区弹出或收起软键盘，按键直接进会话，不再有独立输入框。
+     *
+     * 输入视图留在 1×1 的可见位置（不能是 GONE）：完全不可见的视图拿不到输入法焦点。
+     */
     private fun toggleKeyboard() {
         val manager = host.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
         if (keyboardShown) {
             manager.hideSoftInputFromWindow(input.windowToken, 0)
             keyboardShown = false
         } else {
-            input.requestFocus()
+            refocusInput()
             manager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
             keyboardShown = true
         }
         cursorOn = true
         render()
+    }
+
+    /**
+     * 把焦点还给输入视图。点过输出区（它可以拖动选择文本）或键盘收起之后，
+     * 焦点可能已经跑掉，下一次点终端区必须先把焦点拉回来，输入法才会重新挂上。
+     */
+    private fun refocusInput() {
+        if (!input.hasFocus()) input.requestFocus()
     }
 
     /** 终端区的 IME 目标：把键盘输入按字节送进 shell。 */
@@ -296,17 +323,38 @@ class TerminalPage(
         override fun onCheckIsTextEditor(): Boolean = true
 
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-            outAttrs.inputType = InputType.TYPE_NULL
-            outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN
-            return object : BaseInputConnection(this@TerminalInput, true) {
+            // 不能声明 TYPE_NULL：那在多数输入法里等于"这里不接收文本"，键盘会切成无输入
+            // 状态并且不再回调 commitText，于是敲什么都不会有反应。这里按普通多行文本声
+            // 明，同时关掉联想与学习，避免候选词与自动更正来抢输入。
+            outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
+                EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+                EditorInfo.IME_FLAG_NO_ENTER_ACTION
+            outAttrs.initialCapsMode = 0
+            return object : BaseInputConnection(this@TerminalInput, false) {
 
                 override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
                     if (!text.isNullOrEmpty()) typeText(text.toString())
                     return true
                 }
 
+                override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                    // 输入法的候选串只是中间态，这里不做处理，等它 commit 时统一送进会话。
+                    return true
+                }
+
+                override fun finishComposingText(): Boolean = true
+
                 override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                    repeat(beforeLength) { typeText("\u007f") }
+                    repeat(beforeLength) { typeText(BACKSPACE) }
+                    return true
+                }
+
+                override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                    repeat(beforeLength) { typeText(BACKSPACE) }
                     return true
                 }
 
@@ -314,7 +362,7 @@ class TerminalPage(
                     if (event.action != KeyEvent.ACTION_DOWN) return true
                     when (event.keyCode) {
                         KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> submitLine()
-                        KeyEvent.KEYCODE_DEL -> typeText("\u007f")
+                        KeyEvent.KEYCODE_DEL -> typeText(BACKSPACE)
                         else -> {
                             val code = event.unicodeChar
                             if (code != 0) {
@@ -547,6 +595,9 @@ class TerminalPage(
         const val CURSOR = "\u2588"
         const val BLINK_MS = 530L
         const val MAX_CHARS = 120_000
+
+        /** 退格：终端里就是发送删除字符。 */
+        const val BACKSPACE = "\u007f"
 
         val firstRow = listOf(
             KeySpec("ESC", "\u001b"),
