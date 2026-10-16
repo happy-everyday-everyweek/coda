@@ -27,6 +27,7 @@
         <activity
             android:name=".workspace.WorkspaceActivity"
             android:exported="false"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|uiMode"
             android:windowSoftInputMode="adjustResize" />
         <activity
             android:name=".CrashActivity"

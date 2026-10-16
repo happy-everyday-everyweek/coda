@@ -38,8 +38,8 @@ class FilesPage(
     private lateinit var editorTitle: TextView
     private lateinit var editorStatus: TextView
     private lateinit var editorGutter: android.widget.HorizontalScrollView
-    private lateinit var editorBody: LinearLayout
     private lateinit var editorGutterText: TextView
+    private lateinit var editorGuide: IndentGuideView
 
     /** 当前编辑文件的词法规则；纯文本时为 null。 */
     private var editorRules: LanguageRules? = null
@@ -398,7 +398,6 @@ class FilesPage(
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
         }
-        editorBody = body
         editorGutter = android.widget.HorizontalScrollView(host).apply {
             isHorizontalScrollBarEnabled = false
             setBackgroundColor(surface)
@@ -415,7 +414,11 @@ class FilesPage(
             android.widget.FrameLayout.LayoutParams(WRAP, MATCH),
         )
         body.addView(editorGutter)
-        editorInput = EditText(host).apply {
+        editorGuide = IndentGuideView(host).apply {
+            layoutParams = LinearLayout.LayoutParams(MATCH, MATCH)
+            guideColor = tintAlpha(color(com.google.android.material.R.attr.colorOnSurfaceVariant), 0.18f)
+        }
+        editorInput = EditorInput(host).apply {
             typeface = Typeface.MONOSPACE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
             setTextColor(onSurface)
@@ -427,18 +430,19 @@ class FilesPage(
             setPadding(dp(6f), dp(6f), dp(14f), dp(14f))
             isVerticalScrollBarEnabled = true
             layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
+            onCaretLine = { refreshEditorChrome() }
             addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {
                     // 改动后立刻重画行号与光标位置，高亮交给节流令牌合并。
-                    refreshGutter()
-                    refreshCursorStatus()
+                    refreshEditorChrome()
                     host.scheduleHighlight(highlightTick)
                 }
                 override fun afterTextChanged(s: android.text.Editable?) = Unit
             })
             setOnScrollChangeListener { _, _, _, _, _ -> editorGutter.scrollTo(0, 0) }
         }
+        body.addView(editorGuide)
         body.addView(editorInput)
         editor.addView(body)
 
@@ -447,6 +451,167 @@ class FilesPage(
         }
         editor.addView(editorStatus)
         return editor
+    }
+
+    /**
+     * 编辑器本体：只管当前行的位置。
+     *
+     * 光标移动、点击落点、选区变化最后都会走到 onSelectionChanged，这里记下插入点所在行，
+     * 交给外面重画左侧行号与当前行底，避免每处输入路径各自提示一次。
+     */
+    private class EditorInput(context: android.content.Context) : EditText(context) {
+        var onCaretLine: (() -> Unit)? = null
+
+        override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+            super.onSelectionChanged(selStart, selEnd)
+            onCaretLine?.invoke()
+        }
+    }
+
+    /** 缩进参考线：按制表宽度画竖线，让深层嵌套与 VS Code 一样有"对齐感"。 */
+    private class IndentGuideView(context: android.content.Context) : View(context) {
+        /** 每级的像素宽度；<=0 表示这一帧还没量到字宽，直接不画。 */
+        var stepPx: Float = 0f
+        var guideColor: Int = android.graphics.Color.GRAY
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            super.onDraw(canvas)
+            if (stepPx <= 0f) return
+            val paint = android.graphics.Paint().apply {
+                color = guideColor
+                strokeWidth = 1f
+            }
+            var x = stepPx
+            while (x < width) {
+                canvas.drawLine(x, 0f, x, height.toFloat(), paint)
+                x += stepPx
+            }
+        }
+    }
+
+    /** 当前行底：从行首铺到行尾的半透明色块，随主题。 */
+    private class CurrentLineSpan(private val color: Int) :
+        android.text.style.BackgroundColorSpan(color) {
+        override fun getSize(
+            paint: android.graphics.Paint,
+            text: CharSequence,
+            start: Int,
+            end: Int,
+            fm: android.graphics.Paint.FontMetricsInt,
+        ): Int = paint.measureText(text, start, end).toInt()
+
+        override fun draw(
+            canvas: android.graphics.Canvas,
+            text: CharSequence,
+            start: Int,
+            end: Int,
+            x: Float,
+            top: Int,
+            y: Int,
+            bottom: Int,
+            paint: android.graphics.Paint,
+        ) {
+            canvas.drawRect(
+                0f,
+                top.toFloat(),
+                x + paint.measureText(text, start, end),
+                bottom.toFloat(),
+                background,
+            )
+        }
+    }
+
+    /** 行号槽的一行：当前行用主题色加粗，其余用弱化色。 */
+    private fun gutterMarkup(): android.text.SpannableString {
+        val lines = editorInput.lineCount.coerceAtLeast(1)
+        val current = caretLine()
+        val builder = StringBuilder()
+        for (i in 1..lines) {
+            builder.append(i)
+            if (i < lines) builder.append('\n')
+        }
+        val text = android.text.SpannableString(builder.toString())
+        var offset = 0
+        for (i in 1..lines) {
+            val end = offset + i.toString().length
+            val active = i == current
+            text.setSpan(
+                android.text.style.ForegroundColorSpan(if (active) primary else onSurfaceVariant),
+                offset,
+                end,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+            if (active) {
+                text.setSpan(
+                    android.text.style.StyleSpan(Typeface.BOLD),
+                    offset,
+                    end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+            offset = end + 1
+        }
+        return text
+    }
+
+    /** 插入点所在行（1 起），把换行显示也算进去，与行号槽一致。 */
+    private fun caretLine(): Int {
+        val layout = editorInput.layout ?: return 1
+        val length = editorInput.text?.length ?: 0
+        val offset = editorInput.selectionStart.coerceIn(0, length)
+        val raw = runCatching { layout.getLineForOffset(offset) }.getOrDefault(0)
+        return raw + 1
+    }
+
+    /** 当前行底色：铺满插入点所在那一整个显示行。 */
+    private fun refreshCurrentLine() {
+        val text = editorInput.text ?: return
+        for (marker in text.getSpans(0, text.length, CurrentLineSpan::class.java)) {
+            text.removeSpan(marker)
+        }
+        val layout = editorInput.layout ?: return
+        val offset = editorInput.selectionStart.coerceIn(0, text.length)
+        val line = runCatching { layout.getLineForOffset(offset) }.getOrDefault(0)
+        val start = layout.getLineStart(line)
+        val end = layout.getLineVisibleEnd(line).coerceAtLeast(start)
+        text.setSpan(
+            CurrentLineSpan(currentLineTint),
+            start,
+            end,
+            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+    }
+
+    /** 当前行底的取色：主题色压低透明度，深浅模式都成立。 */
+    private val currentLineTint: Int
+        get() = tintAlpha(color(androidx.appcompat.R.attr.colorPrimary), 0.10f)
+
+    private fun tintAlpha(color: Int, alpha: Float): Int {
+        val a = (255 * alpha).toInt().coerceIn(0, 255)
+        return (color and 0x00FFFFFF) or (a shl 24)
+    }
+
+    /** 光标随时可能动：行号、当前行底、缩进参考线、底部状态一起刷新。 */
+    private fun refreshEditorChrome() {
+        if (!::editorGutterText.isInitialized) return
+        if (editor.visibility != View.VISIBLE) return
+        editorGutterText.text = gutterMarkup()
+        refreshCurrentLine()
+        refreshCursorStatus()
+        refreshIndentGuides()
+    }
+
+    /** 缩进参考线的步长取等宽字宽；纯文本文件不画。 */
+    private fun refreshIndentGuides() {
+        if (!::editorGuide.isInitialized) return
+        if (editorRules == null) {
+            editorGuide.visibility = View.GONE
+            return
+        }
+        editorGuide.visibility = View.VISIBLE
+        val paint = editorInput.paint
+        editorGuide.stepPx = paint.measureText(TAB_WIDTH_CHARS)
+        editorGuide.invalidate()
     }
 
     /** 编辑器头部的文字按钮。 */
@@ -482,18 +647,6 @@ class FilesPage(
         CodeHighlighter.apply(text, rules, palette())
         // 清 span 不会动文本，但部分输入法会重置选区，这里兜一下光标位置。
         if (start <= text.length) editorInput.setSelection(start)
-    }
-
-    /** 行号槽：按行数生成 1..n，宽度随位数自适应。 */
-    private fun refreshGutter() {
-        if (!::editorGutterText.isInitialized) return
-        val lines = editorInput.lineCount.coerceAtLeast(1)
-        val builder = StringBuilder()
-        for (i in 1..lines) {
-            builder.append(i)
-            if (i < lines) builder.append('\n')
-        }
-        editorGutterText.text = builder.toString()
     }
 
     /** 底部状态：路径 · 大小 · 行数 · 行列 · 语言。 */
@@ -547,7 +700,7 @@ class FilesPage(
             }
             editorInput.setSelection(index.coerceIn(0, text.length))
             editorInput.requestFocus()
-            refreshCursorStatus()
+            refreshEditorChrome()
         })
     }
 
@@ -564,7 +717,8 @@ class FilesPage(
         editorInput.setHorizontallyScrolling(!wrap)
         editorInput.setSingleLine(false)
         editorInput.requestLayout()
-        refreshCursorStatus()
+        // 折行会改变显示行数，行号与当前行底都要跟着重算。
+        editorInput.post { refreshEditorChrome() }
         toast(if (wrap) "已启用自动换行" else "已关闭自动换行")
     }
 
@@ -598,10 +752,9 @@ class FilesPage(
         editorInput.setText(content)
         editorInput.setSelection(0)
         editor.visibility = View.VISIBLE
-        refreshGutter()
-        refreshCursorStatus()
-        // 打开即上色；内容已经稳定，不需要节流。
         runHighlight()
+        // 当前行底与行号要靠布局里的行位置，等这一帧量完再上一次。
+        editorInput.post { refreshEditorChrome() }
     }
 
     private fun saveEditor() {
@@ -689,5 +842,8 @@ class FilesPage(
 
     private companion object {
         const val MAX_EDIT_BYTES = 2L * 1024 * 1024
+
+        /** 缩进参考线的步长，按等宽字宽折算。 */
+        const val TAB_WIDTH_CHARS = "    "
     }
 }
