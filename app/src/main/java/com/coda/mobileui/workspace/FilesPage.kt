@@ -49,6 +49,15 @@ class FilesPage(
 
     private var wrapEnabled = false
 
+    /** 有未保存修改。用于标题上的圆点，对应 VS Code 的脏标记。 */
+    private var dirty = false
+
+    /** 这一份文件实际用的缩进单位（制表符或若干空格），供参考线与回车缩进使用。 */
+    private var indentUnit = "    "
+
+    /** 加载文件期间关掉输入辅助，否则 setText 也会被自动配对改写。 */
+    private var suppressEdits = false
+
     private var current: File = host.root
     private var editing: File? = null
     private var originalText: String = ""
@@ -431,10 +440,12 @@ class FilesPage(
             isVerticalScrollBarEnabled = true
             layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
             onCaretLine = { refreshEditorChrome() }
+            setOnKeyListener { view, code, event -> handleEditorKey(view, code, event) }
             addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {
-                    // 改动后立刻重画行号与光标位置，高亮交给节流令牌合并。
+                    // 改动后立刻重画脏标记、行号与光标位置，高亮交给节流令牌合并。
+                    refreshDirty()
                     refreshEditorChrome()
                     host.scheduleHighlight(highlightTick)
                 }
@@ -489,37 +500,13 @@ class FilesPage(
         }
     }
 
-    /** 当前行底：从行首铺到行尾的半透明色块，随主题。 */
-    private class CurrentLineSpan(private val color: Int) :
-        android.text.style.BackgroundColorSpan(color) {
-        override fun getSize(
-            paint: android.graphics.Paint,
-            text: CharSequence,
-            start: Int,
-            end: Int,
-            fm: android.graphics.Paint.FontMetricsInt,
-        ): Int = paint.measureText(text, start, end).toInt()
-
-        override fun draw(
-            canvas: android.graphics.Canvas,
-            text: CharSequence,
-            start: Int,
-            end: Int,
-            x: Float,
-            top: Int,
-            y: Int,
-            bottom: Int,
-            paint: android.graphics.Paint,
-        ) {
-            canvas.drawRect(
-                0f,
-                top.toFloat(),
-                x + paint.measureText(text, start, end),
-                bottom.toFloat(),
-                background,
-            )
-        }
-    }
+    /**
+     * 当前行底：从行首铺到行尾的半透明色块，随主题。
+     *
+     * 用 BackgroundColorSpan 而不是 ReplacementSpan：后者会接管整段绘制，连带吞掉这一行
+     * 的语法着色。范围铺到行尾，因此行尾空白也会被盖住，视觉上仍是整行。
+     */
+    private class CurrentLineSpan(color: Int) : android.text.style.BackgroundColorSpan(color)
 
     /** 行号槽的一行：当前行用主题色加粗，其余用弱化色。 */
     private fun gutterMarkup(): android.text.SpannableString {
@@ -610,9 +597,120 @@ class FilesPage(
         }
         editorGuide.visibility = View.VISIBLE
         val paint = editorInput.paint
-        editorGuide.stepPx = paint.measureText(TAB_WIDTH_CHARS)
+        editorGuide.stepPx = paint.measureText(indentUnit)
         editorGuide.invalidate()
     }
+
+    // -------------------------------------------------------------- 编辑增强
+
+    /** 标题上的脏标记：与 VS Code 的未保存圆点同一语义，未改动则撤下。 */
+    private fun refreshDirty() {
+        if (suppressEdits) return
+        val file = editing ?: return
+        val changed = editorInput.text.toString() != originalText
+        if (changed == dirty) return
+        dirty = changed
+        editorTitle.text = if (changed) "${file.name} ·" else file.name
+    }
+
+    /**
+     * 缩进单位推断：与 VS Code 同一启发式——先看有没有制表符，再看最小空格缩进，
+     * 缩进看起来是几的倍数就用几个空格。
+     */
+    private fun detectIndentUnit(text: String): String {
+        val lines = text.split('\n').take(2000)
+        var tab = false
+        var minSpaces = Int.MAX_VALUE
+        for (line in lines) {
+            if (line.isEmpty()) continue
+            var i = 0
+            while (i < line.length && (line[i] == ' ' || line[i] == '\t')) {
+                if (line[i] == '\t') tab = true
+                i++
+            }
+            if (line.startsWith("  ") && line[0] == ' ') minSpaces = minOf(minSpaces, i)
+        }
+        if (tab && minSpaces == Int.MAX_VALUE) return "\t"
+        if (minSpaces == Int.MAX_VALUE) return "    "
+        return if (minSpaces % 4 == 0) "    " else "  "
+    }
+
+    /**
+     * 编辑器按键辅助，对齐 VS Code 的两条默认行为：
+     * 输入左括号/引号时补上右边并让光标停在中间；回车时沿用当前行缩进，行尾是
+     * 开括号或冒号时再进一级。只在这两种情形返回 true，其余按键交回输入法。
+     */
+    private fun handleEditorKey(view: android.view.View, code: Int, event: android.view.KeyEvent): Boolean {
+        if (event.action != android.view.KeyEvent.ACTION_DOWN) return false
+        if (suppressEdits || editing == null) return false
+        val text = editorInput.text ?: return false
+        val start = editorInput.selectionStart
+        val end = editorInput.selectionEnd
+        if (start < 0 || start != end) return false
+
+        if (code == android.view.KeyEvent.KEYCODE_ENTER) {
+            val enterAction = insertSmartNewline(text, start)
+            if (enterAction) {
+                editorInput.setSelection(start + 1 + enterActionExtra)
+                return true
+            }
+            return false
+        }
+
+        val typed = event.unicodeChar.toChar()
+        val close = closerFor(typed)
+        if (close != null) {
+            // 右边已经是同一个右括号：不补新的，光标直接跳过。
+            if (start < text.length && text[start] == close) {
+                editorInput.setSelection(start + 1)
+                return true
+            }
+            text.insert(start, "$typed$close")
+            editorInput.setSelection(start + 1)
+            return true
+        }
+        // 手动敲右括号且正好落在对应左括号之后：跳过，避免出现重复的括号对。
+        // 条件必须带上 text[start] == typed，否则会把用户真正想输入的字符吞掉。
+        if (start > 0 && start < text.length &&
+            text[start] == typed && isMatchingPair(text[start - 1], typed)
+        ) {
+            editorInput.setSelection(start + 1)
+            return true
+        }
+        return false
+    }
+
+    private var enterActionExtra = 0
+
+    /** 回车：返回是否已自行插入，并把多加的缩进量记在 [enterActionExtra]。 */
+    private fun insertSmartNewline(text: android.text.Editable, caret: Int): Boolean {
+        val before = text.subSequence(0, caret).toString()
+        val lineStart = before.lastIndexOf('\n') + 1
+        val currentLine = before.substring(lineStart)
+        val indent = buildString {
+            for (c in currentLine) {
+                if (c == ' ' || c == '\t') append(c) else break
+            }
+        }
+        val trimmed = currentLine.trimEnd()
+        val deepens = trimmed.endsWith("{") || trimmed.endsWith("(") ||
+            trimmed.endsWith("[") || trimmed.endsWith(":")
+        val extra = if (deepens) indentUnit else ""
+        enterActionExtra = indent.length + extra.length
+        text.insert(caret, "\n" + indent + extra)
+        return true
+    }
+
+    private fun closerFor(open: Char): Char? = when (open) {
+        '(' -> ')'
+        '[' -> ']'
+        '{' -> '}'
+        '"' -> '"'
+        '\'' -> '\''
+        else -> null
+    }
+
+    private fun isMatchingPair(open: Char, close: Char): Boolean = closerFor(open) == close
 
     /** 编辑器头部的文字按钮。 */
     private fun editorChip(text: String, click: () -> Unit): TextView = label(text, 13f, onSurfaceVariant).apply {
@@ -747,13 +845,18 @@ class FilesPage(
     private fun showEditor(file: File, content: String) {
         editing = file
         originalText = content
+        dirty = false
         editorRules = rulesFor(file)
+        indentUnit = if (editorRules == null) "    " else detectIndentUnit(content)
         editorTitle.text = file.name
+        // 加载期间关掉输入辅助，否则程序化 setText 也会被自动配对规则碰到。
+        suppressEdits = true
         editorInput.setText(content)
         editorInput.setSelection(0)
+        suppressEdits = false
         editor.visibility = View.VISIBLE
         runHighlight()
-        // 当前行底与行号要靠布局里的行位置，等这一帧量完再上一次。
+        // 当前行底、行号与参考线要靠布局里的行位置，等这一帧量完再上一次。
         editorInput.post { refreshEditorChrome() }
     }
 
@@ -763,6 +866,8 @@ class FilesPage(
         val ok = runCatching { file.writeText(text) }.isSuccess
         if (ok) {
             originalText = text
+            dirty = false
+            editorTitle.text = file.name
             refreshCursorStatus()
             toast("已保存")
         } else {
@@ -796,7 +901,11 @@ class FilesPage(
         editing = null
         originalText = ""
         editorRules = null
+        dirty = false
+        indentUnit = "    "
+        suppressEdits = true
         editorInput.setText("")
+        suppressEdits = false
         editor.visibility = View.GONE
         renderList()
     }
@@ -842,8 +951,5 @@ class FilesPage(
 
     private companion object {
         const val MAX_EDIT_BYTES = 2L * 1024 * 1024
-
-        /** 缩进参考线的步长，按等宽字宽折算。 */
-        const val TAB_WIDTH_CHARS = "    "
     }
 }
