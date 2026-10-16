@@ -270,7 +270,7 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun buildContainer(): View {
         container = FrameLayout(this).apply {
-            setBackgroundColor(surface)
+            // 底色由 applyChromePalette 按当前页面决定，这里先不留默认色。
         }
 
         pageHost = FrameLayout(this).apply {
@@ -288,7 +288,7 @@ class WorkspaceActivity : BaseActivity() {
         bottom.addView(toolRow())
         bottomBar = bottom
         container.addView(bottom)
-        applyBottomBarPalette()
+        applyChromePalette()
 
         statusView = TextView(this).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
@@ -338,14 +338,17 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     /**
-     * 底栏配色跟随当前页面：终端页用纯黑底加浅色字，进入沉浸状态；其他页面用主题的
-     * 卡片底色与前景色，和页面内容同一套色调，不再出现只有终端才该有的黑条。
+     * 顶栏（状态栏区域）与底栏的配色跟随当前页面。
+     *
+     * 状态栏是隐藏的，顶部那条安全区露出的是容器底色：终端页必须一起转黑，否则会在
+     * 终端顶上留一条白色，与整片黑色割裂。其余页面用主题的 surface 与卡片色。
      */
-    private fun applyBottomBarPalette() {
+    private fun applyChromePalette() {
         if (!::bottomBar.isInitialized) return
         val terminal = tabs.firstOrNull { it.data.id == activeId }?.page?.kind == WorkspaceTabs.TERMINAL
         val background = if (terminal) terminalBarBackground else surfaceContainerLow
         val foreground = if (terminal) terminalBarForeground else onSurfaceVariant
+        container.setBackgroundColor(if (terminal) terminalBarBackground else surface)
         bottomBar.setBackgroundColor(background)
         dividerLine.setBackgroundColor(if (terminal) terminalBarDivider else outline)
         countButton.setTextColor(foreground)
@@ -508,7 +511,7 @@ class WorkspaceActivity : BaseActivity() {
         aheadButton.isEnabled = canAhead
         aheadButton.alpha = if (canAhead) 1f else 0.35f
         countButton.text = tabs.size.toString()
-        applyBottomBarPalette()
+        applyChromePalette()
     }
 
     private fun persist() {
