@@ -304,7 +304,7 @@ abstract class WorkspacePage(protected val host: WorkspaceActivity) {
         if (click != null) body.setOnClickListener { click() }
         val card = groupCard()
         card.addView(body, ViewGroup.LayoutParams(MATCH, WRAP))
-        card.cardCornerRadius = groupCorner
+        card.radius = groupCorner
         return card
     }
 
