@@ -37,6 +37,17 @@ class FilesPage(
     private lateinit var editorInput: EditText
     private lateinit var editorTitle: TextView
     private lateinit var editorStatus: TextView
+    private lateinit var editorGutter: android.widget.HorizontalScrollView
+    private lateinit var editorBody: LinearLayout
+    private lateinit var editorGutterText: TextView
+
+    /** 当前编辑文件的词法规则；纯文本时为 null。 */
+    private var editorRules: LanguageRules? = null
+
+    /** 高亮重扫的节流令牌：改动后延迟合并，避免每敲一个字都整篇重扫。 */
+    private val highlightTick = Runnable { runHighlight() }
+
+    private var wrapEnabled = false
 
     private var current: File = host.root
     private var editing: File? = null
@@ -352,7 +363,7 @@ class FilesPage(
         val header = LinearLayout(host).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8f), dp(12f), dp(16f), dp(8f))
+            setPadding(dp(8f), dp(12f), dp(12f), dp(8f))
         }
         header.addView(ImageView(host).apply {
             setImageResource(R.drawable.ic_arrow_back)
@@ -369,9 +380,11 @@ class FilesPage(
             layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
         }
         header.addView(editorTitle)
+        header.addView(editorChip("转到行") { gotoLine() })
+        header.addView(editorChip("换行") { toggleWrap() })
         val save = label("保存", 14f, primary).apply {
             setTextColor(primary)
-            setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
+            setPadding(dp(12f), dp(7f), dp(12f), dp(7f))
             background = androidx.core.content.ContextCompat.getDrawable(host, R.drawable.bg_pill)
             isClickable = true
             setOnClickListener { saveEditor() }
@@ -379,6 +392,29 @@ class FilesPage(
         header.addView(save)
         editor.addView(header)
 
+        // 编辑区：行号槽 + 文本。行号槽放在一个横向滚动的容器里，不随正文横向滚动，
+        // 这样横向拖正文时行号始终可见。
+        val body = LinearLayout(host).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+        }
+        editorBody = body
+        editorGutter = android.widget.HorizontalScrollView(host).apply {
+            isHorizontalScrollBarEnabled = false
+            setBackgroundColor(surface)
+            layoutParams = LinearLayout.LayoutParams(WRAP, MATCH)
+        }
+        editorGutterText = TextView(host).apply {
+            typeface = Typeface.MONOSPACE
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTextColor(onSurfaceVariant)
+            setPadding(dp(12f), dp(6f), dp(10f), dp(14f))
+        }
+        editorGutter.addView(
+            editorGutterText,
+            android.widget.FrameLayout.LayoutParams(WRAP, MATCH),
+        )
+        body.addView(editorGutter)
         editorInput = EditText(host).apply {
             typeface = Typeface.MONOSPACE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
@@ -388,17 +424,148 @@ class FilesPage(
             inputType = InputType.TYPE_CLASS_TEXT or
                 InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            setPadding(dp(14f), dp(6f), dp(14f), dp(14f))
+            setPadding(dp(6f), dp(6f), dp(14f), dp(14f))
             isVerticalScrollBarEnabled = true
-            layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {
+                    // 改动后立刻重画行号与光标位置，高亮交给节流令牌合并。
+                    refreshGutter()
+                    refreshCursorStatus()
+                    host.scheduleHighlight(highlightTick)
+                }
+                override fun afterTextChanged(s: android.text.Editable?) = Unit
+            })
+            setOnScrollChangeListener { _, _, _, _, _ -> editorGutter.scrollTo(0, 0) }
         }
-        editor.addView(editorInput)
+        body.addView(editorInput)
+        editor.addView(body)
 
         editorStatus = label("", 12f, onSurfaceVariant).apply {
-            setPadding(dp(16f), 0, dp(16f), dp(12f))
+            setPadding(dp(16f), dp(6f), dp(16f), dp(12f))
         }
         editor.addView(editorStatus)
         return editor
+    }
+
+    /** 编辑器头部的文字按钮。 */
+    private fun editorChip(text: String, click: () -> Unit): TextView = label(text, 13f, onSurfaceVariant).apply {
+        setTextColor(onSurfaceVariant)
+        setPadding(dp(10f), dp(7f), dp(10f), dp(7f))
+        layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = dp(6f) }
+        isClickable = true
+        setOnClickListener { click() }
+    }
+
+    // -------------------------------------------------------------- 高亮与编辑增强
+
+    /** 按当前文件的扩展名取词法规则。 */
+    private fun rulesFor(file: File): LanguageRules? = CodeHighlighter.detect(file.name)
+
+    /** 从主题属性取高亮配色，深浅模式各自成立，不写死颜色。 */
+    private fun palette(): CodePalette = CodePalette(
+        comment = color(com.google.android.material.R.attr.colorOnSurfaceVariant),
+        keyword = color(androidx.appcompat.R.attr.colorPrimary),
+        type = color(com.google.android.material.R.attr.colorTertiary),
+        string = color(com.google.android.material.R.attr.colorSecondary),
+        number = color(com.google.android.material.R.attr.colorOnSurface),
+        function = color(com.google.android.material.R.attr.colorOnSurface),
+    )
+
+    /** 节流后的整篇重扫；文本没到上限时就地更新 span，不重建文本。 */
+    private fun runHighlight() {
+        val rules = editorRules ?: return
+        val text = editorInput.text ?: return
+        if (text.length > CodeHighlighter.MAX_HIGHLIGHT_CHARS) return
+        val start = editorInput.selectionStart.coerceAtLeast(0)
+        CodeHighlighter.apply(text, rules, palette())
+        // 清 span 不会动文本，但部分输入法会重置选区，这里兜一下光标位置。
+        if (start <= text.length) editorInput.setSelection(start)
+    }
+
+    /** 行号槽：按行数生成 1..n，宽度随位数自适应。 */
+    private fun refreshGutter() {
+        if (!::editorGutterText.isInitialized) return
+        val lines = editorInput.lineCount.coerceAtLeast(1)
+        val builder = StringBuilder()
+        for (i in 1..lines) {
+            builder.append(i)
+            if (i < lines) builder.append('\n')
+        }
+        editorGutterText.text = builder.toString()
+    }
+
+    /** 底部状态：路径 · 大小 · 行数 · 行列 · 语言。 */
+    private fun refreshCursorStatus() {
+        val file = editing ?: return
+        val text = editorInput.text ?: return
+        val caret = editorInput.selectionStart.coerceAtLeast(0)
+        var line = 1
+        var lineStart = 0
+        var i = 0
+        while (i < caret && i < text.length) {
+            if (text[i] == '\n') {
+                line++
+                lineStart = i + 1
+            }
+            i++
+        }
+        val column = caret - lineStart + 1
+        val language = editorRules?.name
+        editorStatus.text = buildString {
+            append(file.absolutePath)
+            append(" · ")
+            append(readableSize(file.length()))
+            append(" · ")
+            append(editorInput.lineCount)
+            append(" 行")
+            append(" · Ln ")
+            append(line)
+            append(", Col ")
+            append(column)
+            if (language != null) {
+                append(" · ")
+                append(language)
+            }
+            if (wrapEnabled) append(" · 自动换行")
+        }
+    }
+
+    /** 转到指定行（1 起），把光标与选区落在该行行首。 */
+    private fun gotoLine() {
+        if (editing == null) return
+        inputSheet("转到行", "", onDone = { raw ->
+            val target = raw.trim().toIntOrNull() ?: return@inputSheet
+            val text = editorInput.text ?: return@inputSheet
+            val clamped = target.coerceIn(1, editorInput.lineCount)
+            var line = 1
+            var index = 0
+            while (index < text.length && line < clamped) {
+                if (text[index] == '\n') line++
+                index++
+            }
+            editorInput.setSelection(index.coerceIn(0, text.length))
+            editorInput.requestFocus()
+            refreshCursorStatus()
+        })
+    }
+
+    /** 切换自动换行。默认关（长行横向滚动），开启后按宽度折行。 */
+    private fun toggleWrap() {
+        wrapEnabled = !wrapEnabled
+        val wrap = wrapEnabled
+        val flags = editorInput.inputType
+        editorInput.inputType = if (wrap) {
+            flags or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        } else {
+            flags and InputType.TYPE_TEXT_FLAG_MULTI_LINE.inv()
+        }
+        editorInput.setHorizontallyScrolling(!wrap)
+        editorInput.setSingleLine(false)
+        editorInput.requestLayout()
+        refreshCursorStatus()
+        toast(if (wrap) "已启用自动换行" else "已关闭自动换行")
     }
 
     private fun openFile(file: File) {
@@ -426,18 +593,15 @@ class FilesPage(
     private fun showEditor(file: File, content: String) {
         editing = file
         originalText = content
+        editorRules = rulesFor(file)
         editorTitle.text = file.name
         editorInput.setText(content)
         editorInput.setSelection(0)
-        editorStatus.text = buildString {
-            append(file.absolutePath)
-            append(" · ")
-            append(readableSize(file.length()))
-            append(" · ")
-            append(content.count { it == '\n' } + 1)
-            append(" 行")
-        }
         editor.visibility = View.VISIBLE
+        refreshGutter()
+        refreshCursorStatus()
+        // 打开即上色；内容已经稳定，不需要节流。
+        runHighlight()
     }
 
     private fun saveEditor() {
@@ -446,7 +610,7 @@ class FilesPage(
         val ok = runCatching { file.writeText(text) }.isSuccess
         if (ok) {
             originalText = text
-            editorStatus.text = "${file.absolutePath} · 已保存"
+            refreshCursorStatus()
             toast("已保存")
         } else {
             toast("保存失败")
@@ -478,6 +642,7 @@ class FilesPage(
     private fun leaveEditor() {
         editing = null
         originalText = ""
+        editorRules = null
         editorInput.setText("")
         editor.visibility = View.GONE
         renderList()

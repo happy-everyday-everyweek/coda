@@ -50,6 +50,9 @@ class WorkspaceActivity : BaseActivity() {
         /** 进入工作区的展开时长，与抽屉展开的缓动节奏一致。 */
         private const val ENTER_EXPAND_DURATION_MS = 260L
 
+        /** 编辑器高亮的合并窗口：输入停顿这么久之后才重扫一遍。 */
+        private const val HIGHLIGHT_DEBOUNCE_MS = 120L
+
         fun intent(context: Context): Intent = Intent(context, WorkspaceActivity::class.java)
     }
 
@@ -75,6 +78,16 @@ class WorkspaceActivity : BaseActivity() {
 
     /** 底部操作栏的当前高度。 */
     fun bottomBarHeight(): Int = if (::bottomBar.isInitialized) bottomBar.height else dp(53f)
+
+    /**
+     * 把一次重活推迟到输入停顿后再做，期间重复请求只保留最后一次。
+     *
+     * 编辑器用它在改动后合并重扫：每敲一个字都整篇上色没有必要，合并到一次更省。
+     */
+    fun scheduleHighlight(task: Runnable) {
+        main.removeCallbacks(task)
+        main.postDelayed(task, HIGHLIGHT_DEBOUNCE_MS)
+    }
 
     private lateinit var container: FrameLayout
     private lateinit var pageHost: FrameLayout
