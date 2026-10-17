@@ -1,6 +1,7 @@
 package com.coda.mobileui.core
 
 import android.content.Context
+import android.system.Os
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
@@ -133,7 +134,7 @@ object ProxyHost {
             }.getOrDefault(false)
             if (!ok) continue
             if (target.length() > 10_000_000L) {
-                android.os.Process.chmod(target.absolutePath, 493) // 0755
+                Os.chmod(target.absolutePath, 493) // 0755
                 return true
             }
             target.delete()
@@ -173,7 +174,7 @@ object ProxyHost {
             }
             tmp.delete()
             if (found && target.length() > 10_000_000L) {
-                android.os.Process.chmod(target.absolutePath, 493)
+                Os.chmod(target.absolutePath, 493)
                 true
             } else {
                 target.delete()
@@ -484,7 +485,7 @@ object ProxyHost {
 
         onProgress("获取 ${provider.name} 插件…")
         val zip = File(dirFor(ctx), "${provider.pluginId}.zip")
-        if (!download(ctx, provider.downloadUrl(provider), zip)) return false
+        if (!download(ctx, OAuthProviders.downloadUrl(provider), zip)) return false
 
         return try {
             // 压缩包里只有一个同名 .so，直接按 zip 结构取，不假设路径深度。
@@ -499,7 +500,7 @@ object ProxyHost {
             }
             zip.delete()
             if (target.isFile && target.length() > 500_000L) {
-                android.os.Process.chmod(target.absolutePath, 493) // 0755
+                Os.chmod(target.absolutePath, 493) // 0755
                 true
             } else {
                 target.delete()

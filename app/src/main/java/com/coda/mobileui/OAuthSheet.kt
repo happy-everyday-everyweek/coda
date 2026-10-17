@@ -111,7 +111,7 @@ class OAuthSheet(private val host: BaseActivity, private val provider: OAuthProv
 
         // 装二进制、装插件、起进程都要几秒，放后台，回来再画授权信息。
         Thread {
-            val ok = OAuthLogin.prepare(host) { text -> main.post { status.text = text } }
+            val ok = OAuthLogin.prepare(host, provider) { text -> main.post { status.text = text } }
             main.post {
                 if (!ok) {
                     status.text = "网关启动失败，请检查网络后重试"
@@ -353,7 +353,7 @@ class OAuthSheet(private val host: BaseActivity, private val provider: OAuthProv
         }
         setPadding(dp(14f), dp(11f), dp(14f), dp(11f))
         setOnClickListener { click() }
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP).apply { topMargin = dp(8f) }
+        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(8f) }
     }
 
     private companion object {
