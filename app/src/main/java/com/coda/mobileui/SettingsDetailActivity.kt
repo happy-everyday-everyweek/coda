@@ -30,6 +30,7 @@ import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.PhoneControl
+import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.core.ZController
 import java.io.File
@@ -255,6 +256,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             key == KEY_CODE_THEME_DARK ->
                 pickCodeTheme(getString(R.string.appearance_code_theme_dark), isLight = false)
             key == "providers_add" -> editProvider(null)
+            key == "providers_oauth_pick" -> pickOAuthProvider()
+            key.startsWith("providers_oauth_open:") -> {
+                // 已经授权过的，再点一次就是重新登录一个账号，方便连续纳管。
+                OAuthProviders.byId(key.removePrefix("providers_oauth_open:"))?.let {
+                    OAuthSheet(this, it).show()
+                }
+            }
             key.startsWith("providers_edit:") -> {
                 val id = key.removePrefix("providers_edit:")
                 val p = ProviderStore.load(this).firstOrNull { it.id == id }
@@ -1268,6 +1276,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheetPickList(title, SettingsStore.CODE_THEMES.toList(), current) { which ->
             if (isLight) store.codeThemeLightIndex = which else store.codeThemeDarkIndex = which
             renderPage()
+        }
+    }
+
+    /** 选一个 OAuth 供应商，然后进授权面板。 */
+    private fun pickOAuthProvider() {
+        val providers = OAuthProviders.all
+        sheetPickList("选择 OAuth 供应商", providers.map { it.name }, -1) { which ->
+            providers.getOrNull(which)?.let { OAuthSheet(this, it).show() }
         }
     }
 

@@ -9,6 +9,7 @@ import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.PhoneAccessibilityService
 import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.ZController
+import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.ProviderStore
 import org.json.JSONObject
 import java.io.File
@@ -152,6 +153,18 @@ object SettingsData {
             }
         }
         rows += SettingRow.Value("添加供应商", "填写 API 端点、模型名称与 Key", "providers_add")
+
+        // OAuth 供应商：授权登录后由本机网关托管账号，对内核而言仍是一条普通 provider。
+        rows += SettingRow.Header("OAuth 授权")
+        rows += SettingRow.Value(
+            "添加 OAuth 供应商",
+            "授权账号，由本机网关托管，可连续添加多个账号",
+            "providers_oauth_pick",
+        )
+        val oauth = OAuthProviders.all.filter { p -> providers.any { it.id == p.id } }
+        for (p in oauth) {
+            rows += SettingRow.Value(p.name, "${p.vendor} · 已授权", "providers_oauth_open:${p.id}")
+        }
         return SettingsPage("模型设置", rows)
     }
 

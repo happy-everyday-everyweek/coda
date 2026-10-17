@@ -53,6 +53,20 @@ object ProxyHost {
      */
     private const val MANAGEMENT_KEY = "coda-local-proxy"
 
+    /** 网关给下游用的调用密钥。 */
+    private const val CLIENT_KEY = "coda-client-key"
+
+    /** 管理接口密钥。 */
+    fun managementKey(): String = MANAGEMENT_KEY
+
+    /**
+     * 网关给下游（也就是内核）用的调用密钥。
+     *
+     * 与管理密钥分开：管理密钥能改配置、删账号，调用密钥只能发请求。内核只需要后者，
+     * 把权限更大的那把交给它没有好处。
+     */
+    fun clientKey(): String = CLIENT_KEY
+
     private var process: Process? = null
     private var booting = false
     private var activePort = DEFAULT_PORT
@@ -260,6 +274,10 @@ object ProxyHost {
             // 管理接口即使在回环地址上也要密钥，写操作（登录、签到、删账号）全部经过它。
             appendLine("  allow-remote: false")
             appendLine("  secret-key: \"$MANAGEMENT_KEY\"")
+            appendLine("access:")
+            // 下游（内核）用这把密钥调 /v1，权限只到发请求，不能碰管理面。
+            appendLine("  api-keys:")
+            appendLine("    - \"$CLIENT_KEY\"")
             appendLine("plugins:")
             appendLine("  enabled: true")
             appendLine("  dir: \"$plugins\"")
