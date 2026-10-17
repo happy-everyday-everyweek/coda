@@ -263,6 +263,17 @@ object ProxyHost {
             appendLine("plugins:")
             appendLine("  enabled: true")
             appendLine("  dir: \"$plugins\"")
+            // 只为目录里真实存在的插件写启用项，避免宿主报缺插件。
+            val present = OAuthProviders.all.filter {
+                File(pluginsDirFor(ctx), OAuthProviders.pluginFile(it)).isFile
+            }
+            if (present.isNotEmpty()) {
+                appendLine("  configs:")
+                for (p in present) {
+                    appendLine("    ${p.pluginId}:")
+                    appendLine("      enabled: true")
+                }
+            }
         }
         configFor(ctx).writeText(text)
     }
@@ -440,4 +451,84 @@ object ProxyHost {
     ): JSONObject? = runCatching {
         ProxyHost.management(ctx, path, method, body)?.let { JSONObject(it) }
     }.getOrNull()
+
+    // ---------------------------------------------------------------- 插件
+
+    /**
+     * 确保某个 OAuth 供应商的插件已就位。
+     *
+     * 只下这一个插件的 arm64 包（约 3MB），解出 `.so` 放进宿主扫描的插件目录。
+     * 已经装过就跳过，避免每次启动都重新下载。
+     */
+    fun ensurePlugin(ctx: Context, provider: OAuthProviders.Provider, onProgress: (String) -> Unit = {}): Boolean {
+        val target = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(provider))
+        if (target.isFile && target.length() > 500_000L) return true
+
+        onProgress("获取 ${provider.name} 插件…")
+        val zip = File(dirFor(ctx), "${provider.pluginId}.zip")
+        if (!download(ctx, provider.downloadUrl(provider), zip)) return false
+
+        return try {
+            // 压缩包里只有一个同名 .so，直接按 zip 结构取，不假设路径深度。
+            java.util.zip.ZipInputStream(FileInputStream(zip).buffered()).use { zin ->
+                while (true) {
+                    val entry = zin.nextEntry ?: break
+                    if (entry.isDirectory || !entry.name.endsWith(".so")) continue
+                    target.parentFile?.mkdirs()
+                    FileOutputStream(target).use { out -> zin.copyTo(out, 256 * 1024) }
+                    break
+                }
+            }
+            zip.delete()
+            if (target.isFile && target.length() > 500_000L) {
+                android.os.Process.chmod(target.absolutePath, 493) // 0755
+                true
+            } else {
+                target.delete()
+                false
+            }
+        } catch (_: Throwable) {
+            zip.delete()
+            target.delete()
+            false
+        }
+    }
+
+    /**
+     * 下载到文件。
+     *
+     * raw.githubusercontent.com 在部分网络下会被重置，所以失败时退回 GitHub API 的
+     * `contents` 原始通道（带鉴权），两条路都不通才算失败。
+     */
+    private fun download(ctx: Context, url: String, target: File): Boolean {
+        if (downloadOnce(ctx, url, target, raw = false)) return true
+        val apiUrl = url.replace("https://raw.githubusercontent.com/", "https://api.github.com/repos/")
+            .replace("/main/release-assets/", "/contents/release-assets/") + "?ref=main"
+        return downloadOnce(ctx, apiUrl, target, raw = true)
+    }
+
+    private fun downloadOnce(ctx: Context, url: String, target: File, raw: Boolean): Boolean = try {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 20_000
+            readTimeout = 180_000
+            instanceFollowRedirects = true
+            if (raw) {
+                // API 通道需要鉴权才不会被限流；用户没配令牌时也照常尝试匿名访问。
+                setRequestProperty("Accept", "application/vnd.github.raw")
+                GitHub.token(ctx)?.let { setRequestProperty("Authorization", "Bearer $it") }
+            }
+        }
+        if (conn.responseCode !in 200..299) {
+            false
+        } else {
+            target.parentFile?.mkdirs()
+            conn.inputStream.use { input ->
+                FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+            }
+            conn.disconnect()
+            target.length() > 500_000L
+        }
+    } catch (_: Throwable) {
+        false
+    }
 }

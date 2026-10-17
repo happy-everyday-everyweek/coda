@@ -18,7 +18,24 @@ object ProviderStore {
         var baseUrl: String,
         var apiKey: String,
         var models: MutableList<String>,
-    )
+        /**
+         * 凭据类型：`api-key` 是用户自己填 Key；`oauth` 是授权登录后由网关托管多账号凭据。
+         *
+         * 这个字段只影响我们怎么管理它，不影响内核读模型：内核看的是 `access` 段，
+         * oauth 供应商同样写一份 access，只是 apiKey 留空、真正的账号在网关的 auth 目录里。
+         */
+        var authType: String = AUTH_API_KEY,
+        /** OAuth 供应商标识（如 workbuddy），决定网关该起哪个插件。 */
+        var oauthProvider: String = "",
+    ) {
+        val isOAuth: Boolean get() = authType == AUTH_OAUTH
+    }
+
+    /** 自己填 Key 的普通供应商。 */
+    const val AUTH_API_KEY = "api-key"
+
+    /** 授权登录、多账号托管的供应商。 */
+    const val AUTH_OAUTH = "oauth"
 
     fun fileFor(ctx: Context): File {
         val base = File(ctx.filesDir, "zcode-data/.zcode/v2")
@@ -56,6 +73,11 @@ object ProviderStore {
                 baseUrl = api?.optString("baseUrl") ?: "",
                 apiKey = cfg.optJSONObject("access")?.optString("apiKey") ?: "",
                 models = models,
+                // access.type 是判别依据：oauth 供应商写的是网关托管凭据，没有 apiKey。
+                authType = cfg.optJSONObject("access")?.optString("type")
+                    ?.takeIf { it.isNotEmpty() } ?: AUTH_API_KEY,
+                // 供应商标识放在自定义段，内核不认识也不受影响。
+                oauthProvider = cfg.optJSONObject("coda")?.optString("oauthProvider") ?: "",
             )
         }
         return out
