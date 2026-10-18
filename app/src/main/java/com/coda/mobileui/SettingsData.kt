@@ -41,6 +41,23 @@ sealed class SettingRow {
 
     /** 单选项行。 */
     data class Radio(val title: String, val checked: Boolean, val key: String = "") : SettingRow()
+
+    /**
+     * 自定义视图行。
+     *
+     * 有些内容用「标题 + 一行文字」表达不了，比如热力图这种需要自己画布的控件。
+     * 这一行不自带 UI，只把数据交出去，由渲染方按 [kind] 构造对应视图。
+     */
+    data class Custom(
+        val kind: String,
+        val data: org.json.JSONObject? = null,
+        val key: String = "",
+    ) : SettingRow() {
+        companion object {
+            /** 活跃度热力图。数据是 usage/stats 的原始返回体。 */
+            const val KIND_HEATMAP = "heatmap"
+        }
+    }
 }
 
 /** 二级页面定义。 */
@@ -223,6 +240,12 @@ object SettingsData {
         }
         val s = data.optJSONObject("summary")
         if (s == null || s.optInt("totalSessions", 0) == 0) {
+            // 没有会话统计时，热力图仍可能有数据（比如只跑过工具），所以照画。
+            val heat = data.optJSONObject("heatmap")
+            if (heat != null && (heat.optJSONArray("weeks")?.length() ?: 0) > 0) {
+                rows += SettingRow.Header("活跃度")
+                rows += SettingRow.Custom(SettingRow.Custom.KIND_HEATMAP, data)
+            }
             rows += SettingRow.Value("暂无统计数据", "还没有产生用量记录")
             rows += SettingRow.Value("刷新", "重新读取统计", "extras_refresh:usage")
             return SettingsPage("使用统计", rows)
@@ -258,6 +281,8 @@ object SettingsData {
             "${s.optLong("avgTimeToFirstTokenMs")} / ${s.optLong("avgTurnDurationMs")} ms",
         )
         rows += SettingRow.Header("活跃度")
+        // 热力图用内核算好的按日数据，一格一天，颜色越深当天用量越大。
+        rows += SettingRow.Custom(SettingRow.Custom.KIND_HEATMAP, data)
         rows += SettingRow.Value(
             "活跃天数",
             "${s.optInt("activeDays")} 天 · 当前连续 ${s.optInt("currentStreakDays")} 天",
@@ -267,6 +292,43 @@ object SettingsData {
             "单日峰值",
             CodaExtras.formatCount(s.optLong("peakDayTokens")) + " Token",
         )
+
+        // 模型用量：各模型占比，按 token 从多到少。原页面只显示最常用的一个。
+        val models = data.optJSONArray("models")
+        if (models != null && models.length() > 0) {
+            rows += SettingRow.Header("模型用量")
+            val list = (0 until models.length()).mapNotNull { i -> models.optJSONObject(i) }
+                .sortedByDescending { it.optLong("totalTokens", 0) }
+            for (m in list.take(6)) {
+                val id = m.optString("modelId").ifEmpty { "未知模型" }
+                val share = (m.optDouble("share", 0.0) * 100).toInt()
+                rows += SettingRow.Value(
+                    id,
+                    "${CodaExtras.formatCount(m.optLong("totalTokens"))} Token · $share%" +
+                        " · ${m.optInt("requestCount")} 次",
+                )
+            }
+        }
+
+        // 工具用量：哪些工具被调用得最多。
+        val tools = data.optJSONArray("tools")
+        if (tools != null && tools.length() > 0) {
+            rows += SettingRow.Header("工具用量")
+            val list = (0 until tools.length()).mapNotNull { i -> tools.optJSONObject(i) }
+                .sortedByDescending { it.optInt("callCount", 0) }
+            for (t in list.take(6)) {
+                val name = t.optString("toolName").ifEmpty { t.optString("name") }
+                if (name.isEmpty()) continue
+                val calls = t.optInt("callCount")
+                val errors = t.optInt("errorCount")
+                val rate = (t.optDouble("errorRate", 0.0) * 100).toInt()
+                rows += SettingRow.Value(
+                    name,
+                    if (errors > 0) "$calls 次 · 失败 $errors 次（$rate%）" else "$calls 次",
+                )
+            }
+        }
+
         rows += SettingRow.Value("刷新", "重新读取统计", "extras_refresh:usage")
         return SettingsPage("使用统计", rows)
     }
