@@ -325,14 +325,19 @@ class TerminalPage(
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
             // 不能声明 TYPE_NULL：那在多数输入法里等于"这里不接收文本"，键盘会切成无输入
             // 状态并且不再回调 commitText，于是敲什么都不会有反应。这里按普通多行文本声
-            // 明，同时关掉联想与学习，避免候选词与自动更正来抢输入。
+            // 明，同时关掉联想，避免候选词与自动更正来抢输入。
+            //
+            // 也绝不能用任何 VARIATION_PASSWORD 变体（包括 VISIBLE_PASSWORD）：输入法看
+            // 到 PASSWORD 就切到密码键盘——空格式键盘、禁用剪贴板、回车键变成"完成"，
+            // 而终端需要的是完整的符号键盘与真正的换行。改用默认变体，隐私需求靠
+            // imeOptions 的 NO_PERSONALIZED_LEARNING 满足。
             outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
                 InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
                 EditorInfo.IME_FLAG_NO_EXTRACT_UI or
-                EditorInfo.IME_FLAG_NO_ENTER_ACTION
+                EditorInfo.IME_FLAG_NO_ENTER_ACTION or
+                EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
             outAttrs.initialCapsMode = 0
             return object : BaseInputConnection(this@TerminalInput, false) {
 
