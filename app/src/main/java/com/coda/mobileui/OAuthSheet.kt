@@ -207,7 +207,7 @@ class OAuthSheet(private val host: BaseActivity, private val provider: OAuthProv
         column.addView(status)
 
         Thread {
-            val list = OAuthLogin.models(host, provider)
+            val list = OAuthLogin.models(host)
             main.post {
                 models = list
                 status.text = if (list.isEmpty()) {
@@ -267,7 +267,7 @@ class OAuthSheet(private val host: BaseActivity, private val provider: OAuthProv
             override fun run() {
                 val current = session ?: return
                 Thread {
-                    val result = OAuthLogin.poll(host, current, provider.pluginId)
+                    val result = OAuthLogin.poll(host, current)
                     main.post {
                         when (result) {
                             is OAuthLogin.Result.Ready -> {

@@ -270,7 +270,9 @@ object ProxyHost {
             appendLine("server:")
             appendLine("  host: \"127.0.0.1\"")
             appendLine("  port: $port")
-            appendLine("auth-dir: \"$data/auth\"")
+            appendLine("oauth:")
+            // v8 起认证目录从顶层挪到了 oauth 段下，写在顶层会被忽略。
+            appendLine("  auth-dir: \"$data/auth\"")
             appendLine("management:")
             // 管理接口即使在回环地址上也要密钥，写操作（登录、签到、删账号）全部经过它。
             appendLine("  allow-remote: false")
@@ -344,24 +346,32 @@ object ProxyHost {
         }
     }
 
-    /** 把宿主的输出持续写进日志文件，方便排查；线程常驻但随进程结束退出。 */
+    /**
+     * 把宿主的输出持续写进日志文件，方便排查。
+     *
+     * 标准输出与错误输出各一条线程，但它们共用同一个文件，必须串行写：两个线程各自
+     * 用 appendText 会互相覆盖偏移，日志会变成残缺的碎片。这里只加锁，不合并流——
+     * 合并会丢掉"这条是错误还是普通输出"的区分。
+     */
     private fun pump(proc: Process, log: File) {
-        Thread {
-            runCatching {
-                proc.inputStream.bufferedReader().useLines { lines ->
-                    log.appendText(lines.joinToString("\n", postfix = "\n"))
+        val lock = Any()
+        fun drain(stream: java.io.InputStream) {
+            Thread {
+                runCatching {
+                    stream.bufferedReader().useLines { lines ->
+                        for (line in lines) {
+                            synchronized(lock) {
+                                runCatching { log.appendText(line + "\n") }
+                            }
+                        }
+                    }
+                }.onFailure {
+                    // 读不到输出不致命：宿主是否可用由 HTTP 探测判定，不看日志。
                 }
-            }.onFailure {
-                // 读不到输出不致命：宿主的健康状态由 HTTP 探测判定，不靠日志。
-            }
-        }.apply { isDaemon = true }.start()
-        Thread {
-            runCatching {
-                proc.errorStream.bufferedReader().useLines { lines ->
-                    log.appendText(lines.joinToString("\n", postfix = "\n"))
-                }
-            }
-        }.apply { isDaemon = true }.start()
+            }.apply { isDaemon = true }.start()
+        }
+        drain(proc.inputStream)
+        drain(proc.errorStream)
     }
 
     /** 轮询 `/healthz` 直到宿主应答，或超时。 */
@@ -469,6 +479,25 @@ object ProxyHost {
         body: String? = null,
     ): JSONObject? = runCatching {
         ProxyHost.management(ctx, path, method, body)?.let { JSONObject(it) }
+    }.getOrNull()
+
+    /**
+     * 用下游调用密钥请求数据面接口（`/v1/*`）。
+     *
+     * 与管理面分开：这里只带 `clientKey`，只能读模型、发对话，动不了账号与配置。
+     */
+    fun clientJson(ctx: Context, path: String): JSONObject? = runCatching {
+        val conn = (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10_000
+            readTimeout = 15_000
+            setRequestProperty("Authorization", "Bearer $CLIENT_KEY")
+        }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() }
+        conn.disconnect()
+        if (code in 200..299 && text != null) JSONObject(text) else null
     }.getOrNull()
 
     // ---------------------------------------------------------------- 插件

@@ -46,40 +46,46 @@ object OAuthLogin {
     /**
      * 开始一次登录。
      *
-     * 插件为每次登录建立独立的 cookie jar，所以连续登录多批账号不会互相串。
-     * 插件返回的字段各家略有差异：可能是 `auth_url`，也可能是 `authUrl`，一律兜住。
+     * 走宿主按插件挂的 `/<pluginId>-auth-url`：宿主替插件调 `auth.login.start`，
+     * 回 `{state, url, status}`。插件为每次登录建立独立 cookie jar，连续登录多批账号不会互串。
+     * 设备码流程还会带 `user_code`，其余字段名各家略有差异，一并兜住。
      */
     fun begin(ctx: Context, provider: OAuthProviders.Provider): Session? {
         val body = ProxyHost.managementJson(
             ctx,
-            "/v0/management/plugins/${provider.pluginId}/login/start",
-            method = "POST",
-            body = "{}",
+            "/v0/management/${provider.pluginId}-auth-url",
+            method = "GET",
         ) ?: return null
+        // 宿主的这层响应是扁平的，没有 data 包装，但兼容一层以防上游改形。
         val data = body.optJSONObject("data") ?: body
         val state = data.optString("state").ifEmpty { data.optString("flow_id") }
-        val url = data.optString("auth_url").ifEmpty { data.optString("authUrl") }
+        val url = data.optString("url").ifEmpty { data.optString("auth_url") }
+            .ifEmpty { data.optString("authUrl") }
             .ifEmpty { data.optString("authorize_url") }
+            .ifEmpty { data.optString("verification_uri_complete") }
             .ifEmpty { data.optString("verification_uri") }
         val code = data.optString("user_code")
         if (state.isEmpty() && url.isEmpty()) return null
         return Session(provider.id, state, url, code)
     }
 
-    /** 查一次登录结果。调用方自己按秒轮询。 */
-    fun poll(ctx: Context, session: Session, pluginId: String): Result {
+    /**
+     * 查一次登录结果。调用方自己按秒轮询。
+     *
+     * 宿主的会话状态只有三种取值：`wait` 等待、`ok` 完成、`error` 失败。
+     * 没有单独的"已就绪"状态——`ok` 即表示凭据已经落盘。
+     */
+    fun poll(ctx: Context, session: Session): Result {
         val body = ProxyHost.managementJson(
             ctx,
-            "/v0/management/plugins/$pluginId/login/poll",
-            method = "POST",
-            body = JSONObject().put("state", session.state).toString(),
+            "/v0/management/get-auth-status?state=${android.net.Uri.encode(session.state)}",
+            method = "GET",
         ) ?: return Result.Failed("无法连接网关")
 
         val data = body.optJSONObject("data") ?: body
-        val status = data.optString("status")
-        return when {
-            status == "ready" || data.has("token") || data.has("access_token") -> Result.Ready
-            status == "failed" -> Result.Failed(data.optString("message", "授权失败"))
+        return when (data.optString("status")) {
+            "ok", "ready", "success" -> Result.Ready
+            "error", "failed" -> Result.Failed(data.optString("error", "授权失败"))
             else -> Result.Pending
         }
     }
@@ -111,15 +117,13 @@ object OAuthLogin {
     }
 
     /**
-     * 从网关读这个供应商当前可用的模型。
+     * 从网关读当前可用的模型。
      *
-     * 直接问宿主要模型清单，比在客户端硬编码可靠：插件会按账号实际权限返回。
+     * 走宿主对下游的 `/v1/models`：登录成功的账号会以该账号实际权限注册模型，
+     * 用调用密钥就能读，不需要按插件、也不需要 auth_index。
      */
-    fun models(ctx: Context, provider: OAuthProviders.Provider): List<String> {
-        val body = ProxyHost.managementJson(
-            ctx,
-            "/v0/management/plugins/${provider.pluginId}/models",
-        ) ?: return emptyList()
+    fun models(ctx: Context): List<String> {
+        val body = ProxyHost.clientJson(ctx, "/v1/models") ?: return emptyList()
         val array = body.optJSONArray("data") ?: body.optJSONArray("models") ?: return emptyList()
         val out = mutableListOf<String>()
         for (i in 0 until array.length()) {
