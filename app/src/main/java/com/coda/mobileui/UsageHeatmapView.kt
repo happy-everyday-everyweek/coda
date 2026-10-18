@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.view.View
+import com.coda.mobileui.core.CodaExtras
 import com.google.android.material.color.MaterialColors
 import org.json.JSONObject
 import java.util.Calendar
@@ -275,7 +276,7 @@ class UsageHeatmapView(context: Context) : View(context) {
      *
      * @return 被点中的那格；点在空位上返回 null。
      */
-    fun cellAt(x: Float, y: Float): Cell? {
+    internal fun cellAt(x: Float, y: Float): Cell? {
         if (weeks.isEmpty()) return null
         val ci = ((x - leftPad) / (cellSize + gap)).toInt()
         val ri = ((y - topPad) / (cellSize + rowGap)).toInt()
@@ -287,7 +288,7 @@ class UsageHeatmapView(context: Context) : View(context) {
     }
 
     /** 给外部读出某格的描述文字。 */
-    fun describe(cell: Cell?): String? {
+    internal fun describe(cell: Cell?): String? {
         if (cell == null) return null
         val tokens = CodaExtras.formatCount(cell.tokens)
         return if (cell.tokens <= 0) {
@@ -298,5 +299,5 @@ class UsageHeatmapView(context: Context) : View(context) {
     }
 
     /** 当前选中的那格，供页面显示。 */
-    fun selectedCell(): Cell? = selected
+    internal fun selectedCell(): Cell? = selected
 }
