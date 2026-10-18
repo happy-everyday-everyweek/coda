@@ -70,7 +70,8 @@ object OAuthAccounts {
             get() = when {
                 disabled -> Health.DISABLED
                 exhausted -> Health.EXHAUSTED
-                cooling && coolUntil * 1000 > System.currentTimeMillis() -> Health.COOLING
+                // 插件说在冷却但没给截止时间时也要按冷却显示，否则会误报成正常。
+                cooling && (coolUntil <= 0 || coolUntil * 1000 > System.currentTimeMillis()) -> Health.COOLING
                 testFailed -> Health.SUSPECT
                 lowCredits -> Health.LOW
                 error.isNotEmpty() -> Health.UNKNOWN
@@ -124,19 +125,30 @@ object OAuthAccounts {
          * 记录具体命中哪几条，界面才能给出准确的动作名而不是笼统的「领取奖励」。
          */
         val growthRoutes: Set<String> = emptySet(),
+        /** 有 `/unfreeze`，可解冻被上游风控冻结的账号。 */
+        val unfreeze: Boolean = false,
+        /** 从面板读到的全部路由，界面上可以用来判断"这个平台还有什么"。 */
+        val routes: Set<String> = emptySet(),
     )
-
-    /**
-     * 探测能力的探测顺序。
+/**
+     * 从插件面板 HTML 里读出它实现了哪些路由。
      *
-     * 每个字段对应一条只读或幂等的请求。签到类用 GET 打会 404、用 POST 打会真的签到，
-     * 所以对写操作只能看宿主是否返回 404 以外的状态码——这里用空 body 的 POST，
-     * 插件会因为缺少 auth_index 回业务错误而不是 404，从而能把"存在"和"不存在"分清。
+     * 判据不是平台名字，也不是"有面板就什么都有"（早先那版就错在这），而是面板脚本里
+     * 实际调用的路由。面板脚本的写法是 `api("/checkin")`、`api("/models?auth_index=")`，
+     * 所以只认 `api("` 后面那一段，避免把页面里的静态资源路径也算进来。
+     *
+     * 为什么不用 POST 空 body 逐条试探：不少插件把"auth_index 为空"定义为对全部账号执行，
+     * 探一条 /disable 就会真的把整平台的账号停掉。这种探测方式有副作用，不能用。
      */
-    private fun probe(ctx: Context, provider: OAuthProviders.Provider, path: String): Boolean {
-        val code = ProxyHost.managementStatus(ctx, base(provider) + path, "POST", "{}")
-        // 404 才是"这条路不存在"，其余状态码都说明插件认这条路由。
-        return code != null && code != 404
+    private fun parseRoutes(html: String): Set<String> {
+        val out = mutableSetOf<String>()
+        val regex = Regex("""api\(\s*["'](/[^"']*)["']""")
+        for (m in regex.findAll(html)) {
+            // 查询串与末尾斜杠与路由表无关。
+            val path = m.groupValues[1].substringBefore('?').trimEnd('/')
+            if (path.isNotEmpty()) out += path
+        }
+        return out
     }
 
     /** 一次操作的结果，界面直接拿去提示。 */
@@ -149,39 +161,57 @@ object OAuthAccounts {
     /**
      * 探测插件支持哪些账号操作。
      *
-     * 宿主 `/v0/management/plugins` 会报每个插件是否支持 oauth 与 quota，但不报账号面板能力，
-     * 所以这里按插件里是否存在对应路由来判定：先取一次 `/accounts`，能通就认为是面板型插件。
+     * 分两个来源，先读面板再补验证：
+     *
+     * 一是插件自带的面板 HTML，它就是一张路由清单（脚本里 `api("/xxx")` 调的就是实现的）。
+     * 但面板只覆盖它自己用到的路由，比如 `keepalive` 只会自动跑、面板不显示，就不在里面。
+     * 所以二是对这类"面板未必提到"的路由单独发一条只读的 GET 验证：GET 打写接口只会 404，
+     * 不会产生副作用，可以安全地用来判断存在性。
+     *
+     * 绝不能用 POST 空 body 去试：不少插件把"auth_index 为空"定义为对全部账号执行，
+     * 探一条 /disable 就会真的把整平台的账号停掉。
      */
     fun capabilities(ctx: Context, provider: OAuthProviders.Provider): Capabilities {
-        // 面板本身用 GET 探，它不会产生副作用。
-        val panel = ProxyHost.managementJson(ctx, base(provider) + "/accounts")?.let { body ->
-            body.has("accounts") || body.has("summary")
-        } ?: false
+        val html = ProxyHost.resourceText(ctx, "/v0/resource/plugins/${provider.pluginId}/panel")
+        val panelRoutes = if (html == null) emptySet() else parseRoutes(html)
 
-        // 其余逐条探。这里会有十来次本地回环请求，都在后台线程跑，代价可接受；
-        // 比"猜一个通用集合、点下去报 404"对用户友好得多。
-        val checkin = panel && probe(ctx, provider, "/checkin")
-        // 活动领取各家用不同名字，逐条探出来记进集合，界面据此给出准确的动作名。
-        val growthRoutes = mutableSetOf<String>()
-        if (panel) {
-            if (probe(ctx, provider, "/growth")) growthRoutes += "growth"
-            if (probe(ctx, provider, "/claim")) growthRoutes += "claim"
+        // 面板没提到、但可能存在的路由，用 GET 探测真值。GET 不会有副作用。
+        fun exists(path: String): Boolean =
+            panelRoutes.contains(path) ||
+                ProxyHost.managementStatus(ctx, base(provider) + path, "GET", null)?.let { it != 404 } == true
+
+        if (panelRoutes.isEmpty() && !exists("/accounts")) return Capabilities(
+            panel = false, checkin = false, growth = false, refresh = false, keepalive = false,
+        )
+
+        val routes = mutableSetOf<String>()
+        routes += panelRoutes
+        // 面板外的关键路由逐个确认，确认到才加入能力集。
+        for (path in listOf("/keepalive", "/enable", "/disable", "/claim", "/claim-pro", "/clear-cooldown", "/unfreeze")) {
+            if (exists(path)) routes += path
         }
+
         return Capabilities(
-            panel = panel,
-            checkin = checkin,
-            growth = growthRoutes.isNotEmpty(),
-            refresh = panel && probe(ctx, provider, "/refresh"),
-            keepalive = panel && probe(ctx, provider, "/keepalive"),
-            claimPro = panel && probe(ctx, provider, "/claim-pro"),
-            clearCooldown = panel && probe(ctx, provider, "/clear-cooldown"),
+            panel = true,
+            checkin = routes.contains("/checkin"),
+            growth = routes.contains("/growth") || routes.contains("/claim"),
+            refresh = routes.contains("/refresh"),
+            keepalive = routes.contains("/keepalive"),
+            claimPro = routes.contains("/claim-pro"),
+            clearCooldown = routes.contains("/clear-cooldown") || routes.contains("/unfreeze"),
             // 启停要两个都有才有意义，只实现一个的平台不显示开关。
-            enableDisable = panel && probe(ctx, provider, "/enable") && probe(ctx, provider, "/disable"),
-            checkinConfig = checkin && probe(ctx, provider, "/checkin/config"),
-            trial = panel && probe(ctx, provider, "/trial"),
-            growthRoutes = growthRoutes,
+            enableDisable = routes.contains("/enable") && routes.contains("/disable"),
+            checkinConfig = routes.contains("/checkin/config"),
+            trial = routes.contains("/trial"),
+            growthRoutes = buildSet {
+                if (routes.contains("/growth")) add("growth")
+                if (routes.contains("/claim")) add("claim")
+            },
+            unfreeze = routes.contains("/unfreeze"),
+            routes = routes,
         )
     }
+
 
     /**
      * 列出该平台上已登录的账号。

@@ -472,6 +472,35 @@ object ProxyHost {
     }
 
     /**
+     * 取插件自带管理面板的 HTML 原文。
+     *
+     * 面板挂在 `/v0/resource/plugins/<pluginId>/panel`，是资源路由，不需要管理密钥。
+     * 它对我们的价值不在界面，而在它是插件的**能力清单**：面板脚本里用 `api("/xxx")`
+     * 调哪些路由，插件就实现了哪些路由。比起拿 POST 空 body 去试探（空 body 在不少插件里
+     * 等于「对全部账号执行」，会真的触发签到或停用），读面板是纯只读、且一次拿到全量。
+     *
+     * 拿不到就返回 null，调用方退回"什么都不显示"而不是瞎猜。
+     */
+    fun resourceText(ctx: Context, path: String, timeoutMs: Int = 10_000): String? = try {
+        val conn = (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8_000
+            readTimeout = timeoutMs
+        }
+        val code = conn.responseCode
+        val text = if (code in 200..299) {
+            conn.inputStream?.bufferedReader()?.use { it.readText() }
+        } else {
+            runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }
+            null
+        }
+        conn.disconnect()
+        text
+    } catch (_: Throwable) {
+        null
+    }
+
+    /**
      * 发一条管理请求，只回状态码。
      *
      * 用来区分"这条路不存在"与"这条路存在但参数不对"：插件把未知路径当 404 回，

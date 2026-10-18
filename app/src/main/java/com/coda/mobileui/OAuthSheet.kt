@@ -264,13 +264,21 @@ class OAuthSheet(
         self.primaryAction(if (step == 2) "完成" else "继续") { next -> onPrimary(next) }
     }
 
-    /** 轮询插件，直到授权成功或失败。 */
+    /** 轮询插件，直到授权成功、失败，或超过插件的会话有效期。 */
     private fun startPolling() {
         if (polling) return
         polling = true
+        val startedAt = System.currentTimeMillis()
         val tick = object : Runnable {
             override fun run() {
                 val current = session ?: return
+                // 插件的登录会话默认 5 分钟过期，过期后 poll 会一直回 wait。
+                // 客户端必须自己收口，否则界面会永远停在"等待授权"。
+                if (System.currentTimeMillis() - startedAt > SESSION_TIMEOUT_MS) {
+                    polling = false
+                    statusText?.text = "授权超时，请重新发起登录"
+                    return
+                }
                 Thread {
                     val result = OAuthLogin.poll(host, current)
                     main.post {
@@ -365,5 +373,8 @@ class OAuthSheet(
 
     private companion object {
         const val POLL_INTERVAL_MS = 2_000L
+
+        /** 插件侧登录会话 5 分钟过期，客户端按同一上限收口。 */
+        const val SESSION_TIMEOUT_MS = 5 * 60_000L
     }
 }

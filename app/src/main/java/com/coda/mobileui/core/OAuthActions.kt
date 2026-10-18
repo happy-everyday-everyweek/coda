@@ -105,6 +105,20 @@ object OAuthActions {
             scope = Scope.PLATFORM,
         ),
         Action(
+            id = "select",
+            title = "设为当前路由",
+            note = "网关优先用这个账号承接请求",
+            path = "/select",
+            scope = Scope.ACCOUNT,
+        ),
+        Action(
+            id = "test-active",
+            title = "测试连通",
+            note = "发一次真实请求验证账号可用",
+            path = "/test-active",
+            scope = Scope.ACCOUNT,
+        ),
+        Action(
             id = "keepalive",
             title = "续期令牌",
             note = "凭据过期时手动刷新一次",
@@ -116,6 +130,14 @@ object OAuthActions {
             title = "清除冷却",
             note = "让被限流的账号立刻重新参与调度",
             path = "/clear-cooldown",
+            scope = Scope.ACCOUNT,
+            confirm = true,
+        ),
+        Action(
+            id = "unfreeze",
+            title = "解冻账号",
+            note = "解除上游的风控冻结状态",
+            path = "/unfreeze",
             scope = Scope.ACCOUNT,
             confirm = true,
         ),
@@ -168,8 +190,11 @@ object OAuthActions {
         if (caps.claimPro) all.firstOrNull { it.id == "claim-pro" }?.let { out += it }
         if (caps.trial) all.firstOrNull { it.id == "trial" }?.let { out += it }
         if (caps.refresh) all.firstOrNull { it.id == "refresh" }?.let { out += it }
+        // select 与 test-active 面板里一定在用，探到路由表里有就放出来。
+        if (caps.routes.contains("/select")) all.firstOrNull { it.id == "select" }?.let { out += it }
+        if (caps.routes.contains("/test-active")) all.firstOrNull { it.id == "test-active" }?.let { out += it }
         if (caps.keepalive) all.firstOrNull { it.id == "keepalive" }?.let { out += it }
-        if (caps.clearCooldown) all.firstOrNull { it.id == "clear-cooldown" }?.let { out += it }
+        if (caps.unfreeze) all.firstOrNull { it.id == "unfreeze" }?.let { out += it }
         if (caps.enableDisable) {
             all.firstOrNull { it.id == "enable" }?.let { out += it }
             all.firstOrNull { it.id == "disable" }?.let { out += it }
