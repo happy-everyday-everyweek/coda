@@ -327,7 +327,7 @@ class OAuthAccountSheet(
         // 国际版账号走加油包，没有签到。
         if (account.region == "global") {
             card.addView(TextView(host).apply {
-                text = "国际版账号没有每日签到，额度靠专家加油包。"
+                setText("国际版账号没有每日签到，额度靠专家加油包。")
                 setTextColor(onSurfaceVariant)
                 textSize = 12f
                 setPadding(0, dp(7f), 0, 0)

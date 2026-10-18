@@ -209,7 +209,7 @@ class OAuthAccountsSheet(private val host: BaseActivity) {
         row.addView(text)
 
         row.addView(TextView(host).apply {
-            text = "›"
+            setText("›")
             setTextColor(onSurfaceVariant)
             textSize = 16f
         })
