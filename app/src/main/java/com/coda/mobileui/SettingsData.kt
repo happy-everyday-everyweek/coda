@@ -129,6 +129,9 @@ object SettingsData {
     fun appearance(store: SettingsStore): SettingsPage = SettingsPage(
         "外观",
         listOf(
+            // 这一行只在「其它设置页」开关打开时才有内容；关掉时高度为 0。
+            // 放在最前面，是为了让它趴在第一张卡片的留白里，而不是压住正文。
+            SettingRow.Custom(kind = SettingRow.Custom.KIND_PET_STAGE, key = "appearance"),
             SettingRow.Header("主题"),
             SettingRow.Radio("跟随系统", store.themeMode == SettingsStore.MODE_SYSTEM, "theme=${SettingsStore.MODE_SYSTEM}"),
             SettingRow.Radio("浅色", store.themeMode == SettingsStore.MODE_LIGHT, "theme=${SettingsStore.MODE_LIGHT}"),
@@ -712,11 +715,37 @@ object SettingsData {
         rows.add(
             SettingRow.Toggle(
                 "启用宠物",
-                "在输入框上方与设置页显示",
+                "总开关，关掉后任何页面都不再出现",
                 store.petEnabled,
                 "pet_enabled",
             ),
         )
+        rows.add(SettingRow.Header("在哪些页面出现"))
+        rows.add(
+            SettingRow.Toggle(
+                "输入框上方",
+                "会话页输入框上方的提示条",
+                store.petInComposer,
+                "pet_in_composer",
+            ),
+        )
+        rows.add(
+            SettingRow.Toggle(
+                "宠物设置页",
+                "也就是这一页顶部趴着的那只",
+                store.petInSettings,
+                "pet_in_settings",
+            ),
+        )
+        rows.add(
+            SettingRow.Toggle(
+                "其它设置页",
+                "外观、使用统计等页面顶部；默认关闭，避免到处都有它",
+                store.petInOtherSettings,
+                "pet_in_other_settings",
+            ),
+        )
+        rows.add(SettingRow.Header("显示方式"))
         rows.add(
             SettingRow.Toggle(
                 "只显示气泡",

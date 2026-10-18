@@ -47,9 +47,10 @@ class PetStageView(context: Context) : LinearLayout(context) {
      * 形象取设置里选的那份；主题色直接用当前 Activity 的 colorPrimary，
      * 所以换主色或开自动取色之后，这只小家伙会跟着变。
      */
-    fun bind(ctx: Context) {
+    fun bind(ctx: Context, pageKey: String = "pet") {
         val store = SettingsStore.get(ctx)
-        if (!store.petEnabled || store.petBubbleOnly) {
+        // 先按页面判断该不该出现：总开关、该页场景开关、以及"只显示气泡"三者都得成立
+        if (!store.petSettingsVisible(pageKey) || store.petBubbleOnly) {
             visibility = View.GONE
             layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, 0)
             return
@@ -63,7 +64,7 @@ class PetStageView(context: Context) : LinearLayout(context) {
         pet.accent = accent
         pet.accentLight = light
         pet.accentSoft = soft
-        pet.reduceMotion = store.petReduceMotion
+        pet.reduceMotion = store.petReduceMotionEffective(ctx)
 
         hint.text = hintFor(store.petSkinId)
         // 设置页里它只是趴在旁边看着，不占用运行状态

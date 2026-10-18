@@ -186,13 +186,17 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     override fun onToggleChange(key: String, checked: Boolean) {
-        if (key == "pet_enabled" || key == "pet_bubble_only" || key == "pet_reduce_motion") {
+        if (key.startsWith("pet")) {
             when (key) {
                 "pet_enabled" -> store.petEnabled = checked
                 "pet_bubble_only" -> store.petBubbleOnly = checked
-                else -> store.petReduceMotion = checked
+                "pet_reduce_motion" -> store.petReduceMotion = checked
+                "pet_in_composer" -> store.petInComposer = checked
+                "pet_in_settings" -> store.petInSettings = checked
+                "pet_in_other_settings" -> store.petInOtherSettings = checked
+                else -> return
             }
-            // 这三项都只影响显示，改完就地重画这一页即可
+            // 这些都只影响显示，改完就地重画这一页即可（宠物站台会按新设置决定是否出现）
             renderPage()
             return
         }

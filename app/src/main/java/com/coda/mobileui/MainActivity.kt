@@ -186,6 +186,14 @@ class MainActivity : BaseActivity() {
     /** 运行期的宠物对表拍子（只在 zc.running 时循环）。 */
     private val petTick = Runnable { syncPet() }
 
+    /**
+     * 内核当前挂起的权限请求对应的工具名。
+     *
+     * 内核推权限请求时并不知道具体是哪个工具在排队（消息列表可能还没更新），
+     * 所以这里单独记一份，作为"等你确认"最可靠的来源；用户处理完就清空。
+     */
+    private var pendingPermissionName: String? = null
+
     /** 当前思考强度档位（0=轻度 … 4=Max），面板重建后保持。 */
     private var strengthLevel = 0
 
@@ -1239,16 +1247,27 @@ collapseFullDrawerThen { showConversation(conversation) }
                 snack(text)
             }
 
-            override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
+override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
+                // 记下这一次等待，宠物条据此立刻切到"等你确认"
+                pendingPermissionName = params.optString("toolName").ifEmpty { "权限" }
+                syncPet(force = true)
                 showPermissionDialog(requestId, params)
             }
 
             override fun onUserInputRequest(requestId: Any, params: org.json.JSONObject) {
+                pendingPermissionName = "询问"
+                syncPet(force = true)
                 showUserInputDialog(requestId, params)
             }
 
             override fun onSessionOpened(sessionId: String) {
                 todoStatusCache.clear()
+                // 换会话等于换上下文：上一回合的"在跑/刚结束"不能带过来，
+                // 否则会一出场就误报"做完了"。
+                petWasRunning = false
+                petActivity = ""
+                pendingPermissionName = null
+                petBar?.hideNow()
                 renderFromController()
             }
         }
@@ -1299,7 +1318,8 @@ collapseFullDrawerThen { showConversation(conversation) }
     private fun applyPetSettings() {
         val bar = petBar ?: return
         val store = SettingsStore.get(this)
-        if (!store.petEnabled) {
+        // 总开关关掉，或明确不在会话页显示时，整条都不工作
+        if (!store.petComposerVisible()) {
             bar.hideNow()
             bar.visibility = android.view.View.GONE
             ui.removeCallbacks(petTick)
@@ -1307,7 +1327,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         }
         bar.visibility = android.view.View.VISIBLE
         bar.petView().visibility = if (store.petBubbleOnly) android.view.View.GONE else android.view.View.VISIBLE
-        bar.petView().reduceMotion = store.petReduceMotion
+        bar.petView().reduceMotion = store.petReduceMotionEffective(this)
         val colors = accentTriple()
         bar.applySkin(this, store.petSkinId, colors[0], colors[1], colors[2])
     }
@@ -1329,8 +1349,8 @@ collapseFullDrawerThen { showConversation(conversation) }
      */
     private fun syncPet(force: Boolean = false) {
         val bar = petBar ?: return
-        // 关掉总开关时整条不工作，连对表拍子也不排
-        if (!SettingsStore.get(this).petEnabled) return
+        // 关掉总开关或会话页不显示时，整条不工作，连对表拍子也不排
+        if (!SettingsStore.get(this).petComposerVisible()) return
         // 运行期间每 2 秒对一次表：内核的工具切换事件不一定每次都推过来，
         // 光靠 stateChanged 会出现"字一直停在第一步"的情况。停止后不再排下一拍。
         ui.removeCallbacks(petTick)
@@ -1340,7 +1360,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             // 正在等用户确认：优先显示它，因为这是唯一需要人动手的状态
             val waiting = waitingTool()
             if (waiting != null) {
-                val label = "等你确认：" + toolLabel(waiting.tool)
+                val label = "等你确认：" + toolLabel(waiting)
                 if (force || label != petActivity) {
                     petActivity = label
                     bar.showWaiting(label)
@@ -1412,11 +1432,22 @@ collapseFullDrawerThen { showConversation(conversation) }
         }.getOrNull()?.takeIf { it.isNotBlank() }?.let { shorten(it) }
     }
 
-    /** 正在等用户处理的工具（询问类）。 */
-    private fun waitingTool(): com.coda.mobileui.core.ZPart.ToolPart? {
+    /**
+     * 正在等用户处理的动作。
+     *
+     * 只认两类：内核明确推来的权限请求（优先，最准），以及模型主动发起的询问类工具。
+     * 不能把"状态是 scheduled/pending 的工具"一律当成等待——
+     * 一个回合里排队的工具大多只是还没轮到执行，那样会一直误报"等你确认"。
+     */
+    private fun waitingTool(): String? {
+        pendingPermissionName?.let { return it }
         val last = zc.messages.lastOrNull() ?: return null
-        return last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
-            .lastOrNull { it.status == "scheduled" || it.status == "pending" }
+        val asking = last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
+            .lastOrNull {
+                (it.status == "scheduled" || it.status == "pending" || it.status == "running") &&
+                    (it.tool == "AskUserQuestion" || it.tool == "ExitPlanMode")
+            }
+        return asking?.tool
     }
 
     /** 这一回合是否有工具失败，返回最先失败的那个工具名。 */
@@ -2632,6 +2663,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         sheet.onDismiss {
             if (!responded) {
                 zc.runtime.respond(requestId, org.json.JSONObject().put("decision", "deny"))
+                clearPendingPermission()
             }
         }
         sheet.content { col ->
@@ -2652,6 +2684,7 @@ collapseFullDrawerThen { showConversation(conversation) }
                             val resp = options?.optJSONObject(index)?.optJSONObject("response")
                                 ?: org.json.JSONObject().put("decision", "deny")
                             zc.runtime.respond(requestId, resp)
+                            clearPendingPermission()
                             sheet.dismiss()
                         }
                     },
@@ -2685,6 +2718,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         sheet.onDismiss {
             if (!responded) {
                 zc.runtime.respond(requestId, org.json.JSONObject().put("action", "decline"))
+                clearPendingPermission()
             }
         }
         if (labels.isNotEmpty()) {
@@ -2729,6 +2763,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             sheet.secondaryAction("拒绝") { s ->
                 responded = true
                 zc.runtime.respond(requestId, org.json.JSONObject().put("action", "decline"))
+                clearPendingPermission()
                 s.dismiss()
             }
             sheet.primaryAction("提交") { s ->
@@ -2749,6 +2784,14 @@ collapseFullDrawerThen { showConversation(conversation) }
             requestId,
             org.json.JSONObject().put("action", "accept").put("content", content),
         )
+        clearPendingPermission()
+    }
+
+    /** 用户处理完一次等待后，清掉标记并让宠物条回到运行态。 */
+    private fun clearPendingPermission() {
+        pendingPermissionName = null
+        petActivity = ""
+        syncPet()
     }
 
     /** 申请存储权限（Agent 修改安卓文件所需）。 */

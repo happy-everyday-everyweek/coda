@@ -38,6 +38,9 @@ class PetBar(context: Context) : LinearLayout(context) {
     private var shown = false
     private var pendingDismiss: Runnable? = null
 
+    /** 承载本条的容器。收起时整块隐藏，避免它的 padding 留下空隙。 */
+    private var host: ViewGroup? = null
+
     init {
         orientation = VERTICAL
         setPadding(0, 0, 0, 0)
@@ -101,6 +104,31 @@ class PetBar(context: Context) : LinearLayout(context) {
         pendingDismiss = null
         bubble.text = text
         bubble.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        // 文字长短变了行数会变，高度是固定值时会裁掉第二行，这里按新内容重新量一次。
+        relayoutToContent()
+    }
+
+    /**
+     * 按当前内容重算高度并直接套用（不动画）。
+     *
+     * 展开时用的是动画，动画结束时已经切成 WRAP_CONTENT；
+     * 但显示期间文字变了（"读取文件" → "编辑文件：PetBar.kt"）时，还需要再量一次。
+     */
+    private fun relayoutToContent() {
+        if (!shown) return
+        post {
+            if (!shown) return@post
+            val parent = parent as? View
+            val available = (parent?.width ?: 0) - paddingStart - paddingEnd
+            val widthSpec = if (available > 0) {
+                MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST)
+            } else {
+                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            }
+            measure(widthSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            layoutParams.height = LayoutParams.WRAP_CONTENT
+            requestLayout()
+        }
     }
 
     /** 需要用户确认。 */
@@ -123,10 +151,20 @@ class PetBar(context: Context) : LinearLayout(context) {
     fun hideNow() {
         pendingDismiss?.let { removeCallbacks(it) }
         pendingDismiss = null
-        if (!shown) return
+        if (!shown) {
+            // 已经是收起态：顺手把宿主也藏掉（首次进入走这里）
+            host?.visibility = View.GONE
+            return
+        }
         shown = false
+        // 同时把播放器复位回 idle：否则下次播同一个状态（连着两次「做完了」）
+        // 会被 setMood 的幂等判断吃掉，庆祝动画就不播了。
+        pet.resetToIdle()
         animateHeight(0) {
             visibility = View.GONE
+            // 宿主本身也藏起来：它是 wrap_content + 左右 padding，
+            // 只把自身高度设 0 仍会留下一条 padding 的空白。
+            host?.visibility = View.GONE
             onShownChanged?.invoke(false)
         }
     }
@@ -159,12 +197,22 @@ class PetBar(context: Context) : LinearLayout(context) {
         pet.setMood(mood)
         if (!shown) {
             shown = true
+            // 宿主先恢复可见，否则测出来的宽度恒为 0，展开动画会用错目标高度
+            host?.visibility = View.VISIBLE
             visibility = View.VISIBLE
-            measure(
-                MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST),
-                MeasureSpec.UNSPECIFIED,
-            )
-            animateHeight(measuredHeight) { onShownChanged?.invoke(true) }
+            // 第一次展开时自身 width 还是 0，用父容器的可用宽度来测量，
+            // 否则测出来的高度会按 0 宽算（气泡换行数不同，高度就差很多）。
+            val parent = parent as? View
+            val available = (parent?.width ?: 0) - paddingStart - paddingEnd
+            val widthSpec = if (available > 0) {
+                MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST)
+            } else {
+                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            }
+            measure(widthSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            // 测量的结果可能是 0（还没布局完），兜一个按内容的估算，避免展开动画起点终点相同
+            val target = if (measuredHeight > 0) measuredHeight else dp(56)
+            animateHeight(target) { onShownChanged?.invoke(true) }
         }
     }
 
@@ -173,26 +221,54 @@ class PetBar(context: Context) : LinearLayout(context) {
         if (mood == PetMood.IDLE) hideNow()
     }
 
+    /**
+     * 收起（target = 0）或展开到内容高。
+     *
+     * 高度在收起态是 0、在展开态是 WRAP_CONTENT，两者都不是固定像素，
+     * 所以不能拿当前 height 和目标做相等判断，直接按方向走。
+     */
     private fun animateHeight(target: Int, end: (() -> Unit)? = null) {
         anim?.cancel()
-        val from = height.coerceAtLeast(0)
-        if (from == target) {
-            layoutParams.height = target
-            end?.invoke()
+        if (target == 0) {
+            // 收起：从当前实际高度动画到 0
+            val from = height.coerceAtLeast(0)
+            if (from <= 0) {
+                layoutParams.height = 0
+                requestLayout()
+                end?.invoke()
+                return
+            }
+            anim = ValueAnimator.ofInt(from, 0).apply {
+                duration = 180
+                interpolator = DecelerateInterpolator()
+                addUpdateListener { animation ->
+                    layoutParams.height = animation.animatedValue as Int
+                    requestLayout()
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        layoutParams.height = 0
+                        requestLayout()
+                        end?.invoke()
+                    }
+                })
+                start()
+            }
             return
         }
+        // 展开：从当前高度动画到测量出来的内容高，结束后交给 WRAP_CONTENT
+        val from = height.coerceAtLeast(0)
         anim = ValueAnimator.ofInt(from, target).apply {
             duration = 180
             interpolator = DecelerateInterpolator()
             addUpdateListener { animation ->
-                val v = animation.animatedValue as Int
-                layoutParams.height = v
+                layoutParams.height = animation.animatedValue as Int
                 requestLayout()
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
-                    layoutParams.height = if (target == 0) 0 else LayoutParams.WRAP_CONTENT
-                    if (target != 0) requestLayout()
+                    layoutParams.height = LayoutParams.WRAP_CONTENT
+                    requestLayout()
                     end?.invoke()
                 }
             })
@@ -250,6 +326,8 @@ class PetBar(context: Context) : LinearLayout(context) {
 
     /** 塞进容器时用，初始高度为 0（收起态）。 */
     fun attachTo(parent: ViewGroup, index: Int = -1) {
+        host = parent
+        parent.visibility = View.GONE
         val lp = LayoutParams(LayoutParams.MATCH_PARENT, 0)
         if (index >= 0) parent.addView(this, index, lp) else parent.addView(this, lp)
     }

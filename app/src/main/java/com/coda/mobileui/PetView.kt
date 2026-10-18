@@ -58,6 +58,8 @@ class PetView(context: Context) : View(context) {
     var onMoodChanged: ((PetMood) -> Unit)? = null
 
     private var mood: PetMood = PetMood.IDLE
+    /** 当前状态是否已经装配过片段（用于 setMood 的幂等判断）。 */
+    private var moodReady: Boolean = false
     private var cachedPalette: Map<Char, Int> = skin.resolvePalette(accentLight, accent, accentSoft)
     private val poseCache = HashMap<String, Array<CharArray>>()
 
@@ -98,11 +100,26 @@ class PetView(context: Context) : View(context) {
 
     /** 切状态。同一状态重复调用不留痕，避免重播进场动画。 */
     fun setMood(next: PetMood, animate: Boolean = true) {
-        if (next == mood && clipName.isNotEmpty()) return
+        // 只比 mood 不够：still 类型的状态（如 idle）不设 clipName，
+        // 光看 clipName 会误判成"还没播过"而重播；反过来 hide 之后又可能被误当成"已在播"。
+        // 用一个自增的 revision 标记"这一版状态是否已经装配过"。
+        if (next == mood && moodReady) return
         applyMood(next, animate)
     }
 
     fun mood(): PetMood = mood
+
+    /**
+     * 回到闲置并把播放器复位。
+     *
+     * 提示条收起时必须调用：否则下一次显示「做完了」时，会因为状态相同而被
+     * setMood 的幂等判断直接跳过，动画就不会播。
+     */
+    fun resetToIdle() {
+        moodReady = false
+        applyMood(PetMood.IDLE, animate = false)
+        moodReady = true
+    }
 
     private fun applyMood(next: PetMood, animate: Boolean) {
         mood = next
@@ -129,6 +146,7 @@ class PetView(context: Context) : View(context) {
         val every = spec?.fidgetEveryMs ?: 0L
         fidgetAt = if (every > 0) System.currentTimeMillis() + every else 0L
         fidgeting = false
+        moodReady = true
     }
 
     private fun play(name: String?, loop: Boolean) {

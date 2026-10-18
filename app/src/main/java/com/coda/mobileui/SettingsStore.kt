@@ -116,6 +116,50 @@ class SettingsStore private constructor(context: Context) {
         get() = prefs.getBoolean(KEY_PET_REDUCE_MOTION, false)
         set(value) = prefs.edit().putBoolean(KEY_PET_REDUCE_MOTION, value).apply()
 
+    /**
+     * 实际生效的"减少动态效果"。
+     *
+     * 用户手动打开，或者系统里开了「移除动画」时为真。系统那档是硬性偏好，
+     * 不该被应用里的默认值盖掉，所以这里取或。
+     */
+    fun petReduceMotionEffective(ctx: Context): Boolean {
+        if (petReduceMotion) return true
+        val scale = runCatching {
+            android.provider.Settings.Global.getFloat(
+                ctx.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            )
+        }.getOrDefault(1f)
+        return scale == 0f
+    }
+
+    // ------------------------------------------------- 宠物出现在哪些场景
+
+    /** 输入框上方。这里是主战场，默认开。 */
+    var petInComposer: Boolean
+        get() = prefs.getBoolean(KEY_PET_IN_COMPOSER, true)
+        set(value) = prefs.edit().putBoolean(KEY_PET_IN_COMPOSER, value).apply()
+
+    /** 宠物设置页顶部那只趴着的。默认开，关掉后连设置页里的装饰也不出现。 */
+    var petInSettings: Boolean
+        get() = prefs.getBoolean(KEY_PET_IN_SETTINGS, true)
+        set(value) = prefs.edit().putBoolean(KEY_PET_IN_SETTINGS, value).apply()
+
+    /** 其它设置页（外观、使用统计等）。默认关，避免到处都有它。 */
+    var petInOtherSettings: Boolean
+        get() = prefs.getBoolean(KEY_PET_IN_OTHER_SETTINGS, false)
+        set(value) = prefs.edit().putBoolean(KEY_PET_IN_OTHER_SETTINGS, value).apply()
+
+    /** 按场景判断输入框上方要不要显示（总开关 + 场景开关同时成立才显示）。 */
+    fun petComposerVisible(): Boolean = petEnabled && petInComposer
+
+    /** 按场景判断某个设置页要不要那只趴着的。 */
+    fun petSettingsVisible(pageKey: String): Boolean {
+        if (!petEnabled) return false
+        return if (pageKey == "pet") petInSettings else petInOtherSettings
+    }
+
     /** 当前生效的主色名称（自动取色时为系统取色）。 */
     fun accentName(): String = when {
         autoColor -> "自动取色"
@@ -164,6 +208,9 @@ class SettingsStore private constructor(context: Context) {
         private const val KEY_PET_ENABLED = "pet_enabled"
         private const val KEY_PET_BUBBLE_ONLY = "pet_bubble_only"
         private const val KEY_PET_REDUCE_MOTION = "pet_reduce_motion"
+        private const val KEY_PET_IN_COMPOSER = "pet_in_composer"
+        private const val KEY_PET_IN_SETTINGS = "pet_in_settings"
+        private const val KEY_PET_IN_OTHER_SETTINGS = "pet_in_other_settings"
 
         const val MODE_SYSTEM = 0
         const val MODE_LIGHT = 1

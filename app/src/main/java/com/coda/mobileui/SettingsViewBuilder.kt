@@ -183,14 +183,16 @@ object SettingsViewBuilder {
         } else {
             null
         }
-        // 宠物站台：只在设置页顶部出现一次，蹲在第一张卡片上方
+        // 宠物站台：只在声明了这一行的页面出现，蹲在第一张卡片上方
         is SettingRow.Custom -> if (row.kind == SettingRow.Custom.KIND_PET_STAGE) {
             PetStageView(container.context).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                 )
-                bind(container.context)
+                // row.key 就是页面 key（pet / appearance / usage …），
+                // 由 SettingsData 决定把这一行放进哪一页，显示与否交给设置判定。
+                bind(container.context, row.key.ifEmpty { "pet" })
             }
         } else {
             null
