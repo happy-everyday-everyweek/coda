@@ -153,9 +153,14 @@ object SettingsData {
             }
         }
         rows += SettingRow.Value("添加供应商", "填写 API 端点、模型名称与 Key", "providers_add")
-
         // OAuth 供应商：授权登录后由本机网关托管账号，对内核而言仍是一条普通 provider。
+        // 一个平台可以登多个账号，账号本身在网关里，所以这里的「账号」入口列表是全部平台。
         rows += SettingRow.Header("OAuth 授权")
+        rows += SettingRow.Value(
+            "管理 OAuth 账号",
+            "查看账号健康度、签到、领奖励，同一平台可加多个账号",
+            "providers_oauth_accounts",
+        )
         rows += SettingRow.Value(
             "添加 OAuth 供应商",
             "授权账号，由本机网关托管，可连续添加多个账号",

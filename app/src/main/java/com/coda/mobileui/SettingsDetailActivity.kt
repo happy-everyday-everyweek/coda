@@ -257,6 +257,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 pickCodeTheme(getString(R.string.appearance_code_theme_dark), isLight = false)
             key == "providers_add" -> editProvider(null)
             key == "providers_oauth_pick" -> pickOAuthProvider()
+            key == "providers_oauth_accounts" -> OAuthAccountsSheet(this).show()
             key.startsWith("providers_oauth_open:") -> {
                 // 已经授权过的，再点一次就是重新登录一个账号，方便连续纳管。
                 OAuthProviders.byId(key.removePrefix("providers_oauth_open:"))?.let {

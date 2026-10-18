@@ -28,7 +28,12 @@ import com.google.android.material.color.MaterialColors
  * 授权页一律在应用内打开，而且每次打开前清掉 Cookie 与站点数据。上游靠登录态区分账号，
  * 共用 Cookie 会让后登的号顶掉先登的，多账号就纳不进来——这是要多批账号的关键。
  */
-class OAuthSheet(private val host: BaseActivity, private val provider: OAuthProviders.Provider) {
+class OAuthSheet(
+    private val host: BaseActivity,
+    private val provider: OAuthProviders.Provider,
+    /** 账号成功落盘后回调，用来让上游列表刷新。 */
+    private val onAdded: (() -> Unit)? = null,
+) {
 
     private val sheet = CodaSheet(host)
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
@@ -297,6 +302,8 @@ class OAuthSheet(private val host: BaseActivity, private val provider: OAuthProv
     private fun commit() {
         OAuthLogin.save(host, provider, models)
         Toast.makeText(host, "${provider.name} 已添加", Toast.LENGTH_SHORT).show()
+        // 列表那层要重新拉一次账号，否则新号不会出现。
+        onAdded?.invoke()
     }
 
     private fun teardown() {
