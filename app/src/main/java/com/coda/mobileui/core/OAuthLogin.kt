@@ -33,13 +33,17 @@ object OAuthLogin {
     }
 
     /**
-     * 准备宿主：装好宿主二进制与该供应商的插件，然后启动，等到能应答健康检查。
+     * 准备宿主：装配 Linux 环境、备好宿主二进制与该供应商的插件，然后启动并等到能应答健康检查。
      *
-     * 三步都幂等，重复调用只是快速返回。整个过程要放在后台线程。
-     * 失败时不只说 false，把 [ProxyHost.lastError] 交给 [onProgress]，界面才能显示真实原因。
+     * 全部幂等，重复调用只是快速返回。整个过程要放在后台线程。
+     *
+     * 顺序必须是这样，不能颠倒：二进制与插件都落在 rootfs 内，而 rootfs 由环境装配产生；
+     * 插件又必须在宿主进程拉起**之前**放到位，宿主启动时才会扫描到它。所以是
+     * 环境 → 二进制 → 插件 → 启动，一次起步，不需要为加载插件再重起一遍。
      */
     fun prepare(ctx: Context, provider: OAuthProviders.Provider, onProgress: (String) -> Unit = {}): Boolean {
-        if (!ProxyHost.ensureInstalled(ctx, onProgress)) {
+        // 把环境与二进制备好（含 rootfs 装配与资产释放），这一步不改动进程状态。
+        if (!ProxyHost.ensureRuntime(ctx, onProgress)) {
             ProxyHost.lastError?.let(onProgress)
             return false
         }

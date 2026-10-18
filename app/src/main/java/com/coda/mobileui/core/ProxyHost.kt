@@ -47,10 +47,6 @@ object ProxyHost {
     private const val PROBE_TIMEOUT_MS = 1_500
 
     private const val PROBE_INTERVAL_MS = 500L
-
-    /** 数据目录名：落在 files/ 下，与内核数据同级，便于统一清理。 */
-    private const val HOST_DIR = "proxy-host"
-
     /**
      * 管理接口密钥。
      *
@@ -97,21 +93,53 @@ object ProxyHost {
         get() = booting
 
     /**
-     * 宿主根目录：`files/proxy-host/`，其下放 `cli-proxy-api`、`plugins/`、`data/`。
+     * 网关程序与其数据的存放根目录，位于 rootfs 之内。
      *
-     * 数据目录单独放 `data/` 而不是宿主所在目录，是为了升级宿主时只换二进制、不动账号与配置。
+     * 这里有一个必须绕开的坑：早先把二进制放在 `ctx.filesDir/proxy-host`，再靠
+     * `guestPath()` 把宿主路径换算成容器路径交给 proot。这条路依赖"应用沙箱以同名路径
+     * 绑定进容器"这个假设，实测在真机上不成立——proot 起得来（`env` 正常执行），
+     * 但容器里没有那个路径，于是报：
+     * `env: can't execute '/data/user/0/.../cli-proxy-api': No such file or directory`
+     *
+     * 现在改成直接放进 rootfs：rootfs 是以 `-r <rootfs>` 作为容器根挂进去的，
+     * 所以宿主上的 `<rootfs>/root/.coda/proxy-host/cli-proxy-api` 在容器里必然就是
+     * `/root/.coda/proxy-host/cli-proxy-api`，路径由我们自己完全决定，不经过任何绑定推导。
+     * 数据单独放 `data/`，升级宿主时只换二进制、不动账号与配置。
      */
-    fun dirFor(ctx: Context): File = File(ctx.filesDir, HOST_DIR).apply { mkdirs() }
+    private fun guestRoot(ctx: Context): File =
+        File(File(LinuxEnv(ctx).rootfs, "root"), ".coda/proxy-host").apply { mkdirs() }
 
-    fun binaryFor(ctx: Context): File = File(dirFor(ctx), "cli-proxy-api")
+    /** 宿主侧的存放目录（rootfs 内），保留这个入口给日志与配置。 */
+    fun dirFor(ctx: Context): File = guestRoot(ctx)
 
-    fun pluginsDirFor(ctx: Context): File = File(dirFor(ctx), "plugins").apply { mkdirs() }
+    fun binaryFor(ctx: Context): File = File(guestRoot(ctx), "cli-proxy-api")
 
-    fun dataDirFor(ctx: Context): File = File(dirFor(ctx), "data").apply { mkdirs() }
+    fun pluginsDirFor(ctx: Context): File = File(guestRoot(ctx), "plugins").apply { mkdirs() }
 
-    fun configFor(ctx: Context): File = File(dirFor(ctx), "config.yaml")
+    fun dataDirFor(ctx: Context): File = File(guestRoot(ctx), "data").apply { mkdirs() }
 
-    fun logFor(ctx: Context): File = File(dirFor(ctx), "host.log")
+    fun configFor(ctx: Context): File = File(guestRoot(ctx), "config.yaml")
+
+    fun logFor(ctx: Context): File = File(guestRoot(ctx), "host.log")
+
+    /**
+     * 容器内的绝对路径。
+     *
+     * 因为上面所有文件都在 rootfs 内，容器路径就是把 rootfs 的宿主前缀换成根 `/`。
+     * 不再走 `guestPath()` 的绑定推导，避免依赖"沙箱同名绑定"这个不可靠假设。
+     */
+    private fun guestPathOf(ctx: Context, file: File): String {
+        val root = LinuxEnv(ctx).rootfs.absolutePath.trimEnd('/')
+        val abs = file.absolutePath
+        val rel = if (abs.startsWith("$root/")) abs.removePrefix("$root") else "/$abs"
+        return rel.ifEmpty { "/" }
+    }
+
+    /** 网关程序在容器内的路径。 */
+    fun guestBinary(ctx: Context): String = guestPathOf(ctx, binaryFor(ctx))
+
+    /** 配置文件在容器内的路径。 */
+    fun guestConfig(ctx: Context): String = guestPathOf(ctx, configFor(ctx))
 
     /** 宿主二进制是否已就位。 */
     fun isInstalled(ctx: Context): Boolean = binaryFor(ctx).let { it.isFile && it.length() > 10_000_000L }
@@ -166,12 +194,12 @@ object ProxyHost {
     /**
      * 写配置文件。每次启动前重写，保证端口、插件目录、数据目录与实际路径一致。
      *
-     * 数据目录用容器的 guest 路径，因为宿主只在容器里看得见它。宿主把认证文件、
-     * 配置与日志写在这里，升级二进制不会碰到它。
+     * 配置里必须写**容器内**路径：宿主进程跑在容器里，它只认 `/root/.coda/...` 这种形式，
+     * 不认 Android 的 `/data/user/0/...`。
      */
     private fun writeConfig(ctx: Context, port: Int) {
-        val plugins = LinuxEnv(ctx).guestPath(pluginsDirFor(ctx).absolutePath)
-        val data = LinuxEnv(ctx).guestPath(dataDirFor(ctx).absolutePath)
+        val plugins = guestPathOf(ctx, pluginsDirFor(ctx))
+        val data = guestPathOf(ctx, dataDirFor(ctx))
         val text = buildString {
             appendLine("config-version: 8")
             appendLine("server:")
@@ -207,6 +235,27 @@ object ProxyHost {
     }
 
     /**
+     * 备好运行前提，但不启动进程：装配 Linux 环境 + 释放宿主二进制。
+     *
+     * 单独拆出来是因为顺序有硬要求：二进制落在 rootfs 内，必须先有 rootfs；插件又必须在
+     * 宿主进程拉起之前放到位，宿主启动时才扫描得到。所以调用方的顺序应当是
+     * `ensureRuntime` → `ensurePlugin` → `start`。
+     */
+    fun ensureRuntime(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
+        lastError = null
+        val env = LinuxEnv(ctx)
+        if (!env.isReady()) {
+            onProgress("装配 Linux 环境…")
+            if (!env.ensureReady(onProgress)) {
+                lastError = "Linux 环境装配失败，网关无法启动。请先在终端页确认环境可用"
+                onProgress(lastError!!)
+                return false
+            }
+        }
+        return ensureInstalled(ctx, onProgress)
+    }
+
+    /**
      * 启动宿主并等到它真正就绪。
      *
      * 调用方必须在后台线程调用：整个过程含解包、进程拉起与最多 [READY_TIMEOUT_MS] 的等待。
@@ -222,25 +271,19 @@ object ProxyHost {
             return false
         }
 
-        if (!ensureInstalled(ctx, onProgress)) {
-            // ensureInstalled 内部已写过 lastError，这里只在它没写时兜一句。
-            if (lastError == null) return fail("网关程序未就位")
-            return false
-        }
+        // 前提条件统一由 ensureRuntime 保证（环境装配 + 二进制释放），顺序与 prepare 一致。
+        if (!ensureRuntime(ctx, onProgress)) return false
 
         val env = LinuxEnv(ctx)
-        if (!env.isReady()) {
-            return fail("Linux 环境未就绪，网关无法启动。请先在终端页确认环境可用")
-        }
 
         val port = pickPort() ?: return fail("端口全部被占用（${PORT_CANDIDATES.joinToString("/")}）")
         activePort = port
         writeConfig(ctx, port)
         onProgress("启动网关…")
 
-        val guestBinary = env.guestPath(binaryFor(ctx).absolutePath)
-        val guestConfig = env.guestPath(configFor(ctx).absolutePath)
-        val builder = env.builder(listOf(guestBinary, "-config", guestConfig))
+        val binaryPath = guestBinary(ctx)
+        val configPath = guestConfig(ctx)
+        val builder = env.builder(listOf(binaryPath, "-config", configPath))
 
         return try {
             booting = true

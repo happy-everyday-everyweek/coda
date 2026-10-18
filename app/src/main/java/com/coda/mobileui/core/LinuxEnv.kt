@@ -279,12 +279,29 @@ class LinuxEnv(private val ctx: Context) {
         var best = absolute
         for ((source, target) in activeBinds()) {
             val prefix = source.trimEnd('/')
-            if (absolute != prefix && !absolute.startsWith("$prefix/")) continue
+            // 只用"目录前缀"判定：相等的整串匹配留给文件本身不成立的场景，这里按子树处理。
+            if (!absolute.startsWith("$prefix/")) continue
             if (prefix.length <= bestLength) continue
             bestLength = prefix.length
             best = if (target == null) absolute else target.trimEnd('/') + absolute.removePrefix(prefix)
         }
-        return best
+        if (bestLength >= 0) return best
+
+        // 应用沙箱的绑定是“宿主路径 → 同名路径”，但 Android 上同一个目录有两个等价前缀：
+        // `/data/user/0/<pkg>/...` 与 `/data/data/<pkg>/...`。ctx.filesDir 给出其中一个，
+        // 而插件或系统给的路径可能是另一个，字面前缀匹配会失败，函数就会把 Android 绝对路径
+        // 原样交给容器，于是报 `env: can't execute '/data/user/0/...': No such file or directory`
+        // ——因为那个路径在容器 rootfs 里根本不存在。这里按 filesDir 的两个前缀做兜底换算。
+        val filesDirPath = ctx.filesDir.absolutePath
+        val altFilesDir = filesDirPath.replace("/data/user/0/", "/data/data/")
+            .let { if (it == filesDirPath) filesDirPath.replace("/data/data/", "/data/user/0/") else it }
+        for (prefix in listOf(filesDirPath, altFilesDir)) {
+            val trimmed = prefix.trimEnd('/')
+            if (!absolute.startsWith("$trimmed/")) continue
+            // 沙箱在容器内是原位绑定的，所以 guest 路径就是 file path 的规范形式。
+            return filesDirPath.trimEnd('/') + absolute.removePrefix(trimmed)
+        }
+        return absolute
     }
 
     /**
