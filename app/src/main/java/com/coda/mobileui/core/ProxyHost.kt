@@ -471,6 +471,44 @@ object ProxyHost {
         null
     }
 
+    /**
+     * 发一条管理请求，只回状态码。
+     *
+     * 用来区分"这条路不存在"与"这条路存在但参数不对"：插件把未知路径当 404 回，
+     * 而参数缺失这类业务错误仍是 200。探测插件能力时只有这个区分靠得住。
+     * 连不上返回 null，与 404 是两回事。
+     */
+    fun managementStatus(
+        ctx: Context,
+        path: String,
+        method: String = "POST",
+        body: String? = null,
+    ): Int? = try {
+        val conn = (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 8_000
+            readTimeout = 15_000
+            setRequestProperty("Authorization", "Bearer $MANAGEMENT_KEY")
+            if (body != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+            }
+        }
+        if (body != null) {
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        }
+        val code = conn.responseCode
+        // 必须读掉响应体，否则连接不会被回收，反复探测会把连接池占满。
+        runCatching {
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            stream?.bufferedReader()?.use { it.readText() }
+        }
+        conn.disconnect()
+        code
+    } catch (_: Throwable) {
+        null
+    }
+
     /** 解析管理接口返回的 JSON；失败返回 null，由界面决定怎么提示。 */
     fun managementJson(
         ctx: Context,

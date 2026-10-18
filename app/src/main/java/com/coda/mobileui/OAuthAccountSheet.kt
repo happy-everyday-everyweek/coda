@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import com.coda.mobileui.core.OAuthAccounts
+import com.coda.mobileui.core.OAuthActions
 import com.coda.mobileui.core.OAuthProviders
 import com.google.android.material.color.MaterialColors
 import java.util.concurrent.Executors
@@ -336,7 +337,7 @@ class OAuthAccountSheet(
         return card
     }
 
-    /** 其余动作：成长奖励、刷新额度、续令牌。没实现的平台自动隐藏。 */
+    /** 已知平台的动作清单按插件的真实路由逐条试探，界面只照结果渲染。 */
     private fun actionRow(): View {
         val row = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
@@ -344,19 +345,49 @@ class OAuthAccountSheet(
                 bottomMargin = dp(12f)
             }
         }
-        if (caps.growth) {
-            row.addView(actionItem("领取成长奖励", "旅行、任务、连签、兑换、抽奖") { growth() })
-        }
-        if (caps.refresh) {
-            row.addView(actionItem("刷新额度", "向服务端重新取一次余额") { refresh() })
-        }
-        if (caps.keepalive) {
-            row.addView(actionItem("续期令牌", "凭据过期时手动刷新") { keepalive() })
-        }
-        if (row.childCount == 0) {
+        // 签到有专门的卡片，这里跳过，避免同一个动作出现两次。
+        val actions = OAuthActions.available(caps).filter { it.id != "checkin" }
+        if (actions.isEmpty()) {
             row.addView(hint("该平台插件没有提供额外的账号操作。"))
+            return row
+        }
+        actions.forEach { action ->
+            // 删除放在最底部单独处理，这里不重复。
+            if (action.id == "delete") return@forEach
+            row.addView(
+                actionItem(
+                    title = action.title,
+                    note = action.note,
+                    tint = if (action.danger) 0xFFC62828.toInt() else onSurface,
+                ) { perform(action) }
+            )
         }
         return row
+    }
+
+    /** 执行表里的动作。需要确认的先弹二次确认，否则直接跑。 */
+    private fun perform(action: OAuthActions.Action) {
+        if (!action.confirm) {
+            run { OAuthActions.run(host, provider, action, account.authIndex) }
+            return
+        }
+        CodaSheet(host)
+            .compact()
+            .title(action.title)
+            .subtitle(action.note)
+            .content { col ->
+                col.addView(TextView(host).apply {
+                    setText("确认要对「${account.title}」执行吗？")
+                    setTextColor(onSurfaceVariant)
+                    textSize = 13f
+                })
+            }
+            .primaryAction("确认") { self ->
+                self.dismiss()
+                run { OAuthActions.run(host, provider, action, account.authIndex) }
+            }
+            .secondaryAction("取消") { self -> self.dismiss() }
+            .show()
     }
 
     /** 删除单独一节，颜色用错误的红，明确它是不可逆的。 */
@@ -447,18 +478,6 @@ class OAuthAccountSheet(
         run { OAuthAccounts.checkin(host, provider, account.authIndex) }
     }
 
-    private fun growth() {
-        run { OAuthAccounts.growth(host, provider, account.authIndex) }
-    }
-
-    private fun refresh() {
-        run { OAuthAccounts.refresh(host, provider) }
-    }
-
-    private fun keepalive() {
-        run { OAuthAccounts.keepalive(host, provider, account.authIndex) }
-    }
-
     /** 删除要二次确认：这一步连本地凭据一起删，删完只能重新授权。 */
     private fun confirmDelete() {
         CodaSheet(host)
@@ -467,7 +486,7 @@ class OAuthAccountSheet(
             .subtitle(account.title)
             .content { col ->
                 col.addView(TextView(host).apply {
-                    text = "会连同本地凭据一起删除，之后需要重新授权才能使用。已经产生的额度不会退回。"
+                    setText("会连同本地凭据一起删除，之后需要重新授权才能使用。已经产生的额度不会退回。")
                     setTextColor(onSurfaceVariant)
                     textSize = 13f
                     setLineSpacing(dp(3f).toFloat(), 1f)
@@ -475,7 +494,10 @@ class OAuthAccountSheet(
             }
             .primaryAction("删除") { self ->
                 self.dismiss()
-                run { OAuthAccounts.delete(host, provider, account.authIndex) }
+                val action = OAuthActions.byId("delete")
+                if (action != null) {
+                    run { OAuthActions.run(host, provider, action, account.authIndex) }
+                }
                 // 删掉后这个账号已不存在，面板本身也该关掉。
                 sheet.dismiss()
             }

@@ -88,19 +88,56 @@ object OAuthAccounts {
 
     enum class Health { GOOD, LOW, COOLING, SUSPECT, EXHAUSTED, DISABLED, UNKNOWN }
 
-    /** 插件支持哪些账号操作。界面按这个决定按钮显示，避免点了报 404。 */
+    /**
+     * 插件支持哪些账号操作。
+     *
+     * 这里必须逐家试探，不能像早先那样"有面板就全都有"。实测各家差别很大：
+     * qoderwork 有 `/claim-pro` 与 `/clear-cooldown`，traework 有 `/enable`、`/disable`、
+     * `/lifecycle`，copilot 只有 `/disable`、`/enable`，zcode 有 `/claim`。
+     * 宿主不公布插件的路由表，只能靠打一条请求看是否 404。
+     */
     data class Capabilities(
         /** 有 `/accounts` 面板，能拿到健康度与签到状态。 */
         val panel: Boolean,
         /** 有 `/checkin`，能手动签到。 */
         val checkin: Boolean,
-        /** 有 `/growth`，能领成长中心奖励。 */
+        /** 有 `/growth` 或 `/claim` 这类活动领取。 */
         val growth: Boolean,
         /** 有 `/refresh`，能刷新额度。 */
         val refresh: Boolean,
         /** 有 `/keepalive`，能手动续令牌。 */
         val keepalive: Boolean,
+        /** 有 `/claim-pro`（Qoder 系的专业版权益领取）。 */
+        val claimPro: Boolean = false,
+        /** 有 `/clear-cooldown`，可手动清冷却。 */
+        val clearCooldown: Boolean = false,
+        /** 有 `/enable` 与 `/disable`，可手动启停账号。 */
+        val enableDisable: Boolean = false,
+        /** 有 `/checkin/config`，有自动签到可开关。 */
+        val checkinConfig: Boolean = false,
+        /** 有 `/trial`，国际版可领一次性试用包。 */
+        val trial: Boolean = false,
+        /**
+         * 实际探到的活动领取路由。
+         *
+         * 各家用不同名字：CodeBuddy 是 growth，Qoder 是 claim-pro，ZCode 是 claim。
+         * 记录具体命中哪几条，界面才能给出准确的动作名而不是笼统的「领取奖励」。
+         */
+        val growthRoutes: Set<String> = emptySet(),
     )
+
+    /**
+     * 探测能力的探测顺序。
+     *
+     * 每个字段对应一条只读或幂等的请求。签到类用 GET 打会 404、用 POST 打会真的签到，
+     * 所以对写操作只能看宿主是否返回 404 以外的状态码——这里用空 body 的 POST，
+     * 插件会因为缺少 auth_index 回业务错误而不是 404，从而能把"存在"和"不存在"分清。
+     */
+    private fun probe(ctx: Context, provider: OAuthProviders.Provider, path: String): Boolean {
+        val code = ProxyHost.managementStatus(ctx, base(provider) + path, "POST", "{}")
+        // 404 才是"这条路不存在"，其余状态码都说明插件认这条路由。
+        return code != null && code != 404
+    }
 
     /** 一次操作的结果，界面直接拿去提示。 */
     data class Outcome(val ok: Boolean, val message: String)
@@ -116,17 +153,33 @@ object OAuthAccounts {
      * 所以这里按插件里是否存在对应路由来判定：先取一次 `/accounts`，能通就认为是面板型插件。
      */
     fun capabilities(ctx: Context, provider: OAuthProviders.Provider): Capabilities {
-        val body = ProxyHost.managementJson(ctx, base(provider) + "/accounts") ?: return Capabilities(
-            panel = false, checkin = false, growth = false, refresh = false, keepalive = false,
-        )
-        // 取到面板即说明这是实现了管理接口的插件；几个写操作路由它一并都有。
-        val panel = body.has("accounts") || body.has("summary")
+        // 面板本身用 GET 探，它不会产生副作用。
+        val panel = ProxyHost.managementJson(ctx, base(provider) + "/accounts")?.let { body ->
+            body.has("accounts") || body.has("summary")
+        } ?: false
+
+        // 其余逐条探。这里会有十来次本地回环请求，都在后台线程跑，代价可接受；
+        // 比"猜一个通用集合、点下去报 404"对用户友好得多。
+        val checkin = panel && probe(ctx, provider, "/checkin")
+        // 活动领取各家用不同名字，逐条探出来记进集合，界面据此给出准确的动作名。
+        val growthRoutes = mutableSetOf<String>()
+        if (panel) {
+            if (probe(ctx, provider, "/growth")) growthRoutes += "growth"
+            if (probe(ctx, provider, "/claim")) growthRoutes += "claim"
+        }
         return Capabilities(
             panel = panel,
-            checkin = panel,
-            growth = panel,
-            refresh = panel,
-            keepalive = panel,
+            checkin = checkin,
+            growth = growthRoutes.isNotEmpty(),
+            refresh = panel && probe(ctx, provider, "/refresh"),
+            keepalive = panel && probe(ctx, provider, "/keepalive"),
+            claimPro = panel && probe(ctx, provider, "/claim-pro"),
+            clearCooldown = panel && probe(ctx, provider, "/clear-cooldown"),
+            // 启停要两个都有才有意义，只实现一个的平台不显示开关。
+            enableDisable = panel && probe(ctx, provider, "/enable") && probe(ctx, provider, "/disable"),
+            checkinConfig = checkin && probe(ctx, provider, "/checkin/config"),
+            trial = panel && probe(ctx, provider, "/trial"),
+            growthRoutes = growthRoutes,
         )
     }
 
@@ -258,6 +311,8 @@ object OAuthAccounts {
      * 每项结果字段是 `success` 而不是 `ok`，并且 `skipped`+`reason` 标出「今天已签」与
      * 「国际版不支持签到」这两种非失败情况。批量时看 summary 的计数更省事。
      */
+    fun checkinOutcome(res: JSONObject): Outcome = readCheckinOutcome(res)
+
     private fun readCheckinOutcome(res: JSONObject): Outcome {
         val payload = res.optJSONObject("data") ?: res
         payload.optString("error").takeIf { it.isNotEmpty() }?.let { return Outcome(false, describeError(it)) }
