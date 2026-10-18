@@ -228,6 +228,14 @@
             </LinearLayout>
         </FrameLayout>
 
+        <!-- 宠物条：输入框上方，空闲时高度为 0（由 PetBar 控制显隐） -->
+        <FrameLayout
+            android:id="@+id/pet_bar_host"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp" />
+
         <!-- 输入区 -->
         <LinearLayout
             android:id="@+id/composer_container"

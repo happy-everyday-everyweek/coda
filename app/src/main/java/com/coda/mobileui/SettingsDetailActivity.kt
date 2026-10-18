@@ -148,6 +148,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
         PAGE_AUTOMATIONS -> SettingsData.automations(this)
         PAGE_HOOKS -> SettingsData.hooks(this, ZController.get(this).workspacePath())
+        PAGE_PET -> SettingsData.pet(store, this)
         PAGE_COMPUTER -> SettingsData.phoneControl(this)
         PAGE_BROWSER -> SettingsData.browser(this)
         PAGE_SYSTEM -> SettingsData.system(this)
@@ -185,6 +186,16 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     override fun onToggleChange(key: String, checked: Boolean) {
+        if (key == "pet_enabled" || key == "pet_bubble_only" || key == "pet_reduce_motion") {
+            when (key) {
+                "pet_enabled" -> store.petEnabled = checked
+                "pet_bubble_only" -> store.petBubbleOnly = checked
+                else -> store.petReduceMotion = checked
+            }
+            // 这三项都只影响显示，改完就地重画这一页即可
+            renderPage()
+            return
+        }
         if (key.startsWith("plugins_toggle:")) {
             val id = key.removePrefix("plugins_toggle:")
             ZController.get(this).setPluginEnabled(id, checked) { ok, msg ->
@@ -237,6 +248,17 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     override fun onValueClick(key: String) {
         when {
+            key == "pet_skin" -> {
+                val skins = com.coda.mobileui.core.PetSkins.all(this)
+                sheetPickList(
+                    "宠物形象",
+                    skins.map { it.title },
+                    skins.indexOfFirst { it.id == store.petSkinId }.coerceAtLeast(0),
+                ) { which ->
+                    store.petSkinId = skins[which].id
+                    renderPage()
+                }
+            }
             key == "chat_default_send_mode" -> {
             sheetPickList("默认发送模式", listOf("Yolo", "Build", "Chat"), store.defaultSendMode) { which ->
                 store.defaultSendMode = which
@@ -1815,6 +1837,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_MCP = "mcp"
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
+        const val PAGE_PET = "pet"
         const val PAGE_COMPUTER = "computer"
         const val PAGE_GITHUB = "github"
         const val PAGE_INTEGRATIONS = "integrations"

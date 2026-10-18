@@ -56,6 +56,8 @@ sealed class SettingRow {
         companion object {
             /** 活跃度热力图。数据是 usage/stats 的原始返回体。 */
             const val KIND_HEATMAP = "heatmap"
+            /** 宠物站台：趴着的那只宠物，画在第一张卡片上方。 */
+            const val KIND_PET_STAGE = "petStage"
         }
     }
 }
@@ -88,6 +90,7 @@ object SettingsData {
         SettingRow.Category("commands", "命令", "管理 .md 命令文件", R.drawable.ic_terminal),
         SettingRow.Category("automations", "定时任务", "按计划自动运行任务", R.drawable.ic_clock),
         SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
+        SettingRow.Category("pet", "宠物", "形象、提示方式与动态效果", R.drawable.ic_logo_spark),
         SettingRow.Header("数据与统计"),
         SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
         SettingRow.Category("migration", "迁移", "Claude 历史迁移", R.drawable.ic_migration),
@@ -690,6 +693,52 @@ object SettingsData {
         rows.add(SettingRow.Header("数据"))
         rows.add(SettingRow.Value("清除浏览器数据", "清除", "browser_clear_data"))
         return SettingsPage("浏览器控制", rows)
+    }
+
+    /** 宠物设置页。 */
+    fun pet(store: SettingsStore, ctx: Context): SettingsPage {
+        val skins = com.coda.mobileui.core.PetSkins.all(ctx)
+        val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.first()
+        val rows = mutableListOf<SettingRow>()
+        // 顶部留一块给趴着的宠物本体，由设置页自己往里画
+        rows.add(
+            SettingRow.Custom(
+                kind = SettingRow.Custom.KIND_PET_STAGE,
+                key = "pet_stage",
+            ),
+        )
+        rows.add(SettingRow.Header("外观"))
+        rows.add(SettingRow.Value("形象", current.title, "pet_skin"))
+        rows.add(
+            SettingRow.Toggle(
+                "启用宠物",
+                "在输入框上方与设置页显示",
+                store.petEnabled,
+                "pet_enabled",
+            ),
+        )
+        rows.add(
+            SettingRow.Toggle(
+                "只显示气泡",
+                "隐藏宠物本体，只保留提示文字",
+                store.petBubbleOnly,
+                "pet_bubble_only",
+            ),
+        )
+        rows.add(
+            SettingRow.Toggle(
+                "减少动态效果",
+                "只换表情，不播放逐格动画",
+                store.petReduceMotion,
+                "pet_reduce_motion",
+            ),
+        )
+        rows.add(SettingRow.Header("它现在会做什么"))
+        rows.add(SettingRow.Value("运行中", "在输入框上方显示正在做什么"))
+        rows.add(SettingRow.Value("等你确认", "需要你点一下时提醒"))
+        rows.add(SettingRow.Value("做完了", "显示最后一句回复的首句，几秒后收起"))
+        rows.add(SettingRow.Value("出错", "显示失败的工具名"))
+        return SettingsPage("宠物", rows)
     }
 
     val pages: Map<String, SettingsPage> = mapOf(

@@ -94,6 +94,28 @@ class SettingsStore private constructor(context: Context) {
         get() = prefs.getString(KEY_ACCENT_HEX, "") ?: ""
         set(value) = prefs.edit().putString(KEY_ACCENT_HEX, value).apply()
 
+    // ---------------------------------------------------------------- 宠物
+
+    /** 宠物形象 id（对应 PetSkins.all 里的一份皮肤）。 */
+    var petSkinId: String
+        get() = prefs.getString(KEY_PET_SKIN, "coda") ?: "coda"
+        set(value) = prefs.edit().putString(KEY_PET_SKIN, value).apply()
+
+    /** 宠物总开关。关掉后输入框上方不再出现，设置页里的装饰也一并隐藏。 */
+    var petEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PET_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_PET_ENABLED, value).apply()
+
+    /** 输入框上方的提示条：只显示球泡、不显示宠物本体。 */
+    var petBubbleOnly: Boolean
+        get() = prefs.getBoolean(KEY_PET_BUBBLE_ONLY, false)
+        set(value) = prefs.edit().putBoolean(KEY_PET_BUBBLE_ONLY, value).apply()
+
+    /** 减少动态效果；跟随系统无障碍设置时可以单独覆盖。 */
+    var petReduceMotion: Boolean
+        get() = prefs.getBoolean(KEY_PET_REDUCE_MOTION, false)
+        set(value) = prefs.edit().putBoolean(KEY_PET_REDUCE_MOTION, value).apply()
+
     /** 当前生效的主色名称（自动取色时为系统取色）。 */
     fun accentName(): String = when {
         autoColor -> "自动取色"
@@ -138,6 +160,10 @@ class SettingsStore private constructor(context: Context) {
         private const val KEY_SLASH_RECENT = "slash_recent"
         private const val KEY_WORKSPACE_ROOT = "workspace_root"
         private const val KEY_SESSION_SEEN = "session_seen_"
+        private const val KEY_PET_SKIN = "pet_skin"
+        private const val KEY_PET_ENABLED = "pet_enabled"
+        private const val KEY_PET_BUBBLE_ONLY = "pet_bubble_only"
+        private const val KEY_PET_REDUCE_MOTION = "pet_reduce_motion"
 
         const val MODE_SYSTEM = 0
         const val MODE_LIGHT = 1

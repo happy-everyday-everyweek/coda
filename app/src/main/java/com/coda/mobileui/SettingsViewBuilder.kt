@@ -183,6 +183,18 @@ object SettingsViewBuilder {
         } else {
             null
         }
+        // 宠物站台：只在设置页顶部出现一次，蹲在第一张卡片上方
+        is SettingRow.Custom -> if (row.kind == SettingRow.Custom.KIND_PET_STAGE) {
+            PetStageView(container.context).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                )
+                bind(container.context)
+            }
+        } else {
+            null
+        }
     }
 
     /** 组首只给上圆角、组末只给下圆角，组内其余行是直角。 */

@@ -171,6 +171,21 @@ class MainActivity : BaseActivity() {
     /** 斜杠命令建议条。 */
     private var slashPanel: View? = null
 
+    /**
+     * 输入框上方的宠物条。
+     *
+     * 它只做一件事：把"内核现在在干什么"翻译成一只小家伙的表情和一句话。
+     * 状态来源只有两处——ZController 的 stateChanged 与工具部件状态，
+     * 所以不需要额外的轮询。
+     */
+    private var petBar: PetBar? = null
+    /** 上一次喂给宠物的动作标签，用来避免同一句话反复触发重播。 */
+    private var petActivity: String = ""
+    /** 上一回合是否在跑，用来判断"刚结束"这一刻。 */
+    private var petWasRunning = false
+    /** 运行期的宠物对表拍子（只在 zc.running 时循环）。 */
+    private val petTick = Runnable { syncPet() }
+
     /** 当前思考强度档位（0=轻度 … 4=Max），面板重建后保持。 */
     private var strengthLevel = 0
 
@@ -400,6 +415,7 @@ class MainActivity : BaseActivity() {
         }
 
         buildDrawer()
+        setupPetBar()
         attachZController()
         requestStoragePermissionIfNeeded()
 
@@ -1170,6 +1186,9 @@ collapseFullDrawerThen { showConversation(conversation) }
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
+        // 停掉宠物的对表拍子与动画，避免页面销毁后还在跑
+        ui.removeCallbacks(petTick)
+        petBar?.petView()?.animating = false
         super.onDestroy()
     }
 
@@ -1249,8 +1268,182 @@ collapseFullDrawerThen { showConversation(conversation) }
         }
     }
 
+    // ---------------------------------------------------------------- 宠物
+
+    /**
+     * 装配输入框上方的宠物条。
+     *
+     * 位置在 composer_container 上方的 pet_bar_host 里，收起时高度为 0，
+     * 所以不需要在别处补 padding。
+     */
+    private fun setupPetBar() {
+        val host = findViewById<android.widget.FrameLayout>(R.id.pet_bar_host) ?: return
+        if (petBar != null) return
+        val bar = PetBar(this)
+        bar.attachTo(host)
+        val colors = accentTriple()
+        bar.applySkin(this, SettingsStore.get(this).petSkinId, colors[0], colors[1], colors[2])
+        petBar = bar
+        // 点它一下就把状态重复讲一遍（相当于"再看一眼"），不做别的跳转
+        bar.petView().setOnClickListener { syncPet(force = true) }
+        applyPetSettings()
+    }
+
+    /**
+     * 把宠物相关设置应用到已经建好的控件上。
+     *
+     * 从设置页返回时会被调用一次，所以改完不用重进主界面。三项设置的含义：
+     * 关掉总开关就整条不工作；只显示气泡时把宠物本体藏起来；
+     * 减少动态效果时禁用逐格动画，只保留表情切换。
+     */
+    private fun applyPetSettings() {
+        val bar = petBar ?: return
+        val store = SettingsStore.get(this)
+        if (!store.petEnabled) {
+            bar.hideNow()
+            bar.visibility = android.view.View.GONE
+            ui.removeCallbacks(petTick)
+            return
+        }
+        bar.visibility = android.view.View.VISIBLE
+        bar.petView().visibility = if (store.petBubbleOnly) android.view.View.GONE else android.view.View.VISIBLE
+        bar.petView().reduceMotion = store.petReduceMotion
+        val colors = accentTriple()
+        bar.applySkin(this, store.petSkinId, colors[0], colors[1], colors[2])
+    }
+
+    /** 当前主题的三档强调色：正常 / 浅 / 柔。 */
+    private fun accentTriple(): IntArray {
+        val accent = attrColor(androidx.appcompat.R.attr.colorPrimary, 0xFF6750A4.toInt())
+        val light = attrColor(com.google.android.material.R.attr.colorPrimaryContainer, accent)
+        val soft = attrColor(com.google.android.material.R.attr.colorTertiary, accent)
+        return intArrayOf(accent, light, soft)
+    }
+
+    /**
+     * 把内核当前状态翻译成宠物表情。
+     *
+     * 只看三样东西：是否在跑、有没有在等用户、这一回合是不是刚结束。
+     * 因为是从状态推导而不是从事件推导，所以刷新多少次都只会得到同一个结论，
+     * 不需要额外的去重机制。
+     */
+    private fun syncPet(force: Boolean = false) {
+        val bar = petBar ?: return
+        // 关掉总开关时整条不工作，连对表拍子也不排
+        if (!SettingsStore.get(this).petEnabled) return
+        // 运行期间每 2 秒对一次表：内核的工具切换事件不一定每次都推过来，
+        // 光靠 stateChanged 会出现"字一直停在第一步"的情况。停止后不再排下一拍。
+        ui.removeCallbacks(petTick)
+        if (zc.running) ui.postDelayed(petTick, 2000)
+        if (zc.running) {
+            petWasRunning = true
+            // 正在等用户确认：优先显示它，因为这是唯一需要人动手的状态
+            val waiting = waitingTool()
+            if (waiting != null) {
+                val label = "等你确认：" + toolLabel(waiting.tool)
+                if (force || label != petActivity) {
+                    petActivity = label
+                    bar.showWaiting(label)
+                }
+                return
+            }
+            val label = runningLabel()
+            if (force || label != petActivity) {
+                val hadLabel = petActivity.isNotEmpty()
+                petActivity = label
+                // 已经在运行中就只换文字；首次进入才播进场动画
+                if (hadLabel && bar.petView().mood() == com.coda.mobileui.core.PetMood.RUNNING) {
+                    bar.updateText(label)
+                } else {
+                    bar.showRunning(label)
+                }
+            }
+            return
+        }
+        if (petWasRunning) {
+            petWasRunning = false
+            val failed = lastTurnFailed()
+            if (failed != null) {
+                petActivity = "出错了：$failed"
+                bar.showError(petActivity)
+            } else {
+                val brief = lastReplyBrief()
+                petActivity = if (brief.isEmpty()) "做完了" else "做完了：$brief"
+                bar.showDone(petActivity)
+            }
+            return
+        }
+        if (force) {
+            petActivity = ""
+            bar.showDone(if (zc.currentSessionId == null) "等你开口" else "随时可以继续")
+        }
+    }
+
+    /** 正在跑时显示的动作标签：优先取最新一个 running 的工具，否则说在思考。 */
+    private fun runningLabel(): String {
+        val last = zc.messages.lastOrNull() ?: return "正在思考"
+        val tools = last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
+        val active = tools.lastOrNull { it.status == "running" || it.status == "scheduled" }
+            ?: tools.lastOrNull()
+        if (active == null) {
+            return if (last.parts.any { it is com.coda.mobileui.core.ZPart.Reasoning }) {
+                "正在思考"
+            } else {
+                "正在回复"
+            }
+        }
+        val action = toolLabel(active.tool)
+        val target = toolTarget(active)
+        return if (target.isNullOrBlank()) action else "$action：$target"
+    }
+
+    /** 工具作用对象，例如文件名或命令首词，用于把动作说具体。 */
+    private fun toolTarget(part: com.coda.mobileui.core.ZPart.ToolPart): String? {
+        val input = part.input ?: part.title ?: return null
+        return runCatching {
+            val o = org.json.JSONObject(input)
+            o.optString("file_path").ifEmpty {
+                o.optString("path").ifEmpty {
+                    o.optString("pattern").ifEmpty {
+                        o.optString("command").ifEmpty { o.optString("query") }
+                    }
+                }
+            }
+        }.getOrNull()?.takeIf { it.isNotBlank() }?.let { shorten(it) }
+    }
+
+    /** 正在等用户处理的工具（询问类）。 */
+    private fun waitingTool(): com.coda.mobileui.core.ZPart.ToolPart? {
+        val last = zc.messages.lastOrNull() ?: return null
+        return last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
+            .lastOrNull { it.status == "scheduled" || it.status == "pending" }
+    }
+
+    /** 这一回合是否有工具失败，返回最先失败的那个工具名。 */
+    private fun lastTurnFailed(): String? {
+        val last = zc.messages.lastOrNull() ?: return null
+        val bad = last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
+            .firstOrNull { it.status == "error" || it.status == "denied" } ?: return null
+        return toolLabel(bad.tool)
+    }
+
+    /** 最后一条回复的首句，控制在 40 字以内。 */
+    private fun lastReplyBrief(): String {
+        val text = zc.messages.lastOrNull { it.role != "user" }?.text()?.trim().orEmpty()
+        if (text.isEmpty()) return ""
+        val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        val sentence = firstLine.split('。', '.', '！', '!', '\n').firstOrNull { it.isNotBlank() }
+            ?.trim()
+            .orEmpty()
+        return shorten(if (sentence.isEmpty()) firstLine else sentence)
+    }
+
+    private fun shorten(text: String): String =
+        if (text.length <= 40) text else text.take(39) + "…"
+
     /** 依据控制器状态刷新界面。 */
     private fun renderFromController() {
+        syncPet()
         if (zc.running) {
             if (runningSince == null) runningSince = System.currentTimeMillis()
         } else {
@@ -3176,6 +3369,8 @@ collapseFullDrawerThen { showConversation(conversation) }
         super.onResume()
         // 浏览器控制引擎需要 Activity 承载隐藏 WebView。
         BrowserControl.attachActivity(this)
+        // 从设置页回来时，宠物形象与三项开关可能已经改过，这里重新套一遍。
+        applyPetSettings()
         if (pendingOpenDrawer) {
             pendingOpenDrawer = false
             drawerLayout.openDrawer(Gravity.START)
@@ -3207,6 +3402,8 @@ collapseFullDrawerThen { showConversation(conversation) }
             ?.visibility = View.GONE
         (findViewById<View>(R.id.model_selector)?.parent as? ViewGroup)?.visibility = View.VISIBLE
         findViewById<View>(R.id.composer_container).visibility = View.VISIBLE
+        // 设置页里可能改过宠物形象与开关，回到会话时对齐一次
+        applyPetSettings()
     }
 
     private fun renderSettingsPage() {
@@ -3666,6 +3863,17 @@ message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    /** 从主题属性取色；MaterialColors 的泛型重载在这里推不出类型，改用 TypedValue。 */
+    private fun attrColor(attr: Int, fallback: Int): Int {
+        val tv = android.util.TypedValue()
+        val ta = obtainStyledAttributes(tv.data, intArrayOf(attr))
+        return try {
+            if (ta.hasValue(0)) ta.getColor(0, fallback) else fallback
+        } finally {
+            ta.recycle()
+        }
+    }
 
     /** 顶部避让高度：取系统状态栏高度与挖孔安全区的较大者（沉浸式下 WindowInsets 会返回 0）。 */
     private fun topSafeInset(): Int = maxOf(
