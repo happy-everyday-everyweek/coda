@@ -132,8 +132,9 @@ object ProxyHost {
         if (installFromAsset(ctx, target)) return true
 
         // 走到这里说明打包漏了资产，属于构建错误，要让用户看到明确原因而不是干等。
-        lastError = "安装包内缺少网关程序（assets/proxy-host/cli-proxy-api-$VERSION）"
-        onProgress(lastError)
+        val reason = "安装包内缺少网关程序（assets/proxy-host/cli-proxy-api-$VERSION）"
+        lastError = reason
+        onProgress(reason)
         return false
     }
 
