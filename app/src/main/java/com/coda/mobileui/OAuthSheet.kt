@@ -17,6 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.coda.mobileui.core.OAuthLogin
 import com.coda.mobileui.core.OAuthProviders
+import com.coda.mobileui.core.ProxyHost
 import com.google.android.material.color.MaterialColors
 
 /**
@@ -116,10 +117,19 @@ class OAuthSheet(
 
         // 装二进制、装插件、起进程都要几秒，放后台，回来再画授权信息。
         Thread {
-            val ok = OAuthLogin.prepare(host, provider) { text -> main.post { status.text = text } }
+            // 把最后一条进度记下来：失败时它就是真实原因，不能再盖成一句笼统的提示。
+            val lastStep = arrayOf("")
+            val ok = OAuthLogin.prepare(host, provider) { text ->
+                lastStep[0] = text
+                main.post { status.text = text }
+            }
             main.post {
                 if (!ok) {
-                    status.text = "网关启动失败，请检查网络后重试"
+                    // 之前这里硬编码「请检查网络后重试」，把真实原因盖掉了。网关与插件都已随包
+                    // 内置、不再联网，这类失败基本与网络无关，必须显示具体卡在哪一步。
+                    val reason = ProxyHost.lastError ?: lastStep[0].ifEmpty { "未知原因" }
+                    status.text = "网关启动失败：$reason"
+                    status.setTextColor(0xFFC62828.toInt())
                     return@post
                 }
                 val started = OAuthLogin.begin(host, provider)

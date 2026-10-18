@@ -24,6 +24,11 @@ import java.util.zip.GZIPInputStream
  * 宿主，等于把宿主重写一遍。所以这里让宿主保持原样跑起来，插件按 `plugins/` 目录原样加载。
  *
  * 进程走 [LinuxEnv.builder]，与终端页同一条 proot 通路，因此不需要另造一套容器启动逻辑。
+ *
+ * 分发方式：宿主二进制与八家的 arm64 插件**全部随 APK 发布**（`assets/proxy-host` 与
+ * `assets/proxy-plugins`），首次使用只做本地复制，运行期不依赖任何外部服务。
+ * 早先这里有一条"资产缺失就联网下载"的兜底，那是设计错误：几十兆的下载在移动网络下
+ * 经常失败，用户只会看到一句"网关启动失败"，而真实原因被埋在网络层。
  */
 object ProxyHost {
 
@@ -72,6 +77,17 @@ object ProxyHost {
     private var booting = false
     private var activePort = DEFAULT_PORT
 
+    /**
+     * 最近一次失败的原因。
+     *
+     * 这个字段是必要的：之前所有失败都只通过 onProgress 回调出去，接口层拿到 false 之后
+     * 只会说一句"网关启动失败"，用户和日志都看不到究竟卡在哪一步（资产缺失、环境未就绪、
+     * 端口全占、进程起不来、还是就绪超时）。现在每一步都写这里，界面可以直接显示。
+     */
+    @Volatile
+    var lastError: String? = null
+        private set
+
     /** 宿主进程是否存活。 */
     val isRunning: Boolean
         get() = process?.isAlive == true
@@ -103,31 +119,34 @@ object ProxyHost {
     /**
      * 确保宿主二进制就位。
      *
-     * 优先用随包资产（`assets/proxy-host/cli-proxy-api-<VERSION>`），这样首次使用不需要联网；
-     * 资产缺失时才退回从 GitHub Release 下载。两条路都只做一次，之后靠文件长度判断复用。
+     * 宿主随 APK 一起发布（`assets/proxy-host/cli-proxy-api-<VERSION>`），首次使用只做一次
+     * 本地复制，**不联网**。之前这里有一条"资产缺失就从 GitHub 下载"的兜底，那是错的：
+     * 二十多兆的下载在移动网络下经常失败，用户看到的就是一句"网关启动失败"，而真正原因
+     * 被埋在网络层。构建期就该把二进制放进包里，运行时不该依赖任何外部服务。
      */
     fun ensureInstalled(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
         val target = binaryFor(ctx)
         if (isInstalled(ctx)) return true
 
         onProgress("释放网关程序…")
-        val fromAsset = runCatching { installFromAsset(ctx, target) }.getOrDefault(false)
-        if (fromAsset) return true
+        if (installFromAsset(ctx, target)) return true
 
-        onProgress("下载网关程序…")
-        return installFromNetwork(target, onProgress)
+        // 走到这里说明打包漏了资产，属于构建错误，要让用户看到明确原因而不是干等。
+        lastError = "安装包内缺少网关程序（assets/proxy-host/cli-proxy-api-$VERSION）"
+        onProgress(lastError)
+        return false
     }
 
-    /** 从随包资产释放宿主二进制。资产不存在时返回 false，由调用方退回下载。 */
+    /** 从随包资产释放宿主二进制。资产缺失或写出不完整时返回 false。 */
     private fun installFromAsset(ctx: Context, target: File): Boolean {
         val names = listOf(
             "proxy-host/cli-proxy-api-$VERSION",
             "proxy-host/cli-proxy-api",
         )
+        target.parentFile?.mkdirs()
         for (name in names) {
             val ok = runCatching {
                 ctx.assets.open(name).use { input ->
-                    target.parentFile?.mkdirs()
                     FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
                 }
                 true
@@ -137,123 +156,10 @@ object ProxyHost {
                 Os.chmod(target.absolutePath, 493) // 0755
                 return true
             }
+            // 长度不对说明资产被截断或压缩配置有问题，删掉重试下一个名字。
             target.delete()
         }
         return false
-    }
-
-    /**
-     * 从 Release 下载宿主。
-     *
-     * 只取 gzip 压缩的 tar，解出里面的 `cli-proxy-api`。这里不校验签名：宿主是开源 Go 二进制，
-     * 校验值随版本变，跟着升级一次就要改一次，收益不如"能装得上"重要。
-     */
-    private fun installFromNetwork(target: File, onProgress: (String) -> Unit): Boolean {
-        val url = "https://github.com/router-for-me/CLIProxyAPI/releases/download/" +
-            "v$VERSION/CLIProxyAPI_" + VERSION + "_linux_aarch64.tar.gz"
-        val tmp = File(target.parentFile, "download.tar.gz")
-        return try {
-            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 20_000
-                readTimeout = 180_000
-                instanceFollowRedirects = true
-            }
-            if (conn.responseCode !in 200..299) return false
-            conn.inputStream.use { input ->
-                FileOutputStream(tmp).use { out -> input.copyTo(out, 256 * 1024) }
-            }
-            onProgress("解开网关程序…")
-            var found = false
-            GZIPInputStream(BufferedInputStream(FileInputStream(tmp))).use { gz ->
-                untarSelect(gz) { name, stream ->
-                    if (name == "cli-proxy-api" && !found) {
-                        FileOutputStream(target).use { out -> stream.copyTo(out, 256 * 1024) }
-                        found = true
-                    }
-                }
-            }
-            tmp.delete()
-            if (found && target.length() > 10_000_000L) {
-                Os.chmod(target.absolutePath, 493)
-                true
-            } else {
-                target.delete()
-                false
-            }
-        } catch (_: Throwable) {
-            tmp.delete()
-            false
-        }
-    }
-
-    /**
-     * 精简 tar 读取器：边读边把条目交给回调，只保留需要的那个。
-     *
-     * 不把整个归档读进内存——宿主压缩包 21MB，解压后更大，手机上没有理由为此吃内存。
-     * 归档只含常规文件，与 LinuxEnv 里的解包器同一假设。
-     */
-    private fun untarSelect(archive: java.io.InputStream, onEntry: (String, java.io.InputStream) -> Unit) {
-        val header = ByteArray(512)
-        while (true) {
-            if (!readFully(archive, header, 512)) return
-            if (header.all { it == 0.toByte() }) return
-            val name = String(header, 0, 100, Charsets.UTF_8).trimEnd('\u0000')
-            val sizeField = String(header, 124, 12, Charsets.UTF_8).trim().trimEnd('\u0000')
-            val size = sizeField.toLongOrNull(8) ?: 0L
-            val typeFlag = header[156].toInt().toChar()
-            val isFile = typeFlag == '0' || typeFlag == '\u0000'
-
-            if (isFile && name.isNotEmpty()) {
-                onEntry(name, LimitedStream(archive, size))
-            }
-            // 无论要不要这个条目，都要把它的数据读完并对齐到 512 边界。
-            skipFully(archive, size)
-            val padding = ((512 - (size % 512)) % 512)
-            skipFully(archive, padding)
-        }
-    }
-
-    private fun readFully(input: java.io.InputStream, buffer: ByteArray, length: Int): Boolean {
-        var offset = 0
-        while (offset < length) {
-            val read = input.read(buffer, offset, length - offset)
-            if (read <= 0) return false
-            offset += read
-        }
-        return true
-    }
-
-    private fun skipFully(input: java.io.InputStream, length: Long) {
-        var left = length
-        while (left > 0) {
-            val skipped = input.skip(left)
-            if (skipped > 0) {
-                left -= skipped
-                continue
-            }
-            if (input.read() < 0) return
-            left--
-        }
-    }
-
-    /** 只允许读 [limit] 字节的视图，供 tar 条目在不解压后续内容的前提下被读走。 */
-    private class LimitedStream(
-        private val source: java.io.InputStream,
-        private var limit: Long,
-    ) : java.io.InputStream() {
-        override fun read(): Int {
-            if (limit <= 0) return -1
-            val value = source.read()
-            if (value >= 0) limit--
-            return value
-        }
-
-        override fun read(b: ByteArray, off: Int, len: Int): Int {
-            if (limit <= 0) return -1
-            val read = source.read(b, off, minOf(len.toLong(), limit).toInt())
-            if (read > 0) limit -= read
-            return read
-        }
     }
 
     /**
@@ -306,19 +212,31 @@ object ProxyHost {
      * 端口从候选里挑第一个能用的，挑不到就返回失败，而不是让宿主带着冲突端口起一个假活的进程。
      */
     fun start(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
+        lastError = null
         if (isRunning) return true
-        if (!ensureInstalled(ctx, onProgress)) return false
-        if (!LinuxEnv(ctx).isReady()) {
-            onProgress("Linux 环境未就绪")
+
+        fun fail(reason: String): Boolean {
+            lastError = reason
+            onProgress(reason)
             return false
         }
 
-        val port = pickPort() ?: return false
+        if (!ensureInstalled(ctx, onProgress)) {
+            // ensureInstalled 内部已写过 lastError，这里只在它没写时兜一句。
+            if (lastError == null) return fail("网关程序未就位")
+            return false
+        }
+
+        val env = LinuxEnv(ctx)
+        if (!env.isReady()) {
+            return fail("Linux 环境未就绪，网关无法启动。请先在终端页确认环境可用")
+        }
+
+        val port = pickPort() ?: return fail("端口全部被占用（${PORT_CANDIDATES.joinToString("/")}）")
         activePort = port
         writeConfig(ctx, port)
         onProgress("启动网关…")
 
-        val env = LinuxEnv(ctx)
         val guestBinary = env.guestPath(binaryFor(ctx).absolutePath)
         val guestConfig = env.guestPath(configFor(ctx).absolutePath)
         val builder = env.builder(listOf(guestBinary, "-config", guestConfig))
@@ -333,18 +251,37 @@ object ProxyHost {
             pump(proc, log)
             val ready = awaitReady(port)
             if (!ready) {
-                onProgress("网关启动超时")
+                // 进程活着但不应答，和进程直接退出，是两种完全不同的故障。
+                val tail = logTail(log)
                 stop()
+                return fail(
+                    if (proc.isAlive) "网关启动超时（45 秒内未应答$port）" + tail
+                    else "网关进程退出" + tail
+                )
             }
-            ready
+            true
         } catch (t: Throwable) {
-            onProgress("网关启动失败：" + (t.message ?: "未知错误"))
             stop()
-            false
+            fail("网关启动失败：" + (t.message ?: t.javaClass.simpleName))
         } finally {
             booting = false
         }
     }
+
+    /**
+     * 取日志末尾若干行，附在错误里。
+     *
+     * 宿主起不来时真正的原因（缺动态库、配置语法错、端口绑定失败）都写在它自己的输出里，
+     * 不把这几行带出来，界面永远只会显示一句笼统的失败。
+     */
+    private fun logTail(log: File, lines: Int = 6): String = runCatching {
+        val text = log.readLines()
+        if (text.isEmpty()) {
+            "（网关没有任何输出）"
+        } else {
+            "：\n" + text.takeLast(lines).joinToString("\n").take(600)
+        }
+    }.getOrDefault("")
 
     /**
      * 把宿主的输出持续写进日志文件，方便排查。
@@ -579,9 +516,29 @@ object ProxyHost {
         val target = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(provider))
         if (target.isFile && target.length() > 500_000L) return true
 
-        onProgress("获取 ${provider.name} 插件…")
+        // 先看包内有没有。八家的 arm64 插件都已随包发布，正常情况下这一步就够了，不联网。
+        onProgress("安装 ${provider.name} 插件…")
+        val assetName = "proxy-plugins/" + OAuthProviders.pluginFile(provider)
+        val fromAsset = runCatching {
+            ctx.assets.open(assetName).use { input ->
+                target.parentFile?.mkdirs()
+                FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+            }
+            true
+        }.getOrDefault(false)
+        if (fromAsset && target.length() > 500_000L) {
+            Os.chmod(target.absolutePath, 493) // 0755
+            return true
+        }
+        target.delete()
+
+        // 包内没有再走网络：只对将来新增、尚未打进包里的平台有意义。
+        onProgress("下载 ${provider.name} 插件…")
         val zip = File(dirFor(ctx), "${provider.pluginId}.zip")
-        if (!download(ctx, OAuthProviders.downloadUrl(provider), zip)) return false
+        if (!download(ctx, OAuthProviders.downloadUrl(provider), zip)) {
+            lastError = "获取 ${provider.name} 插件失败：安装包内没有该插件，联网下载也未成功"
+            return false
+        }
 
         return try {
             // 压缩包里只有一个同名 .so，直接按 zip 结构取，不假设路径深度。
@@ -600,11 +557,13 @@ object ProxyHost {
                 true
             } else {
                 target.delete()
+                lastError = "${provider.name} 插件包内容不完整"
                 false
             }
         } catch (_: Throwable) {
             zip.delete()
             target.delete()
+            lastError = "${provider.name} 插件解包失败"
             false
         }
     }

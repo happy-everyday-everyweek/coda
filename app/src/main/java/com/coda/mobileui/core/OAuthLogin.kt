@@ -36,11 +36,20 @@ object OAuthLogin {
      * 准备宿主：装好宿主二进制与该供应商的插件，然后启动，等到能应答健康检查。
      *
      * 三步都幂等，重复调用只是快速返回。整个过程要放在后台线程。
+     * 失败时不只说 false，把 [ProxyHost.lastError] 交给 [onProgress]，界面才能显示真实原因。
      */
     fun prepare(ctx: Context, provider: OAuthProviders.Provider, onProgress: (String) -> Unit = {}): Boolean {
-        if (!ProxyHost.ensureInstalled(ctx, onProgress)) return false
-        if (!ProxyHost.ensurePlugin(ctx, provider, onProgress)) return false
-        return ProxyHost.start(ctx, onProgress)
+        if (!ProxyHost.ensureInstalled(ctx, onProgress)) {
+            ProxyHost.lastError?.let(onProgress)
+            return false
+        }
+        if (!ProxyHost.ensurePlugin(ctx, provider, onProgress)) {
+            ProxyHost.lastError?.let(onProgress)
+            return false
+        }
+        val ok = ProxyHost.start(ctx, onProgress)
+        if (!ok) ProxyHost.lastError?.let(onProgress)
+        return ok
     }
 
     /**

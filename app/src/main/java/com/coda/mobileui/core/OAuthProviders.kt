@@ -57,10 +57,10 @@ object OAuthProviders {
             name = "CodeBuddy",
             vendor = "腾讯",
             pluginId = "workbuddy-provider",
-            version = "0.16.4",
-            asset = "workbuddy-provider-0.16.4/workbuddy-provider_0.16.4_linux_arm64.zip",
+            version = "0.16.5",
+            asset = "workbuddy-provider_0.16.5_linux_arm64.zip",
             sha = "e2338e74e291fdb920e91bd167cdd1b54d823de9",
-            size = 2_952_292L,
+            size = 2_952_859L,
             flow = Flow.QRCODE,
             note = "国内版与国际版统一入口，签到、积分与故障转移由插件负责",
         ),
@@ -70,7 +70,7 @@ object OAuthProviders {
             vendor = "腾讯国际版",
             pluginId = "workbuddy-ai-provider",
             version = "0.1.17",
-            asset = "workbuddy-ai-provider-0.1.17/workbuddy-ai-provider_0.1.17_linux_arm64.zip",
+            asset = "workbuddy-ai-provider_0.1.17_linux_arm64.zip",
             sha = "6196f12201eacc397debbd299dc554a36e826836",
             size = 2_938_717L,
             flow = Flow.QRCODE,
@@ -81,10 +81,10 @@ object OAuthProviders {
             name = "GitHub Copilot",
             vendor = "GitHub",
             pluginId = "copilot-provider",
-            version = "0.1.5",
-            asset = "copilot-provider-0.1.5/copilot-provider_0.1.5_linux_arm64.zip",
+            version = "0.1.9",
+            asset = "copilot-provider_0.1.9_linux_arm64.zip",
             sha = "c7df4b4d05535694c34cd949b614ea9f1e2bba89",
-            size = 2_888_675L,
+            size = 2_889_990L,
             flow = Flow.DEVICE_CODE,
             note = "设备码授权，无需密码，订阅额度直连",
         ),
@@ -94,7 +94,7 @@ object OAuthProviders {
             vendor = "智谱 BigModel",
             pluginId = "zcode-provider",
             version = "0.1.32",
-            asset = "zcode-provider-0.1.32/zcode-provider_0.1.32_linux_arm64.zip",
+            asset = "zcode-provider_0.1.32_linux_arm64.zip",
             sha = "19cbd1fb033d1be17834e52132ea821278bc0224",
             size = 2_999_216L,
             flow = Flow.LINK,
@@ -105,10 +105,10 @@ object OAuthProviders {
             name = "QoderWork",
             vendor = "阿里 Qoder 国内版",
             pluginId = "qoderwork-provider",
-            version = "0.9.41",
-            asset = "qoderwork-provider-0.9.41/qoderwork-provider_0.9.41_linux_arm64.zip",
+            version = "0.9.44",
+            asset = "qoderwork-provider_0.9.44_linux_arm64.zip",
             sha = "3833af8962b5ba375991c2e91d6f48c8507e91c4",
-            size = 2_928_423L,
+            size = 2_928_644L,
             flow = Flow.LINK,
             note = "设备授权，登录后自动领取试用",
         ),
@@ -117,10 +117,10 @@ object OAuthProviders {
             name = "Qoder AI",
             vendor = "阿里 Qoder 国际版",
             pluginId = "qoder-ai-provider",
-            version = "0.1.22",
-            asset = "qoder-ai-provider-0.1.22/qoder-ai-provider_0.1.22_linux_arm64.zip",
+            version = "0.1.24",
+            asset = "qoder-ai-provider_0.1.24_linux_arm64.zip",
             sha = "d0292b18c08547e14fa5f27e5fe17d790606853c",
-            size = 2_960_873L,
+            size = 2_961_918L,
             flow = Flow.LINK,
             note = "设备授权，含每日签到",
         ),
@@ -130,7 +130,7 @@ object OAuthProviders {
             vendor = "字节跳动",
             pluginId = "traework-provider",
             version = "0.2.14",
-            asset = "traework-provider-0.2.14/traework-provider_0.2.14_linux_arm64.zip",
+            asset = "traework-provider_0.2.14_linux_arm64.zip",
             sha = "c0168e303e6377b1c9dade7d31f93cc89573fa44",
             size = 2_961_476L,
             flow = Flow.LINK,
@@ -142,7 +142,7 @@ object OAuthProviders {
             vendor = "Cursor",
             pluginId = "cursor-provider",
             version = "0.1.6",
-            asset = "cursor-provider-0.1.6/cursor-provider_0.1.6_linux_arm64.zip",
+            asset = "cursor-provider_0.1.6_linux_arm64.zip",
             sha = "62d98969793db0c398febbe5ad49f41b2f633ecc",
             size = 3_598_253L,
             flow = Flow.LINK,
@@ -155,10 +155,19 @@ object OAuthProviders {
     /** 插件在磁盘上的文件名：宿主按 `.so` 扫描插件目录。 */
     fun pluginFile(provider: Provider): String = provider.pluginId + ".so"
 
-    /** 插件压缩包在仓库里的下载地址。 */
+    /**
+     * 插件压缩包的真实下载地址。
+     *
+     * 产物挂在 GitHub Release 上（tag 形如 `workbuddy-provider-v0.16.5`），**不在仓库文件里**。
+     * 早先按 `main/release-assets/...` 拼路径是错的，取回来是 14 字节的 404 页，
+     * 表现就是"网关起不来"。这里按 Release 规则拼，`asset` 只留文件名。
+     *
+     * 注意：正常路径根本走不到这里——八家的 arm64 插件都已随包发布，`ensurePlugin`
+     * 先从 assets 取。这个地址只在将来加了新平台、还没打进包时兜底用。
+     */
     fun downloadUrl(provider: Provider): String =
-        "https://raw.githubusercontent.com/luode0320/cpa-workbuddy-plugin/main/release-assets/" +
-            provider.asset
+        "https://github.com/luode0320/cpa-workbuddy-plugin/releases/download/" +
+            provider.pluginId + "-v" + provider.version + "/" + provider.asset
 
     /**
      * OAuth 供应商的模型名统一带前缀，避免与用户自填的供应商撞名。
