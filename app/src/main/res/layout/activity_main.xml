@@ -228,12 +228,11 @@
             </LinearLayout>
         </FrameLayout>
 
-        <!-- 宠物条：输入框上方，空闲时整体隐藏（由 PetBar 控制显隐与高度） -->
+        <!-- 宠物条：输入框上方，常驻显示（空闲时也在，会呼吸眨眼打瞌睡） -->
         <FrameLayout
             android:id="@+id/pet_bar_host"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:visibility="gone"
             android:paddingStart="16dp"
             android:paddingEnd="16dp" />
 

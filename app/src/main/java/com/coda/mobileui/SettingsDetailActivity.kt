@@ -149,6 +149,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         PAGE_AUTOMATIONS -> SettingsData.automations(this)
         PAGE_HOOKS -> SettingsData.hooks(this, ZController.get(this).workspacePath())
         PAGE_PET -> SettingsData.pet(store, this)
+        PAGE_PET_APPEARANCE -> SettingsData.petAppearance(store, this)
+        PAGE_PET_PLACES -> SettingsData.petPlaces(store)
+        PAGE_PET_BEHAVIOR -> SettingsData.petBehavior(store)
         PAGE_COMPUTER -> SettingsData.phoneControl(this)
         PAGE_BROWSER -> SettingsData.browser(this)
         PAGE_SYSTEM -> SettingsData.system(this)
@@ -164,6 +167,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     override fun onRadioSelect(key: String) {
+        // 宠物形象单选：key 是 pet_pick=<形象 id>，不是数字，单独处理。
+        if (key.startsWith("pet_pick=")) {
+            store.petSkinId = key.removePrefix("pet_pick=")
+            renderPage()
+            return
+        }
         val value = key.substringAfter('=', "").toIntOrNull() ?: return
         when {
             key.startsWith("theme=") -> {
@@ -1842,6 +1851,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
         const val PAGE_PET = "pet"
+        const val PAGE_PET_APPEARANCE = "pet_appearance"
+        const val PAGE_PET_PLACES = "pet_places"
+        const val PAGE_PET_BEHAVIOR = "pet_behavior"
         const val PAGE_COMPUTER = "computer"
         const val PAGE_GITHUB = "github"
         const val PAGE_INTEGRATIONS = "integrations"

@@ -16,14 +16,11 @@ import com.coda.mobileui.core.PetSkins
 /**
  * 输入框上方的宠物提示条。
  *
- * 出现与收起的节奏照 Claude Code 的做法：只在有事情发生时露面，事情结束就退场，
- * 绝不常驻占位置。具体是：
+ * 它是**常驻**的：跟原项目一样，空闲时也在，会呼吸、眨眼、左右张望，久了我还会打瞌睡。
+ * 有事情发生时切到对应状态并在旁边补一句话；事情结束后回到空闲，而不是整条消失。
  *
- * 空闲时不显示，整条高度归零；
- * 运行中滑入，显示"它在做什么"，换动作只换文字不回退进场；
- * 等你确认时滑入并带提示色底，处理完立刻收起；
- * 做完后先庆祝，再显示最后一句话的首句，停留几秒自动收起；
- * 出错时滑入并带错误色底，停久一点。
+ * 之前这里是"有事才出现、没事就收起"，与用户要的"Pet 是常驻核心功能"不符，
+ * 也正是"任何界面都看不见"的直接原因之一。
  */
 class PetBar(context: Context) : LinearLayout(context) {
 
@@ -35,7 +32,7 @@ class PetBar(context: Context) : LinearLayout(context) {
     /** 展开与收起时回调，方便外面把上下间距一起收掉。 */
     var onShownChanged: ((Boolean) -> Unit)? = null
 
-    private var shown = false
+    private var shown = true
     private var pendingDismiss: Runnable? = null
 
     /** 承载本条的容器。收起时整块隐藏，避免它的 padding 留下空隙。 */
@@ -44,7 +41,8 @@ class PetBar(context: Context) : LinearLayout(context) {
     init {
         orientation = VERTICAL
         setPadding(0, 0, 0, 0)
-        visibility = View.GONE
+        // 常驻：一创建就可见，不靠事件驱动
+        visibility = View.VISIBLE
 
         row.orientation = HORIZONTAL
         row.gravity = Gravity.BOTTOM or Gravity.START
@@ -138,47 +136,49 @@ class PetBar(context: Context) : LinearLayout(context) {
         show(text, PetMood.WAITING, tint = 0xFFFF9F0A.toInt())
     }
 
-    /** 做完了。传最后一句话的首句，停留几秒后自动收起。 */
+    /** 做完了。文字停留几秒后清掉，但宠物本体继续在（它会自己回到空闲）。 */
     fun showDone(text: String) {
         show(text, PetMood.DONE, tint = 0xFF34C759.toInt())
-        autoDismiss(6000)
+        clearTextLater(6000)
     }
 
     /** 出错。 */
     fun showError(text: String) {
         show(text, PetMood.ERROR, tint = 0xFFFF3B30.toInt())
-        autoDismiss(9000)
+        clearTextLater(9000)
     }
-    /** 回到闲置：整条收起，不占输入框上方的空间。 */
+
+    /**
+     * 回到空闲。
+     *
+     * 只清气泡文字并把表情切回 idle；宠物本体继续显示，不会整条消失。
+     * 名字保留 hideNow 以免改动调用点，但它不再隐藏任何东西。
+     */
     fun hideNow() {
         pendingDismiss?.let { removeCallbacks(it) }
         pendingDismiss = null
-        if (!shown) {
-            // 已经是收起态：顺手把宿主也藏掉（首次进入走这里）
-            host?.visibility = View.GONE
-            return
-        }
-        shown = false
-        // 收回 idle：新引擎里 setMood 的幂等判断看的是 mood 与是否有片段，
-        // 回 idle 之后再播「做完了」就能重新触发庆祝。
+        clearBubble()
         pet.setMood(PetMood.IDLE, animate = false)
-        animateHeight(0) {
-            visibility = View.GONE
-            // 宿主本身也藏起来：它是 wrap_content + 左右 padding，
-            // 只把自身高度设 0 仍会留下一条 padding 的空白。
-            host?.visibility = View.GONE
-            onShownChanged?.invoke(false)
-        }
+        onShownChanged?.invoke(false)
     }
 
-    private fun autoDismiss(delayMs: Long) {
+    private fun clearTextLater(delayMs: Long) {
         pendingDismiss?.let { removeCallbacks(it) }
         val r = Runnable {
             pendingDismiss = null
-            hideNow()
+            // 只清文字，宠物继续；它自己会从 done/error 回到空闲
+            clearBubble()
+            onShownChanged?.invoke(false)
         }
         pendingDismiss = r
         postDelayed(r, delayMs)
+    }
+
+    /** 清掉气泡文字，并把行高收回仅宠物的高度。 */
+    private fun clearBubble() {
+        bubble.text = ""
+        bubble.visibility = View.GONE
+        relayoutToContent()
     }
 
     // ---------------------------------------------------------------- 内部
@@ -197,30 +197,16 @@ class PetBar(context: Context) : LinearLayout(context) {
             },
         )
         pet.setMood(mood)
-        if (!shown) {
-            shown = true
-            // 宿主先恢复可见，否则测出来的宽度恒为 0，展开动画会用错目标高度
-            host?.visibility = View.VISIBLE
-            visibility = View.VISIBLE
-            // 第一次展开时自身 width 还是 0，用父容器的可用宽度来测量，
-            // 否则测出来的高度会按 0 宽算（气泡换行数不同，高度就差很多）。
-            val parent = parent as? View
-            val available = (parent?.width ?: 0) - paddingStart - paddingEnd
-            val widthSpec = if (available > 0) {
-                MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST)
-            } else {
-                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
-            }
-            measure(widthSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-            // 测量的结果可能是 0（还没布局完），兜一个按内容的估算，避免展开动画起点终点相同
-            val target = if (measuredHeight > 0) measuredHeight else dp(56)
-            animateHeight(target) { onShownChanged?.invoke(true) }
-        }
+        // 常驻显示：这里只按需重算高度，不再做展开/收起动画
+        host?.visibility = View.VISIBLE
+        visibility = View.VISIBLE
+        relayoutToContent()
+        onShownChanged?.invoke(true)
     }
 
     private fun onMood(mood: PetMood) {
-        // 情绪由 show* 主动设定；自己回闲置时把整条收起
-        if (mood == PetMood.IDLE) hideNow()
+        // 情绪由 show* 主动设定。宠物自己回到 idle 时不清气泡文字：
+        // 文字的生灭由 show* / clearTextLater 管，否则刚写的句子会被立刻抹掉。
     }
 
     /**

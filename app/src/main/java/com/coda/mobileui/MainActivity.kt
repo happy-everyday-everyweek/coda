@@ -1319,7 +1319,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val bar = petBar ?: return
         val store = SettingsStore.get(this)
         val host = findViewById<android.view.View>(R.id.pet_bar_host)
-        // 总开关关掉或该页不显示时，容器与自身一起藏起来，不占位置
+        // 关掉总开关或不在会话页显示时：整块隐藏
         if (!store.petComposerVisible()) {
             bar.hideNow()
             bar.visibility = android.view.View.GONE
@@ -1327,14 +1327,13 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             ui.removeCallbacks(petTick)
             return
         }
-        // 显示时容器必须一起恢复：之前只把 PetBar 设为 VISIBLE，外层容器仍是 GONE，
-        // 整条就永远看不见——这是上一版"任何界面都不可见"的直接原因。
+        // 常驻显示：容器与自身都要可见。之前只把 PetBar 设 VISIBLE、
+        // 外层容器仍是 gone，整条永远看不见。
         host?.visibility = android.view.View.VISIBLE
         bar.visibility = android.view.View.VISIBLE
         bar.petView().visibility = if (store.petBubbleOnly) android.view.View.GONE else android.view.View.VISIBLE
         bar.petView().reduceMotion = store.petReduceMotionEffective(this)
-        val colors = accentTriple()
-        bar.applySkin(this, store.petSkinId, colors[0], colors[1], colors[2])
+        bar.applySkin(this, store.petSkinId)
     }
 
     /** 当前主题的三档强调色：正常 / 浅 / 柔。 */
@@ -1404,7 +1403,8 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         }
         if (force) {
             petActivity = ""
-            bar.showDone(if (zc.currentSessionId == null) "等你开口" else "随时可以继续")
+            // 常驻：空闲时也保持显示，只把表情与文字归位
+            bar.hideNow()
         }
     }
 
@@ -3389,6 +3389,15 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 if (blocked) return super.dispatchTouchEvent(ev)
                 val dx = ev.x - edgeSwipeStartX
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
+                // 设置页：右滑打开抽屉（回到上一级），左滑不做任何事。
+                // 设置页没有自己的会话内容，绝不能复用主界面的"左滑进工作台"。
+                if (showingSettings) {
+                    if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.START)) {
+                        drawerLayout.openDrawer(Gravity.START)
+                        edgeSwipeStartX = ev.x
+                    }
+                    return super.dispatchTouchEvent(ev)
+                }
                 // 全屏抽屉可见：左滑回到半屏抽屉
                 if (fullDrawer?.visibility == View.VISIBLE) {
                     if (dx < -dp(48) && -dx > dy) {
@@ -3416,6 +3425,13 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 if (blocked) return super.dispatchTouchEvent(ev)
                 val dx = ev.x - edgeSwipeStartX
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
+                // 设置页：抬手也不进入工作台，只允许右滑打开抽屉
+                if (showingSettings) {
+                    if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.START)) {
+                        drawerLayout.openDrawer(Gravity.START)
+                    }
+                    return super.dispatchTouchEvent(ev)
+                }
                 if (fullDrawer?.visibility == View.VISIBLE) {
                     if (dx < -dp(48) && -dx > dy) {
                         hideFullDrawer()
@@ -3429,8 +3445,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 } else if (dx < -dp(48) && -dx > dy) {
                     if (drawerLayout.isDrawerOpen(Gravity.START)) {
                         drawerLayout.closeDrawer(Gravity.START)
-                    } else if (-dx > dp(96)) {
-                        // 主界面左滑进入工作台
+                    } else if (!showingSettings && -dx > dp(96)) {
+                        // 主界面左滑进入工作台。设置页里绝不能走这里：
+                        // 设置页是主区域内的换页，左滑应该什么都不做（返回靠左上角菜单），
+                        // 之前缺这个判断，导致在设置页右滑/左滑会误开工作区。
                         openWorkspace()
                     }
                 }
@@ -3465,6 +3483,9 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         findViewById<View>(R.id.composer_container).visibility = View.GONE
         // 顶栏属于会话页，设置页里不显示
         (findViewById<View>(R.id.model_selector)?.parent as? ViewGroup)?.visibility = View.GONE
+        // 设置页不是会话页：手势必须按"设置页"那套判定（见 dispatchTouchEvent），
+        // 否则在设置页右滑会被当成主界面手势，误开工作区。
+        updateSwipeIntercept()
         renderSettingsPage()
     }
 
@@ -3478,6 +3499,8 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         findViewById<View>(R.id.composer_container).visibility = View.VISIBLE
         // 设置页里可能改过宠物形象与开关，回到会话时对齐一次
         applyPetSettings()
+        // 回到会话页，手势拦截规则随之恢复
+        updateSwipeIntercept()
     }
 
     private fun renderSettingsPage() {
@@ -3485,9 +3508,13 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         page.findViewById<View>(R.id.settings_page_back).setOnClickListener {
             drawerLayout.openDrawer(Gravity.START)
         }
+        val container = page.findViewById<LinearLayout>(R.id.settings_page_container)
+        // 必须先清空：每次从抽屉点「设置」都会重新渲染一遍，
+        // 不清空就会在同一个容器里一层层追加出多份一模一样的设置列表。
+        container.removeAllViews()
         SettingsViewBuilder.render(
             this,
-            page.findViewById(R.id.settings_page_container),
+            container,
             SettingsData.home,
         ) { target ->
             startActivity(

@@ -90,6 +90,9 @@ object SettingsData {
         SettingRow.Category("commands", "命令", "管理 .md 命令文件", R.drawable.ic_terminal),
         SettingRow.Category("automations", "定时任务", "按计划自动运行任务", R.drawable.ic_clock),
         SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
+        // 宠物是核心功能，独立成组；位置上必须在 Agent 能力之后、数据与统计之前。
+        // 以后它的子项会变多（形象、提醒、行为、集成…），所以这里用分组标题而不是塞进 Agent 能力里。
+        SettingRow.Header("宠物"),
         SettingRow.Category("pet", "宠物", "形象、提示方式与动态效果", R.drawable.ic_logo_spark),
         SettingRow.Header("数据与统计"),
         SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
@@ -698,79 +701,94 @@ object SettingsData {
         return SettingsPage("浏览器控制", rows)
     }
 
-    /** 宠物设置页。 */
+    /**
+     * 宠物设置页（总入口）。
+     *
+     * 这一页只放"分类入口 + 总开关"，具体细项拆到子页里：
+     * 形象、出现位置、行为。这样以后加新能力（提醒、语气、与其他应用联动）
+     * 只需要加一个分类，不会把这一页堆成一大坨。
+     */
     fun pet(store: SettingsStore, ctx: Context): SettingsPage {
         val skins = com.coda.mobileui.core.PetSkins.all(ctx)
         val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.first()
         val rows = mutableListOf<SettingRow>()
-        // 顶部留一块给趴着的宠物本体，由设置页自己往里画
+        // 顶部留一块给趴着的宠物本体，由设置页自己往里画。
+        // key 必须是**页面 key**（这里就是 "pet"），PetStageView 拿它判断
+        // petSettingsVisible(pageKey)；写成别的名字会让这一页永远不显示宠物。
         rows.add(
-            // key 必须是**页面 key**（这里就是 "pet"），PetStageView 拿它判断
-            // petSettingsVisible(pageKey)；写成别的名字会让这一页永远不显示宠物。
             SettingRow.Custom(
                 kind = SettingRow.Custom.KIND_PET_STAGE,
                 key = "pet",
             ),
         )
-        rows.add(SettingRow.Header("外观"))
-        rows.add(SettingRow.Value("形象", current.title, "pet_skin"))
+        rows.add(SettingRow.Header("总开关"))
         rows.add(
             SettingRow.Toggle(
                 "启用宠物",
-                "总开关，关掉后任何页面都不再出现",
+                "关掉后任何页面都不再出现",
                 store.petEnabled,
                 "pet_enabled",
             ),
         )
-        rows.add(SettingRow.Header("在哪些页面出现"))
-        rows.add(
-            SettingRow.Toggle(
-                "输入框上方",
-                "会话页输入框上方的提示条",
-                store.petInComposer,
-                "pet_in_composer",
-            ),
-        )
-        rows.add(
-            SettingRow.Toggle(
-                "宠物设置页",
-                "也就是这一页顶部趴着的那只",
-                store.petInSettings,
-                "pet_in_settings",
-            ),
-        )
-        rows.add(
+        rows.add(SettingRow.Header("设置"))
+        // 分类入口：指向子页（SettingsDetailActivity 按 key 路由）
+        rows.add(SettingRow.Category("pet_appearance", "形象", "当前：${current.title}", R.drawable.ic_logo_spark))
+        rows.add(SettingRow.Category("pet_places", "出现位置", "会话页、设置页分别是否显示", R.drawable.ic_layers))
+        rows.add(SettingRow.Category("pet_behavior", "行为", "动态效果与提示方式", R.drawable.ic_zap))
+        rows.add(SettingRow.Header("它现在会做什么"))
+        rows.add(SettingRow.Value("运行中", "在输入框上方显示正在做什么"))
+        rows.add(SettingRow.Value("等你确认", "需要你点一下时提醒"))
+        rows.add(SettingRow.Value("做完了", "显示最后一句回复的首句"))
+        rows.add(SettingRow.Value("出错", "显示失败的工具名"))
+        return SettingsPage("宠物", rows)
+    }
+
+    /** 宠物 → 形象。 */
+    fun petAppearance(store: SettingsStore, ctx: Context): SettingsPage {
+        val skins = com.coda.mobileui.core.PetSkins.all(ctx)
+        val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.first()
+        val rows = mutableListOf<SettingRow>()
+        rows.add(SettingRow.Header("形象"))
+        rows.add(SettingRow.Value("当前形象", current.title, "pet_skin"))
+        rows.add(SettingRow.Value("可用数量", "${skins.size} 个", ""))
+        rows.add(SettingRow.Header("来自 critter 的五个形象"))
+        for (skin in skins) {
+            rows.add(SettingRow.Radio(skin.title, skin.id == current.id, "pet_pick=${skin.id}"))
+        }
+        return SettingsPage("形象", rows)
+    }
+
+    /** 宠物 → 出现位置。 */
+    fun petPlaces(store: SettingsStore): SettingsPage = SettingsPage(
+        "出现位置",
+        listOf(
+            SettingRow.Header("会话页"),
+            SettingRow.Toggle("输入框上方", "会话页输入框上方的提示条", store.petInComposer, "pet_in_composer"),
+            SettingRow.Header("设置页"),
+            SettingRow.Toggle("宠物设置页", "也就是宠物页顶部趴着的那只", store.petInSettings, "pet_in_settings"),
             SettingRow.Toggle(
                 "其它设置页",
                 "外观、使用统计等页面顶部；默认关闭，避免到处都有它",
                 store.petInOtherSettings,
                 "pet_in_other_settings",
             ),
-        )
-        rows.add(SettingRow.Header("显示方式"))
-        rows.add(
-            SettingRow.Toggle(
-                "只显示气泡",
-                "隐藏宠物本体，只保留提示文字",
-                store.petBubbleOnly,
-                "pet_bubble_only",
-            ),
-        )
-        rows.add(
+        ),
+    )
+
+    /** 宠物 → 行为。 */
+    fun petBehavior(store: SettingsStore): SettingsPage = SettingsPage(
+        "行为",
+        listOf(
+            SettingRow.Header("显示方式"),
+            SettingRow.Toggle("只显示气泡", "隐藏宠物本体，只保留提示文字", store.petBubbleOnly, "pet_bubble_only"),
             SettingRow.Toggle(
                 "减少动态效果",
-                "只换表情，不播放逐格动画",
+                "只换表情，不播放逐格动画；系统开了移除动画时强制生效",
                 store.petReduceMotion,
                 "pet_reduce_motion",
             ),
-        )
-        rows.add(SettingRow.Header("它现在会做什么"))
-        rows.add(SettingRow.Value("运行中", "在输入框上方显示正在做什么"))
-        rows.add(SettingRow.Value("等你确认", "需要你点一下时提醒"))
-        rows.add(SettingRow.Value("做完了", "显示最后一句回复的首句，几秒后收起"))
-        rows.add(SettingRow.Value("出错", "显示失败的工具名"))
-        return SettingsPage("宠物", rows)
-    }
+        ),
+    )
 
     val pages: Map<String, SettingsPage> = mapOf(
         "migration" to SettingsPage(
