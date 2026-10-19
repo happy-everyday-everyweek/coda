@@ -398,6 +398,18 @@ class WorkspaceActivity : BaseActivity() {
         layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
         setPadding(dp(9f), dp(9f), dp(9f), dp(9f))
         setOnClickListener { click() }
+        // 底栏图标很密，按下只做轻微缩放、不做透明度：缩放在 40dp 的方块里最清楚。
+        setOnTouchListener { v, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN ->
+                    v.animate().scaleX(0.88f).scaleY(0.88f)
+                        .setDuration(Motion.TAP_MS).setInterpolator(Motion.standard).start()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    v.animate().scaleX(1f).scaleY(1f)
+                        .setDuration(Motion.SETTLE_MS).setInterpolator(Motion.settle).start()
+            }
+            false
+        }
     }
 
     private fun line(): View = View(this).apply {
@@ -469,8 +481,13 @@ class WorkspaceActivity : BaseActivity() {
             next.page.view.visibility = View.VISIBLE
             // 轻量淡入：切页时给一次明确的"内容换了"的反馈，不做位移动画以免与
             // 各页自身的滚动位置打架。
+            next.page.view.animate().cancel()
             next.page.view.alpha = 0f
-            next.page.view.animate().alpha(1f).setDuration(140).start()
+            next.page.view.animate()
+                .alpha(1f)
+                .setDuration(Motion.SETTLE_MS)
+                .setInterpolator(Motion.standard)
+                .start()
             activeId = id
             next.page.onShown()
         }
@@ -533,12 +550,24 @@ class WorkspaceActivity : BaseActivity() {
     private fun updateBar() {
         val canBack = history.isNotEmpty()
         backButton.isEnabled = canBack
-        backButton.alpha = if (canBack) 1f else 0.35f
+        // 可用/禁用不再直接跳到目标值：淡一下，眼睛能看出"能点了"这件事发生了变化。
+        fadeToolButton(backButton, if (canBack) 1f else 0.35f)
         val canAhead = ahead.isNotEmpty()
         aheadButton.isEnabled = canAhead
-        aheadButton.alpha = if (canAhead) 1f else 0.35f
-        countButton.text = tabs.size.toString()
+        fadeToolButton(aheadButton, if (canAhead) 1f else 0.35f)
+        countButton.crossFadeText(tabs.size.toString())
         applyChromePalette()
+    }
+
+    /** 底栏图标的状态切换：透明度过渡，避免一下子跳过去。 */
+    private fun fadeToolButton(button: ImageButton, target: Float) {
+        if (button.alpha == target) return
+        button.animate().cancel()
+        button.animate()
+            .alpha(target)
+            .setDuration(Motion.SETTLE_MS)
+            .setInterpolator(Motion.standard)
+            .start()
     }
 
     private fun persist() {
@@ -616,14 +645,19 @@ class WorkspaceActivity : BaseActivity() {
         overview = scrim
         // 遮罩淡入 + 面板轻微上移，给"管理页被拉起"的方向感。
         panel.translationY = dp(24f).toFloat()
-        scrim.animate().alpha(1f).setDuration(160).start()
-        panel.animate().translationY(0f).setDuration(200).start()
+        scrim.animate().alpha(1f).setDuration(Motion.SETTLE_MS).setInterpolator(Motion.standard).start()
+        panel.animate()
+            .translationY(0f)
+            .setDuration(Motion.PANEL_MS)
+            .setInterpolator(Motion.standard)
+            .start()
     }
 
     private fun fillGrid() {
         val grid = overviewGrid ?: return
         grid.removeAllViews()
         var index = 0
+        var rowIndex = 0
         while (index < tabs.size) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             for (slot in 0 until 2) {
@@ -641,6 +675,18 @@ class WorkspaceActivity : BaseActivity() {
                 row,
                 LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10f) },
             )
+            // 逐行错开入场：网格整体重建时如果一起出现，看着像闪了一下；
+            // 每行晚 24ms 出来，读起来是"卡片一张张落位"。
+            row.alpha = 0f
+            row.translationY = dp(10f).toFloat()
+            row.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay((rowIndex * 24L).coerceAtMost(180L))
+                .setDuration(Motion.PANEL_MS)
+                .setInterpolator(Motion.standard)
+                .start()
+            rowIndex++
             index += 2
         }
     }
@@ -661,9 +707,12 @@ class WorkspaceActivity : BaseActivity() {
         // 返回 false 让点击与关闭按钮继续照常派发。
         card.setOnTouchListener { v, ev ->
             when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN -> v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(90).start()
+                MotionEvent.ACTION_DOWN ->
+                    v.animate().scaleX(0.97f).scaleY(0.97f)
+                        .setDuration(Motion.TAP_MS).setInterpolator(Motion.standard).start()
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                    v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                    v.animate().scaleX(1f).scaleY(1f)
+                        .setDuration(Motion.SETTLE_MS).setInterpolator(Motion.settle).start()
             }
             false
         }
@@ -690,7 +739,16 @@ class WorkspaceActivity : BaseActivity() {
             val size = dp(30f)
             layoutParams = LinearLayout.LayoutParams(size, size)
             setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
-            setOnClickListener { closeTab(entry.data.id) }
+            setOnClickListener {
+                // 先让这张卡缩一下再真正关掉，避免网格里"凭空少一格"
+                card.animate()
+                    .scaleX(0.92f).scaleY(0.92f)
+                    .alpha(0f)
+                    .setDuration(Motion.SETTLE_MS)
+                    .setInterpolator(Motion.standard)
+                    .withEndAction { closeTab(entry.data.id) }
+                    .start()
+            }
         })
         card.addView(head)
         val detail = entry.page.subtitle()
@@ -713,7 +771,8 @@ class WorkspaceActivity : BaseActivity() {
         // 淡出后再摘除；期间新开的遮罩以 alpha 动画覆盖，不做等待。
         view.animate()
             .alpha(0f)
-            .setDuration(140)
+            .setDuration(Motion.SETTLE_MS)
+            .setInterpolator(Motion.standard)
             .withEndAction {
                 if (view.parent === container) container.removeView(view)
             }
@@ -818,7 +877,7 @@ sheet.content { column ->
                         sheet.dismiss()
                         when (item) {
                             "标签总览" -> showOverview()
-                            "刷新当前标签" -> activePage()?.onMenuItem("刷新")
+                            "刷新当前标签" -> refreshActivePage()
                             "关闭当前标签" -> activeId?.let { closeTab(it) }
                             "关闭其他标签" -> activeId?.let { closeOthers(it) }
                             "关闭全部标签" -> closeAll()
@@ -828,6 +887,28 @@ sheet.content { column ->
             })
         }
         sheet.show()
+    }
+
+    /** 刷新当前标签：先压暗再回亮，给一次看得见的确认。 */
+    private fun refreshActivePage() {
+        val page = activePage() ?: return
+        // 刷新大多很快，内容原样重画时用户看不出发生过什么。
+        // 先轻微压暗再回亮，给一次"确实刷新了"的确认感。
+        val view = page.view
+        view.animate().cancel()
+        view.animate()
+            .alpha(0.55f)
+            .setDuration(Motion.TAP_MS)
+            .setInterpolator(Motion.standard)
+            .withEndAction {
+                page.onMenuItem("刷新")
+                view.animate()
+                    .alpha(1f)
+                    .setDuration(Motion.PANEL_MS)
+                    .setInterpolator(Motion.standard)
+                    .start()
+            }
+            .start()
     }
 
     /** 选择工作区目录；[into] 非空时就地换页，不再关菜单另开一张。 */
@@ -846,6 +927,7 @@ sheet.content { column ->
             setPadding(0, dp(12f), 0, dp(12f))
             isClickable = true
             setOnClickListener { click() }
+            pressFeedback(pressedAlpha = 0.6f)
         }
         if (iconRes != null) {
             row.addView(ImageView(this).apply {
@@ -928,13 +1010,18 @@ sheet.content { column ->
 
     private fun showStatus(text: String) {
         if (isFinishing || isDestroyed) return
+        val wasVisible = statusView.visibility == View.VISIBLE
         statusView.text = text
+        if (wasVisible) return
+        // 从上方轻轻落下：状态条是"浮在上面的一行提示"，给它一个来源方向。
         statusView.visibility = View.VISIBLE
+        statusView.enterFrom(-dp(8f).toFloat(), Motion.SETTLE_MS)
     }
 
     private fun hideStatus() {
         if (isFinishing || isDestroyed) return
-        statusView.visibility = View.GONE
+        if (statusView.visibility != View.VISIBLE) return
+        statusView.exitTo(-dp(6f).toFloat()) { statusView.visibility = View.GONE }
     }
 
     private fun toast(text: String) {
