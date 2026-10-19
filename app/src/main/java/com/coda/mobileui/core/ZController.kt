@@ -458,7 +458,6 @@ class ZController private constructor(private val app: Context) {
         val live = ZWorkflowKit.liveFromProgress(runId, eventType, inner, address, actorSessionId)
         post {
             if (live != null) workflowLive[runId] = live
-            workflowTick++
             // 只通知工作流面板：主聊天页的整页重渲染留给真正影响消息的事件，
             // 否则每来一条进度都会把聊天视图重建一次（并可能打断滚动）。
             for (w in workflowWatchers) w.onWorkflowProgress(runId)

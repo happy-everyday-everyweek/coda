@@ -2297,12 +2297,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                     zc.cancelWorkflowRun(run.runId) { ok, msg ->
                         ui.post {
                             if (ok) {
-                                toast("已请求停止工作流")
+                                snack("已请求停止工作流")
                                 // 停止是异步结算，先给按钮一个即时状态，结算事件回来后卡片会自动刷新
                                 body.alpha = 0.5f
                                 body.animate().alpha(1f).setDuration(220).start()
                             } else {
-                                toast(controlFailText(msg, "停止失败"))
+                                snack(controlFailText(msg, "停止失败"))
                             }
                         }
                     }
@@ -2314,7 +2314,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 workflowControlButton("继续", filled = true) {
                     zc.resumeWorkflowRun(run.runId) { ok, msg ->
                         ui.post {
-                            if (ok) toast("已请求继续工作流") else toast(controlFailText(msg, "继续失败"))
+                            if (ok) snack("已请求继续工作流") else snack(controlFailText(msg, "继续失败"))
                         }
                     }
                 },
