@@ -723,45 +723,76 @@ class WorkspaceActivity : BaseActivity() {
 
     // -------------------------------------------------------------- 弹出面板
 
-    private fun showNewTabSheet() {
-        val sheet = CodaSheet(this).title("新建标签页")
-        sheet.content { column ->
+    /**
+     * 新建标签页的选择页。
+     *
+     * [into] 非空表示就地换页（从标签菜单点"新建标签页"进来），复用那张卡片。
+     */
+    private fun showNewTabSheet(into: CodaSheet? = null) {
+        val kinds = listOf(
+            WorkspaceTabs.OVERVIEW,
+            WorkspaceTabs.FILES,
+            WorkspaceTabs.GIT,
+            WorkspaceTabs.TERMINAL,
+        )
+        // 真正承载这一页的卡片：就地换页时是宿主，否则是稍后新建的那张。
+        // 用一个容器持有，闭包在构建时就能拿到正确的引用。
+        val holder = arrayOfNulls<CodaSheet>(1)
+        fun fill(column: LinearLayout) {
             column.removeAllViews()
-            for (kind in listOf(
-                WorkspaceTabs.OVERVIEW,
-                WorkspaceTabs.FILES,
-                WorkspaceTabs.GIT,
-                WorkspaceTabs.TERMINAL,
-            )) {
+            for (kind in kinds) {
                 column.addView(
                     sheetRow(iconFor(kind), WorkspaceTabs.label(kind), describeKind(kind)) {
-                        sheet.dismiss()
+                        holder[0]?.dismiss()
                         createTab(kind, null)
                     },
                 )
             }
         }
+        if (into != null) {
+            holder[0] = into
+            into.navigate {
+                title("新建标签页")
+                content { column -> fill(column) }
+                primaryAction("关闭") { it.dismiss() }
+            }
+            return
+        }
+        val sheet = CodaSheet(this).title("新建标签页")
+        holder[0] = sheet
+        sheet.content { column -> fill(column) }
         sheet.show()
     }
 
-    private fun showTabActions(id: String) {
+    private fun showTabActions(id: String, into: CodaSheet? = null) {
         val label = tabs.firstOrNull { it.data.id == id }?.let { WorkspaceTabs.label(it.data.kind) } ?: "标签"
-        val sheet = CodaSheet(this).title(label)
-        sheet.content { column ->
+        // 菜单页就地换到"标签操作"时，宿主是那张已经打开的卡；否则自己新建一张。
+        val holder = arrayOfNulls<CodaSheet>(1)
+        fun fill(column: LinearLayout) {
             column.removeAllViews()
             column.addView(sheetRow(R.drawable.ic_close_lucide, "关闭标签", null) {
-                sheet.dismiss()
+                holder[0]?.dismiss()
                 closeTab(id)
             })
             column.addView(sheetRow(R.drawable.ic_close_lucide, "关闭其他标签", null) {
-                sheet.dismiss()
+                holder[0]?.dismiss()
                 closeOthers(id)
             })
             column.addView(sheetRow(R.drawable.ic_add, "新建标签页", null) {
-                sheet.dismiss()
-                showNewTabSheet()
+                holder[0]?.let { showNewTabSheet(it) }
             })
         }
+        if (into != null) {
+            holder[0] = into
+            into.navigate {
+                title(label)
+                content { column -> fill(column) }
+            }
+            return
+        }
+        val sheet = CodaSheet(this).title(label)
+        holder[0] = sheet
+        sheet.content { column -> fill(column) }
         sheet.show()
     }
 
@@ -776,26 +807,36 @@ class WorkspaceActivity : BaseActivity() {
             "关闭全部标签",
         )
         val sheet = CodaSheet(this).title(root.name.ifEmpty { "工作区" }).subtitle(root.absolutePath)
-        sheet.content { column ->
+sheet.content { column ->
             column.removeAllViews()
             for (item in items) column.addView(sheetRow(null, item, null) {
-                sheet.dismiss()
                 when (item) {
-                    "新建标签页" -> showNewTabSheet()
-                    "标签总览" -> showOverview()
-                    "切换工作区目录" -> pickRoot()
-                    "刷新当前标签" -> activePage()?.onMenuItem("刷新")
-                    "关闭当前标签" -> activeId?.let { closeTab(it) }
-                    "关闭其他标签" -> activeId?.let { closeOthers(it) }
-                    "关闭全部标签" -> closeAll()
+                    // 这两项原本"关掉菜单再开新卡"，改成同一张卡就地换页
+                    "新建标签页" -> showNewTabSheet(sheet)
+                    "切换工作区目录" -> pickRoot(sheet)
+                    else -> {
+                        sheet.dismiss()
+                        when (item) {
+                            "标签总览" -> showOverview()
+                            "刷新当前标签" -> activePage()?.onMenuItem("刷新")
+                            "关闭当前标签" -> activeId?.let { closeTab(it) }
+                            "关闭其他标签" -> activeId?.let { closeOthers(it) }
+                            "关闭全部标签" -> closeAll()
+                        }
+                    }
                 }
             })
         }
         sheet.show()
     }
 
-    private fun pickRoot() {
-        DirectoryPicker.show(this, "选择工作区目录", root) { switchRoot(it) }
+    /** 选择工作区目录；[into] 非空时就地换页，不再关菜单另开一张。 */
+    private fun pickRoot(into: CodaSheet? = null) {
+        if (into != null) {
+            DirectoryPicker.attachTo(into, this, "选择工作区目录", root) { switchRoot(it) }
+        } else {
+            DirectoryPicker.show(this, "选择工作区目录", root) { switchRoot(it) }
+        }
     }
 
     private fun sheetRow(iconRes: Int?, text: String, detail: String?, click: () -> Unit): View {
