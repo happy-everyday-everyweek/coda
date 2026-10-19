@@ -55,16 +55,67 @@ object ArchiveKit {
         !file.isDirectory && kindOf(file) != Kind.UNKNOWN
 
     /**
+     * 按文件头判断是不是 zip 容器。
+     *
+     * 后缀不可信：apk 改名成 .bin、从网络下来的无后缀文件、`.ZIP` 大写、`.zipx` 都存在。
+     * zip 的本地文件头固定是 `PK\x03\x04`；空包是 `PK\x05\x06`；跨卷分片是 `PK\x07\x08`。
+     * 只读前 4 字节，对任意大小的文件都是常数开销。
+     */
+    fun looksLikeZip(file: File): Boolean {
+        if (!file.isFile || file.length() < 4) return false
+        return runCatching {
+            java.io.FileInputStream(file).use { input ->
+                val head = ByteArray(4)
+                if (input.read(head) != 4) {
+                    false
+                } else {
+                    head[0] == 0x50.toByte() && head[1] == 0x4B.toByte() &&
+                        (
+                            (head[2] == 0x03.toByte() && head[3] == 0x04.toByte()) ||
+                                (head[2] == 0x05.toByte() && head[3] == 0x06.toByte()) ||
+                                (head[2] == 0x07.toByte() && head[3] == 0x08.toByte())
+                            )
+                }
+            }
+        }.getOrDefault(false)
+    }
+
+    /**
+     * 打开某个文件时该走哪条路。
+     *
+     * 判断顺序就是需求里的优先级：先看后缀明确是压缩包；后缀不明时，只要有别的打开方式
+     * （系统里注册过这个 MIME/后缀的应用），就交给系统；确实没有别的办法，才按二进制内容
+     * 试一次 ZIP。
+     */
+    enum class Route {
+        /** 后缀是压缩包，直接包内浏览。 */
+        ARCHIVE,
+
+        /** 后缀未知，但内容像 ZIP，且没有别的打开方式。 */
+        ARCHIVE_BY_CONTENT,
+
+        /** 普通文本/可编辑文件。 */
+        TEXT,
+
+        /** 交给系统应用。 */
+        SYSTEM,
+
+        /** 没有任何可用方式。 */
+        NONE,
+    }
+
+    /**
      * 列出某个目录层级下的直接条目。
      *
      * [dirPath] 是包内路径，空串表示根。只返回这一层的直接子项：中间目录由调用方
      * 通过"存在性"补齐（zip 里常有 `a/b/c.txt` 而没有 `a/` 与 `a/b/` 条目）。
      */
-    fun list(file: File, dirPath: String, env: LinuxEnv?): List<Entry> = when (kindOf(file)) {
-        Kind.ZIP -> listZip(file, dirPath)
-        Kind.TAR, Kind.TAR_GZ -> if (env == null) emptyList() else listTar(file, dirPath, env)
-        else -> emptyList()
-    }
+    fun list(file: File, dirPath: String, env: LinuxEnv?, kind: Kind? = null): List<Entry> =
+        when (kind ?: kindOf(file)) {
+            Kind.ZIP -> listZip(file, dirPath)
+            Kind.TAR, Kind.TAR_GZ -> if (env == null) emptyList() else listTar(file, dirPath, env)
+            else -> emptyList()
+        }
 
     /**
      * 读取包内某个文件的文本内容。
@@ -77,7 +128,8 @@ object ArchiveKit {
         path: String,
         env: LinuxEnv?,
         maxBytes: Long = 2L * 1024 * 1024,
-    ): String? = when (kindOf(file)) {
+        kind: Kind? = null,
+    ): String? = when (kind ?: kindOf(file)) {
         Kind.ZIP -> readZipText(file, path, maxBytes)
         Kind.TAR, Kind.TAR_GZ -> if (env == null) null else readTarText(file, path, env, maxBytes)
         else -> null

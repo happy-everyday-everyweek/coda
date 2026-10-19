@@ -158,6 +158,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+        <!-- 文件共享：把工作区文件交给系统应用打开时用 content:// URI -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.workspacefiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <!-- 手机控制执行端：无障碍服务（默认关闭，用户在设置中开启） -->
         <service
             android:name=".core.PhoneAccessibilityService"

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 的可共享范围。
+
+  只开放工作区可能落到的几处，不放行整个存储：
+  - files-path：应用私有目录（内部工作区默认位置）
+  - external-files-path：应用外置私有目录
+  - external-path：外置存储，工作区根默认在 /sdcard/Coda
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="internal_files" path="." />
+    <external-files-path name="external_files" path="." />
+    <external-path name="sdcard" path="." />
+</paths>

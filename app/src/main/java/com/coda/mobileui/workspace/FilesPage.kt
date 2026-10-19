@@ -75,6 +75,14 @@ class FilesPage(
     /** 包内当前路径，空串表示压缩包根。 */
     private var archivePath: String = ""
 
+    /**
+     * 这个包是怎么被认出来的。
+     *
+     * 后缀明确是压缩包时为对应类型；后缀不认识但内容像 zip 时记 [ArchiveKit.Kind.ZIP]，
+     * 后续列目录/读文件都按它走，不会再因为后缀回落到"不认识"。
+     */
+    private var archiveKind: ArchiveKit.Kind = ArchiveKit.Kind.UNKNOWN
+
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
     override fun build(): View {
@@ -216,8 +224,8 @@ class FilesPage(
      * 用户不需要学第二套操作。
      */
     private fun renderArchiveList(pack: File) {
-        val kind = ArchiveKit.kindOf(pack)
-        val entries = ArchiveKit.list(pack, archivePath, host.env)
+        val kind = archiveKind.takeIf { it != ArchiveKit.Kind.UNKNOWN } ?: ArchiveKit.kindOf(pack)
+        val entries = ArchiveKit.list(pack, archivePath, host.env, kind)
         listColumn.addView(
             infoCard(
                 R.drawable.ic_file,
@@ -303,8 +311,9 @@ class FilesPage(
     }
 
     /** 进入一个压缩包：清掉编辑态，切到包内渲染。 */
-    private fun enterArchive(pack: File) {
+    private fun enterArchive(pack: File, kind: ArchiveKit.Kind = ArchiveKit.kindOf(pack)) {
         archive = pack
+        archiveKind = kind
         archivePath = ""
         renderList()
     }
@@ -329,7 +338,7 @@ class FilesPage(
         }
         toast("正在读取…")
         host.background(
-            work = { ArchiveKit.readText(pack, entry.path, host.env) },
+            work = { ArchiveKit.readText(pack, entry.path, host.env, kind = archiveKind) },
             then = { text ->
                 if (text == null) {
                     toast("无法读取，可能是二进制文件或超过上限")
@@ -461,7 +470,7 @@ class FilesPage(
                     isDir -> open(file)
                     // 压缩包点开＝进目录：与文件夹同一种交互，不弹菜单也不跳编辑器
                     ArchiveKit.isArchive(file) -> enterArchive(file)
-                    else -> openFile(file)
+                    else -> openFileSmart(file)
                 }
             },
             longClick = { showActions(file) },
@@ -1116,6 +1125,141 @@ class FilesPage(
             return
         }
         readInto(file, onFail = { showInfo(file, it) }, done = { showEditor(file, it) })
+    }
+
+    /**
+     * 点开一个非目录、非已知压缩包的文件时该怎么打开。
+     *
+     * 顺序按需求定，且"系统有没有打开方式"优先于"按内容当压缩包"：
+     * 1. 先判断是不是文本——文本仍进内置编辑器（这是本项目的主场）；
+     * 2. 不是文本时，只要系统里有应用能接（ACTION_VIEW 或 ACTION_SEND），就交给系统；
+     * 3. 系统也接不了，才把它当 ZIP 试一次。
+     *
+     * 注意不能靠"readText 是否抛异常"来区分文本与二进制：任意字节都能被解码成乱码
+     * 且不报错，那样二进制永远走不到第 2 步，全被塞进编辑器里显示乱码。
+     */
+    private fun openFileSmart(file: File) {
+        val textual = isProbablyText(file)
+        if (textual && file.length() <= MAX_EDIT_BYTES) {
+            readInto(
+                file,
+                onFail = { note ->
+                    if (!openWithSystem(file) && !tryArchiveByContent(file)) showInfo(file, note)
+                },
+                done = { showEditor(file, it) },
+            )
+            return
+        }
+        // 二进制，或大到不该塞进编辑器：先问系统
+        if (openWithSystem(file)) return
+        if (tryArchiveByContent(file)) return
+        if (textual) {
+            showInfo(file, "文件过大，未打开")
+        } else {
+            showInfo(file, "没有应用能打开这个文件")
+        }
+    }
+
+    /**
+     * 粗略判断是否文本。
+     *
+     * 只看前 4KB：出现 NUL 字节即判为二进制（UTF-16 文本会因此被误判，但工作区里
+     * UTF-16 源码极少，而把二进制误当文本的代价更大——满屏乱码还挡住系统打开）。
+     * 同时统计不可打印控制字符比例，超过 10% 也判为二进制。
+     */
+    private fun isProbablyText(file: File): Boolean {
+        val probe = runCatching {
+            java.io.FileInputStream(file).use { input ->
+                val buf = ByteArray(4096)
+                val n = input.read(buf)
+                if (n <= 0) ByteArray(0) else buf.copyOf(n)
+            }
+        }.getOrNull() ?: return false
+        if (probe.isEmpty()) return true
+        var suspicious = 0
+        for (b in probe) {
+            val v = b.toInt() and 0xFF
+            if (v == 0) return false
+            // 允许常见的空白控制符，其余控制字符计入可疑
+            val control = v < 0x09 || (v > 0x0D && v < 0x20)
+            if (control) suspicious++
+        }
+        return suspicious * 100 / probe.size <= 10
+    }
+
+    /**
+     * 内容像 ZIP 就按压缩包打开。
+     *
+     * 只在这里被调用，调用前已经确认过"系统没有应用能接"——所以这个函数不做二次询问，
+     * 命中就直接进包内浏览。不命中返回 false，由调用方给"打不开"的提示。
+     */
+    private fun tryArchiveByContent(file: File): Boolean {
+        if (!ArchiveKit.looksLikeZip(file)) return false
+        // 先确认真的能列出条目：有些文件只是碰巧以 PK 开头，ZipFile 会抛异常。
+        val entries = ArchiveKit.list(file, "", host.env, ArchiveKit.Kind.ZIP)
+        if (entries.isEmpty()) return false
+        toast("按压缩包打开")
+        enterArchive(file, ArchiveKit.Kind.ZIP)
+        return true
+    }
+
+    /**
+     * 交给系统应用打开。
+     *
+     * 返回是否真的发起了：没有应用能处理时返回 false，让调用方继续尝试别的方式。
+     * 走 FileProvider 而不是 file://——后者从 Android N 起跨应用会被直接拒绝。
+     *
+     * 判断"有没有应用能接"必须用具体 MIME：通配 `*/*` 会命中几乎所有应用，
+     * 等于把"系统打不开"永远判成"能打开"，后面的 ZIP 兜底就再也走不到了。
+     * 后缀认不出来时，用 `application/octet-stream`（通用二进制）去问，
+     * 只统计真正声明支持二进制的应用。
+     */
+    private fun openWithSystem(file: File): Boolean {
+        val uri = runCatching { WorkspaceFiles.uriFor(host, file) }.getOrNull() ?: return false
+        val mime = mimeOf(file)
+        val view = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mime)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        if (hasHandler(view)) {
+            runCatching { host.startActivity(view) }.onSuccess { return true }
+        }
+        // 没有明确的查看者时，再试一次"发送/分享"，很多文件管理器只注册了 SEND。
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        if (!hasHandler(send)) return false
+        return runCatching {
+            host.startActivity(android.content.Intent.createChooser(send, file.name))
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * 是否有应用真的能处理这个 Intent。
+     *
+     * 排除掉我们自己：本应用也会在某些 MIME 上注册（比如自己声明的 intent-filter），
+     * 若把自己算进去，就会"自己打开自己"并形成一次无意义的跳转。
+     */
+    private fun hasHandler(intent: android.content.Intent): Boolean =
+        host.packageManager
+            .queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            .any { it.activityInfo.packageName != host.packageName }
+
+    /**
+     * 按后缀给 MIME。
+     *
+     * 认不出后缀时给 `application/octet-stream` 而不是 `*/*`：前者是"通用二进制"，
+     * 只有确实支持二进制的应用会响应；后者会匹配到几乎所有应用（包括纯文本编辑器），
+     * 让"系统没有打开方式"这个判断失去意义。
+     */
+    private fun mimeOf(file: File): String {
+        val ext = file.extension.lowercase()
+        if (ext.isEmpty()) return "application/octet-stream"
+        val fromMap = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+        return fromMap ?: "application/octet-stream"
     }
 
     /** 读回文本内容；失败时走 onFail，不会静默。 */
