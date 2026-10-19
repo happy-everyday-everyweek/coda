@@ -3542,6 +3542,8 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             openWorkspace()
         }
     }
+
+    /** 打开设置：主区域换页 + 抽屉收起（与新对话同一层级，不新开页面）。 */
     private fun openSettingsPage() {
         showingSettings = true
         drawerLayout.closeDrawer(Gravity.START)
