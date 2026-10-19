@@ -71,6 +71,11 @@ class CodaSheet(private val activity: Activity) {
     private var navBarH = 0
     private var cornerPx = 0f
 
+    // 以下三个只在卡片显示期间有效：navigate() 重建内容与底栏时要用到。
+    private var livePanel: LinearLayout? = null
+    private var liveScroll: android.widget.ScrollView? = null
+    private var liveColors: IntArray? = null
+
     var isShowing: Boolean = false
         private set
 
@@ -242,6 +247,10 @@ class CodaSheet(private val activity: Activity) {
         }
         scroll.isFillViewport = true
         scroll.overScrollMode = View.OVER_SCROLL_ALWAYS
+        // 记下容器与配色，供 navigate() 在同一张卡片里重建内容
+        livePanel = panelView
+        liveScroll = scroll
+        liveColors = intArrayOf(onSurface, onSurfaceVariant, primary, onPrimary)
         scroll.addView(
             contentCol,
             ViewGroup.LayoutParams(
@@ -544,6 +553,183 @@ class CodaSheet(private val activity: Activity) {
         val col = liveContentCol ?: return
         col.removeAllViews()
         block(col)
+    }
+
+    /**
+     * 按当前字段重建"标题 + 内容 + 底部按钮"，不动卡片外壳。
+     *
+     * navigate() 用它换页；show() 首次构建时逻辑与这里一致，但为了不改动已验证的
+     * 首次展开流程，只在这里复刻一份等价实现（标题、内容、按钮的样式与间距完全相同）。
+     */
+    private fun rebuildPage() {
+        val panelView = livePanel ?: return
+        val contentCol = liveContentCol ?: return
+        val colors = liveColors ?: return
+        val onSurface = colors[0]
+        val onSurfaceVariant = colors[1]
+        val primary = colors[2]
+        val onPrimary = colors[3]
+
+        // 旧的底栏整块移除，新页重建（没有按钮时就不加）
+        footerRow?.let { panelView.removeView(it) }
+        footerRow = null
+
+        contentCol.removeAllViews()
+        if (!titleText.isNullOrEmpty()) {
+            contentCol.addView(
+                TextView(activity).apply {
+                    text = titleText
+                    textSize = 22f
+                    setTextColor(onSurface)
+                    typeface = android.graphics.Typeface.create(
+                        "sans-serif-medium",
+                        android.graphics.Typeface.NORMAL,
+                    )
+                },
+            )
+        }
+        if (!subtitleText.isNullOrEmpty()) {
+            contentCol.addView(
+                TextView(activity).apply {
+                    text = subtitleText
+                    textSize = 14f
+                    setTextColor(onSurfaceVariant)
+                    setPadding(0, dp(6f), 0, dp(2f))
+                },
+            )
+        }
+        contentBlock?.invoke(contentCol)
+
+        if (primaryText != null || secondaryText != null) {
+            val footer = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
+            }
+            fun footerButton(label: String, filled: Boolean, block: (CodaSheet) -> Unit): TextView =
+                TextView(activity).apply {
+                    text = label
+                    textSize = 15f
+                    gravity = Gravity.CENTER
+                    if (filled) {
+                        setTextColor(onPrimary)
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(26f).toFloat()
+                            setColor(primary)
+                        }
+                    } else {
+                        setTextColor(onSurface)
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(26f).toFloat()
+                            setStroke(dp(1f), withAlpha(onSurface, 0.25f))
+                        }
+                    }
+                    setOnClickListener { block(this@CodaSheet) }
+                }
+            val both = primaryText != null && secondaryText != null
+            if (secondaryText != null) {
+                footer.addView(
+                    footerButton(secondaryText!!, false) { secondaryBlock?.invoke(it) },
+                    LinearLayout.LayoutParams(0, dp(52f), 1f).apply {
+                        if (both) rightMargin = dp(12f)
+                    },
+                )
+            }
+            if (primaryText != null) {
+                footer.addView(
+                    footerButton(primaryText!!, true) { primaryBlock?.invoke(it) },
+                    LinearLayout.LayoutParams(0, dp(52f), 1f),
+                )
+            }
+            footerRow = footer
+            panelView.addView(
+                footer,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        contentCol.requestLayout()
+        // 内容高度变了：按当前停靠状态重新套一次底部避让（不能强制拉到全屏）
+        footerRow?.setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
+        panelView.requestLayout()
+    }
+
+    /**
+     * 在同一个卡片里换到下一页，不关闭卡片。
+     *
+     * 很多按钮的行为本来是"关掉当前卡片 → 打开另一张卡片"，观感上卡片要先沉下去再升起来，
+     * 中间还有一段空白。这个方法保留卡片容器，只把标题、内容与底部按钮整块换掉，
+     * 并做一次淡出 + 轻微位移的交叉过渡，看起来就是同一张卡片换了内容。
+     *
+     * 用法：在按钮回调里把原本"dismiss 后再 new CodaSheet(...).show()"的那段，
+     * 改成 sheet.navigate { 在这里描述新一页 }。
+     */
+    fun navigate(block: CodaSheet.() -> Unit) {
+        val col = liveContentCol ?: return
+        // 先记下当前页描述，便于新页在同一实例上重建
+        val oldTitle = titleText
+        val oldSubtitle = subtitleText
+        val oldHeaderActionText = headerActionText
+        val oldHeaderActionBlock = headerActionBlock
+        val oldPrimaryText = primaryText
+        val oldPrimaryBlock = primaryBlock
+        val oldSecondaryText = secondaryText
+        val oldSecondaryBlock = secondaryBlock
+        val oldContentBlock = contentBlock
+
+        // 关掉旧页：内容区与底部按钮一起淡出并轻微左移
+        val fadeOut = 110L
+        col.animate().alpha(0f).translationX(-dp(12f)).setDuration(fadeOut)
+        footerRow?.animate()?.alpha(0f)?.setDuration(fadeOut)?.start()
+
+        col.postDelayed({
+            // 复位动画状态
+            col.animate().cancel()
+            col.alpha = 1f
+            col.translationX = 0f
+
+            // 重置为一页干净的描述，再让调用方填新页
+            titleText = null
+            subtitleText = null
+            headerActionText = null
+            headerActionBlock = null
+            primaryText = null
+            primaryBlock = null
+            secondaryText = null
+            secondaryBlock = null
+            contentBlock = null
+
+            // 在同一个实例上应用新一页
+            block()
+
+            // 重建这一页：标题 + 内容 + 底部按钮
+            rebuildPage()
+
+            // 新页从右侧轻轻推入
+            col.alpha = 0f
+            col.translationX = dp(16f)
+            col.animate().alpha(1f).translationX(0f).setDuration(160).start()
+            footerRow?.let {
+                it.alpha = 0f
+                it.animate().alpha(1f).setDuration(160).start()
+            }
+
+            // 若新页没有定义任何内容（调用方写错），退回旧页，避免留下空白卡片
+            if (titleText == null && contentBlock == null && primaryText == null && secondaryText == null) {
+                titleText = oldTitle
+                subtitleText = oldSubtitle
+                headerActionText = oldHeaderActionText
+                headerActionBlock = oldHeaderActionBlock
+                primaryText = oldPrimaryText
+                primaryBlock = oldPrimaryBlock
+                secondaryText = oldSecondaryText
+                secondaryBlock = oldSecondaryBlock
+                contentBlock = oldContentBlock
+                rebuildPage()
+            }
+        }, fadeOut + 10)
     }
 
     /** 关闭半屏卡片（播放退出动画后移除）。 */
