@@ -234,7 +234,8 @@ class FilesPage(
             ),
         )
         listColumn.addView(groupSpacing())
-        listColumn.addView(
+        // cardGroup 返回的是一组卡片（首尾圆角不同），要整组加进去
+        listColumn.addViews(
             cardGroup(
                 listOf(
                     cardRow(R.drawable.ic_arrow_up, "上一级") {
@@ -1209,9 +1210,9 @@ class FilesPage(
      * 返回是否真的发起了：没有应用能处理时返回 false，让调用方继续尝试别的方式。
      * 走 FileProvider 而不是 file://——后者从 Android N 起跨应用会被直接拒绝。
      *
-     * 判断"有没有应用能接"必须用具体 MIME：通配 `*/*` 会命中几乎所有应用，
+     * 判断"有没有应用能接"必须用具体 MIME：通配星号会命中几乎所有应用，
      * 等于把"系统打不开"永远判成"能打开"，后面的 ZIP 兜底就再也走不到了。
-     * 后缀认不出来时，用 `application/octet-stream`（通用二进制）去问，
+     * 后缀认不出来时，用 application/octet-stream（通用二进制）去问，
      * 只统计真正声明支持二进制的应用。
      */
     private fun openWithSystem(file: File): Boolean {
@@ -1251,8 +1252,8 @@ class FilesPage(
     /**
      * 按后缀给 MIME。
      *
-     * 认不出后缀时给 `application/octet-stream` 而不是 `*/*`：前者是"通用二进制"，
-     * 只有确实支持二进制的应用会响应；后者会匹配到几乎所有应用（包括纯文本编辑器），
+     * 认不出后缀时给 application/octet-stream 而不是通配星号：前者是"通用二进制"，
+     * 只有确实支持二进制的应用会响应；通配会匹配到几乎所有应用（包括纯文本编辑器），
      * 让"系统没有打开方式"这个判断失去意义。
      */
     private fun mimeOf(file: File): String {
