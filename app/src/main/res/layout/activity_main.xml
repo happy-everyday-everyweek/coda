@@ -367,14 +367,6 @@
                 android:paddingTop="8dp"
                 android:paddingBottom="16dp" />
         </ScrollView>
-
-        <!-- 半屏内的"第二层"：点设置时不做关抽屉再开抽屉，
-             而是让这一层从右侧轻轻推入、盖住会话列表，返回时再退出。 -->
-        <FrameLayout
-            android:id="@+id/drawer_sheet_host"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:visibility="gone" />
     </FrameLayout>
 
 </androidx.drawerlayout.widget.DrawerLayout>
