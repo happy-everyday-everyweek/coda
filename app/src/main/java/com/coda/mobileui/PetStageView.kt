@@ -56,40 +56,19 @@ class PetStageView(context: Context) : LinearLayout(context) {
             return
         }
         visibility = View.VISIBLE
-        val accent = attrColor(androidx.appcompat.R.attr.colorPrimary, 0xFF6750A4.toInt())
-        val light = attrColor(com.google.android.material.R.attr.colorPrimaryContainer, accent)
-        val soft = attrColor(com.google.android.material.R.attr.colorTertiary, accent)
-
         pet.skin = PetSkins.resolve(ctx, store.petSkinId)
-        pet.accent = accent
-        pet.accentLight = light
-        pet.accentSoft = soft
         pet.reduceMotion = store.petReduceMotionEffective(ctx)
 
         hint.text = hintFor(store.petSkinId)
         // 设置页里它只是趴在旁边看着，不占用运行状态
         pet.setMood(PetMood.IDLE, animate = false)
         pet.setOnClickListener {
-            // 点一下逗一下：眨眼、张望、挥个手，然后回去发呆
-            pet.setMood(PetMood.DONE)
+            // 原项目的"来回蹭"交互：播 manifest 里 interactions.pet 那一段
+            pet.pet()
         }
     }
 
-    private fun hintFor(skinId: String): String = when (skinId) {
-        "coda" -> "点一下，它会动一动"
-        else -> "点一下试试"
-    }
-
-    /** 从主题里取色：MaterialColors 的重载在纯 View 上下文里推不出类型，直接读属性更稳。 */
-    private fun attrColor(attr: Int, fallback: Int): Int {
-        val tv = android.util.TypedValue()
-        val ta = context.obtainStyledAttributes(tv.data, intArrayOf(attr))
-        return try {
-            if (ta.hasValue(0)) ta.getColor(0, fallback) else fallback
-        } finally {
-            ta.recycle()
-        }
-    }
+    private fun hintFor(skinId: String): String = "点一下，它会动一动"
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()

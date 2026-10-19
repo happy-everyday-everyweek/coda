@@ -1,428 +1,274 @@
 package com.coda.mobileui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.view.View
-import android.view.animation.DecelerateInterpolator
-import com.coda.mobileui.core.PetFrame
+import com.coda.mobileui.core.ActorSnapshot
+import com.coda.mobileui.core.GlyphDraw
+import com.coda.mobileui.core.PetActor
 import com.coda.mobileui.core.PetMood
 import com.coda.mobileui.core.PetSkin
 import com.coda.mobileui.core.PetSkins
+import com.coda.mobileui.core.PixelGrid
 import kotlin.math.min
 
 /**
  * 宠物渲染器。
  *
- * 只做三件事：把当前姿态画成像素方块、按片段逐格推进、按状态机切换片段。
- * 它不认识"小芽""Clawd"这类具体形象，换皮肤只换 [skin] 数据。
+ * 严格按 critter 的绘制方式：地面是基准线，基框 18×10 的 row height 就是地面；
+ * 姿态用像素包围盒绘制，所以抬手、垂腿这些超出基框的像素照样画得出来，不会被裁掉。
  *
- * 性能上刻意做到"静止时不耗电"：没有常驻循环，只在需要换帧时 postDelayed 一格；
- * 帧与帧完全相同就跳过重绘。空闲一段时间后自动降到极低频，页面不可见时整体停表。
+ * 每 tick 由 PetActor 推进，渲染器只把 ActorSnapshot 画出来；快照相同就跳过重绘。
+ * 没有常驻动画循环：只在下一个 tick 才 postDelayed 一次，页面不可见时停表。
  */
 class PetView(context: Context) : View(context) {
 
-    // ---------------------------------------------------------------- 状态
-
-    var skin: PetSkin = PetSkins.builtin
+    var skin: PetSkin = PetSkins.resolve(context, PetSkins.defaultId)
         set(value) {
             if (field === value) return
             field = value
-            cachedPalette = value.resolvePalette(accentLight, accent, accentSoft)
-            poseCache.clear()
-            restart()
+            gridCache.clear()
+            bitmapCache.clear()
+            actor = PetActor(value)
+            actor.hidden = !isShown
+            actor.reduceMotion = reduceMotion
+            lastSnapshot = null
+            requestLayout()
+            invalidate()
         }
 
-    /** 主题色：皮肤里的 @accent 系列会解析成这三种。 */
-    var accent: Int = 0xFF6750A4.toInt()
-        set(value) { field = value; refreshPalette() }
-    var accentLight: Int = 0xFFB39DF3.toInt()
-        set(value) { field = value; refreshPalette() }
-    var accentSoft: Int = 0xFF9580DD.toInt()
-        set(value) { field = value; refreshPalette() }
-
-    /** 减少动态效果：只在换状态时直接落到代表姿态，不做逐格动画。 */
     var reduceMotion: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            actor.reduceMotion = value
+            lastSnapshot = null
+            invalidate()
+        }
 
-    /** 是否允许播放（例如滚动时、页面不可见时关掉，省电）。 */
+    /** 允许播放（页面不可见或滚动中可关掉，省电）。 */
     var animating: Boolean = true
         set(value) {
             if (field == value) return
             field = value
-            if (value) restart() else stopTicker()
+            if (value) scheduleTick() else removeCallbacks(ticker)
         }
 
-    /** 状态变化回调，用于让外面同步标签文字。 */
+    /** 状态变化回调，方便外面同步文字。 */
     var onMoodChanged: ((PetMood) -> Unit)? = null
 
-    private var mood: PetMood = PetMood.IDLE
-    /** 当前状态是否已经装配过片段（用于 setMood 的幂等判断）。 */
-    private var moodReady: Boolean = false
-    private var cachedPalette: Map<Char, Int> = skin.resolvePalette(accentLight, accent, accentSoft)
-    private val poseCache = HashMap<String, Array<CharArray>>()
+    private var actor = PetActor(skin)
+    private val gridCache = HashMap<String, PixelGrid?>()
+    private val bitmapCache = HashMap<String, android.graphics.Bitmap?>()
+    private var lastSnapshot: ActorSnapshot? = null
+    private var current: ActorSnapshot? = null
 
-    // 播放游标
-    private var clipName: String = ""
-    private var frames: List<PetFrame> = emptyList()
-    private var frameIndex = 0
-    private var current: PetFrame? = null
-    private var loopClip = true
-
-    // 计时
-    private val ticker = Runnable { advance() }
-    private var dwellUntil = 0L
-    private var fidgetAt = 0L
-    private var fidgeting = false
-    private var phaseBeforeFidget = -1
-
-    // 位移动画（格 → 像素的平滑过渡）
-    private var drawDx = 0f
-    private var drawDy = 0f
-    private var dxAnim: ValueAnimator? = null
-    private var dyAnim: ValueAnimator? = null
-
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val badgeText = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val cellRect = RectF()
-    private val badgeRect = RectF()
+    private val ticker = Runnable { onTick() }
+    private val paint = Paint()
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
 
     init {
         isClickable = true
         isFocusable = true
-        badgeText.textAlign = Paint.Align.CENTER
-        applyMood(PetMood.IDLE, animate = false)
+        shadowPaint.color = 0x47000000
     }
 
-    // ---------------------------------------------------------------- 状态机
+    // ------------------------------------------------------------ 对外
 
-    /** 切状态。同一状态重复调用不留痕，避免重播进场动画。 */
-    fun setMood(next: PetMood, animate: Boolean = true) {
-        // 只比 mood 不够：still 类型的状态（如 idle）不设 clipName，
-        // 光看 clipName 会误判成"还没播过"而重播；反过来 hide 之后又可能被误当成"已在播"。
-        // 用一个自增的 revision 标记"这一版状态是否已经装配过"。
-        if (next == mood && moodReady) return
-        applyMood(next, animate)
+    /** 切状态。 */
+    fun setMood(mood: PetMood, animate: Boolean = true) {
+        val before = actor.mood
+        actor.setMood(mood, animate)
+        if (before != actor.mood) onMoodChanged?.invoke(actor.mood)
+        pump()
     }
 
-    fun mood(): PetMood = mood
+    fun mood(): PetMood = actor.mood
 
-    /**
-     * 回到闲置并把播放器复位。
-     *
-     * 提示条收起时必须调用：否则下一次显示「做完了」时，会因为状态相同而被
-     * setMood 的幂等判断直接跳过，动画就不会播。
-     */
-    fun resetToIdle() {
-        moodReady = false
-        applyMood(PetMood.IDLE, animate = false)
-        moodReady = true
+    /** 换工作变体（laptop / think / read / bash / juggle）。 */
+    fun setActivity(activity: String?) {
+        actor.setActivity(activity)
     }
 
-    private fun applyMood(next: PetMood, animate: Boolean) {
-        mood = next
-        onMoodChanged?.invoke(next)
-        val spec = skin.state(next.key)
-        val enter = if (animate && !reduceMotion) spec?.enter else null
-        if (enter != null && skin.clip(enter).isNotEmpty()) {
-            play(enter, loop = false)
-        } else {
-            val still = spec?.still
-            if (still != null) {
-                showPose(still)
-                frames = emptyList()
-                current?.let { schedule(skin.tickMs.toLong()) }
-            } else {
-                play(spec?.loop, loop = true)
-            }
-        }
-        dwellUntil = if (spec != null && spec.dwellMs > 0) {
-            System.currentTimeMillis() + spec.dwellMs
-        } else {
-            0L
-        }
-        val every = spec?.fidgetEveryMs ?: 0L
-        fidgetAt = if (every > 0) System.currentTimeMillis() + every else 0L
-        fidgeting = false
-        moodReady = true
+    /** 点一下逗它。 */
+    fun pet() {
+        actor.pet()
+        pump()
     }
 
-    private fun play(name: String?, loop: Boolean) {
-        val list = skin.clip(name)
-        clipName = name.orEmpty()
-        frames = list
-        frameIndex = 0
-        loopClip = loop
-        stopTicker()
-        if (list.isEmpty()) {
-            current = null
+    fun wake() {
+        actor.wake()
+        pump()
+    }
+
+    /** 立即推进一帧（状态刚变时不必等下一个 tick）。 */
+    private fun pump() {
+        lastSnapshot = null
+        onTick()
+    }
+
+    // ------------------------------------------------------------ 时钟
+
+    private fun onTick() {
+        removeCallbacks(ticker)
+        if (!animating) return
+        actor.hidden = !isShown
+        actor.step()
+        current = actor.snapshot()
+        if (current != lastSnapshot) {
+            lastSnapshot = current
             invalidate()
-            return
         }
-        val first = list[0]
-        current = first
-        animateOffset(first)
-        invalidate()
-        schedule(first.hold * skin.tickMs.toLong())
+        scheduleTick()
     }
 
-    private fun advance() {
-        if (!animating) return
-
-        // 到点自动回 idle（做完了、出错了都只停留一会）
-        if (dwellUntil > 0 && System.currentTimeMillis() >= dwellUntil) {
-            dwellUntil = 0
-            setMood(PetMood.IDLE)
-            return
-        }
-
-        // 空闲时插一段随机小动作，看起来像活物
-        if (!fidgeting && fidgetAt > 0 && System.currentTimeMillis() >= fidgetAt) {
-            val spec = skin.state(mood.key)
-            val pick = spec?.fidget?.randomOrNull()
-            val extra = skin.clip(pick)
-            if (extra.isNotEmpty()) {
-                phaseBeforeFidget = frameIndex
-                fidgeting = true
-                frames = extra
-                frameIndex = 0
-                current = extra[0]
-                animateOffset(extra[0])
-                invalidate()
-                schedule(extra[0].hold * skin.tickMs.toLong())
-                return
-            }
-            fidgetAt = System.currentTimeMillis() + (spec?.fidgetEveryMs ?: 0L)
-        }
-
-        if (frames.isEmpty()) {
-            // 静止姿态：什么都不用做，等下一次状态变化
-            stopTicker()
-            return
-        }
-
-        val next = frameIndex + 1
-        if (next >= frames.size) {
-            if (loopClip) {
-                frameIndex = 0
-            } else if (fidgeting) {
-                // 小动作播完，回到主循环的当前位置
-                fidgeting = false
-                val spec = skin.state(mood.key)
-                val main = skin.clip(spec?.loop)
-                fidgetAt = if (spec != null && spec.fidgetEveryMs > 0) {
-                    System.currentTimeMillis() + spec.fidgetEveryMs
-                } else {
-                    0L
-                }
-                frames = main
-                frameIndex = if (main.isEmpty()) 0 else {
-                    (phaseBeforeFidget.coerceAtLeast(0)) % main.size
-                }
-                if (main.isEmpty()) {
-                    val still = spec?.still
-                    if (still != null) showPose(still)
-                    stopTicker()
-                    return
-                }
-                val f = main[frameIndex]
-                current = f
-                animateOffset(f)
-                invalidate()
-                schedule(f.hold * skin.tickMs.toLong())
-                return
-            } else {
-                // 进场片段播完，转主循环
-                val spec = skin.state(mood.key)
-                val loop = skin.clip(spec?.loop)
-                if (loop.isNotEmpty()) {
-                    play(spec?.loop, loop = true)
-                } else {
-                    val still = spec?.still
-                    if (still != null) showPose(still)
-                    frames = emptyList()
-                    stopTicker()
-                }
-                return
-            }
-        } else {
-            frameIndex = next
-        }
-
-        val frame = frames[frameIndex]
-        val same = frame.pose == current?.pose && frame.dx == current?.dx && frame.dy == current?.dy
-        current = frame
-        animateOffset(frame)
-        if (!same) invalidate()
-        schedule(frame.hold * skin.tickMs.toLong())
-    }
-
-    private fun schedule(delayMs: Long) {
+    private fun scheduleTick() {
         removeCallbacks(ticker)
         if (!animating) return
-        postDelayed(ticker, delayMs.coerceAtLeast(16))
+        postDelayed(ticker, skin.tickMs.toLong().coerceAtLeast(16))
     }
 
-    private fun stopTicker() {
-        removeCallbacks(ticker)
-    }
+    // ------------------------------------------------------------ 绘制
 
-    private fun restart() {
-        clipName = ""
-        applyMood(mood, animate = false)
-    }
-
-    private fun showPose(pose: String) {
-        current = PetFrame(pose, 1)
-        invalidate()
-    }
-
-    private fun refreshPalette() {
-        cachedPalette = skin.resolvePalette(accentLight, accent, accentSoft)
-        invalidate()
-    }
-
-    /** 位移做 120ms 插值，逐格跳会显得抖。 */
-    private fun animateOffset(frame: PetFrame) {
-        val cell = cellSize()
-        val tx = frame.dx * cell
-        val ty = frame.dy * cell
-        if (reduceMotion || !isAttachedToWindow) {
-            drawDx = tx
-            drawDy = ty
-            return
-        }
-        if (drawDx == tx && drawDy == ty) return
-        dxAnim?.cancel()
-        dyAnim?.cancel()
-        if (drawDx != tx) {
-            dxAnim = ValueAnimator.ofFloat(drawDx, tx).apply {
-                duration = 120
-                interpolator = DecelerateInterpolator()
-                addUpdateListener { drawDx = it.animatedValue as Float; invalidate() }
-                start()
-            }
-        }
-        if (drawDy != ty) {
-            dyAnim = ValueAnimator.ofFloat(drawDy, ty).apply {
-                duration = 120
-                interpolator = DecelerateInterpolator()
-                addUpdateListener { drawDy = it.animatedValue as Float; invalidate() }
-                start()
-            }
-        }
-    }
-
-    // ---------------------------------------------------------------- 绘制
-
-    private fun cellSize(): Float {
+    /** 一整格多少像素：基框宽度铺满控件宽度。 */
+    private fun unit(): Float {
         val w = (width - paddingLeft - paddingRight).toFloat()
-        val h = (height - paddingTop - paddingBottom).toFloat()
-        if (w <= 0f || h <= 0f) return 0f
-        // 上方留一格给头顶标记，下方留一格给落地阴影
-        return min(w / skin.cols, h / (skin.rows + 2))
+        if (w <= 0f) return 0f
+        return w / skin.cols.coerceAtLeast(1)
     }
-
-    private fun grid(pose: String): Array<CharArray> =
-        poseCache.getOrPut(pose) { skin.gridOf(pose) }
 
     override fun onDraw(canvas: Canvas) {
-        val cell = cellSize()
-        if (cell <= 0f) return
-        val frame = current ?: return
-        val g = grid(frame.pose)
-        // 整体水平居中；垂直留出顶部空间给标记与负坐标部件
-        val offsetX = paddingLeft + (width - paddingLeft - paddingRight - skin.cols * cell) / 2f + drawDx
-        val offsetY = paddingTop + cell * 2 + drawDy
+        val u = unit()
+        if (u <= 0f) return
+        val snap = current ?: return
+        if (!snap.visible) return
 
-        for (y in 0 until skin.rows) {
-            val row = g[y]
-            var x = 0
-            while (x < skin.cols) {
-                val ch = row[x]
-                if (ch == '.') {
-                    x++
-                    continue
-                }
-                val color = cachedPalette[ch]
-                if (color == null) {
-                    x++
-                    continue
-                }
-                // 横向合并同色格，减少 drawRect 次数
-                var end = x + 1
-                while (end < skin.cols && row[end] == ch) end++
-                paint.color = color
-                cellRect.set(
-                    offsetX + x * cell,
-                    offsetY + y * cell,
-                    offsetX + end * cell,
-                    offsetY + (y + 1) * cell,
-                )
-                canvas.drawRect(cellRect, paint)
-                x = end
+        val groundY = paddingTop + skin.rows * u
+        val baseLeft = paddingLeft + ((width - paddingLeft - paddingRight) - skin.cols * u) / 2f
+
+        // 影子：贴在脚下，宽度随离地高度变化
+        if (snap.shadowWidth > 0) {
+            val sw = snap.shadowWidth * u
+            val sh = min(2f * u, u * 0.5f).coerceAtLeast(2f)
+            val cx = baseLeft + (skin.cols / 2f) * u
+            rect.set(cx - sw / 2f, groundY - sh, cx + sw / 2f, groundY)
+            canvas.drawRoundRect(rect, sh, sh, shadowPaint)
+        }
+
+        drawPose(canvas, snap, baseLeft, groundY, u)
+
+        // 字形：道具 → 粒子 → 挂件 → 标记，都在身体之上，不裁切
+        for (d in snap.props) drawGlyph(canvas, d, baseLeft, groundY, u)
+        for (d in snap.particles) drawGlyph(canvas, d, baseLeft, groundY, u)
+        snap.accessory?.let { drawGlyph(canvas, it, baseLeft, groundY, u) }
+        snap.badge?.let { drawGlyph(canvas, it, baseLeft, groundY, u) }
+    }
+
+    /**
+     * 画一个姿态。
+     *
+     * 基框坐标 y 向下、地面在第 rows 行；包围盒 minY 可能为负（画到地面以上更远），
+     * 也可能超过 rows（垂下的腿）。位置按 (rows - minY - height) 反推。
+     */
+    private fun drawPose(canvas: Canvas, snap: ActorSnapshot, baseLeft: Float, groundY: Float, u: Float) {
+        val grid = gridCache.getOrPut(snap.pose) { skin.gridOf(snap.pose) } ?: return
+        val bmp = bitmapFor(grid, snap)
+        val left = baseLeft + (snap.bodyX + grid.minX) * u
+        val top = groundY + (snap.bodyY - grid.minY - grid.height) * u
+        rect.set(left, top, left + grid.width * u, top + grid.height * u)
+        paint.alpha = 255
+        paint.isFilterBitmap = false
+        canvas.drawBitmap(bmp, null, rect, paint)
+    }
+
+    /**
+     * 一个姿态的一张位图。
+     *
+     * 缓存键带上淡化标记：原项目里 idle 与 error 会给整个状态加一层 dim，
+     * 同姿态在两种状态下颜色不同，不能共用一个位图。
+     */
+    private fun bitmapFor(grid: PixelGrid, snap: ActorSnapshot): android.graphics.Bitmap {
+        val key = snap.pose + if (snap.tintDim) "#dim" else ""
+        bitmapCache[key]?.let { return it }
+        val w = grid.width.coerceAtLeast(1)
+        val h = grid.height.coerceAtLeast(1)
+        val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val px = IntArray(w * h)
+        for (y in 0 until h) {
+            val line = grid.rows[y]
+            for (x in 0 until w) {
+                val ch = line[x]
+                if (ch == '.') continue
+                val hex = skin.palette[ch.toString()] ?: continue
+                px[y * w + x] = skin.resolveColor(hex, snap.tintDim)
             }
         }
-
-        drawBadge(canvas, cell, offsetX, offsetY)
+        bmp.setPixels(px, 0, w, 0, 0, w, h)
+        bitmapCache[key] = bmp
+        return bmp
     }
 
-    /** 头顶状态标记：等你确认是橙色问号，做完了是绿色对勾，出错是红色感叹号。 */
-    private fun drawBadge(canvas: Canvas, cell: Float, originX: Float, originY: Float) {
-        val spec = skin.state(mood.key) ?: return
-        if (spec.badge.isEmpty()) return
-        val color = when (spec.badgeColor) {
-            "" -> 0xFF6750A4.toInt()
-            else -> runCatching { android.graphics.Color.parseColor(spec.badgeColor) }
-                .getOrDefault(0xFF6750A4.toInt())
+    /** 画一个字形。x/y 是左上格，y 向下、地面在第 rows 行。 */
+    private fun drawGlyph(canvas: Canvas, d: GlyphDraw, baseLeft: Float, groundY: Float, u: Float) {
+        val rows = skin.glyph(d.glyph)
+        if (rows.isEmpty()) return
+        val w = rows.first().length
+        val h = rows.size
+        if (w <= 0) return
+        paint.color = runCatching { android.graphics.Color.parseColor(d.color) }.getOrDefault(0xFFFFFFFF.toInt())
+        paint.alpha = (d.alpha.coerceIn(0.0, 1.0) * 255).toInt()
+        val left = baseLeft + d.x * u
+        val top = groundY + (d.y - skin.rows) * u
+        for (r in 0 until h) {
+            val line = rows[r]
+            var c = 0
+            while (c < line.length) {
+                if (line[c] != '#') {
+                    c++
+                    continue
+                }
+                var end = c + 1
+                while (end < line.length && line[end] == '#') end++
+                rect.set(left + c * u, top + r * u, left + end * u, top + (r + 1) * u)
+                canvas.drawRect(rect, paint)
+                c = end
+            }
         }
-        val r = cell * 2.1f
-        val cx = originX + skin.cols * cell / 2f + cell * 5.6f
-        val cy = originY - cell * 0.4f
-        // 轻微呼吸，不抢眼但能看出"它在等你"
-        val pulse = if (reduceMotion) 1f else {
-            val t = (System.currentTimeMillis() % 1600L) / 1600f
-            1f + 0.06f * kotlin.math.sin(t * 2f * Math.PI).toFloat()
-        }
-        badgePaint.color = color
-        badgePaint.alpha = 240
-        badgeRect.set(cx - r * pulse, cy - r * pulse, cx + r * pulse, cy + r * pulse)
-        canvas.drawCircle(badgeRect.centerX(), badgeRect.centerY(), r * pulse, badgePaint)
-
-        badgeText.color = 0xFFFFFFFF.toInt()
-        badgeText.textSize = r * 1.35f
-        badgeText.isFakeBoldText = true
-        val baseline = badgeRect.centerY() - (badgeText.descent() + badgeText.ascent()) / 2f
-        canvas.drawText(spec.badge, badgeRect.centerX(), baseline, badgeText)
+        paint.alpha = 255
     }
 
-    // ---------------------------------------------------------------- 生命周期
+    // ------------------------------------------------------------ 生命周期
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        restart()
+        scheduleTick()
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        stopTicker()
-        dxAnim?.cancel()
-        dyAnim?.cancel()
+        removeCallbacks(ticker)
+        bitmapCache.clear()
     }
 
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
         super.onVisibilityChanged(changedView, visibility)
-        if (visibility == VISIBLE && isAttachedToWindow) restart() else stopTicker()
+        if (visibility == VISIBLE && isAttachedToWindow) {
+            scheduleTick()
+        } else {
+            removeCallbacks(ticker)
+        }
     }
 
-    /** 让它可以按宽高比自适应：外部给宽度，高度按皮肤比例算。 */
+    /** 高度按基框比例算：宽度定下来一格多大就定了，控件高度 = 基框 + 上下余量。 */
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val cols = skin.cols.coerceAtLeast(1)
         val cell = (w - paddingLeft - paddingRight) / cols.toFloat()
-        val h = (cell * (skin.rows + 2)).toInt() + paddingTop + paddingBottom
+        // 上下各留两格：头顶挂件要空间，脚下要影子
+        val h = (cell * (skin.rows + 4)).toInt() + paddingTop + paddingBottom
         setMeasuredDimension(w, resolveSize(h, heightMeasureSpec))
     }
 }

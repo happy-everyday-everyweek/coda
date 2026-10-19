@@ -98,7 +98,11 @@ class SettingsStore private constructor(context: Context) {
 
     /** 宠物形象 id（对应 PetSkins.all 里的一份皮肤）。 */
     var petSkinId: String
-        get() = prefs.getString(KEY_PET_SKIN, "coda") ?: "coda"
+        // 默认形象是 Clawd（原项目的默认）。旧版本存过 "coda"，那是我自造的形象、
+        // 现在已不存在；读到它时回退到 Clawd，否则会取不到皮肤而整只不显示。
+        get() = (prefs.getString(KEY_PET_SKIN, "clawd") ?: "clawd").let {
+            if (it == "coda" || it.isEmpty()) "clawd" else it
+        }
         set(value) = prefs.edit().putString(KEY_PET_SKIN, value).apply()
 
     /** 宠物总开关。关掉后输入框上方不再出现，设置页里的装饰也一并隐藏。 */

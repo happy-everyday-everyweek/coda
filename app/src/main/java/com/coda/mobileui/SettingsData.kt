@@ -705,9 +705,11 @@ object SettingsData {
         val rows = mutableListOf<SettingRow>()
         // 顶部留一块给趴着的宠物本体，由设置页自己往里画
         rows.add(
+            // key 必须是**页面 key**（这里就是 "pet"），PetStageView 拿它判断
+            // petSettingsVisible(pageKey)；写成别的名字会让这一页永远不显示宠物。
             SettingRow.Custom(
                 kind = SettingRow.Custom.KIND_PET_STAGE,
-                key = "pet_stage",
+                key = "pet",
             ),
         )
         rows.add(SettingRow.Header("外观"))

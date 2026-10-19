@@ -72,12 +72,14 @@ class PetBar(context: Context) : LinearLayout(context) {
         pet.onMoodChanged = { mood -> onMood(mood) }
     }
 
-    /** 注入皮肤与主题色；设置页改了之后当场生效。 */
-    fun applySkin(ctx: Context, skinId: String, accent: Int, accentLight: Int, accentSoft: Int) {
+    /**
+     * 注入皮肤。
+     *
+     * 原项目的五个形象各有自己的调色板，颜色全写在 manifest 里，所以这里不再注入主题色；
+     * 保留签名只是为了少改调用点。
+     */
+    fun applySkin(ctx: Context, skinId: String, accent: Int = 0, accentLight: Int = 0, accentSoft: Int = 0) {
         pet.skin = PetSkins.resolve(ctx, skinId)
-        pet.accent = accent
-        pet.accentLight = accentLight
-        pet.accentSoft = accentSoft
     }
 
     fun petView(): PetView = pet
@@ -157,9 +159,9 @@ class PetBar(context: Context) : LinearLayout(context) {
             return
         }
         shown = false
-        // 同时把播放器复位回 idle：否则下次播同一个状态（连着两次「做完了」）
-        // 会被 setMood 的幂等判断吃掉，庆祝动画就不播了。
-        pet.resetToIdle()
+        // 收回 idle：新引擎里 setMood 的幂等判断看的是 mood 与是否有片段，
+        // 回 idle 之后再播「做完了」就能重新触发庆祝。
+        pet.setMood(PetMood.IDLE, animate = false)
         animateHeight(0) {
             visibility = View.GONE
             // 宿主本身也藏起来：它是 wrap_content + 左右 padding，

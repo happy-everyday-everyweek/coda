@@ -1318,13 +1318,18 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     private fun applyPetSettings() {
         val bar = petBar ?: return
         val store = SettingsStore.get(this)
-        // 总开关关掉，或明确不在会话页显示时，整条都不工作
+        val host = findViewById<android.view.View>(R.id.pet_bar_host)
+        // 总开关关掉或该页不显示时，容器与自身一起藏起来，不占位置
         if (!store.petComposerVisible()) {
             bar.hideNow()
             bar.visibility = android.view.View.GONE
+            host?.visibility = android.view.View.GONE
             ui.removeCallbacks(petTick)
             return
         }
+        // 显示时容器必须一起恢复：之前只把 PetBar 设为 VISIBLE，外层容器仍是 GONE，
+        // 整条就永远看不见——这是上一版"任何界面都不可见"的直接原因。
+        host?.visibility = android.view.View.VISIBLE
         bar.visibility = android.view.View.VISIBLE
         bar.petView().visibility = if (store.petBubbleOnly) android.view.View.GONE else android.view.View.VISIBLE
         bar.petView().reduceMotion = store.petReduceMotionEffective(this)
@@ -1378,6 +1383,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                     bar.showRunning(label)
                 }
             }
+            // 把工具映射成工作变体：laptop / think / read / bash / juggle。
+            // 原项目每个变体有自己的循环、进出场片段与道具，所以这里必须真的告诉它换变体，
+            // 只换文字的话它永远在敲笔记本。
+            bar.petView().setActivity(activityVariant())
             return
         }
         if (petWasRunning) {
@@ -1396,6 +1405,28 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         if (force) {
             petActivity = ""
             bar.showDone(if (zc.currentSessionId == null) "等你开口" else "随时可以继续")
+        }
+    }
+
+    /**
+     * 正在做的事对应哪个工作变体。
+     *
+     * 名字必须与 manifest 里 states.running.variants 的 key 一致，
+     * 否则 PetActor 会退回默认变体，动作就永远停在敲笔记本上。
+     * 原项目的五个变体：laptop（改文件/其它工具）、think（思考）、read（读文件）、
+     * bash（跑命令）、juggle（派子任务）。
+     */
+    private fun activityVariant(): String {
+        val last = zc.messages.lastOrNull() ?: return "think"
+        val tools = last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
+        val active = tools.lastOrNull({ it.status == "running" }) ?: tools.lastOrNull()
+            ?: return "think"
+        return when (active.tool) {
+            "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch" -> "read"
+            "Bash", "BashOutput", "KillShell", "KillBash" -> "bash"
+            "Agent", "Task" -> "juggle"
+            "Edit", "MultiEdit", "Write", "NotebookEdit", "ApplyPatch" -> "laptop"
+            else -> "laptop"
         }
     }
 
