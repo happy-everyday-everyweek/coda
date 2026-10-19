@@ -2,6 +2,7 @@ package com.coda.mobileui
 
 import android.content.ClipData
 import com.coda.mobileui.core.Bg
+import com.coda.mobileui.core.AppLog
 import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.drawable.Drawable
@@ -281,6 +282,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         key == "browser_clear_data" -> {
             BrowserControl.clearData(this)
             snack("已清除浏览器数据")
+            renderPage()
+        }
+        // 日志：查看/导出与清空。
+        // 放在设置里而不是工作区标签：它属于诊断与排障，不是工作区的一种"页"。
+        key == "logs_view" -> showLogsSheet()
+        key == "logs_clear" -> {
+            AppLog.clear()
+            snack("日志已清空")
             renderPage()
         }
         key == KEY_ACCENT -> pickAccent()
@@ -628,6 +637,129 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** sheet 小标题（与聊天页工具详情同款样式）。 */
+    /**
+     * 日志卡片：看当前日志、按级别过滤、导出。
+     *
+     * 直接用可滚动的内容列展示：日志的价值在于"一眼看到最近发生了什么"，
+     * 再套一层列表或代码块反而让长行难读、也难选中复制。
+     */
+    private fun showLogsSheet() {
+        // 只用一条路径：每次打开或切换级别都重新拼正文，不在闭包里维护可变状态，
+        // 这样连续点"切换级别"不会出现上一轮的字漏进来。
+        showLogsSheetAt(AppLog.Level.INFO)
+    }
+
+    /** 在卡片里展示指定级别以上的日志；切换级别时由它自己重进一次。 */
+    private fun showLogsSheetAt(minLevel: AppLog.Level) {
+        CodaSheet(this)
+            .title("日志")
+            .subtitle(logSubtitle(minLevel))
+            .content { col -> col.addView(logBodyFor(minLevel)) }
+            .secondaryAction("切换级别") { self ->
+                // 就地换页：卡片不动，只换标题/内容/按钮
+                val next = nextLogLevel(minLevel)
+                self.navigate {
+                    title("日志")
+                    content { col -> col.addView(logBodyFor(next)) }
+                    subtitle(logSubtitle(next))
+                    secondaryAction("切换级别") { again -> switchLogLevelInPlace(again, next) }
+                    primaryAction("导出") { s -> exportLogs(s) }
+                }
+            }
+            .primaryAction("导出") { self -> exportLogs(self) }
+            .show()
+    }
+
+    /** 已打开卡片里的级别切换：只重画内容与副标题。 */
+    private fun switchLogLevelInPlace(sheet: CodaSheet, next: AppLog.Level) {
+        sheet.navigate {
+            title("日志")
+            subtitle(logSubtitle(next))
+            content { col -> col.addView(logBodyFor(next)) }
+            secondaryAction("切换级别") { again -> switchLogLevelInPlace(again, nextLogLevel(next)) }
+            primaryAction("导出") { s -> exportLogs(s) }
+        }
+    }
+
+    private fun nextLogLevel(level: AppLog.Level): AppLog.Level = when (level) {
+        AppLog.Level.INFO -> AppLog.Level.DEBUG
+        AppLog.Level.DEBUG -> AppLog.Level.VERBOSE
+        AppLog.Level.VERBOSE -> AppLog.Level.ERROR
+        AppLog.Level.ERROR -> AppLog.Level.WARN
+        AppLog.Level.WARN -> AppLog.Level.INFO
+    }
+
+    private fun logLevelLabel(level: AppLog.Level): String = when (level) {
+        AppLog.Level.VERBOSE -> "全部"
+        AppLog.Level.DEBUG -> "调试+"
+        AppLog.Level.INFO -> "信息+"
+        AppLog.Level.WARN -> "警告+"
+        AppLog.Level.ERROR -> "错误"
+    }
+
+    private fun logSubtitle(minLevel: AppLog.Level): String {
+        if (AppLog.dir() == null) return "日志目录不可用"
+        val all = logLines()
+        return "共 ${all.size} 行 · 显示 ${all.count { keepLogLine(it, minLevel) }} · ${logLevelLabel(minLevel)}"
+    }
+
+    private fun logLines(): List<String> {
+        val file = AppLog.currentFile() ?: return emptyList()
+        if (!file.isFile) return emptyList()
+        return runCatching { file.readLines() }.getOrDefault(emptyList())
+            .let { if (it.size <= 2000) it else it.takeLast(2000) }
+    }
+
+    /** 按级别拼出日志正文。每次新建 TextView，避免复用旧实例导致内容串台。 */
+    private fun logBodyFor(minLevel: AppLog.Level): TextView {
+        val shown = logLines().filter { keepLogLine(it, minLevel) }
+        return TextView(this).apply {
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 11f
+            setTextColor(
+                MaterialColors.getColor(
+                    this@SettingsDetailActivity,
+                    com.google.android.material.R.attr.colorOnSurface,
+                    android.graphics.Color.BLACK,
+                ),
+            )
+            setTextIsSelectable(true)
+            text = if (shown.isEmpty()) {
+                if (AppLog.dir() == null) "日志目录不可用" else "当前级别下没有日志"
+            } else {
+                shown.joinToString("\n")
+            }
+        }
+    }
+
+    /** 导出日志到应用私有目录，并提示文件名。 */
+    private fun exportLogs(sheet: CodaSheet) {
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date())
+        val target = java.io.File(filesDir, "coda-logs-$stamp.txt")
+        if (AppLog.exportTo(target)) {
+            snack("已导出：${target.name}")
+        } else {
+            snack("导出失败")
+        }
+        sheet.dismiss()
+    }
+
+    /** 按行首级别标记过滤；续行（堆栈）跟随上一条显示。 */
+    private fun keepLogLine(line: String, minLevel: AppLog.Level): Boolean {
+        val marker = Regex("""^\S+\s+\S+\s+([VDIWE])/""").find(line)?.groupValues?.get(1)
+            ?: return true
+        val level = when (marker) {
+            "V" -> AppLog.Level.VERBOSE
+            "D" -> AppLog.Level.DEBUG
+            "I" -> AppLog.Level.INFO
+            "W" -> AppLog.Level.WARN
+            "E" -> AppLog.Level.ERROR
+            else -> return true
+        }
+        return level.ordinal >= minLevel.ordinal
+    }
+
     private fun sheetSectionLabel(text: String): TextView = TextView(this).apply {
         this.text = text
         textSize = 13f

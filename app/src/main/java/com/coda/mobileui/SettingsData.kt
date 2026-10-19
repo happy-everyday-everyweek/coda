@@ -96,8 +96,8 @@ object SettingsData {
         SettingRow.Category("pet", "宠物", "形象、提示方式与动态效果", R.drawable.ic_logo_spark),
         SettingRow.Header("数据与统计"),
         SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
-        SettingRow.Category("migration", "迁移", "Claude 历史迁移", R.drawable.ic_migration),
-        SettingRow.Header("其它"),
+        // 日志是诊断入口，和"使用统计"同属"看清应用在做什么"这一类，归到数据与统计下。
+        SettingRow.Category("logs", "日志", "运行日志，可查看、复制与导出", R.drawable.ic_file),
         SettingRow.Category("about", "关于", "版本、开源许可与项目主页", R.drawable.ic_info),
     )
 
@@ -791,16 +791,46 @@ object SettingsData {
     )
 
     val pages: Map<String, SettingsPage> = mapOf(
-        "migration" to SettingsPage(
-            "迁移",
-            listOf(
-                SettingRow.Header("Claude 历史迁移"),
-                SettingRow.Value("扫描候选会话", "手动执行"),
-                SettingRow.Value("源目录", "本机 Claude 记录"),
-                SettingRow.Value("workspace 筛选", "全部 workspace"),
-                SettingRow.Value("最近活跃时间", "最近 7 天"),
-                SettingRow.Value("最多返回条数", "200"),
-            ),
-        ),
+        "logs" to logsPage(),
     )
+
+    /**
+     * 日志页。
+     *
+     * 只读展示当前日志的统计与最近内容；真正的查看/复制/导出入口是页面里的操作行，
+     * 由 SettingsDetailActivity 处理（它拿着 Activity 上下文才能做剪贴板与文件写入）。
+     */
+    private fun logsPage(): SettingsPage {
+        val dir = com.coda.mobileui.core.AppLog.dir()
+        val file = com.coda.mobileui.core.AppLog.currentFile()
+        val size = file?.let { if (it.isFile) it.length() else 0L } ?: 0L
+        val lines = file?.takeIf { it.isFile }?.let {
+            runCatching { it.readLines().size }.getOrDefault(0)
+        } ?: 0
+        return SettingsPage(
+            "日志",
+            listOf(
+                SettingRow.Header("存储位置"),
+                SettingRow.Value("日志目录", dir?.absolutePath ?: "不可用"),
+                SettingRow.Value("当前文件", file?.name ?: "尚未生成"),
+                SettingRow.Value("大小与行数", "${readable(size)} · $lines 行"),
+                SettingRow.Header("操作"),
+                // Value 带 key 即可点击：这两个 key 由 SettingsDetailActivity 接。
+                SettingRow.Value("查看与导出", "在卡片里查看日志并复制或导出", "logs_view"),
+                SettingRow.Value("清空日志", "删除现有日志文件并重新开始", "logs_clear"),
+                SettingRow.Header("说明"),
+                SettingRow.Value(
+                    "内容范围",
+                    "启动、内核通信、网关与环境装配、崩溃前的最近 200 行",
+                ),
+                SettingRow.Value("保留策略", "单文件 4MB 轮转，最多保留 3 份历史"),
+            ),
+        )
+    }
+
+    private fun readable(bytes: Long): String = when {
+        bytes >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
+        bytes >= 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
 }
