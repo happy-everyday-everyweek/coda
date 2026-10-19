@@ -67,6 +67,11 @@ android {
         // targetSdk 固定 28 是本项目的有意选择，按项关掉这条政策告警，其余致命检查保留。
         disable += "ExpiredTargetSdkVersion"
     }
+    androidResources {
+        // 网关程序与插件是不压缩的二进制：被 AAPT 再压一遍只会带来两个坏处——
+        // openFd 拿不到长度（回退成整包读一遍）、以及解压流写盘时更容易出半截文件。
+        noCompress += listOf("cli-proxy-api", "so")
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

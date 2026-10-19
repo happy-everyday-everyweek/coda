@@ -141,8 +141,16 @@ object ProxyHost {
     /** 配置文件在容器内的路径。 */
     fun guestConfig(ctx: Context): String = guestPathOf(ctx, configFor(ctx))
 
-    /** 宿主二进制是否已就位。 */
-    fun isInstalled(ctx: Context): Boolean = binaryFor(ctx).let { it.isFile && it.length() > 10_000_000L }
+    /**
+     * 宿主二进制是否已就位。
+     *
+     * 不只看大小：写了一半的 64MB 文件同样大于 10MB，却不可执行。这里额外核对 ELF 文件头，
+     * 让"半截文件"当场被判为未安装并触发重写，而不是等到启动时才报 can't execute。
+     */
+    fun isInstalled(ctx: Context): Boolean {
+        val bin = binaryFor(ctx)
+        return bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin)
+    }
 
     /**
      * 确保宿主二进制就位。
@@ -174,22 +182,61 @@ object ProxyHost {
         )
         target.parentFile?.mkdirs()
         for (name in names) {
+            // 先量出资产真实长度：只靠"写出后超过 10MB"判断会放过被截断的半截文件——
+            // 64MB 的二进制写到一半中断仍然大于 10MB，于是被当成"已安装"，
+            // 启动时 proot 就会报 can't execute（文件不可执行/不完整）。
+            val expected = runCatching { assetSize(ctx, name) }.getOrNull() ?: continue
+            if (expected <= 10_000_000L) continue
+            // 写之前先删掉可能残留的半截文件，避免追加到旧内容后面。
+            runCatching { target.delete() }
             val ok = runCatching {
                 ctx.assets.open(name).use { input ->
                     FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
                 }
                 true
             }.getOrDefault(false)
-            if (!ok) continue
-            if (target.length() > 10_000_000L) {
-                Os.chmod(target.absolutePath, 493) // 0755
-                return true
+            if (!ok) {
+                runCatching { target.delete() }
+                continue
             }
-            // 长度不对说明资产被截断或压缩配置有问题，删掉重试下一个名字。
-            target.delete()
+            // 长度必须与资产完全一致，差一个字节都算失败。
+            if (target.length() == expected) {
+                Os.chmod(target.absolutePath, 493) // 0755
+                // 再确认文件头是 ELF：长度对但内容被替换/写坏时，proot 同样只会报
+                // can't execute（那条错误把"不存在"和"格式不对"混在一起，很难分辨）。
+                if (looksExecutable(target)) return true
+            }
+            runCatching { target.delete() }
         }
         return false
     }
+
+    /** 文件头是否是 ELF 可执行。 */
+    private fun looksExecutable(file: File): Boolean = runCatching {
+        java.io.FileInputStream(file).use { input ->
+            val head = ByteArray(4)
+            if (input.read(head) != 4) return false
+            head[0] == 0x7F.toByte() && head[1] == 'E'.code.toByte() &&
+                head[2] == 'L'.code.toByte() && head[3] == 'F'.code.toByte()
+        }
+    }.getOrDefault(false)
+
+    /** 读资产声明的长度；拿不到返回 null。 */
+    private fun assetSize(ctx: Context, name: String): Long? = runCatching {
+        ctx.assets.openFd(name).use { it.length }
+    }.getOrNull() ?: runCatching {
+        // 压缩存储的资产没有 openFd，只能实际读一遍统计字节数（首次安装一次性开销）。
+        ctx.assets.open(name).use { input ->
+            val buf = ByteArray(256 * 1024)
+            var total = 0L
+            while (true) {
+                val n = input.read(buf)
+                if (n <= 0) break
+                total += n
+            }
+            total
+        }
+    }.getOrNull()
 
     /**
      * 写配置文件。每次启动前重写，保证端口、插件目录、数据目录与实际路径一致。
@@ -283,6 +330,18 @@ object ProxyHost {
 
         val binaryPath = guestBinary(ctx)
         val configPath = guestConfig(ctx)
+        // 启动前做一次现场核对：can't execute 这条错误把"文件不存在""不可执行""架构不对"
+        // 混在一起，不把真实状态打出来，排查就只能靠猜。
+        val hostBinary = binaryFor(ctx)
+        if (!hostBinary.isFile) {
+            return fail("网关程序未就位（$binaryPath）")
+        }
+        if (!looksExecutable(hostBinary)) {
+            return fail("网关程序文件损坏（大小 ${hostBinary.length()}）")
+        }
+        if (hostBinary.length() <= 10_000_000L) {
+            return fail("网关程序不完整（大小 ${hostBinary.length()}）")
+        }
         val builder = env.builder(listOf(binaryPath, "-config", configPath))
 
         return try {
