@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.coda.mobileui.R
+import com.coda.mobileui.core.ArchiveKit
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -62,6 +63,18 @@ class FilesPage(
     private var editing: File? = null
     private var originalText: String = ""
 
+    /**
+     * 正在浏览的压缩包（null 表示在普通目录里）。
+     *
+     * 打开压缩包后沿用同一套列表界面：`current` 仍指向压缩包所在的真实目录，
+     * 包内位置另记在 [archivePath]。这样"上一级"在包根时会自然回到压缩包所在目录，
+     * 不需要为压缩包单独做一套返回栈。
+     */
+    private var archive: File? = null
+
+    /** 包内当前路径，空串表示压缩包根。 */
+    private var archivePath: String = ""
+
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
     override fun build(): View {
@@ -85,10 +98,28 @@ class FilesPage(
             closeEditor()
             return true
         }
+        // 压缩包内按返回：先回包根，再退出到所在目录，与文件夹逐级返回的手感一致。
+        if (archive != null) {
+            if (archivePath.isEmpty()) {
+                exitArchive()
+            } else {
+                archivePath = archivePath.trimEnd('/').substringBeforeLast('/', "")
+                if (archivePath.isNotEmpty()) archivePath += "/"
+                renderList()
+            }
+            return true
+        }
         return false
     }
 
-    override fun subtitle(): String? = current.absolutePath
+    override fun subtitle(): String? {
+        val pack = archive
+        return if (pack == null) {
+            current.absolutePath
+        } else {
+            pack.absolutePath + (if (archivePath.isEmpty()) "" else "/" + archivePath.trimEnd('/'))
+        }
+    }
 
     override fun saveState(): JSONObject = JSONObject().put("path", current.absolutePath)
 
@@ -121,6 +152,11 @@ class FilesPage(
     private fun renderList() {
         if (!::listColumn.isInitialized) return
         listColumn.removeAllViews()
+        val pack = archive
+        if (pack != null) {
+            renderArchiveList(pack)
+            return
+        }
         listColumn.addView(pathCard())
         listColumn.addView(groupSpacing())
         listColumn.addViews(
@@ -171,6 +207,226 @@ class FilesPage(
 
     private fun tail(): View = View(host).apply { minimumHeight = dp(28f) }
 
+    // ------------------------------------------------------------ 压缩包浏览
+
+    /**
+     * 压缩包内部列表：与目录页同一套卡片结构，只有顶部信息卡与"上一级"行为不同。
+     *
+     * 这样点开压缩包之后的交互与文件夹完全一致——进出子目录、点文件看内容、返回上一级，
+     * 用户不需要学第二套操作。
+     */
+    private fun renderArchiveList(pack: File) {
+        val kind = ArchiveKit.kindOf(pack)
+        val entries = ArchiveKit.list(pack, archivePath, host.env)
+        listColumn.addView(
+            infoCard(
+                R.drawable.ic_file,
+                pack.name + if (archivePath.isEmpty()) "" else "/" + archivePath.trimEnd('/'),
+                listOf("${kind.label} 压缩包 · ${entries.size} 项 · ${readableSize(pack.length())}"),
+            ),
+        )
+        listColumn.addView(groupSpacing())
+        listColumn.addView(
+            cardGroup(
+                listOf(
+                    cardRow(R.drawable.ic_arrow_up, "上一级") {
+                        if (archivePath.isEmpty()) {
+                            // 包根再往上就回到压缩包所在的真实目录
+                            exitArchive()
+                        } else {
+                            archivePath = archivePath.trimEnd('/').substringBeforeLast('/', "")
+                            if (archivePath.isNotEmpty()) archivePath += "/"
+                            renderList()
+                        }
+                    },
+                    cardRow(R.drawable.ic_folder, "解压到当前目录") { extractHere(pack) },
+                ),
+            ),
+        )
+        listColumn.addView(groupSpacing())
+        if (entries.isEmpty()) {
+            listColumn.addView(hint(if (archivePath.isEmpty()) "这个压缩包里没有条目" else "此目录下没有内容"))
+            listColumn.addView(tail())
+            return
+        }
+        val dirs = entries.filter { it.isDir }
+        val files = entries.filterNot { it.isDir }
+        if (dirs.isNotEmpty()) {
+            listColumn.addView(groupHeader("目录"))
+            listColumn.addViews(cardGroup(dirs.map { archiveEntryRow(pack, it) }))
+            listColumn.addView(groupSpacing())
+        }
+        listColumn.addView(groupHeader("文件"))
+        if (files.isEmpty()) {
+            listColumn.addView(hint("此目录下没有文件"))
+        } else {
+            listColumn.addViews(cardGroup(files.map { archiveEntryRow(pack, it) }))
+        }
+        listColumn.addView(tail())
+        listColumn.alpha = 0f
+        listColumn.translationY = dp(8f).toFloat()
+        listColumn.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(Motion.PANEL_MS)
+            .setInterpolator(Motion.standard)
+            .start()
+    }
+
+    /** 压缩包内的一行：目录直接进入，文件点了看内容（与目录页点文件的行为一致）。 */
+    private fun archiveEntryRow(pack: File, entry: ArchiveKit.Entry): View {
+        val detail = if (entry.isDir) {
+            "目录 · ${timeFormat.format(Date(entry.modifiedAt))}"
+        } else {
+            val ratio = if (entry.compressedSize > 0 && entry.size > 0) {
+                " · 压缩后 ${readableSize(entry.compressedSize)}"
+            } else {
+                ""
+            }
+            "${readableSize(entry.size)}$ratio"
+        }
+        return cardRow(
+            if (entry.isDir) R.drawable.ic_folder else fileIcon(entry.name),
+            entry.name,
+            detail,
+            null,
+            minHeightDp = 64,
+            click = {
+                if (entry.isDir) {
+                    archivePath = entry.path.trimEnd('/') + "/"
+                    renderList()
+                } else {
+                    openArchiveFile(pack, entry)
+                }
+            },
+        )
+    }
+
+    /** 进入一个压缩包：清掉编辑态，切到包内渲染。 */
+    private fun enterArchive(pack: File) {
+        archive = pack
+        archivePath = ""
+        renderList()
+    }
+
+    /** 退出压缩包浏览，回到它所在的目录。 */
+    private fun exitArchive() {
+        archive = null
+        archivePath = ""
+        renderList()
+    }
+
+    /**
+     * 读取包内文件的文本并用同一个编辑器展示。
+     *
+     * 包内条目是只读的：编辑器照常用来阅读与搜索，但"保存"写不回压缩包，
+     * 因此打开时把 editing 置空（保存会提示没有可写目标），避免误以为改了原包。
+     */
+    private fun openArchiveFile(pack: File, entry: ArchiveKit.Entry) {
+        if (entry.size > MAX_EDIT_BYTES) {
+            toast("文件过大，未打开")
+            return
+        }
+        toast("正在读取…")
+        host.background(
+            work = { ArchiveKit.readText(pack, entry.path, host.env) },
+            then = { text ->
+                if (text == null) {
+                    toast("无法读取，可能是二进制文件或超过上限")
+                } else {
+                    openReadOnlyText(entry.name, text)
+                }
+            },
+            onError = { toast("读取失败") },
+        )
+    }
+
+    /**
+     * 以只读方式打开一段文本：复用编辑器的显示与高亮，但不绑定可写文件。
+     *
+     * 把 [editing] 置空是关键——saveEditor 找不到目标文件就不会真的写盘，
+     * 这样在压缩包内"编辑"不会变成一次无提示的失败。
+     */
+    private fun openReadOnlyText(name: String, content: String) {
+        // 先把编辑目标清空：编辑器只用于阅读，保存动作没有可写目标，不会误改原包。
+        editing = null
+        originalText = content
+        dirty = false
+        editorRules = CodeHighlighter.detect(name)
+        indentUnit = if (editorRules == null) "    " else detectIndentUnit(content)
+        editorTitle.text = "$name（压缩包内，只读）"
+        suppressEdits = true
+        editorInput.setText(content)
+        editorInput.setSelection(0)
+        suppressEdits = false
+        editor.visibility = View.VISIBLE
+        runHighlight()
+        editorInput.post { refreshEditorChrome() }
+    }
+
+    /** 把压缩包解到它所在目录下的同名文件夹。 */
+    private fun extractHere(pack: File) {
+        val target = File(pack.parentFile ?: host.root, pack.nameWithoutExtension)
+        if (target.exists()) {
+            toast("同名目录已存在：${target.name}")
+            return
+        }
+        toast("正在解压…")
+        host.background(
+            work = {
+                val kind = ArchiveKit.kindOf(pack)
+                if (kind == ArchiveKit.Kind.ZIP) {
+                    extractZip(pack, target)
+                } else {
+                    target.mkdirs()
+                    val r = host.env.exec(
+                        listOf("tar", "-xf", pack.absolutePath, "-C", target.absolutePath),
+                    )
+                    r.ok
+                }
+            },
+            then = { ok ->
+                if (ok) {
+                    toast("已解压到 ${target.name}")
+                    renderList()
+                } else {
+                    toast("解压失败")
+                }
+            },
+            onError = { toast("解压失败") },
+        )
+    }
+
+    /**
+     * 解 zip。
+     *
+     * 只按条目名拼接目标路径，并对结果做一次"必须落在目标目录内"的校验：
+     * 压缩包里可以写 `../../etc/x` 这种名字，不校验就等于允许写到任意位置。
+     */
+    private fun extractZip(pack: File, target: File): Boolean = runCatching {
+        java.util.zip.ZipFile(pack).use { zf ->
+            val root = target.canonicalFile
+            val entries = zf.entries()
+            while (entries.hasMoreElements()) {
+                val e = entries.nextElement()
+                val out = File(root, e.name).canonicalFile
+                if (!out.path.startsWith(root.path + File.separator) && out.path != root.path) {
+                    // 越界条目直接跳过，不中断整个解压
+                    continue
+                }
+                if (e.isDirectory) {
+                    out.mkdirs()
+                } else {
+                    out.parentFile?.mkdirs()
+                    zf.getInputStream(e).use { input ->
+                        out.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+            }
+        }
+        true
+    }.getOrDefault(false)
+
     private fun pathCard(): View {
         val count = runCatching { current.list()?.size ?: 0 }.getOrDefault(0)
         return infoCard(
@@ -182,7 +438,11 @@ class FilesPage(
     }
 
     private fun entryRow(file: File, isDir: Boolean): View {
-        val icon = if (isDir) R.drawable.ic_folder else fileIcon(file.name)
+        val icon = when {
+            isDir -> R.drawable.ic_folder
+            ArchiveKit.isArchive(file) -> R.drawable.ic_archive
+            else -> fileIcon(file.name)
+        }
         val trailing = if (isDir) null else readableSize(file.length())
         val detail = if (isDir) {
             val count = runCatching { file.list()?.size ?: 0 }.getOrDefault(0)
@@ -196,7 +456,14 @@ class FilesPage(
             detail,
             trailing,
             minHeightDp = 64,
-            click = { if (isDir) open(file) else openFile(file) },
+            click = {
+                when {
+                    isDir -> open(file)
+                    // 压缩包点开＝进目录：与文件夹同一种交互，不弹菜单也不跳编辑器
+                    ArchiveKit.isArchive(file) -> enterArchive(file)
+                    else -> openFile(file)
+                }
+            },
             longClick = { showActions(file) },
         )
     }
@@ -218,7 +485,18 @@ class FilesPage(
         val isDir = file.isDirectory
         sheet.content { column ->
             column.removeAllViews()
-            if (!isDir) {
+            if (!isDir && ArchiveKit.isArchive(file)) {
+                // 压缩包：打开（浏览）与解压是两个最常用的动作，放最上面
+                column.addView(actionRowInSheet("打开压缩包", R.drawable.ic_folder) {
+                    sheet.dismiss()
+                    enterArchive(file)
+                })
+                column.addView(actionRowInSheet("解压到当前目录", R.drawable.ic_file_add) {
+                    sheet.dismiss()
+                    extractHere(file)
+                })
+            }
+            if (!isDir && !ArchiveKit.isArchive(file)) {
                 column.addView(actionRowInSheet("打开", R.drawable.ic_file) {
                     sheet.dismiss()
                     openFile(file)
