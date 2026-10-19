@@ -43,6 +43,7 @@ import com.coda.mobileui.core.ZSessionInfo
 import com.coda.mobileui.core.ZWorkflowActor
 import com.coda.mobileui.core.ZWorkflowKit
 import com.coda.mobileui.core.ZWorkflowPhase
+import com.coda.mobileui.core.ZWorkflowLive
 import com.coda.mobileui.workspace.DirectoryPicker
 import com.coda.mobileui.workspace.WorkspaceActivity
 import java.io.File
@@ -2059,6 +2060,15 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             )
             card.addView(codaLine(currentStepText(phases, current, snapshot), 12f, codaPrimary(), 6))
         }
+        // 实时动态：进度事件比工具结果回来得早，这一行让卡片在等结果时也有东西可看。
+        // 只有真收到过事件才显示，避免凭空多出一行"正在做什么"却永远不更新。
+        zc.liveOfWorkflow(run?.runId)?.let { live ->
+            card.addView(codaLine(live.line, 12f, codaNeutral(), 4))
+        }
+        // 已停下的 run 明确标出可继续：用户最常问的就是"停下来的那个还能不能接着跑"。
+        if (run != null && !running && zc.liveOfWorkflow(run.runId)?.resumable == true) {
+            card.addView(codaLine("已停止 · 可以继续", 12f, codaPrimary(), 4))
+        }
         card.setOnClickListener { showWorkflowSheet(tool) }
         return card
     }
@@ -2178,59 +2188,222 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         else -> "done"
     }
 
-    /** 工作流半屏（展开态）：保留时间轴与当前步骤，追加当前步骤正在跑的子智能体。 */
+    /** 工作流半屏（展开态）：保留时间轴与当前步骤，追加运行控制与子智能体输出入口。 */
     private fun showWorkflowSheet(tool: com.coda.mobileui.core.ZPart.ToolPart) {
         val run = zc.workflowRunForToolCall(tool.callId)
-        val text = codaWorkflowText(tool)
-        val phases = ZWorkflowKit.parsePhases(text)
-        val actors = ZWorkflowKit.parseActors(text)
-        val current = ZWorkflowKit.currentPhase(phases)
         val bits = mutableListOf(ZWorkflowKit.workflowToolLabel(tool.tool))
         run?.let { bits += ZWorkflowKit.runStatusLabel(it.status) }
         run?.let { if (it.spentTokens > 0) bits += "${formatCharCount(it.spentTokens.toInt())} tokens" }
-        CodaSheet(this)
+        // 内容区随进度重画，用可变容器持有；控制条只建一次，避免按钮在刷新时被替换掉。
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val sheet = CodaSheet(this)
             .title(run?.name ?: tool.title?.takeIf { it.isNotEmpty() } ?: "工作流")
             .subtitle(bits.joinToString(" · "))
             .content { col ->
-                col.addView(sheetSectionLabel("阶段轨"))
-                if (phases.isEmpty()) {
-                    col.addView(codaLine("内核尚未提供阶段信息，调用 GetWorkflowRun 后出现", 12f, codaNeutral()))
-                } else {
-                    col.addView(buildWorkflowTimeline(phases, current))
-                    col.addView(codaLine(currentStepText(phases, current, text), 12f, codaPrimary(), 8))
-                }
-                val onStep = ZWorkflowKit.actorsOfPhase(actors, current)
-                val active = onStep.count { it.isActive }
-                col.addView(
-                    sheetSectionLabel(
-                        if (active > 0) "当前步骤正在运行的子智能体（$active）" else "当前步骤的子智能体",
-                    ),
-                )
-                if (onStep.isEmpty()) {
-                    col.addView(codaLine("本步骤暂无子智能体记录", 12f, codaNeutral()))
-                } else {
-                    onStep.forEach { a -> col.addView(buildActorRow(a)) }
-                }
-                val others = actors.filter { it.isActive && it.phaseName != current?.name }
-                if (others.isNotEmpty()) {
-                    col.addView(sheetSectionLabel("其它步骤仍在跑（${others.size}）"))
-                    others.forEach { a -> col.addView(buildActorRow(a)) }
-                }
-                val out = tool.output?.trim()
-                if (!out.isNullOrEmpty()) {
-                    col.addView(sheetSectionLabel("工具输出"))
-                    col.addView(sheetCodeBlock(out.take(6000)))
+                col.addView(buildWorkflowControls(run, zc.liveOfWorkflow(run?.runId), body))
+                col.addView(body)
+            }
+        fun fill() {
+            // 每次都重新取：进度事件到来时阶段与子智能体都可能在变，
+            // 沿用创建时的快照会让面板看起来"卡住不动"。
+            val snapshotNow = codaWorkflowText(tool)
+            val phasesNow = ZWorkflowKit.parsePhases(snapshotNow)
+            val actorsNow = ZWorkflowKit.parseActors(snapshotNow)
+            val currentNow = ZWorkflowKit.currentPhase(phasesNow)
+            body.removeAllViews()
+            body.addView(sheetSectionLabel("阶段轨"))
+            if (phasesNow.isEmpty()) {
+                body.addView(codaLine("内核尚未提供阶段信息，调用 GetWorkflowRun 后出现", 12f, codaNeutral()))
+            } else {
+                body.addView(buildWorkflowTimeline(phasesNow, currentNow))
+                body.addView(codaLine(currentStepText(phasesNow, currentNow, snapshotNow), 12f, codaPrimary(), 8))
+            }
+            zc.liveOfWorkflow(run?.runId)?.let { l ->
+                body.addView(codaLine("最新：${l.line}", 12f, codaNeutral(), 6))
+            }
+            val onStep = ZWorkflowKit.actorsOfPhase(actorsNow, currentNow)
+            val active = onStep.count { it.isActive }
+            body.addView(
+                sheetSectionLabel(
+                    if (active > 0) "当前步骤正在运行的子智能体（$active）" else "当前步骤的子智能体",
+                ),
+            )
+            if (onStep.isEmpty()) {
+                body.addView(codaLine("本步骤暂无子智能体记录", 12f, codaNeutral()))
+            } else {
+                onStep.forEach { a -> body.addView(buildActorRow(a, run?.runId)) }
+            }
+            val others = actorsNow.filter { it.isActive && it.phaseName != currentNow?.name }
+            if (others.isNotEmpty()) {
+                body.addView(sheetSectionLabel("其它步骤仍在跑（${others.size}）"))
+                others.forEach { a -> body.addView(buildActorRow(a, run?.runId)) }
+            }
+            val out = tool.output?.trim()
+            if (!out.isNullOrEmpty()) {
+                body.addView(sheetSectionLabel("工具输出"))
+                body.addView(sheetCodeBlock(out.take(6000)))
+            }
+        }
+        fill()
+        sheet.show()
+        // 面板开着时跟着进度刷新：只重画这一块，不重建整张卡、不打断滚动。
+        // 结算事件之后 run 已经不会再变，但仍然留着监听（很轻），关面板即摘除。
+        val runId = run?.runId
+        if (runId != null) {
+            val watcher = ZController.WorkflowWatcher { changed ->
+                if (changed == runId) {
+                    // 阶段/子智能体是快照数据，需要重新取一次花名册；取回来由主流程重画卡片。
+                    zc.refreshWorkflowRuns()
+                    fill()
                 }
             }
-            .show()
+            zc.addWorkflowWatcher(watcher)
+            sheet.onDismiss { zc.removeWorkflowWatcher(watcher) }
+        }
     }
 
-    /** 工作流子智能体一行：状态点 + 名称 · 地址 · 状态 · 阶段，下列活动与任务。 */
-    private fun buildActorRow(actor: ZWorkflowActor): View {
+    /**
+     * 运行控制条：停止 / 继续，外加一行状态说明。
+     *
+     * "暂停"在内核里没有对应动作：能停的只有 cancel（结算为 cancelled），之后靠 resume
+     * 从 journal 续跑。因此这里提供的是"停止 + 继续"这一对，语义上等价于可恢复的暂停。
+     */
+    private fun buildWorkflowControls(
+        run: com.coda.mobileui.core.ZWorkflowRun?,
+        live: ZWorkflowLive?,
+        body: LinearLayout,
+    ): View {
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(2), 0, dp(6))
+        }
+        if (run == null) {
+            wrap.addView(codaLine("运行尚未登记，控制按钮暂不可用", 12f, codaNeutral()))
+            return wrap
+        }
+        // 只有 pending/running 才算在跑；stopped 已结算，不能因为"非终态"再显示停止按钮。
+        val running = run.status == "running" || run.status == "pending"
+        // 可继续：内核只允许 cancelled / Interrupted 的 run 恢复。
+        // 摘要里的状态词是 stopped（cancel 结算后的值），两套词都要认。
+        val canResume = live?.resumable == true ||
+            run.isTerminal && (run.status == "stopped" || run.status == "cancelled")
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, 0)
+        }
+        if (running) {
+            row.addView(
+                workflowControlButton("停止", filled = false) {
+                    zc.cancelWorkflowRun(run.runId) { ok, msg ->
+                        ui.post {
+                            if (ok) {
+                                toast("已请求停止工作流")
+                                // 停止是异步结算，先给按钮一个即时状态，结算事件回来后卡片会自动刷新
+                                body.alpha = 0.5f
+                                body.animate().alpha(1f).setDuration(220).start()
+                            } else {
+                                toast(controlFailText(msg, "停止失败"))
+                            }
+                        }
+                    }
+                },
+            )
+        }
+        if (canResume) {
+            row.addView(
+                workflowControlButton("继续", filled = true) {
+                    zc.resumeWorkflowRun(run.runId) { ok, msg ->
+                        ui.post {
+                            if (ok) toast("已请求继续工作流") else toast(controlFailText(msg, "继续失败"))
+                        }
+                    }
+                },
+            )
+        }
+        if (row.childCount > 0) wrap.addView(row)
+        wrap.addView(
+            codaLine(
+                when {
+                    running && canResume -> "可停止；停下后仍可继续"
+                    running -> "运行中"
+                    canResume -> "已停止，可以继续"
+                    else -> "该运行已结束，不能再继续"
+                },
+                11f,
+                codaNeutral(),
+                4,
+            ),
+        )
+        return wrap
+    }
+
+    /** 控制失败的提示：优先用 reason 对应的中文，其次用内核 original message，最后用兜底文案。 */
+    private fun controlFailText(reasonOrMsg: String, fallback: String): String {
+        val byReason = ZWorkflowKit.rejectReasonLabel(reasonOrMsg)
+        if (byReason.isNotEmpty()) return byReason
+        return if (reasonOrMsg.isNotBlank() && reasonOrMsg != "ok") reasonOrMsg else fallback
+    }
+
+    /** 控制条上的文字按钮，按下有轻微压暗，与半屏其它可点元素一致。 */
+    private fun workflowControlButton(
+        label: String,
+        filled: Boolean,
+        click: () -> Unit,
+    ): TextView {
+        val onPrimary = com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnPrimary,
+            Color.WHITE,
+        )
+        return TextView(this).apply {
+            text = label
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setPadding(dp(22), dp(9), dp(22), dp(9))
+            if (filled) {
+                setTextColor(onPrimary)
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(20).toFloat()
+                    setColor(codaPrimary())
+                }
+            } else {
+                setTextColor(codaOnSurface())
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(20).toFloat()
+                    setStroke(dp(1), tintAlpha(codaOnSurface(), 0.22f))
+                }
+            }
+            isClickable = true
+            setOnClickListener { click() }
+            setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN ->
+                        v.animate().alpha(0.6f).setDuration(90).start()
+                    android.view.MotionEvent.ACTION_UP,
+                    android.view.MotionEvent.ACTION_CANCEL,
+                    -> v.animate().alpha(1f).setDuration(140).start()
+                }
+                false
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { rightMargin = dp(8) }
+        }
+    }
+
+    /**
+     * 工作流子智能体一行：状态点 + 名称 · 地址 · 状态 · 阶段，下列活动与任务。
+     *
+     * 有子会话的 actor 整行可点：点开就是它自己的输出（复用子代理那套整页会话视图），
+     * 这正是"在工作流里查看子智能体在跑什么"的入口。
+     */
+    private fun buildActorRow(actor: ZWorkflowActor, runId: String?): View {
         val wrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(6), 0, dp(6))
         }
+        val sessionId = zc.actorSessionOf(runId, actor.address)
         val head = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -2265,7 +2438,65 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         actor.task?.takeIf { it.isNotEmpty() }?.let {
             wrap.addView(codaLine("任务：$it", 11f, codaNeutral(), 2))
         }
+        if (sessionId != null) {
+            wrap.addView(codaLine("查看输出 ›", 11f, codaPrimary(), 2))
+            wrap.isClickable = true
+            wrap.setPadding(0, dp(6), 0, dp(6))
+            wrap.setOnClickListener { showWorkflowActorOutput(actor, runId, sessionId) }
+            wrap.setBackgroundResource(R.drawable.bg_tool_card)
+            // 可点行给一次按下反馈：这里没有现成的 ripple，用透明度最直接。
+            wrap.setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN ->
+                        v.animate().alpha(0.6f).setDuration(90).start()
+                    android.view.MotionEvent.ACTION_UP,
+                    android.view.MotionEvent.ACTION_CANCEL,
+                    -> v.animate().alpha(1f).setDuration(140).start()
+                }
+                false
+            }
+        }
         return wrap
+    }
+
+    /**
+     * 工作流子智能体的输出面板。
+     *
+     * 与 [showSubagentSheet] 同一套渲染（子会话消息按真实消息画），区别只在于它从
+     * 工作流卡进来、并跟随 run 的进度自动刷新，同时还能看到它属于哪个阶段。
+     */
+    private fun showWorkflowActorOutput(actor: ZWorkflowActor, runId: String?, childSessionId: String) {
+        val title = actor.name.ifEmpty { actor.address.ifEmpty { "子智能体" } }
+        val bits = mutableListOf<String>()
+        if (actor.address.isNotEmpty()) bits += actor.address
+        actor.phaseName?.takeIf { it.isNotEmpty() }?.let { bits += "阶段 $it" }
+        bits += ZWorkflowKit.actorStateLabel(actor.state)
+        if (actor.tokens.isNotEmpty()) bits += actor.tokens
+        val host = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val sheet = CodaSheet(this)
+            .title(title)
+            .subtitle(bits.joinToString(" · "))
+            .content { col -> col.addView(host) }
+        var ticker: Runnable? = null
+        fun render() {
+            fillSubagentConversation(host, actor.task, childSessionId)
+        }
+        render()
+        // 仍在跑的 actor 跟一轮：3 秒刷新一次输出，关闭面板立刻停。
+        // 这里只重渲染、不主动发请求：fillSubagentConversation 在自己判断"缓存为空且未失败"
+        // 时才去 loadChildMessages，避免两条请求同时打同一个子会话。
+        if (actor.isActive) {
+            ticker = object : Runnable {
+                override fun run() {
+                    render()
+                    ui.postDelayed(this, 3000)
+                }
+            }
+            ui.postDelayed(ticker, 3000)
+        }
+        val stop = ticker
+        sheet.onDismiss { stop?.let { ui.removeCallbacks(it) } }
+        sheet.show()
     }
 
     private fun sheetSectionLabel(text: String): TextView {
