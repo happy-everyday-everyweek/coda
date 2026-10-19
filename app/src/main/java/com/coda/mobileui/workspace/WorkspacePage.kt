@@ -174,7 +174,10 @@ abstract class WorkspacePage(protected val host: WorkspaceActivity) {
                 setPadding(dp(8f), 0, 0, 0)
             })
         }
-        if (click != null) row.setOnClickListener { click() }
+        if (click != null) {
+            row.setOnClickListener { click() }
+            row.pressFeedback()
+        }
         if (longClick != null) row.setOnLongClickListener { longClick(); true }
         return row
     }
@@ -301,7 +304,10 @@ abstract class WorkspacePage(protected val host: WorkspaceActivity) {
                 ellipsize = TextUtils.TruncateAt.MIDDLE
             })
         }
-        if (click != null) body.setOnClickListener { click() }
+        if (click != null) {
+            body.setOnClickListener { click() }
+            body.pressFeedback(pressedScale = 0.98f)
+        }
         val card = groupCard()
         card.addView(body, ViewGroup.LayoutParams(MATCH, WRAP))
         card.radius = groupCorner
@@ -374,7 +380,10 @@ abstract class WorkspacePage(protected val host: WorkspaceActivity) {
                 setPadding(dp(8f), 0, 0, 0)
             })
         }
-        if (click != null) row.setOnClickListener { click() }
+        if (click != null) {
+            row.setOnClickListener { click() }
+            row.pressFeedback()
+        }
         if (longClick != null) row.setOnLongClickListener { longClick(); true }
         return row
     }
