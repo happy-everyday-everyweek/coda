@@ -16,18 +16,80 @@ import java.io.File
  * 只列目录，不做任何写入，避免误选到不可写的位置。
  */
 object DirectoryPicker {
-
     fun show(activity: Activity, caption: String, startAt: File, onPicked: (File) -> Unit) {
-        var current = if (startAt.isDirectory) startAt else startAt.parentFile ?: File("/")
-        val sheet = CodaSheet(activity).title(caption)
+        val sheet = CodaSheet(activity)
+        bind(sheet, activity, caption, startAt, onPicked)
+        sheet.show()
+    }
+
+    /**
+     * 在一张**已经打开**的卡片里就地显示目录选择器。
+     *
+     * 工作区菜单点"切换工作区目录"走这条路：菜单卡片原地换成选择器，不再关一张开一张。
+     */
+    fun attachTo(
+        into: CodaSheet,
+        activity: Activity,
+        caption: String,
+        startAt: File,
+        onPicked: (File) -> Unit,
+    ) {
+        into.navigate {
+            title(caption)
+            content { column ->
+                // navigate 之后 content 闭包拿到的是新列，交给 bind 里的渲染逻辑刷新
+                bindContent(into, activity, caption, startAt, onPicked, column)
+            }
+            primaryAction("选择此目录") {
+                onPicked(currentDir[into] ?: currentDirOf(startAt))
+                currentDir.remove(into)
+                into.dismiss()
+            }
+        }
+        into.onDismiss { currentDir.remove(into) }
+    }
+
+    /** 记录每个宿主当前所在目录：就地换页时目录内导航要能就地刷新。 */
+    private val currentDir = HashMap<CodaSheet, File>()
+
+    private fun currentDirOf(startAt: File): File =
+        if (startAt.isDirectory) startAt else startAt.parentFile ?: File("/")
+
+    private fun bind(
+        sheet: CodaSheet,
+        activity: Activity,
+        caption: String,
+        startAt: File,
+        onPicked: (File) -> Unit,
+    ) {
+        sheet.title(caption)
+        sheet.content { column -> bindContent(sheet, activity, caption, startAt, onPicked, column) }
+        sheet.primaryAction("选择此目录") {
+            onPicked(currentDir[sheet] ?: currentDirOf(startAt))
+            currentDir.remove(sheet)
+            sheet.dismiss()
+        }
+        sheet.onDismiss { currentDir.remove(sheet) }
+    }
+
+    private fun bindContent(
+        sheet: CodaSheet,
+        activity: Activity,
+        caption: String,
+        startAt: File,
+        onPicked: (File) -> Unit,
+        column: LinearLayout,
+    ) {
+        currentDir.putIfAbsent(sheet, currentDirOf(startAt))
         var render: (LinearLayout) -> Unit = {}
-        render = { column ->
-            column.removeAllViews()
-            column.addView(pathLabel(activity, current))
+        render = { col ->
+            col.removeAllViews()
+            val current = currentDir[sheet] ?: currentDirOf(startAt)
+            col.addView(pathLabel(activity, current))
             val parent = current.parentFile
             if (parent != null) {
-                column.addView(entry(activity, "上一级", true) {
-                    current = parent
+                col.addView(entry(activity, "上一级", true) {
+                    currentDir[sheet] = parent
                     sheet.refreshContent { refreshed -> render(refreshed) }
                 })
             }
@@ -36,21 +98,16 @@ object DirectoryPicker {
                 ?.sortedBy { it.name.lowercase() }
                 ?: emptyList()
             if (children.isEmpty()) {
-                column.addView(entry(activity, "此目录下没有子目录", false) {})
+                col.addView(entry(activity, "此目录下没有子目录", false) {})
             }
             for (dir in children) {
-                column.addView(entry(activity, dir.name, true) {
-                    current = dir
+                col.addView(entry(activity, dir.name, true) {
+                    currentDir[sheet] = dir
                     sheet.refreshContent { refreshed -> render(refreshed) }
                 })
             }
         }
-        sheet.content { column -> render(column) }
-        sheet.primaryAction("选择此目录") {
-            onPicked(current)
-            sheet.dismiss()
-        }
-        sheet.show()
+        render(column)
     }
 
     private fun pathLabel(activity: Activity, path: File): TextView = TextView(activity).apply {

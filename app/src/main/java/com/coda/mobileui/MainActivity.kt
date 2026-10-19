@@ -2574,8 +2574,8 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             }
             col.addView(
                 sheetAction("选择其他目录…", null, onSurface) {
-                    sheet.dismiss()
-                    DirectoryPicker.show(this, "选择会话所属的工作区", File(bound ?: current)) { picked ->
+                    // 就地换成目录选择器，不再关掉这张卡另开一张
+                    DirectoryPicker.attachTo(sheet, this, "选择会话所属的工作区", File(bound ?: current)) { picked ->
                         applySessionWorkspace(session, picked.absolutePath)
                     }
                 },
