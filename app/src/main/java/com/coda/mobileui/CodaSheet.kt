@@ -698,7 +698,7 @@ class CodaSheet(private val activity: Activity) {
 
         // 关掉旧页：内容区与底部按钮一起淡出并轻微左移
         val fadeOut = 110L
-        col.animate().alpha(0f).translationX(-dp(12f)).setDuration(fadeOut)
+        col.animate().alpha(0f).translationX(-dp(12f).toFloat()).setDuration(fadeOut)
         footerRow?.animate()?.alpha(0f)?.setDuration(fadeOut)?.start()
 
         col.postDelayed({
@@ -743,7 +743,7 @@ class CodaSheet(private val activity: Activity) {
 
             // 新页从右侧轻轻推入（内容区与底栏一起）
             col.alpha = 0f
-            col.translationX = dp(16f)
+            col.translationX = dp(16f).toFloat()
             col.animate().alpha(1f).translationX(0f).setDuration(160).start()
             footerRow?.let {
                 it.alpha = 0f
