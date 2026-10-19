@@ -3453,7 +3453,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 } else if (dx < -dp(60) && -dx > dy && !drawerLayout.isDrawerOpen(Gravity.START)) {
                     // 主界面左滑进入工作区：拖动过程中就实时显示展开进度，
                     // 松手后才真正跳转。之前是抬手才一次性打开，没有跟手感。
-                    showWorkspaceDragPreview(-dx)
+                    showWorkspaceDragPreview((-dx).toInt())
                 }
             }
 

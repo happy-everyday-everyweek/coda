@@ -1,5 +1,6 @@
 package com.coda.mobileui
 
+import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
 import android.view.View
