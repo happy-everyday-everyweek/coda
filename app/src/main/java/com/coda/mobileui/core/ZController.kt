@@ -38,6 +38,16 @@ class ZController private constructor(private val app: Context) {
         fun onSessionOpened(sessionId: String) {}
     }
 
+    /**
+     * 工作流进度回调的独立接口。
+     *
+     * 进度事件来得又密又轻，如果都走 [Listener.onStateChanged] 会把整个聊天页重建一遍
+     * （还会打断滚动）；需要实时刷新的组件单独注册，只重画自己那一块。
+     */
+    fun interface WorkflowWatcher {
+        fun onWorkflowProgress(runId: String)
+    }
+
     val runtime = CoreRuntime(app)
 
     var sessions: MutableList<ZSessionInfo> = mutableListOf()
@@ -69,6 +79,26 @@ class ZController private constructor(private val app: Context) {
     /** 当前工作区的动态工作流运行摘要（workflows/runs）。 */
     var workflowRuns: List<ZWorkflowRun> = emptyList()
         private set
+    /**
+     * 工作流子智能体（actor）→ 它自己的子会话 id。
+     *
+     * 来源是父会话的 dynamic_workflow_run_progress 事件：`actor-created`/`node-dispatched`
+     * 上带 actorSessionId（内核铸成 sess_dwf-<runId>-<site@ordinal>）。键用
+     * [ZWorkflowKit.actorKey]，即 runId + 地址，避免两个 run 的同名 actor 相撞。
+     */
+    private val actorSessions = HashMap<String, String>()
+/** 每个 run 最近一条进度事件（折叠卡靠它显示"正在做什么"，不必等工具结果）。 */
+    private val workflowLive = HashMap<String, ZWorkflowLive>()
+    /** 关心工作流进度的轻量订阅者（打开中的半屏），与主聊天页的整页重渲染分开。 */
+    private val workflowWatchers = CopyOnWriteArrayList<WorkflowWatcher>()
+
+    fun addWorkflowWatcher(w: WorkflowWatcher) {
+        if (!workflowWatchers.contains(w)) workflowWatchers += w
+    }
+
+    fun removeWorkflowWatcher(w: WorkflowWatcher) {
+        workflowWatchers -= w
+    }
     /** 子会话消息缓存（子代理半屏的整页会话视图用）。 */
     private val childMessages = HashMap<String, List<ZMessage>>()
     /** 子会话消息读取失败过的会话 id（避免把「读失败」当成「确实为空」）。 */
@@ -400,7 +430,42 @@ class ZController private constructor(private val app: Context) {
                     scheduleRefreshSoon()
                 }
             }
+
+            // 工作流实时进度：actor 出生时记下它的子会话，之后的卡片就能点进去看输出。
+            // 其余几种只更新"正在做什么"，不触发消息重拉（重拉会中断滚动与流式文本）。
+            "dynamic_workflow_run_progress" -> {
+                onWorkflowProgress(payload)
+            }
         }
+    }
+
+    /**
+     * 处理一条工作流进度事件。
+     *
+     * 唯一必须落库的是 actorSessionId：它是查看某个子智能体输出的钥匙，且只在
+     * actor-created / node-dispatched 上出现一次，丢了就只能等下一轮花名册。
+     */
+    private fun onWorkflowProgress(payload: JSONObject) {
+        val runId = payload.optString("runId")
+        if (runId.isEmpty()) return
+        val eventType = payload.optString("eventType")
+        val inner = payload.optJSONObject("payload") ?: JSONObject()
+        val actorSessionId = payload.optString("actorSessionId").takeIf { it.isNotEmpty() }
+        val address = ZWorkflowKit.actorAddressOf(inner)
+        if (actorSessionId != null && address.isNotEmpty()) {
+            actorSessions[ZWorkflowKit.actorKey(runId, address)] = actorSessionId
+        }
+        val live = ZWorkflowKit.liveFromProgress(runId, eventType, inner, address, actorSessionId)
+        post {
+            if (live != null) workflowLive[runId] = live
+            workflowTick++
+            // 只通知工作流面板：主聊天页的整页重渲染留给真正影响消息的事件，
+            // 否则每来一条进度都会把聊天视图重建一次（并可能打断滚动）。
+            for (w in workflowWatchers) w.onWorkflowProgress(runId)
+        }
+        // 结算说明 run 状态变了（可能从 running 变 cancelled），花名册要重拉一次；
+        // 这里只拉一次摘要，不重拉消息。
+        if (eventType == "run-settled") refreshWorkflowRuns()
     }
 
     /**
@@ -519,6 +584,27 @@ class ZController private constructor(private val app: Context) {
         if (callId.isNullOrEmpty()) return null
         return subagents.firstOrNull { it.toolCallId == callId }
     }
+
+    /** 某个工作流 run 最近一条有信息量的进度（折叠卡与详情页共用）。 */
+    fun liveOfWorkflow(runId: String?): ZWorkflowLive? {
+        if (runId.isNullOrEmpty()) return null
+        return workflowLive[runId]
+    }
+
+    /**
+     * 工作流里某个 actor 的子会话 id。
+     *
+     * [address] 是花名册里的 `siteId@ordinal`；取不到就返回 null（调用方据此提示"该子智能体
+     * 还没有独立会话"，而不是打开一个空面板）。
+     */
+    fun actorSessionOf(runId: String?, address: String?): String? {
+        if (runId.isNullOrEmpty() || address.isNullOrEmpty()) return null
+        return actorSessions[ZWorkflowKit.actorKey(runId, address)]
+    }
+
+    /** 当前会话里是否已经收到过某个 run 的实时进度（用来决定卡片要不要显示"实时"标记）。 */
+    fun hasLiveWorkflow(runId: String?): Boolean =
+        !runId.isNullOrEmpty() && workflowLive.containsKey(runId)
 
     /** CreateWorkflow 工具调用 → 对应运行摘要（按 toolCallId 联接）。 */
     fun workflowRunForToolCall(callId: String?): ZWorkflowRun? {
@@ -1122,6 +1208,75 @@ class ZController private constructor(private val app: Context) {
         if (!instructions.isNullOrEmpty()) params.put("instructions", instructions)
         runtime.call("session/compact", params) { ok, body ->
             cb?.invoke(ok, if (ok) "ok" else errMsg(body))
+        }
+    }
+
+    // ------------------------------------------------------------ 工作流控制
+
+    /**
+     * 停止一个正在跑的工作流 run。
+     *
+     * 内核没有专属的工作流取消 RPC：详情页与后台面板的停止共用 v4 `cancelBackgroundWork`，
+     * 载荷 workId ≡ runId。停下之后 run 变成 cancelled，可以用 [resumeWorkflowRun] 恢复。
+     */
+    fun cancelWorkflowRun(runId: String, cb: ((Boolean, String) -> Unit)? = null) {
+        val sid = currentSessionId
+        if (sid == null || runId.isEmpty()) {
+            cb?.invoke(false, "无会话")
+            return
+        }
+        sendV4("cancelBackgroundWork", sid, JSONObject().put("workId", runId)) { ok, msg ->
+            if (ok) refreshWorkflowRuns()
+            cb?.invoke(ok, msg)
+        }
+    }
+
+    /**
+     * 继续一个被停下或进程中断的 run。
+     *
+     * 内核的门：只有 cancelled，或失败编码为 Interrupted 的 run 可恢复；其余情况回
+     * `workflowRunResumeRejected.<reason>`，这里把 reason 原样带给调用方，由 UI 决定文案。
+     */
+    fun resumeWorkflowRun(runId: String, cb: ((Boolean, String) -> Unit)? = null) {
+        val sid = currentSessionId
+        if (sid == null || runId.isEmpty()) {
+            cb?.invoke(false, "无会话")
+            return
+        }
+        sendV4("resumeWorkflowRun", sid, JSONObject().put("workId", runId)) { ok, msg ->
+            if (ok) refreshWorkflowRuns()
+            cb?.invoke(ok, msg)
+        }
+    }
+
+    /**
+     * 发一条 v4 命令并归一结果。
+     *
+     * 与 [stop] 里那段内联命令同一个形状（commandId/clientId/issuedAt 由宿主校验）；
+     * 领域拒绝会带 reasonCode，网关把可读说明放在 message 里，这里优先取它。
+     */
+    private fun sendV4(
+        type: String,
+        sid: String,
+        payload: JSONObject,
+        cb: (Boolean, String) -> Unit,
+    ) {
+        val cmd = JSONObject()
+            .put("commandId", UUID.randomUUID().toString())
+            .put("clientId", "mobile-ui")
+            .put("sessionId", sid)
+            .put("type", type)
+            .put("payload", payload)
+            .put("issuedAt", System.currentTimeMillis())
+        runtime.call("v4/command", cmd) { ok, body ->
+            if (ok) {
+                cb(true, "ok")
+            } else {
+                // 拒绝原因优先用具体 reason（not_resumable / already_running 等），便于 UI 精准提示
+                val reason = body.optString("reasonCode")
+                val msg = errMsg(body)
+                cb(false, reason.substringAfterLast('.').takeIf { it.isNotEmpty() } ?: msg)
+            }
         }
     }
 

@@ -151,6 +151,23 @@ object ZWorkflowKit {
         else -> status
     }
 
+    /**
+     * 工作流控制被拒时的原因文案。
+     *
+     * 内核按 reasonCode 分流（见 workflowRunResumeRejected.<reason>），这里只翻译给用户看；
+     * 空串表示没有具体原因，调用方回落到内核给的 message。
+     */
+    fun rejectReasonLabel(reason: String?): String = when (reason) {
+        "not_resumable" -> "这个运行已经不能再继续了"
+        "already_running" -> "它已经在运行中"
+        "not_found" -> "找不到这个运行"
+        "script_missing" -> "脚本已丢失，无法继续"
+        "script_mismatch" -> "脚本已变更，无法继续"
+        "compile_failed" -> "脚本编译失败，无法继续"
+        "unsupported" -> "当前内核不支持这项操作"
+        else -> ""
+    }
+
     fun phaseStateLabel(state: String): String = when (state) {
         "done" -> "已完成"
         "current" -> "进行中"
@@ -387,4 +404,90 @@ object ZWorkflowKit {
         if (total <= 0) return ""
         return "${phase.stepsSettled} / $total"
     }
+
+    // ------------------------------------------------------------ 实时进度
+
+    /**
+     * actor 的唯一键：runId + 地址（`siteId@ordinal`）。
+     *
+     * 同一 run 里地址唯一；跨 run 同名 actor 很常见，所以必须带 runId 才不撞。
+     */
+    fun actorKey(runId: String, address: String): String = "$runId#$address"
+
+    /**
+     * 从一条 dynamic_workflow_run_progress 事件里取 actor 地址。
+     *
+     * payload 的 `actor` 形状由引擎决定（可能是字符串，也可能是带 site/ordinal 的对象），
+     * 这里两种都认；取不到就返回空串，调用方据此跳过（不会写坏映射）。
+     */
+    fun actorAddressOf(payload: JSONObject?): String {
+        val actor = payload?.opt("actor") ?: return ""
+        if (actor is String) return actor
+        val o = actor as? JSONObject ?: return ""
+        val direct = firstNonEmpty(o.optString("address"), o.optString("ref"), o.optString("key"))
+        if (direct.isNotEmpty()) return direct
+        val site = firstNonEmpty(o.optString("siteId"), o.optString("site"), o.optString("id"))
+        if (site.isEmpty()) return ""
+        // ordinal 缺省时只报 siteId，宁可匹配不到也不猜一个错地址
+        return if (o.has("ordinal")) "$site@${o.optInt("ordinal")}" else site
+    }
+
+    /**
+     * 把一条进度事件折成"这个 run 现在在做什么"。
+     *
+     * 只认有展示价值的几种（run-started / actor-created / phase-entered / node-dispatched /
+     * run-settled）；日志、用量这类事件没有可读的动作，返回 null 让调用方跳过，
+     * 卡片不会因为无信息量的事件反复重画。
+     */
+    fun liveFromProgress(
+        runId: String,
+        eventType: String,
+        payload: JSONObject,
+        actorAddress: String,
+        actorSessionId: String?,
+    ): ZWorkflowLive? {
+        val phase = payload.optString("phaseName").takeIf { it.isNotEmpty() }
+        val actorName = payload.optString("actorName").takeIf { it.isNotEmpty() }
+        val settled = eventType == "run-settled"
+        val line = when (eventType) {
+            "actor-created" -> if (actorName.isNullOrEmpty()) "子智能体已就绪" else "$actorName 已就绪"
+            "phase-entered" -> if (phase.isNullOrEmpty()) "进入新阶段" else "进入 $phase"
+            "node-dispatched" -> when {
+                actorName != null -> "$actorName 开始执行"
+                else -> "派发新节点"
+            }
+
+            "run-started" -> "运行已开始"
+            "run-settled" -> if (payload.optBoolean("resumable", false)) "已停止，可继续" else "运行已结束"
+            else -> return null
+        }
+        return ZWorkflowLive(
+            runId = runId,
+            eventType = eventType,
+            line = line,
+            phaseName = phase,
+            actorAddress = actorAddress,
+            actorSessionId = actorSessionId,
+            settled = settled,
+            resumable = payload.optBoolean("resumable", false),
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
 }
+
+/**
+ * 一个 run 最近一条有信息量的进度事件。
+ *
+ * 折叠卡用它显示"正在做什么"，不必等 GetWorkflowRun 的结果回到工具卡里才有内容。
+ */
+data class ZWorkflowLive(
+    val runId: String,
+    val eventType: String,
+    val line: String,
+    val phaseName: String?,
+    val actorAddress: String,
+    val actorSessionId: String?,
+    val settled: Boolean,
+    val resumable: Boolean,
+    val updatedAt: Long,
+)
