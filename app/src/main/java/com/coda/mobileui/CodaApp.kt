@@ -1,6 +1,7 @@
 package com.coda.mobileui
 import android.app.Application
 import androidx.appcompat.app.AppCompatDelegate
+import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.ext.Extensions
 /**
@@ -10,6 +11,8 @@ import com.coda.mobileui.ext.Extensions
 class CodaApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // 日志要最先初始化：后面的每一步都可能在日志里留下唯一的线索
+        AppLog.init(this)
         AppCompatDelegate.setDefaultNightMode(SettingsStore.get(this).nightMode)
         // 崩溃拦截：不闪退，展示崩溃页面并落盘日志
         CrashGuard.install(this)

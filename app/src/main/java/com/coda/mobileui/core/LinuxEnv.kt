@@ -137,8 +137,12 @@ class LinuxEnv(private val ctx: Context) {
      * 由调用方决定要不要退回其他终端。
      */
     fun ensureReady(onProgress: (String) -> Unit = {}): Boolean {
-        val wanted = assetVersion() ?: return false
+        val wanted = assetVersion() ?: run {
+            AppLog.e("LinuxEnv", "读取不到版本资产，无法判断环境版本")
+            return false
+        }
         if (isReady() && runCatching { marker.readText().trim() }.getOrNull() == wanted) return true
+        AppLog.i("LinuxEnv", "开始装配环境：wanted=$wanted，已有根文件系统=${rootfs.isDirectory}")
 
         home.mkdirs()
         if (!lockDir.mkdirs()) {
@@ -170,9 +174,15 @@ class LinuxEnv(private val ctx: Context) {
                 LaunchPlan(link2symlink = false, minimalBinds = true),
             ).firstOrNull { probe(it) }
             if (plan == null) {
+                AppLog.e("LinuxEnv", "四档启动探测全部失败，环境不可用")
                 onProgress("Linux 环境自检未通过，将退回内置终端")
                 return false
             }
+            // 记下最终选用哪一档：绑定集/链接模式的差异是很多"能起但功能缺失"问题的根源。
+            AppLog.i(
+                "LinuxEnv",
+                "环境就绪：link2symlink=${plan.link2symlink} minimalBinds=${plan.minimalBinds}",
+            )
             link2symlinkMark.writeText(if (plan.link2symlink) "1" else "0")
             minimalBindsMark.writeText(if (plan.minimalBinds) "1" else "0")
             marker.writeText(wanted)
@@ -567,14 +577,38 @@ class LinuxEnv(private val ctx: Context) {
             environment["PROOT_LOADER"] = loaderPath
             environment["PROOT_TMP_DIR"] = tmpDir.absolutePath
             val process = builder.start()
-            process.inputStream.readBytes()
+            // 读流必须在 waitFor 之前：如果先 waitFor，进程写满管道缓冲就会互相等死。
+            // 但读流本身会阻塞到进程关闭输出，所以这里用后台线程读，主线程负责超时判定。
+            val outHolder = arrayOf("")
+            val reader = Thread {
+                outHolder[0] = runCatching {
+                    process.inputStream.readBytes().decodeToString()
+                }.getOrDefault("")
+            }.apply { isDaemon = true }
+            reader.start()
             if (!process.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroy()
+                AppLog.w(
+                    "LinuxEnv",
+                    "探测超时：link2symlink=${plan.link2symlink} minimalBinds=${plan.minimalBinds}",
+                )
                 false
             } else {
-                process.exitValue() == 0
+                // 给读线程一点时间收尾，拿不到也不要紧，输出只是诊断辅助。
+                runCatching { reader.join(500) }
+                val out = outHolder[0]
+                val code = process.exitValue()
+                if (code != 0) {
+                    AppLog.w(
+                        "LinuxEnv",
+                        "探测失败($code)：link2symlink=${plan.link2symlink} minimalBinds=${plan.minimalBinds}" +
+                            if (out.isBlank()) "" else "，输出：${out.take(300)}",
+                    )
+                }
+                code == 0
             }
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            AppLog.w("LinuxEnv", "探测异常：${t.message}")
             false
         }
     }

@@ -13,6 +13,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.coda.mobileui.core.AppLog
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -50,14 +51,26 @@ object CrashGuard {
     private fun saveAndShow(app: Application, thread: Thread, throwable: Throwable) {
         val sw = StringWriter()
         throwable.printStackTrace(PrintWriter(sw))
+        // 崩溃前的最后若干行日志是找根因的关键：只有堆栈时，原因往往在上一屏，
+        // 而 logcat 在用户设备上拿不到，崩溃一过就被刷掉。
+        val before = AppLog.recentText(200)
         val body = buildString {
             append("时间: ")
             append(SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
             append('\n')
             append("线程: ").append(thread.name).append('\n')
             append("异常: ").append(throwable.toString()).append("\n\n")
+            append("===== 崩溃前日志 =====\n")
+            if (before.isEmpty()) {
+                append("(无运行期日志)\n")
+            } else {
+                append(before).append('\n')
+            }
+            append("\n===== 堆栈 =====\n")
             append(sw.toString())
         }
+        // 同时写进运行日志：崩溃之后用户翻日志也能直接看到这一段，不必去找崩溃文件。
+        AppLog.e("Crash", "未捕获异常（${thread.name}）：$throwable", throwable)
         val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         var saved = "(未写入)"
         try {

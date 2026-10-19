@@ -315,6 +315,8 @@ object ProxyHost {
         fun fail(reason: String): Boolean {
             lastError = reason
             onProgress(reason)
+            // 启动失败必须落日志：这条路径的失败信息此前只存在于界面上，用户一关就没了。
+            AppLog.e("ProxyHost", "启动失败：$reason")
             return false
         }
 
