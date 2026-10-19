@@ -157,6 +157,16 @@ class FilesPage(
             listColumn.addViews(cardGroup(files.map { entryRow(it, false) }))
         }
         listColumn.addView(tail())
+        // 目录切换是整块内容替换，屏幕上没有任何过渡会像是没响应。
+        // 这里让列表落定后轻微淡入：从旧目录到新目录能看出"翻页"了。
+        listColumn.alpha = 0f
+        listColumn.translationY = dp(8f).toFloat()
+        listColumn.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(Motion.PANEL_MS)
+            .setInterpolator(Motion.standard)
+            .start()
     }
 
     private fun tail(): View = View(host).apply { minimumHeight = dp(28f) }
@@ -244,6 +254,7 @@ class FilesPage(
             layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
         })
         row.addView(label(text, 15f, onSurface))
+        row.pressFeedback(pressedAlpha = 0.6f)
         return row
     }
 
@@ -719,6 +730,7 @@ class FilesPage(
         layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = dp(6f) }
         isClickable = true
         setOnClickListener { click() }
+        pressFeedback(pressedScale = 0.94f, pressedAlpha = 0.6f)
     }
 
     // -------------------------------------------------------------- 高亮与编辑增强
