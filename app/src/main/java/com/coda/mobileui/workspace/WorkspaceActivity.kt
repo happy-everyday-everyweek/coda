@@ -27,6 +27,8 @@ import com.coda.mobileui.CodaSheet
 import com.coda.mobileui.R
 import com.coda.mobileui.applyBottomInsetWithIme
 import com.coda.mobileui.applyTopSystemBarInset
+import com.coda.mobileui.padForBottomSafeInset
+import com.coda.mobileui.topSafeInsetPx
 import com.coda.mobileui.core.LinuxEnv
 import com.coda.mobileui.core.Workspaces
 import com.coda.mobileui.setupEdgeToEdge
@@ -50,6 +52,13 @@ class WorkspaceActivity : BaseActivity() {
 
         /** 进入工作区的展开时长，与抽屉展开的缓动节奏一致。 */
         private const val ENTER_EXPAND_DURATION_MS = 260L
+
+        /**
+         * 跟手进度：主界面左滑时把手指拖出的比例放在这里，进来后从这里接着展开。
+         * 0 表示没有拖过（比如从别处进入），走完整的 0 → 全宽。
+         */
+        @Volatile
+        var startWidthFraction: Float = 0f
 
         /** 编辑器高亮的合并窗口：输入停顿这么久之后才重扫一遍。 */
         private const val HIGHLIGHT_DEBOUNCE_MS = 120L
@@ -246,10 +255,21 @@ class WorkspaceActivity : BaseActivity() {
     private fun enterFromDrawerShape() {
         val screenWidth = resources.displayMetrics.widthPixels
         if (screenWidth <= 0) return
-        container.layoutParams = container.layoutParams.apply { width = 0 }
+        // 跟手：调用方在主界面拖动时就把进度传进来，这里从那个宽度继续补完，
+        // 不再从 0 重新长一遍，观感才是"我一直跟着手指在展开"。
+        val from = startWidthFraction.coerceIn(0f, 1f).let { (it * screenWidth).toInt() }
+        container.layoutParams = container.layoutParams.apply { width = from }
         container.requestLayout()
-        val anim = ValueAnimator.ofInt(0, screenWidth).apply {
-            duration = ENTER_EXPAND_DURATION_MS
+        if (from >= screenWidth) {
+            container.layoutParams = container.layoutParams.apply { width = MATCH }
+            container.requestLayout()
+            startWidthFraction = 0f
+            return
+        }
+        // 已经被手指拖了一段，剩余距离按比例缩短时长，避免松手后还要等满时长
+        val remaining = 1f - from.toFloat() / screenWidth
+        val anim = ValueAnimator.ofInt(from, screenWidth).apply {
+            duration = (ENTER_EXPAND_DURATION_MS * remaining).toLong().coerceAtLeast(90L)
             interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
             addUpdateListener { a ->
                 container.layoutParams = container.layoutParams.apply {
@@ -263,6 +283,7 @@ class WorkspaceActivity : BaseActivity() {
                 // 展开到位后把宽度交回匹配父布局，避免旋转或分屏后尺寸被固定值锁死。
                 container.layoutParams = container.layoutParams.apply { width = MATCH }
                 container.requestLayout()
+                startWidthFraction = 0f
             }
         })
         anim.start()
@@ -276,7 +297,11 @@ class WorkspaceActivity : BaseActivity() {
         pageHost = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
         }
-        pageHost.applyTopSystemBarInset()
+        // 状态栏避让。不能用 applyTopSystemBarInset：沉浸式下 WindowInsets 会返回 0，
+        // 那样页面内容会顶到屏幕最上面、被状态栏与挖孔压住（这是工作区之前的实际情况）。
+        // 这里改用固定高度（状态栏与挖孔取较大者），与聊天页顶栏同一套口径。
+        // 内边距加在 pageHost 而不是各页面里，所有页面一次性都避让到。
+        pageHost.setPadding(0, topSafeInsetPx(), 0, 0)
         container.addView(pageHost)
 
         val bottom = LinearLayout(this).apply {
@@ -286,6 +311,8 @@ class WorkspaceActivity : BaseActivity() {
         dividerLine = line()
         bottom.addView(dividerLine)
         bottom.addView(toolRow())
+        // 底部工具栏也要让开系统导航栏：否则最下面一行按钮会被手势条压住。
+        bottom.padForBottomSafeInset()
         bottomBar = bottom
         container.addView(bottom)
         applyChromePalette()
@@ -541,7 +568,8 @@ class WorkspaceActivity : BaseActivity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16f), dp(14f), dp(10f), dp(8f))
+            // 概览是覆盖整屏的面板，标题栏必须自己让开状态栏与挖孔
+            setPadding(dp(16f), dp(14f) + topSafeInsetPx(), dp(10f), dp(8f))
         }
         header.addView(TextView(this).apply {
             text = "标签页"

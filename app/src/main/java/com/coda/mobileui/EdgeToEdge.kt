@@ -56,6 +56,50 @@ fun View.applySystemBarsInset() {
     }
 }
 
+/**
+ * 顶部避让高度：系统状态栏与刘海/挖孔取较大者。
+ *
+ * 沉浸式下 WindowInsets 常常返回 0（项目里踩过这个坑），所以这里不依赖 insets，
+ * 直接用资源里的状态栏高度再和挖孔比较，与聊天页顶栏用的是同一套口径。
+ */
+fun Context.topSafeInsetPx(): Int {
+    val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+    val statusBar = if (id > 0) resources.getDimensionPixelSize(id) else dpPx(26)
+    val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        val activity = this as? android.app.Activity
+        activity?.window?.decorView?.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
+    } else {
+        0
+    }
+    return maxOf(statusBar, cutout)
+}
+
+/** 底部避让高度：系统导航栏高度；取不到时用 24dp 兜底。 */
+fun Context.bottomSafeInsetPx(): Int {
+    val id = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+    return if (id > 0) resources.getDimensionPixelSize(id) else dpPx(24)
+}
+
+private fun Context.dpPx(v: Int): Int =
+    (v * resources.displayMetrics.density).roundToInt()
+
+/**
+ * 给一个顶部组件加状态栏避让：把原有内边距整体下移一个安全区高度。
+ *
+ * 与 applyTopSystemBarInset 的区别是它不依赖 WindowInsets —— 沉浸式下那套会拿到 0，
+ * 于是组件直接顶到屏幕最上面、被状态栏或挖孔压住。
+ */
+fun View.padForTopSafeInset() {
+    val extra = context.topSafeInsetPx()
+    setPadding(paddingLeft, paddingTop + extra, paddingRight, paddingBottom)
+}
+
+/** 给一个底部组件加导航栏避让。 */
+fun View.padForBottomSafeInset() {
+    val extra = context.bottomSafeInsetPx()
+    setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom + extra)
+}
+
 /** 底部内边距：取系统栏与输入法（键盘）的较大者，并叠加原有底部间距。 */
 fun View.applyBottomInsetWithIme() {
     val baseBottom = paddingBottom

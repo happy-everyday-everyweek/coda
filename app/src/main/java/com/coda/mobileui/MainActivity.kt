@@ -402,6 +402,17 @@ class MainActivity : BaseActivity() {
         drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
             override fun onDrawerClosed(drawerView: View) {
                 resetDrawerToCompact()
+                // 抽屉收起时把半屏内那层也退出，保证下次打开是干净的列表
+                val sheet = findViewById<android.widget.FrameLayout>(R.id.drawer_sheet_host)
+                if (sheet != null && sheet.visibility == View.VISIBLE) {
+                    sheet.visibility = View.GONE
+                    sheet.alpha = 1f
+                    sheet.translationX = 0f
+                    findViewById<View>(R.id.drawer_scroll)?.let {
+                        it.alpha = 1f
+                        it.translationX = 0f
+                    }
+                }
             }
         })
 
@@ -481,7 +492,9 @@ class MainActivity : BaseActivity() {
         // 新对话与设置之间的间隔比「历史列表与动作项」再小一半。
         actions.addView(
             createActionRow(inflater, actions, R.drawable.ic_settings, R.string.nav_settings) {
-                openSettingsPage()
+                // 半屏内换页：不关抽屉，直接把设置内容推进来盖住列表。
+                // 之前的做法是 closeDrawer + 主区域换页，视觉上是"先关再开"，很跳。
+                pushDrawerSheet()
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -3362,6 +3375,20 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     /** 是否拦截右滑手势：由模型面板是否打开、输入框是否正在输入共同决定。 */
     private var interceptSwipe = false
 
+    /**
+     * 本次手势是否已经在 ACTION_MOVE 里被处理过。
+     *
+     * 抽屉是跟手拖动的，阈值一到就会在 MOVE 阶段被关掉；若抬手时再按"抽屉是否打开"重判一次，
+     * 同一个左滑就会被当成"主界面左滑"而打开工作区。所以一次手势只消费一次。
+     */
+    private var swipeConsumed = false
+
+    /** 左滑进入工作区的当前拖出比例（0…1），松手时用来决定是否提交。 */
+    private var workspaceDragFraction = 0f
+
+    /** 拖出超过这个比例，松手就进工作区；不到就弹回。 */
+    private val workspaceDragCommit = 0.28f
+
     /** 输入法是否正在显示：收起即视为失焦（不看控件的真实焦点）。 */
     private var imeVisible = false
 
@@ -3383,10 +3410,14 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             MotionEvent.ACTION_DOWN -> {
                 edgeSwipeStartX = ev.x
                 edgeSwipeStartY = ev.y
+                // 一次手势只允许被消费一次。抽屉在 ACTION_MOVE 里就被关掉之后，
+                // 如果 ACTION_UP 再判一遍，此时抽屉已是关闭态，同一个左滑会落进
+                // "左滑进工作台"分支——这就是左滑关抽屉偶发打开工作区的原因。
+                swipeConsumed = false
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if (blocked) return super.dispatchTouchEvent(ev)
+                if (blocked || swipeConsumed) return super.dispatchTouchEvent(ev)
                 val dx = ev.x - edgeSwipeStartX
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
                 // 设置页：右滑打开抽屉（回到上一级），左滑不做任何事。
@@ -3394,7 +3425,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 if (showingSettings) {
                     if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.START)) {
                         drawerLayout.openDrawer(Gravity.START)
-                        edgeSwipeStartX = ev.x
+                        swipeConsumed = true
                     }
                     return super.dispatchTouchEvent(ev)
                 }
@@ -3402,7 +3433,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 if (fullDrawer?.visibility == View.VISIBLE) {
                     if (dx < -dp(48) && -dx > dy) {
                         hideFullDrawer()
-                        edgeSwipeStartX = ev.x
+                        swipeConsumed = true
                     }
                     return super.dispatchTouchEvent(ev)
                 }
@@ -3413,16 +3444,26 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                     } else {
                         drawerLayout.openDrawer(Gravity.START)
                     }
-                    edgeSwipeStartX = ev.x
+                    swipeConsumed = true
                 } else if (dx < -dp(48) && -dx > dy && drawerLayout.isDrawerOpen(Gravity.START)) {
-                    // 半屏抽屉：左滑收起，回到正常页面
+                    // 半屏抽屉：左滑收起，回到正常页面。
+                    // 这里必须标记已消费，否则抬手时会再判一次而误开工作区。
                     drawerLayout.closeDrawer(Gravity.START)
-                    edgeSwipeStartX = ev.x
+                    swipeConsumed = true
+                } else if (dx < -dp(60) && -dx > dy && !drawerLayout.isDrawerOpen(Gravity.START)) {
+                    // 主界面左滑进入工作区：拖动过程中就实时显示展开进度，
+                    // 松手后才真正跳转。之前是抬手才一次性打开，没有跟手感。
+                    showWorkspaceDragPreview(-dx)
                 }
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (blocked) return super.dispatchTouchEvent(ev)
+                // 本手势已在 MOVE 阶段处理过（开/关抽屉、进/出全屏、进工作台），抬手不再重复判定
+                if (swipeConsumed) {
+                    swipeConsumed = false
+                    return super.dispatchTouchEvent(ev)
+                }
                 val dx = ev.x - edgeSwipeStartX
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
                 // 设置页：抬手也不进入工作台，只允许右滑打开抽屉
@@ -3445,11 +3486,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 } else if (dx < -dp(48) && -dx > dy) {
                     if (drawerLayout.isDrawerOpen(Gravity.START)) {
                         drawerLayout.closeDrawer(Gravity.START)
-                    } else if (!showingSettings && -dx > dp(96)) {
-                        // 主界面左滑进入工作台。设置页里绝不能走这里：
-                        // 设置页是主区域内的换页，左滑应该什么都不做（返回靠左上角菜单），
-                        // 之前缺这个判断，导致在设置页右滑/左滑会误开工作区。
-                        openWorkspace()
+                    } else if (!showingSettings && -dx > dp(60)) {
+                        // 主界面左滑进入工作台：拖动过程中已经画了跟手预览，
+                        // 这里提交或弹回，比例交给 WorkspaceActivity 接着展开。
+                        finishWorkspaceDrag()
                     }
                 }
             }
@@ -3472,6 +3512,153 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     /** 进入工作台。 */
     private fun openWorkspace() {
         startActivity(WorkspaceActivity.intent(this))
+    }
+
+    /**
+     * 主界面左滑时的跟手预览。
+     *
+     * 抽屉是自己跟手动的；工作区是一个 Activity，无法在本地真正拖动它，
+     * 所以这里在窗口上叠一层与工作区同底色的卡片，宽度跟着手指走；
+     * 松手时把比例交给 WorkspaceActivity，让它从该宽度继续展开，观感是连续的。
+     */
+    private fun showWorkspaceDragPreview(distance: Int) {
+        val screen = resources.displayMetrics.widthPixels
+        if (screen <= 0) return
+        val host = findViewById<android.view.ViewGroup>(android.R.id.content) ?: return
+        var preview = host.findViewWithTag<android.view.View>("workspace_drag_preview")
+        if (preview == null) {
+            preview = android.view.View(this).apply {
+                tag = "workspace_drag_preview"
+                setBackgroundColor(attrColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
+                layoutParams = android.widget.FrameLayout.LayoutParams(
+                    0,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+            }
+            host.addView(preview)
+        }
+        workspaceDragFraction = (distance.toFloat() / screen).coerceIn(0f, 1f)
+        preview.layoutParams = preview.layoutParams.apply { width = distance.coerceAtMost(screen) }
+        preview.requestLayout()
+    }
+
+    /** 松手：进度够就带着比例进工作区，不够就退回。 */
+    private fun finishWorkspaceDrag() {
+        val host = findViewById<android.view.ViewGroup>(android.R.id.content)
+        val preview = host?.findViewWithTag<android.view.View>("workspace_drag_preview")
+        val fraction = workspaceDragFraction
+        preview?.animate()?.alpha(0f)?.setDuration(120)?.withEndAction { host?.removeView(preview) }?.start()
+        workspaceDragFraction = 0f
+        if (fraction >= workspaceDragCommit) {
+            // 把已经拖出的比例交给工作区，让它从这个宽度接着展开
+            WorkspaceActivity.startWidthFraction = fraction
+            openWorkspace()
+        }
+    }
+
+    /**
+     * 半屏内推入一层设置卡片。
+     *
+     * 不做"关闭抽屉再打开设置页"，而是在抽屉内部再叠一层：新层从右侧少量位移 + 淡入，
+     * 旧列表轻微缩小变暗作为背景，视觉上是同一张面板换了内容，不是两个页面切换。
+     */
+    private fun pushDrawerSheet() {
+        val host = findViewById<android.widget.FrameLayout>(R.id.drawer_sheet_host) ?: return
+        val list = findViewById<View>(R.id.drawer_scroll) ?: return
+
+        if (host.childCount == 0) {
+            host.addView(
+                buildDrawerSheetHost(),
+                android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+        host.visibility = View.VISIBLE
+        host.alpha = 0f
+        host.translationX = dp(24).toFloat()
+        // 背景列表让位：轻微右移 + 变暗，强调"下面那张还在"，回来时恢复
+        list.animate().translationX(-dp(16).toFloat()).alpha(0.35f).setDuration(220).start()
+        host.animate()
+            .alpha(1f)
+            .translationX(0f)
+            .setDuration(240)
+            .setInterpolator(android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
+            .start()
+    }
+
+    /** 从半屏内退回列表。 */
+    private fun popDrawerSheet() {
+        val host = findViewById<android.widget.FrameLayout>(R.id.drawer_sheet_host) ?: return
+        if (host.visibility != View.VISIBLE) return
+        val list = findViewById<View>(R.id.drawer_scroll)
+        host.animate()
+            .alpha(0f)
+            .translationX(dp(24).toFloat())
+            .setDuration(200)
+            .withEndAction { host.visibility = View.GONE }
+            .start()
+        list?.animate()?.translationX(0f)?.alpha(1f)?.setDuration(220)?.start()
+    }
+
+    /** 半屏内那一层的内容：标题栏（返回 + 标题）+ 设置列表。 */
+    private fun buildDrawerSheetHost(): View {
+        val store = SettingsStore.get(this)
+        val surface = attrColor(com.google.android.material.R.attr.colorSurface, Color.WHITE)
+        val onSurface = attrColor(com.google.android.material.R.attr.colorOnSurface, Color.BLACK)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(surface)
+        }
+        // 顶部避让：抽屉本身已经在窗口里，这里只补一个与抽屉内容一致的顶部间距
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), topSafeInset() + dp(8), dp(8), dp(8))
+        }
+        header.addView(
+            ImageButton(this).apply {
+                setImageResource(R.drawable.ic_arrow_back)
+                setBackgroundResource(android.R.color.transparent)
+                contentDescription = getString(R.string.settings_title)
+                setColorFilter(onSurface)
+                setOnClickListener { popDrawerSheet() }
+            },
+            LinearLayout.LayoutParams(dp(44), dp(44)),
+        )
+        header.addView(
+            TextView(this).apply {
+                text = getString(R.string.settings_title)
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleLarge)
+                setTextColor(onSurface)
+                setPadding(dp(8), 0, 0, 0)
+            },
+        )
+        root.addView(header)
+
+        val scroll = android.widget.ScrollView(this).apply {
+            isFillViewport = true
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f,
+            )
+        }
+        val inner = LinearLayout(this).apply {
+            id = R.id.settings_page_container
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, dp(24))
+        }
+        // 这里就是设置首页的列表：与主区域设置页共用同一份数据，
+        // 但渲染在抽屉内部，所以点设置时不需要关抽屉再开页面。
+        SettingsViewBuilder.render(this, inner, SettingsData.home) { target ->
+            startActivity(
+                Intent(this, SettingsDetailActivity::class.java)
+                    .putExtra(SettingsDetailActivity.EXTRA_PAGE, target),
+            )
+        }
+        scroll.addView(inner)
+        root.addView(scroll)
+        return root
     }
 
     /** 打开设置：主区域换页 + 抽屉收起（与新对话同一层级，不新开页面）。 */
