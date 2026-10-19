@@ -76,6 +76,12 @@ class CodaSheet(private val activity: Activity) {
     private var liveScroll: android.widget.ScrollView? = null
     private var liveColors: IntArray? = null
 
+    /** 当前停靠进度：0 = 卡片态（半屏），1 = 全屏。换页后按它套回同样的高度与避让。 */
+    private var dockProgress = 0f
+
+    /** navigate() 的过渡进行中标记，防止连点导致两次换页叠加。 */
+    private var navigating = false
+
     var isShowing: Boolean = false
         private set
 
@@ -475,6 +481,7 @@ class CodaSheet(private val activity: Activity) {
     private fun applyDock(pRaw: Float, heightOverride: Int? = null) {
         val panelView = panel ?: return
         val p = pRaw.coerceIn(0f, 1f)
+        dockProgress = p
         val full = fullScreenH
         val card = cardHeightPx()
         val h = heightOverride ?: (card + ((full - card) * p).toInt())
@@ -651,9 +658,10 @@ class CodaSheet(private val activity: Activity) {
             )
         }
         contentCol.requestLayout()
-        // 内容高度变了：按当前停靠状态重新套一次底部避让（不能强制拉到全屏）
-        footerRow?.setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
-        panelView.requestLayout()
+        // 底栏内边距不能在这里写死：applyDock 会按停靠状态叠加导航栏避让（全屏态才加），
+        // 这里如果设成基础值，全屏时底栏又会被导航栏压住。
+        // 用一个成员记住当前停靠进度，换页后原样套回去，高度与内边距都保持一致。
+        applyDock(dockProgress, panelView.height.takeIf { it > 0 })
     }
 
     /**
@@ -668,6 +676,9 @@ class CodaSheet(private val activity: Activity) {
      */
     fun navigate(block: CodaSheet.() -> Unit) {
         val col = liveContentCol ?: return
+        // 过渡期间再来一次会叠加两个 postDelayed，内容次序会乱，直接忽略。
+        if (navigating) return
+        navigating = true
         // 先记下当前页描述，便于新页在同一实例上重建
         val oldTitle = titleText
         val oldSubtitle = subtitleText
@@ -689,7 +700,6 @@ class CodaSheet(private val activity: Activity) {
             col.animate().cancel()
             col.alpha = 1f
             col.translationX = 0f
-
             // 重置为一页干净的描述，再让调用方填新页
             titleText = null
             subtitleText = null
@@ -704,20 +714,13 @@ class CodaSheet(private val activity: Activity) {
             // 在同一个实例上应用新一页
             block()
 
-            // 重建这一页：标题 + 内容 + 底部按钮
-            rebuildPage()
-
-            // 新页从右侧轻轻推入
-            col.alpha = 0f
-            col.translationX = dp(16f)
-            col.animate().alpha(1f).translationX(0f).setDuration(160).start()
-            footerRow?.let {
-                it.alpha = 0f
-                it.animate().alpha(1f).setDuration(160).start()
-            }
-
-            // 若新页没有定义任何内容（调用方写错），退回旧页，避免留下空白卡片
-            if (titleText == null && contentBlock == null && primaryText == null && secondaryText == null) {
+            // 先判断这一页是不是真的定义了内容。判断必须放在动画之前：
+            // 否则会先给空页播一遍淡入，再回滚，屏幕上会闪一下。
+            val pageDefined = titleText != null || subtitleText != null ||
+                headerActionText != null || contentBlock != null ||
+                primaryText != null || secondaryText != null
+            if (!pageDefined) {
+                // 调用方没定义任何东西：把旧页原样填回去，卡片保持不可用状态而不是空白
                 titleText = oldTitle
                 subtitleText = oldSubtitle
                 headerActionText = oldHeaderActionText
@@ -727,8 +730,21 @@ class CodaSheet(private val activity: Activity) {
                 secondaryText = oldSecondaryText
                 secondaryBlock = oldSecondaryBlock
                 contentBlock = oldContentBlock
-                rebuildPage()
             }
+
+            // 重建这一页：标题 + 内容 + 底部按钮
+            rebuildPage()
+
+            // 新页从右侧轻轻推入（内容区与底栏一起）
+            col.alpha = 0f
+            col.translationX = dp(16f)
+            col.animate().alpha(1f).translationX(0f).setDuration(160).start()
+            footerRow?.let {
+                it.alpha = 0f
+                it.animate().alpha(1f).setDuration(160).start()
+            }
+            // 过渡结束，放开连点限制
+            col.postDelayed({ navigating = false }, 170)
         }, fadeOut + 10)
     }
 
@@ -757,6 +773,13 @@ class CodaSheet(private val activity: Activity) {
                 panel = null
                 grabberRow = null
                 footerRow = null
+                // 这些引用指向已从窗口移除的视图：不清掉会一直持有整棵视图树，
+                // 而且同一个 CodaSheet 实例被复用时 navigate 会操作僵尸视图。
+                livePanel = null
+                liveScroll = null
+                liveContentCol = null
+                liveColors = null
+                navigating = false
                 onDismissBlock?.invoke()
             }
             ?.start()
