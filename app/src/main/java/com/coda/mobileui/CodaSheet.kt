@@ -658,6 +658,12 @@ class CodaSheet(private val activity: Activity) {
             )
         }
         contentCol.requestLayout()
+        // 紧凑模式：卡片高度由内容自适应（WRAP_CONTENT），走 applyDock 会被改成固定半屏，
+        // 换个页卡片高度就跳变。这里只刷新底栏的内边距，不动高度。
+        if (compactMode) {
+            footerRow?.setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
+            return
+        }
         // 底栏内边距不能在这里写死：applyDock 会按停靠状态叠加导航栏避让（全屏态才加），
         // 这里如果设成基础值，全屏时底栏又会被导航栏压住。
         // 用一个成员记住当前停靠进度，换页后原样套回去，高度与内边距都保持一致。
