@@ -295,6 +295,7 @@ class GitPage(
             setPadding(0, dp(12f), 0, dp(12f))
             isClickable = true
             setOnClickListener { showBranchActions(name, isCurrent, isRemote) }
+            pressFeedback(pressedAlpha = 0.6f)
         }
         row.addView(ImageView(host).apply {
             setImageResource(R.drawable.ic_branch)
@@ -528,6 +529,7 @@ class GitPage(
             layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
         })
         row.addView(label(text, 15f, onSurface))
+        row.pressFeedback(pressedAlpha = 0.6f)
         return row
     }
 

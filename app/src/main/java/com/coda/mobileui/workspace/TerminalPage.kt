@@ -240,14 +240,26 @@ class TerminalPage(
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
                             keyDownY = event.y
+                            // 按下即时压暗：功能键区没有背景，只靠颜色变化能立刻确认按到了。
+                            view.animate().cancel()
+                            view.animate().alpha(0.55f)
+                                .setDuration(Motion.TAP_MS).setInterpolator(Motion.standard).start()
                             false
                         }
 
                         MotionEvent.ACTION_UP -> {
+                            view.animate().alpha(1f)
+                                .setDuration(Motion.SETTLE_MS).setInterpolator(Motion.settle).start()
                             view.performClick()
                             val popup = spec.popup
                             if (popup != null && keyDownY - event.y > dp(18f).toFloat()) sendKey(popup) else sendKey(spec.bytes)
                             true
+                        }
+
+                        MotionEvent.ACTION_CANCEL -> {
+                            view.animate().alpha(1f)
+                                .setDuration(Motion.SETTLE_MS).setInterpolator(Motion.settle).start()
+                            false
                         }
 
                         else -> false
@@ -262,6 +274,14 @@ class TerminalPage(
         for ((cell, name) in modifierKeys) {
             val armed = if (name == "ctrl") ctrlArmed else altArmed
             cell.setTextColor(if (armed) terminalAccent else terminalForeground)
+            // 文字颜色本身无法做属性动画，用轻微缩放表达状态切换：激活时放大一点，取消时回位。
+            cell.animate().cancel()
+            cell.animate()
+                .scaleX(if (armed) 1.08f else 1f)
+                .scaleY(if (armed) 1.08f else 1f)
+                .setDuration(Motion.TAP_MS)
+                .setInterpolator(Motion.standard)
+                .start()
         }
     }
 
