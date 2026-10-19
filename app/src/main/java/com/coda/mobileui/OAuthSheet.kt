@@ -37,6 +37,14 @@ class OAuthSheet(
 ) {
 
     private val sheet = CodaSheet(host)
+
+    /**
+     * 当前承载本流程的卡片。
+     *
+     * 平时是自己 new 的 [sheet]；attachTo 复用别的卡片时指过去，
+     * 让流程内的关闭/重建作用在真正的宿主上。
+     */
+    private var hostSheet: CodaSheet = sheet
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private var step = 0
     private var session: OAuthLogin.Session? = null
@@ -67,6 +75,23 @@ class OAuthSheet(
             .secondaryAction("取消") { self -> self.dismiss() }
             .onDismiss { teardown() }
             .show()
+    }
+
+    /**
+     * 把登录流程挂到一张已经打开的卡片上（平台选择器点选后走这里）。
+     *
+     * 复用同一个卡片容器，避免"关选择器 → 弹登录卡"的中间空档。
+     */
+    fun attachTo(target: CodaSheet) {
+        hostSheet = target
+        target.navigate {
+            title("添加 ${provider.name}")
+            subtitle(provider.vendor)
+            content { column -> renderStep(column) }
+            primaryAction("继续") { self -> onPrimary(self) }
+            secondaryAction("取消") { self -> self.dismiss() }
+            onDismiss { teardown() }
+        }
     }
 
     // ---------------------------------------------------------------- 三步
@@ -270,8 +295,16 @@ class OAuthSheet(
     }
 
     private fun rebuild(self: CodaSheet) {
-        self.refreshContent { column -> renderStep(column) }
-        self.primaryAction(if (step == 2) "完成" else "继续") { next -> onPrimary(next) }
+        // 用 navigate 而不是 refreshContent：三步之间（免责 → 授权 → 确认）
+        // 标题、内容、底部按钮文案都要跟着变，而且需要一次平滑过渡。
+        // refreshContent 只换内容、不重建底栏，之前"继续/完成"的文案因此一直没更新过。
+        self.navigate {
+            title("添加 ${provider.name}")
+            subtitle(provider.vendor)
+            content { column -> renderStep(column) }
+            primaryAction(if (step == 2) "完成" else "继续") { next -> onPrimary(next) }
+            secondaryAction("取消") { s -> s.dismiss() }
+        }
     }
 
     /** 轮询插件，直到授权成功、失败，或超过插件的会话有效期。 */

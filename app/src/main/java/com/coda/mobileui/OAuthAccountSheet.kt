@@ -38,6 +38,14 @@ class OAuthAccountSheet(
     private var account: OAuthAccounts.Account = initial
 
     private val sheet = CodaSheet(host)
+
+    /**
+     * 当前承载本页的卡片。
+     *
+     * 平时是 [sheet]（自己新建并 show 的那张）；attachTo 复用列表那张卡时会指过去，
+     * 否则页内 dismiss() 会关错卡片。
+     */
+    private var hostSheet: CodaSheet = sheet
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private var column: LinearLayout? = null
@@ -90,6 +98,29 @@ class OAuthAccountSheet(
             .secondaryAction("关闭") { self -> self.dismiss() }
             .onDismiss { io.shutdown() }
             .show()
+    }
+
+    /**
+     * 把这一页挂到一张**已经打开**的卡片上，不新开卡片。
+     *
+     * 账号列表点某一行时用它：列表卡片原地换成这个账号的面板，
+     * 而不是先关列表再弹一张新卡（那样卡片会先沉下去再升起来）。
+     */
+    fun attachTo(target: CodaSheet) {
+        // 复用列表那张卡：本页的关闭动作必须作用在它上面，而不是自己 new 的那张
+        hostSheet = target
+        target.navigate {
+            title(account.title)
+            subtitle(provider.name)
+            content { col ->
+                column = col
+                renderLoading()
+                reload()
+            }
+            primaryAction("签到") { checkin() }
+            secondaryAction("关闭") { self -> self.dismiss() }
+            onDismiss { io.shutdown() }
+        }
     }
 
 /** 拉一次最新状态：能力与账号数据一起更新，然后重画。 */
@@ -499,7 +530,7 @@ class OAuthAccountSheet(
                     run { OAuthActions.run(host, provider, action, account.authIndex) }
                 }
                 // 删掉后这个账号已不存在，面板本身也该关掉。
-                sheet.dismiss()
+                hostSheet.dismiss()
             }
             .secondaryAction("取消") { self -> self.dismiss() }
             .show()

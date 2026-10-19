@@ -173,7 +173,10 @@ class OAuthAccountsSheet(private val host: BaseActivity) {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(11f), 0, dp(11f))
             isClickable = true
-            setOnClickListener { OAuthAccountSheet(host, p, a) { refreshList() }.show() }
+            setOnClickListener {
+                // 不再"关列表 → 弹详情"：直接把同一个卡片换成该账号的面板
+                OAuthAccountSheet(host, p, a) { refreshList() }.attachTo(sheet)
+            }
         }
 
         // 健康点，用颜色说话，省掉一个文字标签。
@@ -238,8 +241,8 @@ class OAuthAccountsSheet(private val host: BaseActivity) {
                     setTextColor(onSurface)
                     setPadding(dp(2f), dp(14f), dp(2f), dp(14f))
                     setOnClickListener {
-                        picker.dismiss()
-                        OAuthSheet(host, p) { refreshList() }.show()
+                        // 同一个卡片换成"添加账号"那一页，不要再关掉选择器另开一张
+                        OAuthSheet(host, p) { refreshList() }.attachTo(picker)
                     }
                 })
             }
