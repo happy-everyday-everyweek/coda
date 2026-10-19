@@ -382,8 +382,7 @@ class GitPage(
                 })
             }
             column.addView(actionRowInSheet("查看提交详情", R.drawable.ic_commit) {
-                sheet.dismiss()
-                showCommitDetail(commit)
+                showCommitDetail(commit, sheet)
             })
             column.addView(actionRowInSheet("从此刻建分支", R.drawable.ic_branch) {
                 sheet.dismiss()
@@ -405,16 +404,34 @@ class GitPage(
         sheet.show()
     }
 
-    private fun showCommitDetail(commit: Git.Commit) {
+    private fun showCommitDetail(commit: Git.Commit, into: CodaSheet? = null) {
+        // 从提交卡片点进来时就地换页：先把标题与"加载中"推进去，结果回来再刷新内容。
+        if (into != null) {
+            into.navigate {
+                title(commit.hash.take(8))
+                subtitle(commit.subject)
+                content { column ->
+                    column.removeAllViews()
+                    column.addView(label("正在读取提交内容…", 12f, onSurfaceVariant))
+                }
+            }
+        }
         host.background(
             work = { Git.show(host.env, host.root, commit.hash).output },
             then = { text ->
-                val sheet = sheet().title(commit.hash.take(8)).subtitle(commit.subject)
-                sheet.content { column ->
-                    column.removeAllViews()
-                    column.addView(monoLabel(text.ifEmpty { "没有内容" }, 12f, onSurfaceVariant))
+                if (into != null) {
+                    into.refreshContent { column ->
+                        column.removeAllViews()
+                        column.addView(monoLabel(text.ifEmpty { "没有内容" }, 12f, onSurfaceVariant))
+                    }
+                } else {
+                    val sheet = sheet().title(commit.hash.take(8)).subtitle(commit.subject)
+                    sheet.content { column ->
+                        column.removeAllViews()
+                        column.addView(monoLabel(text.ifEmpty { "没有内容" }, 12f, onSurfaceVariant))
+                    }
+                    sheet.show()
                 }
-                sheet.show()
             },
         )
     }
