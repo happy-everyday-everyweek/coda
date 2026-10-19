@@ -731,8 +731,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 col.addView(sheetSectionLabel("新增市场源"))
                 col.addView(
                     sheetWideButton("添加插件市场源") {
-                        sheet.dismiss()
-                        addMarketplaceDialog()
+                        // 就地换成"添加"那一页，不关闭当前卡片
+                        addMarketplaceDialog(sheet)
                     },
                 )
             }
@@ -817,9 +817,34 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 添加市场源：输入 Git 仓库或 URL。 */
-    private fun addMarketplaceDialog() {
+    /**
+     * 添加插件市场源。
+     *
+     * [into] 不为空时表示"就地换页"：复用那张已经打开的卡片，不新开一张。
+     * 插件市场源页点「添加」就走这条路，避免先关卡片再弹新卡的空档。
+     */
+    private fun addMarketplaceDialog(into: CodaSheet? = null) {
         val input = EditText(this).apply {
             hint = "Git 仓库或 URL，如 owner/repo"
+        }
+        // 就地换页只换面板内容，卡片外壳（高度、拖拽方式）保持不变，
+        // 因此这里不能调 compact()：compactMode 与已建好的外壳不一致会让拖拽走错分支。
+        if (into != null) {
+            into.navigate {
+                title("添加插件市场源")
+                secondaryAction("取消") { it.dismiss() }
+                content { col ->
+                    col.addView(
+                        input,
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { topMargin = dp(10) },
+                    )
+                }
+                primaryAction("添加") { s -> submitMarketplace(s, input) }
+            }
+            return
         }
         val sheet = CodaSheet(this)
             .compact()
@@ -834,27 +859,30 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 ).apply { topMargin = dp(10) },
             )
         }
-        sheet.primaryAction("添加") { s ->
-            val source = input.text.toString().trim()
-            if (source.isEmpty()) {
-                snack("请输入市场来源")
-            } else {
-                snack("正在添加市场…")
-                ZController.get(this).addPluginMarketplace(source) { ok, msg ->
-                    runOnUiThread {
-                        if (ok) {
-                            s.dismiss()
-                            snack("已添加市场")
-                            extrasCache.remove("plugins")
-                            renderPage()
-                        } else {
-                            snack("添加失败: $msg")
-                        }
-                    }
+        sheet.primaryAction("添加") { s -> submitMarketplace(s, input) }
+        sheet.show()
+    }
+
+    /** 提交市场源：抽出来，卡片内换页与独立弹卡共用同一套逻辑。 */
+    private fun submitMarketplace(s: CodaSheet, input: EditText) {
+        val source = input.text.toString().trim()
+        if (source.isEmpty()) {
+            snack("请输入市场来源")
+            return
+        }
+        snack("正在添加市场…")
+        ZController.get(this).addPluginMarketplace(source) { ok, msg ->
+            runOnUiThread {
+                if (ok) {
+                    s.dismiss()
+                    snack("已添加市场")
+                    extrasCache.remove("plugins")
+                    renderPage()
+                } else {
+                    snack("添加失败: $msg")
                 }
             }
         }
-        sheet.show()
     }
 
     /** 恢复一个内置插件（从插件页或市场页触发）。 */
@@ -1042,8 +1070,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     list.forEach { r ->
                         col.addView(
                             buildRepoRow(r) {
-                                sheet.dismiss()
-                                openRepoDetail(r)
+                                // 就地换成仓库详情，不关闭列表卡片
+                                openRepoDetail(r, sheet)
                             },
                         )
                     }
@@ -1102,12 +1130,28 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 仓库详情：分支与 PR 两个区块（异步加载，就绪后刷新卡片）。 */
-    private fun openRepoDetail(repo: com.coda.mobileui.core.GitHub.Repo) {
-        val sheet = CodaSheet(this)
-            .title(repo.name)
-            .subtitle(repo.fullName + if (repo.privateRepo) " · 私有" else "")
-        sheet.content { col -> col.addView(sheetBodyText("正在加载分支与 PR…")) }
-        sheet.show()
+    /**
+     * 仓库详情：分支与 PR 列表。
+     *
+     * [into] 不为空时表示就地换页（从仓库列表点进来），复用那张已打开的卡片；
+     * 为空则照旧新开一张。
+     */
+    private fun openRepoDetail(repo: com.coda.mobileui.core.GitHub.Repo, into: CodaSheet? = null) {
+        val sheet = into ?: CodaSheet(this)
+        if (into != null) {
+            // 复用宿主：把标题、副标题与"加载中"内容整体推进去
+            into.navigate {
+                title(repo.name)
+                subtitle(repo.fullName + if (repo.privateRepo) " · 私有" else "")
+                content { col -> col.addView(sheetBodyText("正在加载分支与 PR…")) }
+            }
+        } else {
+            sheet
+                .title(repo.name)
+                .subtitle(repo.fullName + if (repo.privateRepo) " · 私有" else "")
+            sheet.content { col -> col.addView(sheetBodyText("正在加载分支与 PR…")) }
+            sheet.show()
+        }
         var branches: List<com.coda.mobileui.core.GitHub.Branch>? = null
         var pulls: List<com.coda.mobileui.core.GitHub.Pull>? = null
         var failMsg: String? = null
@@ -1221,8 +1265,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     text = getString(R.string.appearance_accent_custom)
                     isAllCaps = false
                     setOnClickListener {
-                        sheet.dismiss()
-                        pickCustomAccent()
+                        // 就地换成"自定义颜色"那一页，不关闭色板卡片
+                        pickCustomAccent(sheet)
                     }
                 },
                 LinearLayout.LayoutParams(
@@ -1251,10 +1295,42 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 自定义颜色：输入 #RRGGBB，落到最接近的色板档位，主题与图标一起切换。 */
-    private fun pickCustomAccent() {
+    /**
+     * 自定义颜色：输入 #RRGGBB，落到最接近的色板档位，主题与图标一起切换。
+     *
+     * [into] 不为空时表示就地换页（从色板卡片点"自定义"进来），复用那张卡片。
+     */
+    private fun pickCustomAccent(into: CodaSheet? = null) {
         val input = EditText(this).apply {
             hint = getString(R.string.appearance_accent_custom_hint)
             setText(store.customAccentHex.removePrefix("#"))
+        }
+        fun submit(s: CodaSheet) {
+            val hex = input.text.toString().trim().removePrefix("#")
+            val parsed = hex.toLongOrNull(16)?.toInt() ?: return
+            val color = parsed or 0xFF000000.toInt()
+            store.customAccentHex = "#" + hex.uppercase().padStart(6, '0')
+            store.accentIndex = SettingsStore.nearestAccentIndex(color)
+            store.autoColor = false
+            s.dismiss()
+            recreate()
+        }
+        if (into != null) {
+            into.navigate {
+                title(getString(R.string.appearance_accent_custom))
+                secondaryAction(getString(android.R.string.cancel)) { it.dismiss() }
+                content { col ->
+                    col.addView(
+                        input,
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { topMargin = dp(10) },
+                    )
+                }
+                primaryAction(getString(android.R.string.ok)) { s -> submit(s) }
+            }
+            return
         }
         val sheet = CodaSheet(this)
             .compact()
@@ -1269,18 +1345,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 ).apply { topMargin = dp(10) },
             )
         }
-        sheet.primaryAction(getString(android.R.string.ok)) { s ->
-            val hex = input.text.toString().trim().removePrefix("#")
-            val parsed = hex.toLongOrNull(16)?.toInt()
-            if (parsed != null) {
-                val color = parsed or 0xFF000000.toInt()
-                store.customAccentHex = "#" + hex.uppercase().padStart(6, '0')
-                store.accentIndex = SettingsStore.nearestAccentIndex(color)
-                store.autoColor = false
-                s.dismiss()
-                recreate()
-            }
-        }
+        sheet.primaryAction(getString(android.R.string.ok)) { s -> submit(s) }
         sheet.show()
     }
 
