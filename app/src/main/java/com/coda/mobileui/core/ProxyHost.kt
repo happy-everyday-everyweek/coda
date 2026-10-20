@@ -149,7 +149,14 @@ object ProxyHost {
      */
     fun isInstalled(ctx: Context): Boolean {
         val bin = binaryFor(ctx)
-        return bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin)
+        val ok = bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin)
+        if (!ok) {
+            AppLog.d(
+                "ProxyHost",
+                "isInstalled=false: isFile=${bin.isFile} length=${bin.length()} elf=${looksExecutable(bin)}",
+            )
+        }
+        return ok
     }
 
     /**
@@ -162,10 +169,14 @@ object ProxyHost {
      */
     fun ensureInstalled(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
         val target = binaryFor(ctx)
+        AppLog.d("ProxyHost", "ensureInstalled: target=${target.absolutePath} isFile=${target.isFile}")
         if (isInstalled(ctx)) return true
 
         onProgress("释放网关程序…")
-        if (installFromAsset(ctx, target)) return true
+        if (installFromAsset(ctx, target)) {
+            AppLog.i("ProxyHost", "网关程序释放成功：${target.absolutePath} ${target.length()}B")
+            return true
+        }
 
         // 走到这里说明打包漏了资产，属于构建错误，要让用户看到明确原因而不是干等。
         val reason = "安装包内缺少网关程序（assets/proxy-host/cli-proxy-api-$VERSION）"
@@ -185,7 +196,11 @@ object ProxyHost {
             // 先量出资产真实长度：只靠"写出后超过 10MB"判断会放过被截断的半截文件——
             // 64MB 的二进制写到一半中断仍然大于 10MB，于是被当成"已安装"，
             // 启动时 proot 就会报 can't execute（文件不可执行/不完整）。
-            val expected = runCatching { assetSize(ctx, name) }.getOrNull() ?: continue
+            val expected = runCatching { assetSize(ctx, name) }.getOrNull() ?: run {
+                AppLog.d("ProxyHost", "资产不存在：$name")
+                continue
+            }
+            AppLog.d("ProxyHost", "资产存在：$name ${expected}B")
             if (expected <= 10_000_000L) continue
             // 写之前先删掉可能残留的半截文件，避免追加到旧内容后面。
             runCatching { target.delete() }
