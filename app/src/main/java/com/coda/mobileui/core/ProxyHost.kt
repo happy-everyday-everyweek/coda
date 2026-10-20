@@ -114,6 +114,21 @@ object ProxyHost {
 
     fun binaryFor(ctx: Context): File = File(guestRoot(ctx), "cli-proxy-api")
 
+    /**
+     * glibc 运行时目录，位于 rootfs 内。
+     *
+     * rootfs 是 Alpine（musl），而网关二进制是 glibc 构建，声明的解释器是
+     * `/lib/ld-linux-aarch64.so.1`——musl 系统里没有这个文件，内核 execve 找不到
+     * 解释器时返回 ENOENT，`env` 把它报成 `can't execute <二进制>: No such file or
+     * directory`。报错里的路径是二进制的，真正缺失的是解释器，所以"文件明明在却报
+     * 不存在"。
+     *
+     * 修法：随包带一小套 glibc 运行时（loader + libc + 它的依赖），启动时不再直接
+     * execve 二进制，而是 `ld-linux --library-path <glibc 目录> 二进制`，让加载器
+     * 用这套库把程序拉起来，绕开 musl rootfs 里不存在的 `/lib/ld-linux-aarch64.so.1`。
+     */
+    fun glibcDirFor(ctx: Context): File = File(guestRoot(ctx), "glibc").apply { mkdirs() }
+
     fun pluginsDirFor(ctx: Context): File = File(guestRoot(ctx), "plugins").apply { mkdirs() }
 
     fun dataDirFor(ctx: Context): File = File(guestRoot(ctx), "data").apply { mkdirs() }
@@ -142,6 +157,20 @@ object ProxyHost {
     fun guestConfig(ctx: Context): String = guestPathOf(ctx, configFor(ctx))
 
     /**
+     * 实际交给 proot 执行的启动命令。
+     *
+     * 不是二进制本身：rootfs 是 musl 系，直接 execve 一个 glibc 程序会因解释器
+     * `/lib/ld-linux-aarch64.so.1` 不存在而报 ENOENT。这里用随包的 glibc loader
+     * 显式加载二进制，库查找也限定在 `glibc/` 目录，与 musl 的库完全隔离。
+     */
+    private fun launchCommand(ctx: Context, args: List<String>): List<String> {
+        val loader = guestPathOf(ctx, File(glibcDirFor(ctx), "ld-linux-aarch64.so.1"))
+        val libDir = guestPathOf(ctx, glibcDirFor(ctx))
+        val binary = guestBinary(ctx)
+        return listOf(loader, "--library-path", libDir, binary) + args
+    }
+
+    /**
      * 宿主二进制是否已就位。
      *
      * 不只看大小：写了一半的 64MB 文件同样大于 10MB，却不可执行。这里额外核对 ELF 文件头，
@@ -149,11 +178,15 @@ object ProxyHost {
      */
     fun isInstalled(ctx: Context): Boolean {
         val bin = binaryFor(ctx)
-        val ok = bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin)
+        val loader = File(glibcDirFor(ctx), "ld-linux-aarch64.so.1")
+        // loader 一并算作安装条件：二进制在但 glibc 运行时缺失（升级补上这批文件）时，
+        // 必须让 isInstalled 判为未装全，走一次补装，而不是带着缺失的 loader 去启动。
+        val ok = bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin) && loader.isFile
         if (!ok) {
             AppLog.d(
                 "ProxyHost",
-                "isInstalled=false: isFile=${bin.isFile} length=${bin.length()} elf=${looksExecutable(bin)}",
+                "isInstalled=false: isFile=${bin.isFile} length=${bin.length()} " +
+                    "elf=${looksExecutable(bin)} loader=${loader.isFile}",
             )
         }
         return ok
@@ -196,7 +229,8 @@ object ProxyHost {
             // 先量出资产真实长度：只靠"写出后超过 10MB"判断会放过被截断的半截文件——
             // 64MB 的二进制写到一半中断仍然大于 10MB，于是被当成"已安装"，
             // 启动时 proot 就会报 can't execute（文件不可执行/不完整）。
-            val expected = runCatching { assetSize(ctx, name) }.getOrNull() ?: run {
+            val expected = runCatching { assetSize(ctx, name) }.getOrNull()
+            if (expected == null) {
                 AppLog.d("ProxyHost", "资产不存在：$name")
                 continue
             }
@@ -219,11 +253,49 @@ object ProxyHost {
                 Os.chmod(target.absolutePath, 493) // 0755
                 // 再确认文件头是 ELF：长度对但内容被替换/写坏时，proot 同样只会报
                 // can't execute（那条错误把"不存在"和"格式不对"混在一起，很难分辨）。
-                if (looksExecutable(target)) return true
+                if (looksExecutable(target) && installGlibc(ctx)) return true
             }
             runCatching { target.delete() }
         }
         return false
+    }
+
+    /**
+     * 释放 glibc 运行时到 rootfs 内的 `glibc/` 目录。
+     *
+     * 这些库从 Ubuntu glibc 2.39（aarch64）取出，而网关二进制只要求 GLIBC_2.17，
+     * 版本完全够用。每个文件独立校验长度，任一失败就整体返回 false，让调用方
+     * 走"缺少网关程序"的失败路径并提示用户，而不是带着半套库去启动。
+     */
+    private fun installGlibc(ctx: Context): Boolean {
+        val dir = glibcDirFor(ctx)
+        val files = listOf(
+            "ld-linux-aarch64.so.1",
+            "libc.so.6",
+            "libm.so.6",
+            "libpthread.so.0",
+            "libdl.so.2",
+            "libresolv.so.2",
+            "libgcc_s.so.1",
+        )
+        for (name in files) {
+            val target = File(dir, name)
+            val expected = runCatching { assetSize(ctx, "proxy-host/glibc/$name") }.getOrNull() ?: continue
+            if (target.isFile && target.length() == expected) continue
+            runCatching { target.delete() }
+            val ok = runCatching {
+                ctx.assets.open("proxy-host/glibc/$name").use { input ->
+                    FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+                }
+                true
+            }.getOrDefault(false)
+            if (!ok || target.length() != expected) {
+                AppLog.e("ProxyHost", "释放 glibc 库失败：$name")
+                return false
+            }
+        }
+        AppLog.i("ProxyHost", "glibc 运行时就位：${dir.absolutePath}")
+        return true
     }
 
     /** 文件头是否是 ELF 可执行。 */
@@ -359,7 +431,7 @@ object ProxyHost {
         if (hostBinary.length() <= 10_000_000L) {
             return fail("网关程序不完整（大小 ${hostBinary.length()}）")
         }
-        val builder = env.builder(listOf(binaryPath, "-config", configPath))
+        val builder = env.builder(launchCommand(ctx, listOf("-config", configPath)))
 
         return try {
             booting = true
