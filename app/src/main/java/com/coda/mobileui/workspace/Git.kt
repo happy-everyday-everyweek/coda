@@ -1,5 +1,6 @@
 package com.coda.mobileui.workspace
 
+import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.LinuxEnv
 import com.coda.mobileui.core.Workspaces
 import java.io.File
@@ -30,6 +31,12 @@ object Git {
      */
     private val SAFE_DIRECTORY = listOf("-c", "safe.directory=*")
 
+    /** 网络操作超时：移动网络下推送/拉取大仓库远超默认的 60 秒。 */
+    private const val NETWORK_TIMEOUT_MS = 300_000L
+
+    /** 克隆超时：大仓库整仓下载，再放宽一档。 */
+    private const val CLONE_TIMEOUT_MS = 600_000L
+
     /** 一个提交。 */
     data class Commit(
         val hash: String,
@@ -40,10 +47,19 @@ object Git {
         val subject: String,
     )
 
-    private fun run(env: LinuxEnv, root: File, args: List<String>): Result {
+    private fun run(env: LinuxEnv, root: File, args: List<String>, timeoutMs: Long = 60_000L): Result {
         val result = env.exec(
             listOf("git") + SAFE_DIRECTORY + listOf("-C", env.guestPath(root.absolutePath)) + args,
+            timeoutMs = timeoutMs,
         )
+        // 每次调用都落日志：git 的失败原因（认证、网络、冲突）只存在于输出里，
+        // 不记下来，用户关掉结果卡片后就无从排查。
+        val head = args.firstOrNull() ?: "?"
+        if (result.ok) {
+            AppLog.d("Git", "$head 完成：${result.output.take(200)}")
+        } else {
+            AppLog.w("Git", "$head 失败（码 ${result.code}）：${result.output.take(400)}")
+        }
         return Result(result.ok, result.output.trimEnd())
     }
 
@@ -135,9 +151,16 @@ object Git {
 
     fun mergeAbort(env: LinuxEnv, root: File): Result = run(env, root, listOf("merge", "--abort"))
 
-    fun pull(env: LinuxEnv, root: File): Result = run(env, root, listOf("pull", "--ff-only"))
+    fun pull(env: LinuxEnv, root: File): Result =
+        run(env, root, listOf("pull", "--ff-only"), timeoutMs = NETWORK_TIMEOUT_MS)
 
-    fun push(env: LinuxEnv, root: File): Result = run(env, root, listOf("push"))
+    fun push(env: LinuxEnv, root: File): Result =
+        run(env, root, listOf("push"), timeoutMs = NETWORK_TIMEOUT_MS)
+
+    /** 克隆远程仓库到指定目录。网络操作，超时放宽到 10 分钟。 */
+    fun clone(env: LinuxEnv, url: String, targetDir: File): Result =
+        run(env, targetDir.parentFile ?: targetDir,
+            listOf("clone", url, targetDir.name), timeoutMs = CLONE_TIMEOUT_MS)
 
     /** 组装展示用的状态摘要。 */
     fun summarize(env: LinuxEnv, root: File): String {
