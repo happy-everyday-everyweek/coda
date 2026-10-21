@@ -86,9 +86,9 @@ class ZController private constructor(private val app: Context) {
      * 上带 actorSessionId（内核铸成 sess_dwf-<runId>-<site@ordinal>）。键用
      * [ZWorkflowKit.actorKey]，即 runId + 地址，避免两个 run 的同名 actor 相撞。
      */
-    private val actorSessions = HashMap<String, String>()
+    private val actorSessions = java.util.concurrent.ConcurrentHashMap<String, String>()
 /** 每个 run 最近一条进度事件（折叠卡靠它显示"正在做什么"，不必等工具结果）。 */
-    private val workflowLive = HashMap<String, ZWorkflowLive>()
+    private val workflowLive = java.util.concurrent.ConcurrentHashMap<String, ZWorkflowLive>()
     /** 关心工作流进度的轻量订阅者（打开中的半屏），与主聊天页的整页重渲染分开。 */
     private val workflowWatchers = CopyOnWriteArrayList<WorkflowWatcher>()
 
