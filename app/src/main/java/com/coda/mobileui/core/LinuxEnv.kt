@@ -358,11 +358,24 @@ class LinuxEnv(private val ctx: Context) {
     /** 容器内跑一条命令并读回合并后的输出；调用方负责放到后台线程。 */
     fun exec(guestArgv: List<String>, timeoutMs: Long = 60_000L): ShellResult = try {
         val process = builder(guestArgv).redirectErrorStream(true).start()
-        val output = process.inputStream.use { String(it.readBytes(), Charsets.UTF_8) }
+        // 读流必须放后台：readBytes 会阻塞到进程退出才返回，若在主流程先读，
+        // waitFor(timeout) 永远轮不到执行，超时判断形同虚设——命令一旦挂起
+        // （网络黑洞、等待认证输入），调用线程就永久卡死。与 probe() 同一套模式。
+        val outHolder = arrayOf("")
+        val reader = Thread {
+            outHolder[0] = runCatching {
+                process.inputStream.use { String(it.readBytes(), Charsets.UTF_8) }
+            }.getOrDefault("")
+        }.apply { isDaemon = true }
+        reader.start()
         val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-        if (!finished) process.destroy()
+        if (!finished) {
+            process.destroy()
+            AppLog.w("LinuxEnv", "exec 超时（${timeoutMs}ms）：${guestArgv.firstOrNull()}")
+        }
+        runCatching { reader.join(500) }
         val code = if (finished) process.exitValue() else -1
-        ShellResult(code == 0, code, output)
+        ShellResult(code == 0, code, outHolder[0])
     } catch (t: Throwable) {
         ShellResult(false, -1, t.message ?: "执行失败")
     }
