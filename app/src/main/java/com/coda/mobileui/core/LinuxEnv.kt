@@ -218,13 +218,23 @@ class LinuxEnv(private val ctx: Context) {
                 if (login.isNotEmpty()) append("    user: ").append(login).append('\n')
             }
             writeFile(File(rootfs, "root/.config/gh/hosts.yml"), hosts, MODE_PRIVATE)
+        } else {
+            // 登出后必须把容器里的凭据一并清掉：只清应用侧的 SharedPreferences，
+            // hosts.yml 里的旧令牌会一直留着，git push 会带着已作废的令牌去认证，
+            // 表现是"明明退出登录了还能推上去/一直报 401"。
+            runCatching { File(rootfs, "root/.config/gh/hosts.yml").delete() }
         }
 
         val gitConfig = buildString {
-            append("[credential \"https://github.com\"]\n")
-            append("\thelper = !gh auth git-credential\n")
-            append("[credential \"https://gist.github.com\"]\n")
-            append("\thelper = !gh auth git-credential\n")
+            // gh 的 credential helper 只有登录时才有意义；登出后如果不摘掉，
+            // 每次 git push/pull 都会先去调 gh auth git-credential，失败后
+            // 还可能弹出 gh 自己的交互提示，把本该干净的失败信息搅浑。
+            if (!token.isNullOrEmpty()) {
+                append("[credential \"https://github.com\"]\n")
+                append("\thelper = !gh auth git-credential\n")
+                append("[credential \"https://gist.github.com\"]\n")
+                append("\thelper = !gh auth git-credential\n")
+            }
             append("[init]\n")
             append("\tdefaultBranch = main\n")
             // 容器里的进程身份是伪造的 root，宿主 /sdcard 上的文件属主却是应用自身。

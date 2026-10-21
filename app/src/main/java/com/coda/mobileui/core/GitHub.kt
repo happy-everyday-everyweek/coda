@@ -31,12 +31,18 @@ object GitHub {
 
     fun logout(ctx: Context) {
         prefs(ctx).edit().clear().apply()
+        // 容器里的 hosts.yml/.gitconfig 必须同步清理，否则旧令牌留在 rootfs 里，
+        // git push 仍会带着它去认证。文件写放在后台，不阻塞界面。
+        Bg.run { runCatching { LinuxEnv(ctx).syncGitHubCredentials() } }
     }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private fun store(ctx: Context, token: String, login: String?) {
         prefs(ctx).edit().putString("token", token).putString("login", login ?: "").apply()
+        // 登录/换号成功即把凭据推进容器，不用等下次 App 重启：
+        // 此前只有启动时同步一次，登录完成后容器里还是旧凭据（或没有凭据）。
+        runCatching { LinuxEnv(ctx).syncGitHubCredentials() }
     }
 
     // ---------------------------------------------------------------- 设备流
