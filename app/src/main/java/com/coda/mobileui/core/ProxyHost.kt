@@ -170,6 +170,17 @@ object ProxyHost {
         return listOf(loader, "--library-path", libDir, binary) + args
     }
 
+    /** 随包 glibc 运行时的文件清单；释放与安装校验共用一份，避免两处漂移。 */
+    private val GLIBC_LIBS = listOf(
+        "ld-linux-aarch64.so.1",
+        "libc.so.6",
+        "libm.so.6",
+        "libpthread.so.0",
+        "libdl.so.2",
+        "libresolv.so.2",
+        "libgcc_s.so.1",
+    )
+
     /**
      * 宿主二进制是否已就位。
      *
@@ -178,15 +189,15 @@ object ProxyHost {
      */
     fun isInstalled(ctx: Context): Boolean {
         val bin = binaryFor(ctx)
-        val loader = File(glibcDirFor(ctx), "ld-linux-aarch64.so.1")
-        // loader 一并算作安装条件：二进制在但 glibc 运行时缺失（升级补上这批文件）时，
-        // 必须让 isInstalled 判为未装全，走一次补装，而不是带着缺失的 loader 去启动。
-        val ok = bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin) && loader.isFile
+        // glibc 运行时整套一并算作安装条件：二进制在但库不全（升级补装中途被杀、
+        // rootfs 重装清掉了目录）时，必须判为未装全走补装，而不是带着缺库去启动。
+        val libsReady = GLIBC_LIBS.all { File(glibcDirFor(ctx), it).isFile }
+        val ok = bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin) && libsReady
         if (!ok) {
             AppLog.d(
                 "ProxyHost",
                 "isInstalled=false: isFile=${bin.isFile} length=${bin.length()} " +
-                    "elf=${looksExecutable(bin)} loader=${loader.isFile}",
+                    "elf=${looksExecutable(bin)} glibc=$libsReady",
             )
         }
         return ok
@@ -269,16 +280,7 @@ object ProxyHost {
      */
     private fun installGlibc(ctx: Context): Boolean {
         val dir = glibcDirFor(ctx)
-        val files = listOf(
-            "ld-linux-aarch64.so.1",
-            "libc.so.6",
-            "libm.so.6",
-            "libpthread.so.0",
-            "libdl.so.2",
-            "libresolv.so.2",
-            "libgcc_s.so.1",
-        )
-        for (name in files) {
+        for (name in GLIBC_LIBS) {
             val target = File(dir, name)
             val expected = runCatching { assetSize(ctx, "proxy-host/glibc/$name") }.getOrNull() ?: continue
             if (target.isFile && target.length() == expected) continue
