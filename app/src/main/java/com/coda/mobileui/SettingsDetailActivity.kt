@@ -1398,12 +1398,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             val result = com.coda.mobileui.workspace.Git.clone(env, url, target)
             runOnUiThread {
                 if (result.ok) {
-                    sheet.refreshContent { col ->
-                        col.addView(sheetBodyText("已克隆到 ${target.absolutePath}"))
-                    }
+                    // 先设按钮再刷新内容：primaryAction 只写字段，靠 rebuild 渲染；
+                    // 顺序反了会出现"内容已更新、按钮不出现"。
                     sheet.primaryAction("打开工作区") { s ->
                         s.dismiss()
                         startActivity(com.coda.mobileui.workspace.WorkspaceActivity.intent(this))
+                    }
+                    sheet.refreshContent { col ->
+                        col.addView(sheetBodyText("已克隆到 ${target.absolutePath}"))
                     }
                 } else {
                     sheet.refreshContent { col ->

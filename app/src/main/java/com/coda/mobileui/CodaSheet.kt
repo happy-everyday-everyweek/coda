@@ -560,6 +560,72 @@ class CodaSheet(private val activity: Activity) {
         val col = liveContentCol ?: return
         col.removeAllViews()
         block(col)
+        // 底部按钮也一并按当前字段重建：调用方可能在内容就位后才补 primaryAction/
+        // secondaryAction（如克隆完成后再给"打开工作区"），只清内容不重建按钮，
+        // 按钮永远不会出现。按钮全空时移除旧底栏。
+        rebuildFooter()
+    }
+
+    /** 按当前 primary/secondary 字段重建底栏；卡片未显示或无按钮时移除旧底栏。 */
+    private fun rebuildFooter() {
+        val panelView = livePanel ?: return
+        val contentCol = liveContentCol ?: return
+        val colors = liveColors ?: return
+        footerRow?.let { panelView.removeView(it) }
+        footerRow = null
+        if (primaryText == null && secondaryText == null) return
+        val onSurface = colors[0]
+        val primary = colors[2]
+        val onPrimary = colors[3]
+        val footer = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
+        }
+        fun footerButton(label: String, filled: Boolean, block: (CodaSheet) -> Unit): TextView =
+            TextView(activity).apply {
+                text = label
+                textSize = 15f
+                gravity = Gravity.CENTER
+                if (filled) {
+                    setTextColor(onPrimary)
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(26f).toFloat()
+                        setColor(primary)
+                    }
+                } else {
+                    setTextColor(onSurface)
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(26f).toFloat()
+                        setStroke(dp(1f), withAlpha(onSurface, 0.25f))
+                    }
+                }
+                setOnClickListener { block(this@CodaSheet) }
+            }
+        val both = primaryText != null && secondaryText != null
+        if (secondaryText != null) {
+            footer.addView(
+                footerButton(secondaryText!!, false) { secondaryBlock?.invoke(it) },
+                LinearLayout.LayoutParams(0, dp(52f), 1f).apply {
+                    if (both) rightMargin = dp(12f)
+                },
+            )
+        }
+        if (primaryText != null) {
+            footer.addView(
+                footerButton(primaryText!!, true) { primaryBlock?.invoke(it) },
+                LinearLayout.LayoutParams(0, dp(52f), 1f),
+            )
+        }
+        footerRow = footer
+        panelView.addView(
+            footer,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        contentCol.requestLayout()
     }
 
     /**
