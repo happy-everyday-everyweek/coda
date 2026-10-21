@@ -1284,6 +1284,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             sheet.content { col -> col.addView(sheetBodyText("正在加载分支与 PR…")) }
             sheet.show()
         }
+        // 克隆到工作区：仓库浏览的最后一公里。私有仓库凭容器内已同步的 hosts.yml 认证。
+        sheet.primaryAction("克隆到工作区") { s ->
+            s.dismiss()
+            cloneRepoToWorkspace(repo)
+        }
         var branches: List<com.coda.mobileui.core.GitHub.Branch>? = null
         var pulls: List<com.coda.mobileui.core.GitHub.Pull>? = null
         var failMsg: String? = null
@@ -1363,6 +1368,55 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     /** ISO 时间取日期部分。 */
     private fun ghDate(iso: String): String = if (iso.length >= 10) iso.substring(0, 10) else iso
+
+    /**
+     * 把 GitHub 仓库克隆进工作区根目录。
+     *
+     * 克隆是网络操作（Git 层给了 10 分钟超时），整个过程在后台跑，卡片里给进度与
+     * 结果。目标目录撞名时直接失败——仓库已存在时用户要的是提示，不是静默覆盖。
+     */
+    private fun cloneRepoToWorkspace(repo: com.coda.mobileui.core.GitHub.Repo) {
+        val sheet = CodaSheet(this).title("克隆 ${repo.name}").subtitle(repo.fullName)
+        sheet.content { col -> col.addView(sheetBodyText("正在克隆到工作区…")) }
+        sheet.show()
+        Bg.run {
+            val target = java.io.File(com.coda.mobileui.core.Workspaces.root(this), repo.name)
+            if (target.exists()) {
+                runOnUiThread {
+                    sheet.refreshContent { col -> col.addView(sheetBodyText("目录已存在：${target.name}")) }
+                }
+                return@run
+            }
+            val env = com.coda.mobileui.core.LinuxEnv(this)
+            if (!env.isReady() && !env.ensureReady {}) {
+                runOnUiThread {
+                    sheet.refreshContent { col -> col.addView(sheetBodyText("Linux 环境不可用，无法克隆")) }
+                }
+                return@run
+            }
+            val url = "https://github.com/${repo.fullName}.git"
+            val result = com.coda.mobileui.workspace.Git.clone(env, url, target)
+            runOnUiThread {
+                if (result.ok) {
+                    sheet.refreshContent { col ->
+                        col.addView(sheetBodyText("已克隆到 ${target.absolutePath}"))
+                    }
+                    sheet.primaryAction("打开工作区") { s ->
+                        s.dismiss()
+                        startActivity(com.coda.mobileui.workspace.WorkspaceActivity.intent(this))
+                    }
+                } else {
+                    sheet.refreshContent { col ->
+                        col.addView(
+                            sheetBodyText(
+                                "克隆失败：" + result.output.take(500).ifEmpty { "未知错误" },
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     /** 主色：色板选择 + 自定义颜色入口；选中即关闭自动取色、同步更换应用图标。 */
     private fun pickAccent() {
