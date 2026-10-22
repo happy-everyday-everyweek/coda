@@ -50,7 +50,6 @@ object WebUiHost {
         runCatching { versionFile(ctx).readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     private var serverSocket: ServerSocket? = null
-    private var serverThread: Thread? = null
     private var running = AtomicBoolean(false)
     private var boundPort: Int = 0
     private var lastError: String? = null
@@ -82,7 +81,7 @@ object WebUiHost {
             "https://api.github.com/repos/$REPO/releases?per_page=10",
             headers,
         ) ?: return "无法访问 GitHub API（网络受限或速率限制），可稍后重试"
-        var releaseJson: JSONObject? = null
+        var found = false
         var assetUrl: String? = null
         var assetSize = 0L
         var tag = ""
@@ -92,16 +91,16 @@ object WebUiHost {
             for (j in 0 until assets.length()) {
                 val a = assets.optJSONObject(j) ?: continue
                 if (a.optString("name") == ASSET_NAME) {
-                    releaseJson = rel
+                    found = true
                     tag = rel.optString("tag_name")
                     assetUrl = a.optString("url")
                     assetSize = a.optLong("size")
                     break
                 }
             }
-            if (releaseJson != null) break
+            if (found) break
         }
-        if (releaseJson == null || assetUrl == null) {
+        if (!found || assetUrl == null) {
             return "最近的 Release 里没有附件 $ASSET_NAME（构建端尚未上传）"
         }
 
@@ -172,7 +171,7 @@ object WebUiHost {
             serverSocket = ss
             boundPort = ss.localPort
             running.set(true)
-            serverThread = Thread({ acceptLoop(ss, ctx.applicationContext) }, "coda-webui-http").apply {
+            Thread({ acceptLoop(ss, ctx.applicationContext) }, "coda-webui-http").apply {
                 isDaemon = true
                 start()
             }
@@ -193,7 +192,6 @@ object WebUiHost {
         running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
-        serverThread = null
         boundPort = 0
         lastStatus = "已停止"
         AppLog.i("WebUi", "HTTP 服务已停止")
@@ -231,6 +229,20 @@ object WebUiHost {
     }
 
     // ---------------------------------------------------------------- 请求处理
+
+    /** HTTP 线程里执行 ZController 动作前的公共前提：内核必须已启动。 */
+    private fun withKernel(appCtx: Context, action: () -> Unit) {
+        val zc = ZController.get(appCtx)
+        if (zc.runtime.isRunning) {
+            action()
+            return
+        }
+        // 冷启动时 runtime.call 的 writer 还是 null，请求会被静默丢弃；
+        // 先拉起内核，回调在主线程触发，动作本身已切换到不依赖当前线程的形式。
+        zc.ensureStarted { ok, msg ->
+            if (ok) action() else AppLog.w("WebUi", "内核未就绪，动作被丢弃：$msg")
+        }
+    }
 
     private fun handle(socket: java.net.Socket, appCtx: Context) {
         socket.soTimeout = 15_000
@@ -277,35 +289,40 @@ object WebUiHost {
                         respondJson(output, JSONObject().put("error", "Agent 正在运行中，请先停止"))
                         return
                     }
-                    zc.send(msg) { _, _ -> }
+                    // 发送结果异步回来：失败的真原因必须落日志，否则网页端只看到"已提交"。
+                    withKernel(appCtx) {
+                        zc.send(msg) { ok, err ->
+                            if (!ok) AppLog.w("WebUi", "Web 发送失败：$err")
+                        }
+                    }
                     respondJson(output, JSONObject().put("ok", true))
                 }
                 method == "POST" && path == "/api/stop" -> {
-                    ZController.get(appCtx).stop { _, _ -> }
+                    withKernel(appCtx) { ZController.get(appCtx).stop { _, _ -> } }
                     respondJson(output, JSONObject().put("ok", true))
                 }
                 method == "POST" && path == "/api/session/new" -> {
-                    ZController.get(appCtx).newSession(null)
+                    withKernel(appCtx) { ZController.get(appCtx).newSession(null) }
                     respondJson(output, JSONObject().put("ok", true))
                 }
                 method == "POST" && path.startsWith("/api/session/open/") -> {
                     val sid = path.removePrefix("/api/session/open/")
-                    ZController.get(appCtx).openSession(sid) { _ -> }
+                    withKernel(appCtx) { ZController.get(appCtx).openSession(sid) { _ -> } }
                     respondJson(output, JSONObject().put("ok", true))
                 }
                 method == "GET" && path == "/api/sessions" -> {
                     val zc = ZController.get(appCtx)
                     val arr = JSONArray()
-                    synchronized(zc) {
-                        zc.sessions.forEach { si ->
-                            arr.put(
-                                JSONObject()
-                                    .put("id", si.id)
-                                    .put("title", si.title)
-                                    .put("updatedAt", si.updatedAt)
-                                    .put("active", si.id == zc.currentSessionId),
-                            )
-                        }
+                    // toList() 先做快照：主线程可能在迭代中改写列表，锁实例对象
+                    // 挡不住它（写方不持有这把锁），拷贝才是真实的隔离手段。
+                    zc.sessions.toList().forEach { si ->
+                        arr.put(
+                            JSONObject()
+                                .put("id", si.id)
+                                .put("title", si.title)
+                                .put("updatedAt", si.updatedAt)
+                                .put("active", si.id == zc.currentSessionId),
+                        )
                     }
                     respondJson(output, JSONObject().put("sessions", arr))
                 }
@@ -315,17 +332,16 @@ object WebUiHost {
                         ?: zc.currentSessionId
                     val arr = JSONArray()
                     // 非当前会话先回空：客户端用 /api/session/open 切换后由轮询拉到。
+                    // 消息列表同样用快照迭代，避免主线程并发写导致 CME。
                     if (sid != null && sid == zc.currentSessionId) {
-                        synchronized(zc) {
-                            zc.messages.forEach { m ->
-                                arr.put(
-                                    JSONObject()
-                                        .put("id", m.id)
-                                        .put("role", m.role)
-                                        .put("text", m.text())
-                                        .put("ts", m.createdAt),
-                                )
-                            }
+                        zc.messages.toList().forEach { m ->
+                            arr.put(
+                                JSONObject()
+                                    .put("id", m.id)
+                                    .put("role", m.role)
+                                    .put("text", m.text())
+                                    .put("ts", m.createdAt),
+                            )
                         }
                     }
                     respondJson(output, JSONObject().put("messages", arr))
@@ -343,25 +359,25 @@ object WebUiHost {
     private fun stateJson(appCtx: Context): JSONObject {
         val zc = ZController.get(appCtx)
         val out = JSONObject()
-        synchronized(zc) {
-            out.put("running", zc.running)
-            out.put("sessionId", zc.currentSessionId ?: "")
-            val model = zc.currentModel
-            if (model != null) {
-                out.put("model", JSONObject().put("provider", model.first).put("id", model.second))
-            }
-            val msgs = JSONArray()
-            zc.messages.takeLast(200).forEach { m ->
-                msgs.put(
-                    JSONObject()
-                        .put("id", m.id)
-                        .put("role", m.role)
-                        .put("text", m.text())
-                        .put("ts", m.createdAt),
-                )
-            }
-            out.put("messages", msgs)
+        // 与其它读接口一致：快照拷贝隔离主线程的并发写。
+        val snapshot = zc.messages.toList()
+        out.put("running", zc.running)
+        out.put("sessionId", zc.currentSessionId ?: "")
+        val model = zc.currentModel
+        if (model != null) {
+            out.put("model", JSONObject().put("provider", model.first).put("id", model.second))
         }
+        val msgs = JSONArray()
+        snapshot.takeLast(200).forEach { m ->
+            msgs.put(
+                JSONObject()
+                    .put("id", m.id)
+                    .put("role", m.role)
+                    .put("text", m.text())
+                    .put("ts", m.createdAt),
+            )
+        }
+        out.put("messages", msgs)
         return out
     }
 
@@ -458,24 +474,33 @@ object WebUiHost {
     }
 
     /**
-     * 下载 Release 附件。返回 null 表示成功；"下载失败，请重试" 是兜底文案，
-     * 其余为具体原因。
+     * 下载 Release 附件。返回 null 表示成功；其余为具体失败原因。
+     *
+     * 重定向必须手动跟随：HttpURLConnection 自动跟随时会剥掉 Authorization 头，
+     * 而 GitHub Release 的下载 URL 一定 302 到对象存储——第一跳必须带鉴权，
+     * 第二跳（对象存储签名 URL）绝不能再带（带了反而 400）。
      */
-    private fun httpDownload(url: String, target: File, headers: Map<String, String>): String? {
+    private fun httpDownload(url: String, target: File, headers: Map<String, String>, depth: Int = 0): String? {
+        if (depth > 5) return "重定向次数过多"
         return try {
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 20000
             conn.readTimeout = 60000
+            conn.instanceFollowRedirects = false
             // Release 附件的 API url 需要显式 Accept 才返回二进制
             conn.setRequestProperty("Accept", "application/octet-stream")
             headers.forEach { (k, v) ->
                 if (k != "Accept") conn.setRequestProperty(k, v)
             }
             val code = conn.responseCode
-            if (code == 302 || code == 301) {
+            if (code == 302 || code == 301 || code == 307) {
                 val loc = conn.getHeaderField("Location")
                 conn.disconnect()
-                return if (loc != null) httpDownload(loc, target, headers) else "下载重定向失败"
+                if (loc.isNullOrBlank()) return "下载重定向失败（无 Location）"
+                // 对象存储的签名 URL 自带凭证，任何一跳的目标都不得携带 GitHub 的
+                // Authorization——带了会被 S3 判为签名错误。下一跳只留 UA。
+                val nextHeaders = mapOf("User-Agent" to "Coda-Android")
+                return httpDownload(loc, target, nextHeaders, depth + 1)
             }
             if (code != 200) return "下载失败（HTTP $code）"
             conn.inputStream.use { input ->

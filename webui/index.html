@@ -102,8 +102,17 @@ $('btnStop').onclick = stop;
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
-poll();
-setInterval(poll, running ? 1500 : 3000);
+// 自适应轮询：运行中 1.5s、空闲 3s。不能写 setInterval(poll, running ? 1500 : 3000)
+// ——那个表达式的 running 在定义时就固定了，永远不会变。
+let timer = null;
+function schedule() {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    await poll();
+    schedule();
+  }, running ? 1500 : 3000);
+}
+schedule();
 </script>
 </body>
 </html>

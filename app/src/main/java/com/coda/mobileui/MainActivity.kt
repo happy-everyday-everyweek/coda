@@ -1,7 +1,9 @@
 package com.coda.mobileui
 
 import android.content.Context
+import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.Bg
+import com.coda.mobileui.core.WebUiHost
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -3721,6 +3723,14 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         BrowserControl.attachActivity(this)
         // 从设置页回来时，宠物形象与三项开关可能已经改过，这里重新套一遍。
         applyPetSettings()
+        // 实验性 Web UI：开关开着且资产就位时自动恢复服务（App 重启后端口会换新，
+        // 由设置页与通知里的地址兜底展示）。启动失败只落日志，不打扰界面。
+        if (SettingsStore.get(this).webUiEnabled && !WebUiHost.isRunning() && WebUiHost.isDownloaded(this)) {
+            Bg.run {
+                val err = WebUiHost.start(this)
+                if (err != null) AppLog.w("WebUi", "自动恢复失败：$err")
+            }
+        }
         if (pendingOpenDrawer) {
             pendingOpenDrawer = false
             drawerLayout.openDrawer(Gravity.START)

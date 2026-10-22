@@ -3,6 +3,7 @@ package com.coda.mobileui
 import android.content.ClipData
 import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.AppLog
+import com.coda.mobileui.core.WebUiHost
 import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.drawable.Drawable
@@ -201,14 +202,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         if (key == "webui_enabled") {
             store.webUiEnabled = checked
             if (checked) {
-                if (com.coda.mobileui.core.WebUiHost.isDownloaded(this)) {
-                    val err = com.coda.mobileui.core.WebUiHost.start(this)
+                if (WebUiHost.isDownloaded(this)) {
+                    val err = WebUiHost.start(this)
                     snack(err ?: "Web UI 已启动")
                 } else {
                     snack("已启用：请先下载前端资产")
                 }
             } else {
-                com.coda.mobileui.core.WebUiHost.stop()
+                WebUiHost.stop()
                 snack("Web UI 已关闭")
             }
             renderPage()
@@ -283,7 +284,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             key == "webui_download" -> downloadWebUiAssets()
             key == "webui_start" -> startWebUi()
             key == "webui_stop" -> {
-                com.coda.mobileui.core.WebUiHost.stop()
+                WebUiHost.stop()
                 snack("Web UI 已停止")
                 renderPage()
             }
@@ -1400,39 +1401,28 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheet.content { col -> col.addView(sheetBodyText("正在查询最新版本…")) }
         sheet.show()
         Bg.run {
-            var progress = "准备下载…"
-            val err = com.coda.mobileui.core.WebUiHost.download(this) {
-                progress = it
+            val err = WebUiHost.download(this) { text ->
                 runOnUiThread {
-                    sheet.refreshContent { col ->
-                        col.addView(sheetBodyText(it))
-                    }
+                    sheet.refreshContent { col -> col.addView(sheetBodyText(text)) }
                 }
             }
+            // 版本号从 WebUiHost 读回，不依赖进度回调的临时变量跨线程传递。
+            val version = WebUiHost.downloadedVersion(this)
             runOnUiThread {
                 if (err == null) {
                     // 下载成功后若总开关已开，直接把服务拉起来，省一次点击。
-                    if (store.webUiEnabled) {
-                        val startErr = com.coda.mobileui.core.WebUiHost.start(this)
-                        if (startErr != null) {
-                            sheet.refreshContent { col ->
-                                col.addView(sheetBodyText("资产已就绪，但服务启动失败：$startErr"))
-                            }
-                            return@runOnUiThread
-                        }
-                    }
-                    val addr = com.coda.mobileui.core.WebUiHost.localAddresses().firstOrNull()
-                    val port = com.coda.mobileui.core.WebUiHost.port()
+                    var startErr: String? = null
+                    if (store.webUiEnabled) startErr = WebUiHost.start(this)
+                    val addr = WebUiHost.localAddresses().firstOrNull()
+                    val port = WebUiHost.port()
                     sheet.refreshContent { col ->
-                        col.addView(sheetBodyText("下载完成（$progress）"))
-                        if (store.webUiEnabled && port > 0) {
+                        col.addView(sheetBodyText(if (startErr == null) "已就绪（$version）" else "资产已就绪（$version），服务启动失败：$startErr"))
+                        if (startErr == null && port > 0) {
                             col.addView(sheetBodyText("访问地址：http://${addr ?: "本机IP"}:$port"))
                         }
                     }
                 } else {
-                    sheet.refreshContent { col ->
-                        col.addView(sheetBodyText("下载失败：$err"))
-                    }
+                    sheet.refreshContent { col -> col.addView(sheetBodyText("下载失败：$err")) }
                 }
                 renderPage()
             }
@@ -1441,12 +1431,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     /** 启动 Web UI 服务（资产需已下载）。 */
     private fun startWebUi() {
-        val err = com.coda.mobileui.core.WebUiHost.start(this)
+        val err = WebUiHost.start(this)
         if (err != null) {
             snack(err)
         } else {
-            val addr = com.coda.mobileui.core.WebUiHost.localAddresses().firstOrNull()
-            snack("已启动：http://${addr ?: "本机IP"}:${com.coda.mobileui.core.WebUiHost.port()}")
+            val addr = WebUiHost.localAddresses().firstOrNull()
+            snack("已启动：http://${addr ?: "本机IP"}:${WebUiHost.port()}")
         }
         renderPage()
     }

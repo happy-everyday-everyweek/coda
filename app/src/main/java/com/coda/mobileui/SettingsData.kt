@@ -8,6 +8,7 @@ import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.PhoneAccessibilityService
 import com.coda.mobileui.core.PhoneControl
+import com.coda.mobileui.core.WebUiHost
 import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.ProviderStore
@@ -710,9 +711,9 @@ object SettingsData {
      * 动作处理在 SettingsDetailActivity（webui_download / webui_start / webui_stop）。
      */
     fun webUi(store: SettingsStore, ctx: Context): SettingsPage {
-        val downloaded = com.coda.mobileui.core.WebUiHost.isDownloaded(ctx)
-        val version = com.coda.mobileui.core.WebUiHost.downloadedVersion(ctx)
-        val running = com.coda.mobileui.core.WebUiHost.isRunning()
+        val downloaded = WebUiHost.isDownloaded(ctx)
+        val version = WebUiHost.downloadedVersion(ctx)
+        val running = WebUiHost.isRunning()
         val rows = mutableListOf<SettingRow>()
         rows.add(SettingRow.Header("实验性功能"))
         rows.add(
@@ -745,12 +746,12 @@ object SettingsData {
         }
         rows.add(SettingRow.Header("服务"))
         if (running) {
-            val addr = com.coda.mobileui.core.WebUiHost.localAddresses().firstOrNull()
-            rows.add(SettingRow.Value("状态", com.coda.mobileui.core.WebUiHost.status()))
-            rows.add(SettingRow.Value("访问地址", "http://${addr ?: "本机IP"}:${com.coda.mobileui.core.WebUiHost.port()}"))
+            val addr = WebUiHost.localAddresses().firstOrNull()
+            rows.add(SettingRow.Value("状态", WebUiHost.status()))
+            rows.add(SettingRow.Value("访问地址", "http://${addr ?: "本机IP"}:${WebUiHost.port()}"))
             rows.add(SettingRow.Value("停止服务", "断开局域网访问", "webui_stop"))
         } else {
-            rows.add(SettingRow.Value("状态", com.coda.mobileui.core.WebUiHost.status()))
+            rows.add(SettingRow.Value("状态", WebUiHost.status()))
             if (downloaded) {
                 rows.add(SettingRow.Value("启动服务", "开始局域网访问", "webui_start"))
             }
