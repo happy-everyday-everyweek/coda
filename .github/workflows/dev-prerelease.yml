@@ -85,6 +85,8 @@ jobs:
           APK="$(ls app/build/outputs/apk/debug/*.apk | head -1)"
           cp "$APK" "coda-dev.apk"
           sha256sum coda-dev.apk | tee sha256.txt
+          # 实验性 Web UI 的前端资产：不打进 APK，作为 Release 附件由 App 运行时拉取。
+          cd webui && zip -q ../coda-webui.zip index.html && cd ..
 
       # 签名必须每次都一样：签名一换，设备上就装不上新版本，只能卸载重装。
       # 这里把证书摘要打出来并与仓库固定密钥比对，不一致当场失败。
@@ -138,7 +140,7 @@ jobs:
           } > notes.md
 
           gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" coda-dev.apk sha256.txt \
+          gh release create "$TAG" coda-dev.apk coda-webui.zip sha256.txt \
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "开发预览版" \
