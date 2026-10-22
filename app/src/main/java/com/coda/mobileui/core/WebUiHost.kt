@@ -361,6 +361,9 @@ object WebUiHost {
         val out = JSONObject()
         // 与其它读接口一致：快照拷贝隔离主线程的并发写。
         val snapshot = zc.messages.toList()
+        // 内核还没起来时 send/newSession 会被 withKernel 延后，网页端必须能看见，
+        // 否则用户点发送后没反应会以为坏了。
+        out.put("kernelReady", zc.runtime.isRunning)
         out.put("running", zc.running)
         out.put("sessionId", zc.currentSessionId ?: "")
         val model = zc.currentModel

@@ -48,7 +48,12 @@ let lastCount = -1, running = false;
 function render(state) {
   running = !!state.running;
   $('dot').classList.toggle('on', true);
-  $('state').textContent = running ? 'Agent 运行中…' : (state.model ? state.model.id : '就绪');
+  // 内核没起来时动作会被延后，必须显式告知，否则点了发送没反应像坏了。
+  if (state.kernelReady === false) {
+    $('state').textContent = '内核启动中…';
+  } else {
+    $('state').textContent = running ? 'Agent 运行中…' : (state.model ? state.model.id : '就绪');
+  }
   $('btnSend').style.display = running ? 'none' : '';
   $('btnStop').style.display = running ? '' : 'none';
   const msgs = state.messages || [];
