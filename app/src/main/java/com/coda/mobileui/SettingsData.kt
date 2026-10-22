@@ -90,9 +90,10 @@ object SettingsData {
         SettingRow.Category("commands", "命令", "管理 .md 命令文件", R.drawable.ic_terminal),
         SettingRow.Category("automations", "定时任务", "按计划自动运行任务", R.drawable.ic_clock),
         SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
-        // 宠物是核心功能，独立成组；位置上必须在 Agent 能力之后、数据与统计之前。
-        // 以后它的子项会变多（形象、提醒、行为、集成…），所以这里用分组标题而不是塞进 Agent 能力里。
-        SettingRow.Header("宠物"),
+        // 实验性功能：默认全部关闭，开启即代表用户知情尝试。Web UI 的前端资产
+        // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
+        SettingRow.Header("实验性功能"),
+        SettingRow.Category("webui", "Web UI", "局域网网页端，运行时从 GitHub 拉取", R.drawable.ic_globe),
         SettingRow.Category("pet", "宠物", "形象、提示方式与动态效果", R.drawable.ic_logo_spark),
         SettingRow.Header("数据与统计"),
         SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
@@ -701,6 +702,64 @@ object SettingsData {
         return SettingsPage("浏览器控制", rows)
     }
 
+    /**
+     * 实验性 Web UI 设置页。
+     *
+     * 资产不打进 APK：首次开启时从 GitHub Release 拉取 coda-webui.zip，解压到
+     * filesDir/webui/dist/，再由内置 HTTP 服务承载。这一页只编排状态展示与入口，
+     * 动作处理在 SettingsDetailActivity（webui_download / webui_start / webui_stop）。
+     */
+    fun webUi(store: SettingsStore, ctx: Context): SettingsPage {
+        val downloaded = com.coda.mobileui.core.WebUiHost.isDownloaded(ctx)
+        val version = com.coda.mobileui.core.WebUiHost.downloadedVersion(ctx)
+        val running = com.coda.mobileui.core.WebUiHost.isRunning()
+        val rows = mutableListOf<SettingRow>()
+        rows.add(SettingRow.Header("实验性功能"))
+        rows.add(
+            SettingRow.Value(
+                "功能状态",
+                "实验性：功能与接口可能随时调整，不建议长期依赖",
+            ),
+        )
+        rows.add(SettingRow.Header("总开关"))
+        rows.add(
+            SettingRow.Toggle(
+                "启用 Web UI",
+                "在局域网内通过浏览器访问本机会话",
+                store.webUiEnabled,
+                "webui_enabled",
+            ),
+        )
+        rows.add(SettingRow.Header("前端资产"))
+        if (downloaded) {
+            rows.add(SettingRow.Value("已下载版本", version ?: "（未知版本）"))
+            rows.add(SettingRow.Value("重新下载", "从 GitHub Release 拉取最新版", "webui_download"))
+        } else {
+            rows.add(
+                SettingRow.Value(
+                    "尚未下载",
+                    "首次使用需联网从 GitHub 拉取（约几 MB）",
+                    "webui_download",
+                ),
+            )
+        }
+        rows.add(SettingRow.Header("服务"))
+        if (running) {
+            val addr = com.coda.mobileui.core.WebUiHost.localAddresses().firstOrNull()
+            rows.add(SettingRow.Value("状态", com.coda.mobileui.core.WebUiHost.status()))
+            rows.add(SettingRow.Value("访问地址", "http://${addr ?: "本机IP"}:${com.coda.mobileui.core.WebUiHost.port()}"))
+            rows.add(SettingRow.Value("停止服务", "断开局域网访问", "webui_stop"))
+        } else {
+            rows.add(SettingRow.Value("状态", com.coda.mobileui.core.WebUiHost.status()))
+            if (downloaded) {
+                rows.add(SettingRow.Value("启动服务", "开始局域网访问", "webui_start"))
+            }
+        }
+        rows.add(SettingRow.Header("说明"))
+        rows.add(SettingRow.Value("数据来源", "会话与消息来自本机 App，仅限局域网内访问"))
+        rows.add(SettingRow.Value("安全边界", "无鉴权：请勿在公共 Wi-Fi 等不受信网络开启"))
+        return SettingsPage("Web UI", rows)
+    }
     /**
      * 宠物设置页（总入口）。
      *

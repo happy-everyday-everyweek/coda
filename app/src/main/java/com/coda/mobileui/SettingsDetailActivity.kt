@@ -150,6 +150,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         PAGE_AUTOMATIONS -> SettingsData.automations(this)
         PAGE_HOOKS -> SettingsData.hooks(this, ZController.get(this).workspacePath())
         PAGE_PET -> SettingsData.pet(store, this)
+        PAGE_WEB_UI -> SettingsData.webUi(store, this)
         PAGE_PET_APPEARANCE -> SettingsData.petAppearance(store, this)
         PAGE_PET_PLACES -> SettingsData.petPlaces(store)
         PAGE_PET_BEHAVIOR -> SettingsData.petBehavior(store)
@@ -196,6 +197,23 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     override fun onToggleChange(key: String, checked: Boolean) {
+        // 实验性 Web UI 总开关：开启时若资产已就位则顺手拉起服务，关闭时停掉。
+        if (key == "webui_enabled") {
+            store.webUiEnabled = checked
+            if (checked) {
+                if (com.coda.mobileui.core.WebUiHost.isDownloaded(this)) {
+                    val err = com.coda.mobileui.core.WebUiHost.start(this)
+                    snack(err ?: "Web UI 已启动")
+                } else {
+                    snack("已启用：请先下载前端资产")
+                }
+            } else {
+                com.coda.mobileui.core.WebUiHost.stop()
+                snack("Web UI 已关闭")
+            }
+            renderPage()
+            return
+        }
         if (key.startsWith("pet")) {
             when (key) {
                 "pet_enabled" -> store.petEnabled = checked
@@ -262,6 +280,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     override fun onValueClick(key: String) {
         when {
+            key == "webui_download" -> downloadWebUiAssets()
+            key == "webui_start" -> startWebUi()
+            key == "webui_stop" -> {
+                com.coda.mobileui.core.WebUiHost.stop()
+                snack("Web UI 已停止")
+                renderPage()
+            }
             key == "pet_skin" -> {
                 val skins = com.coda.mobileui.core.PetSkins.all(this)
                 sheetPickList(
@@ -1369,6 +1394,63 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** ISO 时间取日期部分。 */
     private fun ghDate(iso: String): String = if (iso.length >= 10) iso.substring(0, 10) else iso
 
+    /** 下载 Web UI 前端资产：半屏卡片展示进度，后台拉 GitHub Release。 */
+    private fun downloadWebUiAssets() {
+        val sheet = CodaSheet(this).title("下载 Web UI").subtitle("从 GitHub Release 拉取")
+        sheet.content { col -> col.addView(sheetBodyText("正在查询最新版本…")) }
+        sheet.show()
+        Bg.run {
+            var progress = "准备下载…"
+            val err = com.coda.mobileui.core.WebUiHost.download(this) {
+                progress = it
+                runOnUiThread {
+                    sheet.refreshContent { col ->
+                        col.addView(sheetBodyText(it))
+                    }
+                }
+            }
+            runOnUiThread {
+                if (err == null) {
+                    // 下载成功后若总开关已开，直接把服务拉起来，省一次点击。
+                    if (store.webUiEnabled) {
+                        val startErr = com.coda.mobileui.core.WebUiHost.start(this)
+                        if (startErr != null) {
+                            sheet.refreshContent { col ->
+                                col.addView(sheetBodyText("资产已就绪，但服务启动失败：$startErr"))
+                            }
+                            return@runOnUiThread
+                        }
+                    }
+                    val addr = com.coda.mobileui.core.WebUiHost.localAddresses().firstOrNull()
+                    val port = com.coda.mobileui.core.WebUiHost.port()
+                    sheet.refreshContent { col ->
+                        col.addView(sheetBodyText("下载完成（$progress）"))
+                        if (store.webUiEnabled && port > 0) {
+                            col.addView(sheetBodyText("访问地址：http://${addr ?: "本机IP"}:$port"))
+                        }
+                    }
+                } else {
+                    sheet.refreshContent { col ->
+                        col.addView(sheetBodyText("下载失败：$err"))
+                    }
+                }
+                renderPage()
+            }
+        }
+    }
+
+    /** 启动 Web UI 服务（资产需已下载）。 */
+    private fun startWebUi() {
+        val err = com.coda.mobileui.core.WebUiHost.start(this)
+        if (err != null) {
+            snack(err)
+        } else {
+            val addr = com.coda.mobileui.core.WebUiHost.localAddresses().firstOrNull()
+            snack("已启动：http://${addr ?: "本机IP"}:${com.coda.mobileui.core.WebUiHost.port()}")
+        }
+        renderPage()
+    }
+
     /**
      * 把 GitHub 仓库克隆进工作区根目录。
      *
@@ -2104,6 +2186,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
         const val PAGE_PET = "pet"
+        const val PAGE_WEB_UI = "webui"
         const val PAGE_PET_APPEARANCE = "pet_appearance"
         const val PAGE_PET_PLACES = "pet_places"
         const val PAGE_PET_BEHAVIOR = "pet_behavior"

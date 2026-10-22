@@ -107,7 +107,9 @@ class SettingsStore private constructor(context: Context) {
 
     /** 宠物总开关。关掉后输入框上方不再出现，设置页里的装饰也一并隐藏。 */
     var petEnabled: Boolean
-        get() = prefs.getBoolean(KEY_PET_ENABLED, true)
+        // 实验性功能统一默认关闭（2026-10-21）：宠物移入实验性分组后，新用户
+        // 不再默认看到它；已打开过的用户不受影响（SharedPreferences 里已存 true）。
+        get() = prefs.getBoolean(KEY_PET_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_PET_ENABLED, value).apply()
 
     /** 输入框上方的提示条：只显示球泡、不显示宠物本体。 */
@@ -155,14 +157,23 @@ class SettingsStore private constructor(context: Context) {
         get() = prefs.getBoolean(KEY_PET_IN_OTHER_SETTINGS, false)
         set(value) = prefs.edit().putBoolean(KEY_PET_IN_OTHER_SETTINGS, value).apply()
 
-    /** 按场景判断输入框上方要不要显示（总开关 + 场景开关同时成立才显示）。 */
+/** 按场景判断输入框上方要不要显示（总开关 + 场景开关同时成立才显示）。 */
     fun petComposerVisible(): Boolean = petEnabled && petInComposer
-
     /** 按场景判断某个设置页要不要那只趴着的。 */
     fun petSettingsVisible(pageKey: String): Boolean {
         if (!petEnabled) return false
         return if (pageKey == "pet") petInSettings else petInOtherSettings
     }
+
+    // ---------------------------------------------------------------- 实验性：Web UI
+    /**
+     * 实验性 Web UI 总开关。默认关闭；开启后由 WebUiHost 从 GitHub 拉取前端资产
+     * 并在局域网内提供访问。
+     */
+    var webUiEnabled: Boolean
+        get() = prefs.getBoolean(KEY_WEB_UI_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_WEB_UI_ENABLED, value).apply()
+
 
     /** 当前生效的主色名称（自动取色时为系统取色）。 */
     fun accentName(): String = when {
@@ -215,6 +226,7 @@ class SettingsStore private constructor(context: Context) {
         private const val KEY_PET_IN_COMPOSER = "pet_in_composer"
         private const val KEY_PET_IN_SETTINGS = "pet_in_settings"
         private const val KEY_PET_IN_OTHER_SETTINGS = "pet_in_other_settings"
+        private const val KEY_WEB_UI_ENABLED = "web_ui_enabled"
 
         const val MODE_SYSTEM = 0
         const val MODE_LIGHT = 1
