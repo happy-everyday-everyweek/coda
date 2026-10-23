@@ -84,6 +84,14 @@ object ProxyHost {
     var lastError: String? = null
         private set
 
+    /**
+     * 就绪探测的首个失败原因。
+     *
+     * 探测失败可能来自明文策略拒绝、连接被拒、端口未监听，三者对外都只表现为
+     * "45 秒超时"。留下第一条异常的类名与消息，超时提示里直接带出来。
+     */
+    private val probeFailure = java.util.concurrent.atomic.AtomicReference<String?>(null)
+
     /** 宿主进程是否存活。 */
     val isRunning: Boolean
         get() = process?.isAlive == true
@@ -491,6 +499,7 @@ object ProxyHost {
             val log = logFor(ctx)
             log.parentFile?.mkdirs()
             log.writeText("")
+            probeFailure.set(null)
             val proc = builder.start()
             process = proc
             pump(proc, log)
@@ -498,10 +507,13 @@ object ProxyHost {
             if (!ready) {
                 // 进程活着但不应答，和进程直接退出，是两种完全不同的故障。
                 val tail = logTail(log)
+                // 探测本身失败时把首条异常带上：明文策略拒绝、连接被拒、端口没监听
+                // 三种原因在网关日志里一模一样，区别只在这个异常里。
+                val probeNote = probeFailure.get()?.let { "\n探测异常：$it" } ?: ""
                 stop()
                 return fail(
-                    if (proc.isAlive) "网关启动超时（45 秒内未应答$port）" + tail
-                    else "网关进程退出" + tail
+                    if (proc.isAlive) "网关启动超时（45 秒内未应答$port）$probeNote" + tail
+                    else "网关进程退出$probeNote" + tail
                 )
             }
             true
@@ -572,9 +584,8 @@ object ProxyHost {
     }
 
     private fun probe(port: Int): Boolean = try {
-        // 必须显式绕过代理：HttpURLConnection 默认吃系统全局代理，设备挂了代理软件时
-        // 连发往 127.0.0.1 的请求都会被代理截走——网关明明 1 秒就绪，探测却 45 秒
-        // 全超时（真机实锤：网关日志 API server started 已打印，healthz 却全部失联）。
+        // 必须显式绕过代理：HttpURLConnection 默认吃系统全局代理，代理或 VPN 类应用
+        // 在场时把回环请求也一并接管的设备并不罕见，绕过它没有副作用。
         val conn = (URL("http://127.0.0.1:$port/healthz")
             .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
             connectTimeout = PROBE_TIMEOUT_MS
@@ -583,7 +594,10 @@ object ProxyHost {
         val code = conn.responseCode
         conn.disconnect()
         code in 200..299
-    } catch (_: Throwable) {
+    } catch (t: Throwable) {
+        // 不能静默返回 false：明文策略拒绝、连接被拒、端口未监听在界面上长得一模一样，
+        // 全都表现为"45 秒超时"。把首次失败的真实异常记下来，下次排查直接看日志。
+        probeFailure.compareAndSet(null, t.javaClass.simpleName + ": " + (t.message ?: ""))
         false
     }
 
