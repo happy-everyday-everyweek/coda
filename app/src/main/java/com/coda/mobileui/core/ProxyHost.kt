@@ -189,9 +189,12 @@ object ProxyHost {
      */
     fun isInstalled(ctx: Context): Boolean {
         val bin = binaryFor(ctx)
-        // glibc 运行时整套一并算作安装条件：二进制在但库不全（升级补装中途被杀、
-        // rootfs 重装清掉了目录）时，必须判为未装全走补装，而不是带着缺库去启动。
-        val libsReady = GLIBC_LIBS.all { File(glibcDirFor(ctx), it).isFile }
+        // glibc 运行时整套一并算作安装条件，且 loader 必须有执行位：loader 是被 env
+        // 直接 execve 的，缺执行位时报 Permission denied（上一版释放时漏了 chmod，
+        // 存量设备靠这个校验触发补装修复）。
+        val glibcDir = glibcDirFor(ctx)
+        val libsReady = GLIBC_LIBS.all { File(glibcDir, it).isFile } &&
+            File(glibcDir, "ld-linux-aarch64.so.1").canExecute()
         val ok = bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin) && libsReady
         if (!ok) {
             AppLog.d(
@@ -283,7 +286,12 @@ object ProxyHost {
         for (name in GLIBC_LIBS) {
             val target = File(dir, name)
             val expected = runCatching { assetSize(ctx, "proxy-host/glibc/$name") }.getOrNull() ?: continue
-            if (target.isFile && target.length() == expected) continue
+            if (target.isFile && target.length() == expected) {
+                // 已就位也要补执行位：loader 是被 env 直接 execve 的，没执行位就是
+                // Permission denied。老版本释放时漏了 chmod，靠这里把存量文件修好。
+                runCatching { Os.chmod(target.absolutePath, 493) } // 0755
+                continue
+            }
             runCatching { target.delete() }
             val ok = runCatching {
                 ctx.assets.open("proxy-host/glibc/$name").use { input ->
@@ -295,6 +303,8 @@ object ProxyHost {
                 AppLog.e("ProxyHost", "释放 glibc 库失败：$name")
                 return false
             }
+            // FileOutputStream 写出的文件没有执行位，必须显式放开。
+            runCatching { Os.chmod(target.absolutePath, 493) } // 0755
         }
         AppLog.i("ProxyHost", "glibc 运行时就位：${dir.absolutePath}")
         return true
