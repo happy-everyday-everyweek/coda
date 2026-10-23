@@ -572,7 +572,11 @@ object ProxyHost {
     }
 
     private fun probe(port: Int): Boolean = try {
-        val conn = (URL("http://127.0.0.1:$port/healthz").openConnection() as HttpURLConnection).apply {
+        // 必须显式绕过代理：HttpURLConnection 默认吃系统全局代理，设备挂了代理软件时
+        // 连发往 127.0.0.1 的请求都会被代理截走——网关明明 1 秒就绪，探测却 45 秒
+        // 全超时（真机实锤：网关日志 API server started 已打印，healthz 却全部失联）。
+        val conn = (URL("http://127.0.0.1:$port/healthz")
+            .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
             connectTimeout = PROBE_TIMEOUT_MS
             readTimeout = PROBE_TIMEOUT_MS
         }
@@ -630,7 +634,10 @@ object ProxyHost {
         body: String? = null,
         timeoutMs: Int = 30_000,
     ): String? = try {
-        val conn = (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+        // 与 probe 同理：回环请求必须绕过系统代理，代理软件在场时不能让它截走
+        // 管理面调用（发起授权、轮询状态、拉模型列表全在这条路上）。
+        val conn = (URL(baseUrl() + path)
+            .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 10_000
             readTimeout = timeoutMs
@@ -736,7 +743,9 @@ object ProxyHost {
      * 与管理面分开：这里只带 `clientKey`，只能读模型、发对话，动不了账号与配置。
      */
     fun clientJson(ctx: Context, path: String): JSONObject? = runCatching {
-        val conn = (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+        // 与 probe 同理：数据面请求也走回环，同样绕过系统代理。
+        val conn = (URL(baseUrl() + path)
+            .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10_000
             readTimeout = 15_000
