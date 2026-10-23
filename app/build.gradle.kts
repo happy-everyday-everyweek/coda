@@ -70,7 +70,8 @@ android {
     androidResources {
         // 网关程序与插件是不压缩的二进制：被 AAPT 再压一遍只会带来两个坏处——
         // openFd 拿不到长度（回退成整包读一遍）、以及解压流写盘时更容易出半截文件。
-        noCompress += listOf("cli-proxy-api", "so")
+        // 管理面板（management.html）同理：它要被完整释放到网关目录，不进压缩层。
+        noCompress += listOf("cli-proxy-api", "so", "html")
     }
 
     compileOptions {

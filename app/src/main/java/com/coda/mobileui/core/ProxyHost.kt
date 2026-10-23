@@ -135,6 +135,41 @@ object ProxyHost {
 
     fun configFor(ctx: Context): File = File(guestRoot(ctx), "config.yaml")
 
+    /**
+     * 管理面板静态目录（rootfs 内），必须与网关自己的推导一致：
+     * StaticDir = config 文件所在目录 + static/，config 在 /root/.coda/proxy-host/，
+     * 所以面板资产释放到 /root/.coda/proxy-host/static/management.html。
+     */
+    fun staticDirFor(ctx: Context): File = File(guestRoot(ctx), "static").apply { mkdirs() }
+
+    /**
+     * 释放管理面板资产（management.html，3.3MB）。
+     *
+     * 网关对这份资产的态度：本地有就直接伺服，没有才联网下载——而"联网下载"正是
+     * 启动被拖死的根源（直连挂起时健康探测永远等不到应答）。因此随包带一份、
+     * 启动前释放到位，网关就再没有理由在启动路径上碰网络。
+     *
+     * 失败不阻塞启动：面板是管理入口，转发与账号能力都不依赖它，缺了顶多
+     * 打不开面板，网关本身照常工作。
+     */
+    private fun ensureManagementAsset(ctx: Context) {
+        val target = File(staticDirFor(ctx), "management.html")
+        val expected = runCatching { assetSize(ctx, "proxy-host/management.html") }.getOrNull() ?: return
+        if (target.isFile && target.length() == expected) return
+        runCatching { target.delete() }
+        val ok = runCatching {
+            ctx.assets.open("proxy-host/management.html").use { input ->
+                FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+            }
+            true
+        }.getOrDefault(false)
+        if (ok) {
+            AppLog.i("ProxyHost", "管理面板资产就位：${target.absolutePath}")
+        } else {
+            AppLog.e("ProxyHost", "管理面板资产释放失败（不阻塞网关启动）")
+        }
+    }
+
     fun logFor(ctx: Context): File = File(guestRoot(ctx), "host.log")
 
     /**
@@ -358,6 +393,10 @@ object ProxyHost {
             // 管理接口即使在回环地址上也要密钥，写操作（登录、签到、删账号）全部经过它。
             appendLine("  allow-remote: false")
             appendLine("  secret-key: \"$MANAGEMENT_KEY\"")
+            // 管理面板资产随包发布并释放到 static/，禁掉启动期与运行期的面板自动更新：
+            // 否则网关会先查 GitHub API 比对哈希，直连挂起时整个启动被网络拖死
+            //（真机实测 45 秒就绪窗口被下载耗尽，健康探测永远等不到应答）。
+            appendLine("  disable-auto-update-panel: true")
             appendLine("access:")
             // 下游（内核）用这把密钥调 /v1，权限只到发请求，不能碰管理面。
             appendLine("  api-keys:")
@@ -398,6 +437,8 @@ object ProxyHost {
                 return false
             }
         }
+        // 面板资产在任何启动路径都先就位：网关本地有它就不会碰网络。
+        ensureManagementAsset(ctx)
         return ensureInstalled(ctx, onProgress)
     }
 
@@ -478,12 +519,12 @@ object ProxyHost {
      * 宿主起不来时真正的原因（缺动态库、配置语法错、端口绑定失败）都写在它自己的输出里，
      * 不把这几行带出来，界面永远只会显示一句笼统的失败。
      */
-    private fun logTail(log: File, lines: Int = 6): String = runCatching {
+    private fun logTail(log: File, lines: Int = 30): String = runCatching {
         val text = log.readLines()
         if (text.isEmpty()) {
             "（网关没有任何输出）"
         } else {
-            "：\n" + text.takeLast(lines).joinToString("\n").take(600)
+            "：\n" + text.takeLast(lines).joinToString("\n").take(3000)
         }
     }.getOrDefault("")
 
