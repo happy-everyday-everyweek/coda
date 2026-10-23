@@ -855,11 +855,19 @@ class FilesPage(
         for (marker in text.getSpans(0, text.length, CurrentLineSpan::class.java)) {
             text.removeSpan(marker)
         }
+        // 空文本没有行底可画。这里必须显式短路：setText("") 触发的 selection 回调
+        // 赶在 layout 重建之前到达，此时 layout 还是旧文本的，getLineVisibleEnd 会
+        // 拿旧行界来对新空文本 setSpan(0, 1)——IndexOutOfBoundsException 的根源。
+        if (text.isEmpty()) return
+        val length = text.length
         val layout = editorInput.layout ?: return
-        val offset = editorInput.selectionStart.coerceIn(0, text.length)
+        val offset = editorInput.selectionStart.coerceIn(0, length)
         val line = runCatching { layout.getLineForOffset(offset) }.getOrDefault(0)
-        val start = layout.getLineStart(line)
-        val end = layout.getLineVisibleEnd(line).coerceAtLeast(start)
+        // 行界来自 layout，而 layout 在文本刚变、重新测量前是旧值：两边都夹紧到
+        // 当前文本长度，宁可这帧画短，也不能越界崩溃。
+        val start = layout.getLineStart(line).coerceIn(0, length)
+        val end = layout.getLineVisibleEnd(line).coerceAtLeast(start).coerceIn(0, length)
+        if (end <= start) return
         text.setSpan(
             CurrentLineSpan(currentLineTint),
             start,
