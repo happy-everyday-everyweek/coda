@@ -722,10 +722,15 @@ class FilesPage(
             android.widget.FrameLayout.LayoutParams(WRAP, MATCH),
         )
         body.addView(editorGutter)
+
+        // 输入区与缩进指引用 FrameLayout 叠放：指引是纯视觉浮层（View 默认不消费
+        // 触摸，事件穿透到下层 EditText）。旧结构把指引作为横向 LinearLayout 的
+        // 子 View 且宽 MATCH，把输入框挤成 0 宽——不能点、不能输入、不能滚动，
+        // 指引自己还从左到右画满整屏竖线，空文件里尤为刺眼。
         editorGuide = IndentGuideView(host).apply {
-            layoutParams = LinearLayout.LayoutParams(MATCH, MATCH)
             guideColor = tintAlpha(color(com.google.android.material.R.attr.colorOnSurfaceVariant), 0.18f)
         }
+        val editorCanvas = android.widget.FrameLayout(host)
         editorInput = EditorInput(host).apply {
             typeface = Typeface.MONOSPACE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
@@ -737,7 +742,7 @@ class FilesPage(
                 InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             setPadding(dp(6f), dp(6f), dp(14f), dp(14f))
             isVerticalScrollBarEnabled = true
-            layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
+            layoutParams = android.widget.FrameLayout.LayoutParams(MATCH, MATCH)
             onCaretLine = { refreshEditorChrome() }
             setOnKeyListener { view, code, event -> handleEditorKey(view, code, event) }
             addTextChangedListener(object : android.text.TextWatcher {
@@ -752,8 +757,12 @@ class FilesPage(
             })
             setOnScrollChangeListener { _, _, _, _, _ -> editorGutter.scrollTo(0, 0) }
         }
-        body.addView(editorGuide)
-        body.addView(editorInput)
+        editorCanvas.addView(editorInput)
+        editorCanvas.addView(
+            editorGuide,
+            android.widget.FrameLayout.LayoutParams(MATCH, MATCH),
+        )
+        body.addView(editorCanvas, LinearLayout.LayoutParams(0, MATCH, 1f))
         editor.addView(body)
 
         editorStatus = label("", 12f, onSurfaceVariant).apply {
@@ -777,28 +786,35 @@ class FilesPage(
             onCaretLine?.invoke()
         }
     }
-
-    /** 缩进参考线：按制表宽度画竖线，让深层嵌套与 VS Code 一样有"对齐感"。 */
+/**
+     * 缩进参考线：按制表宽度画竖线，让深层嵌套与 VS Code 一样有"对齐感"。
+     *
+     * 只画到内容的最大缩进级别：旧版 while(x < width) 会把竖线画满整个视图宽，
+     * 空文件也一整屏，越看越像渲染事故。级别由外面按文本统计后塞进来，<=0 不画。
+     */
     private class IndentGuideView(context: android.content.Context) : View(context) {
         /** 每级的像素宽度；<=0 表示这一帧还没量到字宽，直接不画。 */
         var stepPx: Float = 0f
+        /** 画几级竖线；0 表示内容无缩进，一条也不画。 */
+        var levels: Int = 0
         var guideColor: Int = android.graphics.Color.GRAY
 
         override fun onDraw(canvas: android.graphics.Canvas) {
             super.onDraw(canvas)
-            if (stepPx <= 0f) return
+            if (stepPx <= 0f || levels <= 0) return
             val paint = android.graphics.Paint().apply {
                 color = guideColor
                 strokeWidth = 1f
             }
+            var level = 0
             var x = stepPx
-            while (x < width) {
+            while (level < levels && x < width) {
                 canvas.drawLine(x, 0f, x, height.toFloat(), paint)
+                level++
                 x += stepPx
             }
         }
     }
-
     /**
      * 当前行底：从行首铺到行尾的半透明色块，随主题。
      *
@@ -905,7 +921,30 @@ class FilesPage(
         editorGuide.visibility = View.VISIBLE
         val paint = editorInput.paint
         editorGuide.stepPx = paint.measureText(indentUnit)
+        // 级别 = 文本里最深一层缩进占几个缩进单位，按真实内容来画，
+        // 空文件、顶格写的内容都是 0 条线。
+        editorGuide.levels = maxIndentLevels(editorInput.text?.toString() ?: "", indentUnit)
         editorGuide.invalidate()
+    }
+
+    /** 文本内最深一层的缩进级数；缩进单位长度非法时恒为 0。 */
+    private fun maxIndentLevels(text: String, unit: String): Int {
+        if (unit.isEmpty()) return 0
+        var max = 0
+        for (line in text.lineSequence()) {
+            var spaces = 0
+            for (ch in line) {
+                when {
+                    ch == ' ' -> spaces++
+                    ch == '\t' -> spaces += 4
+                    else -> break
+                }
+            }
+            if (line.isBlank()) continue
+            val level = spaces / unit.length
+            if (level > max) max = level
+        }
+        return max
     }
 
     // -------------------------------------------------------------- 编辑增强
