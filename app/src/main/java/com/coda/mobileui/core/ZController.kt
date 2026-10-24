@@ -757,6 +757,9 @@ class ZController private constructor(private val app: Context) {
         val params = JSONObject()
             .put("sessionId", sessionId)
             .put("deliveryKind", "desktop-continuous")
+            // 要全量模型清单：模型选择面板按它构建列表。内核默认只回当前模型一个
+            //（快照省流），这里必须显式声明 "all"，否则面板永远只有一个可选。
+            .put("modelAvailability", "all")
         runtime.call("session/read", params) { ok, body ->
             var changed = false
             if (ok) {
