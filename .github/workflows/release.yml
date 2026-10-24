@@ -127,6 +127,34 @@ jobs:
             exit 1
           fi
 
+      # 应用内更新读取的版本清单。走 releases/latest/download/update.json 静态下载，
+# 不消耗 GitHub API 限额，并带 sha256 供下载后校验。
+      - name: 生成更新清单
+        run: |
+          SIZE="$(stat -c%s "coda-$CODA_VERSION_NAME.apk")"
+          SHA="$(cut -d' ' -f1 sha256.txt)"
+          APK_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$CODA_TAG/coda-$CODA_VERSION_NAME.apk"
+          python3 - "$SIZE" "$SHA" "$APK_URL" <<'PY'
+          import json, os, sys, datetime
+          size, sha, url = sys.argv[1], sys.argv[2], sys.argv[3]
+          data = {
+              "schemaVersion": 1,
+              "channel": "release",
+              "tag": os.environ["CODA_TAG"],
+              "versionCode": int(os.environ["CODA_VERSION_CODE"]),
+              "versionName": os.environ["CODA_VERSION_NAME"],
+              "apkUrl": url,
+              "size": int(size),
+              "sha256": sha,
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc)
+                               .replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "notes": "",
+          }
+          with open("update.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          print(json.dumps(data, ensure_ascii=False, indent=2))
+          PY
+
       - name: 发布 GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -135,5 +163,6 @@ jobs:
             "coda-$CODA_VERSION_NAME.apk" \
             coda-webui.zip \
             sha256.txt \
+            update.json \
             --title "Coda $CODA_VERSION_NAME" \
             --generate-notes

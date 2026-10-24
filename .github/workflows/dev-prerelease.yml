@@ -27,13 +27,20 @@ jobs:
       - name: 解析版本号
         run: |
           BASE="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)"
+          # dev 包必须带真实递增的 versionCode，否则应用内更新无法判断新旧：
+          # 只传 versionName 会让 versionCode 恒为 build.gradle 里的默认值，
+          # 结果是每次构建出来的号都一样，永远判成「已是最新」。
+          # 用 200000 + run_number 与正式版（10000 + run_number）分开，两个渠道互不干扰。
+          BASE_CODE="$(sed -n 's/.*versionCode = .*?: \([0-9]*\)$/\1/p' app/build.gradle.kts | head -1)"
+          echo "CODA_VERSION_CODE=$(( 200000 + ${{ github.run_number }} ))" >> "$GITHUB_ENV"
           echo "CODA_VERSION_NAME=${BASE:-dev}" >> "$GITHUB_ENV"
           # 仓库内固定密钥（keystore/coda-debug.jks）的证书摘要，核对步骤用它比对。
           echo "CODA_SIGNER_SHA256=05011c837e7fd75ae390c9f5d627f4618324676896ff0fbe04146607db841c35" >> "$GITHUB_ENV"
           {
             echo "dev 构建使用 debug 变体。"
             echo ""
-            echo "版本名：${BASE:-dev}+dev.${{ github.run_number }}"
+            echo "版本名：${BASE:-dev}"
+            echo "版本号：$(( 200000 + ${{ github.run_number }} ))（基线 ${BASE_CODE:-28} + run_number）"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: pnpm/action-setup@v4
@@ -78,6 +85,7 @@ jobs:
           echo "aapt2: $AAPT2"
           ./gradlew :app:assembleDebug \
             -PcodaVersionName="$CODA_VERSION_NAME" \
+            -PcodaVersionCode="$CODA_VERSION_CODE" \
             -Pandroid.aapt2FromMavenOverride="$AAPT2"
 
       - name: 收集产物
@@ -87,6 +95,34 @@ jobs:
           sha256sum coda-dev.apk | tee sha256.txt
           # 实验性 Web UI 的前端资产：不打进 APK，作为 Release 附件由 App 运行时拉取。
           cd webui && zip -q ../coda-webui.zip index.html && cd ..
+
+      # 应用内更新读取的版本清单。App 走 releases/download/<tag>/update-dev.json 静态下载，
+      # 不消耗 GitHub API 的 60 次/小时限额，并且带 sha256 供下载后校验。
+      - name: 生成更新清单
+        run: |
+          SIZE="$(stat -c%s coda-dev.apk)"
+          SHA="$(cut -d' ' -f1 sha256.txt)"
+          APK_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/dev-latest/coda-dev.apk"
+          python3 - "$SIZE" "$SHA" "$APK_URL" <<'PY'
+          import json, os, sys, datetime
+          size, sha, url = sys.argv[1], sys.argv[2], sys.argv[3]
+          data = {
+              "schemaVersion": 1,
+              "channel": "dev",
+              "tag": "dev-latest",
+              "versionCode": int(os.environ["CODA_VERSION_CODE"]),
+              "versionName": os.environ["CODA_VERSION_NAME"],
+              "apkUrl": url,
+              "size": int(size),
+              "sha256": sha,
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc)
+                               .replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "notes": "",
+          }
+          with open("update-dev.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          print(json.dumps(data, ensure_ascii=False, indent=2))
+          PY
 
       # 签名必须每次都一样：签名一换，设备上就装不上新版本，只能卸载重装。
       # 这里把证书摘要打出来并与仓库固定密钥比对，不一致当场失败。
@@ -140,7 +176,7 @@ jobs:
           } > notes.md
 
           gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" coda-dev.apk coda-webui.zip sha256.txt \
+          gh release create "$TAG" coda-dev.apk coda-webui.zip sha256.txt update-dev.json \
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "开发预览版" \

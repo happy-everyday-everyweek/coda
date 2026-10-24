@@ -286,6 +286,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     override fun onValueClick(key: String) {
         when {
+            key == "check_update" -> checkUpdate()
             key == "webui_download" -> downloadWebUiAssets()
             key == "webui_start" -> startWebUi()
             key == "webui_stop" -> {
@@ -1434,8 +1435,107 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
+    /** 检查应用更新：按当前渠道查、下载、交给系统安装器。 */
+    private fun checkUpdate() {
+        val checker = com.coda.mobileui.core.UpdateChecker
+        val installer = com.coda.mobileui.core.UpdateInstaller
+
+        // 架构先拦一道：目前只出 arm64 包，装在别的架构上会得到一次无意义的下载。
+        if (!installer.isSupportedAbi()) {
+            snack("当前设备架构不受支持（仅提供 arm64 安装包）")
+            return
+        }
+
+        val sheet = CodaSheet(this)
+            .title("检查更新")
+            .subtitle("${checker.channelLabel} · 当前 ${checker.currentVersionName}")
+        sheet.content { col -> col.addView(sheetBodyText("正在查询…")) }
+        sheet.show()
+
+        Bg.run {
+            val r = checker.check(applicationContext)
+            runOnUiThread {
+                when {
+                    !r.ok -> sheet.refreshContent { col ->
+                        col.addView(sheetBodyText("检查失败：${r.error ?: "未知原因"}"))
+                    }
+                    !r.hasUpdate -> sheet.refreshContent { col ->
+                        col.addView(sheetBodyText("已是最新版本（${checker.currentVersionName}）"))
+                        col.addView(sheetBodyText("渠道：${checker.channelLabel}"))
+                    }
+                    else -> {
+                        val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
+                        // 必须先设按钮再 refresh：refreshContent 才会按当前字段重建底栏。
+                        // 反过来写按钮永远不会出现（CodaSheet 的页脚只在 show/refresh 时构建）。
+                        sheet.primaryAction("下载并安装") { startUpdateDownload(sheet, r) }
+                        sheet.refreshContent { col ->
+                            col.addView(sheetBodyText("发现新版本 ${r.versionName}（$sizeMb）"))
+                            if (r.notes.isNotBlank()) {
+                                // 更新说明可能很长，截断到 600 字避免卡片被撑爆。
+                                val brief = r.notes.replace("\r", "").take(600)
+                                col.addView(sheetBodyText(brief))
+                                if (r.notes.length > 600) col.addView(sheetBodyText("…（说明过长已截断）"))
+                            }
+                            if (!r.fromManifest) {
+                                // 走 API 兜底时没有哈希，如实告知。
+                                col.addView(sheetBodyText("该版本未提供校验文件，安装前仅能依赖系统签名校验"))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 下载更新包并拉起系统安装器。下载走 AssetFetcher，带镜像测速与哈希校验。 */
+    private fun startUpdateDownload(
+        sheet: CodaSheet,
+        r: com.coda.mobileui.core.UpdateChecker.Result,
+    ) {
+        sheet.refreshContent { col -> col.addView(sheetBodyText("正在探测下载源…")) }
+        val activity = this
+        Bg.run {
+            val file = com.coda.mobileui.core.UpdateInstaller.download(
+                activity,
+                r,
+                onProgress = { done, total ->
+                    val pct = if (total > 0) (done * 100 / total).toInt() else 0
+                    val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
+                    runOnUiThread {
+                        sheet.refreshContent { col ->
+                            col.addView(sheetBodyText("下载中 $pct%（$mb）"))
+                        }
+                    }
+                },
+                onLog = { msg ->
+                    runOnUiThread {
+                        sheet.refreshContent { col -> col.addView(sheetBodyText(msg)) }
+                    }
+                },
+            )
+            runOnUiThread {
+                if (file == null) {
+                    sheet.refreshContent { col ->
+                        col.addView(sheetBodyText("下载失败。可稍后重试，或到 Release 页面手动下载。"))
+                    }
+                    return@runOnUiThread
+                }
+                val ok = com.coda.mobileui.core.UpdateInstaller.install(activity, file)
+                sheet.refreshContent { col ->
+                    if (ok) {
+                        col.addView(sheetBodyText("已交给系统安装器，按提示完成安装。"))
+                        col.addView(sheetBodyText("安装完成后旧版本的下载包会自动清理。"))
+                    } else {
+                        col.addView(sheetBodyText("无法拉起安装器：请确认已允许本应用「安装未知应用」。"))
+                        col.addView(sheetBodyText("文件位置：${file.absolutePath}"))
+                    }
+                }
+            }
+        }
+    }
+
     /** 启动 Web UI 服务（资产需已下载）。 */
-    private fun startWebUi() {
+     private fun startWebUi() {
         val err = WebUiHost.start(this)
         if (err != null) {
             snack(err)

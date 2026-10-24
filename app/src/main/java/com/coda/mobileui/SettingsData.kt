@@ -8,6 +8,7 @@ import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.PhoneAccessibilityService
 import com.coda.mobileui.core.PhoneControl
+import com.coda.mobileui.core.UpdateChecker
 import com.coda.mobileui.core.WebUiHost
 import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.OAuthProviders
@@ -130,6 +131,12 @@ object SettingsData {
                 "边写边看到粗体、标题、代码的最终形态；关闭则为纯文本",
                 store.inputMarkdownPreview,
                 "input_md_preview",
+            ),
+            SettingRow.Header("更新"),
+            SettingRow.Value(
+                "检查更新",
+                "${UpdateChecker.channelLabel} · 当前 ${UpdateChecker.currentVersionName}",
+                "check_update",
             ),
         ),
     )

@@ -2,7 +2,9 @@ package com.coda.mobileui
 import android.app.Application
 import androidx.appcompat.app.AppCompatDelegate
 import com.coda.mobileui.core.AppLog
+import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.PhoneControl
+import com.coda.mobileui.core.UpdateInstaller
 import com.coda.mobileui.ext.Extensions
 /**
  * 启动时应用用户选择的主题模式（浅色 / 深色 / 跟随系统）。
@@ -25,6 +27,14 @@ class CodaApp : Application() {
         try {
             Extensions.engine(this)
         } catch (_: Throwable) {
+        }
+        // 更新包清理：安装成功后旧包就没用了，但它有几十 MB。
+        // 放到后台是因为要遍历目录，启动路径上不该做文件 IO。
+        Bg.run {
+            try {
+                UpdateInstaller.cleanup(this@CodaApp, BuildConfig.VERSION_CODE)
+            } catch (_: Throwable) {
+            }
         }
     }
 }

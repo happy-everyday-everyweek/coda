@@ -61,7 +61,17 @@ android {
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            // 正式发行版：只从正式 Release 取更新（GitHub 的 releases/latest 会自动跳过 prerelease）
+            buildConfigField("String", "UPDATE_CHANNEL", "\"release\"")
         }
+        debug {
+            // dev 预览版：只从固定的 dev-latest 预发行版取更新
+            buildConfigField("String", "UPDATE_CHANNEL", "\"dev\"")
+        }
+    }
+    buildFeatures {
+        // 更新检查要读 BuildConfig.VERSION_CODE / UPDATE_CHANNEL / 仓库地址
+        buildConfig = true
     }
     lint {
         // targetSdk 固定 28 是本项目的有意选择，按项关掉这条政策告警，其余致命检查保留。
