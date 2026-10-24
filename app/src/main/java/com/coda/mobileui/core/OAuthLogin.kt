@@ -42,6 +42,19 @@ object OAuthLogin {
      * 环境 → 二进制 → 插件 → 启动，一次起步，不需要为加载插件再重起一遍。
      */
     fun prepare(ctx: Context, provider: OAuthProviders.Provider, onProgress: (String) -> Unit = {}): Boolean {
+        // CodeBuddy 走独立网关：静态二进制，不需要 glibc 包装与插件目录。
+        if (OAuthProviders.usesWorkBuddyGateway(provider.id)) {
+            if (!LinuxEnv(ctx).isReady()) {
+                onProgress("装配 Linux 环境…")
+                if (!LinuxEnv(ctx).ensureReady(onProgress)) {
+                    onProgress("Linux 环境装配失败，网关无法启动")
+                    return false
+                }
+            }
+            val ok = WorkBuddyGateway.start(ctx, onProgress)
+            if (!ok) WorkBuddyGateway.lastError?.let(onProgress)
+            return ok
+        }
         // 把环境与二进制备好（含 rootfs 装配与资产释放），这一步不改动进程状态。
         if (!ProxyHost.ensureRuntime(ctx, onProgress)) {
             ProxyHost.lastError?.let(onProgress)
@@ -64,6 +77,24 @@ object OAuthLogin {
      * 设备码流程还会带 `user_code`，其余字段名各家略有差异，一并兜住。
      */
     fun begin(ctx: Context, provider: OAuthProviders.Provider): Session? {
+        // CodeBuddy：走 workbuddy2api 内嵌面板的设备授权端点，按 realm 区分国内外。
+        if (OAuthProviders.usesWorkBuddyGateway(provider.id)) {
+            val realm = if (provider.id == "workbuddy-ai") "global" else "cn"
+            val body = runCatching {
+                org.json.JSONObject(
+                    panelJson(
+                        ctx,
+                        "/panel/api/login/start",
+                        method = "POST",
+                        payload = org.json.JSONObject().put("realm", realm).toString(),
+                    ) ?: return null,
+                )
+            }.getOrNull() ?: return null
+            val state = body.optString("state")
+            val url = body.optString("authUrl")
+            if (state.isEmpty() || url.isEmpty()) return null
+            return Session(provider.id, state, url, "")
+        }
         val body = ProxyHost.managementJson(
             ctx,
             "/v0/management/${provider.pluginId}-auth-url",
@@ -89,6 +120,21 @@ object OAuthLogin {
      * 没有单独的"已就绪"状态——`ok` 即表示凭据已经落盘。
      */
     fun poll(ctx: Context, session: Session): Result {
+        // CodeBuddy：workbuddy2api 用 done 布尔表示完成，错误通过 message 给。
+        if (OAuthProviders.usesWorkBuddyGateway(session.providerId)) {
+            val raw = panelJson(
+                ctx,
+                "/panel/api/login/poll?state=${android.net.Uri.encode(session.state)}",
+                method = "GET",
+            ) ?: return Result.Failed("无法连接网关")
+            val body = runCatching { org.json.JSONObject(raw) }.getOrNull()
+                ?: return Result.Failed("网关返回无法解析")
+            if (body.optBoolean("done", false)) return Result.Ready
+            val err = body.optString("error")
+            if (err.isNotEmpty()) return Result.Failed(err)
+            // 设备流通常要用户在浏览器里点确认，未完成时正常返回 pending。
+            return Result.Pending
+        }
         val body = ProxyHost.managementJson(
             ctx,
             "/v0/management/get-auth-status?state=${android.net.Uri.encode(session.state)}",
@@ -114,6 +160,7 @@ object OAuthLogin {
         provider: OAuthProviders.Provider,
         models: List<String>,
     ) {
+        val wb = OAuthProviders.usesWorkBuddyGateway(provider.id)
         val list = ProviderStore.load(ctx)
         list.removeAll { it.id == provider.id }
         list += ProviderStore.Provider(
@@ -121,9 +168,9 @@ object OAuthLogin {
             name = provider.name,
             apiType = "openai-chat-completions",
             // 指向本机网关，内核照旧走它原有的 OpenAI 兼容通路。
-            baseUrl = ProxyHost.baseUrl() + "/v1",
+            baseUrl = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1",
             // 网关对下游的密钥；宿主用同一个管理密钥即可，本机回环不外露。
-            apiKey = ProxyHost.clientKey(),
+            apiKey = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey(),
             models = models.toMutableList(),
         )
         ProviderStore.save(ctx, list)
@@ -136,7 +183,12 @@ object OAuthLogin {
      * 用调用密钥就能读，不需要按插件、也不需要 auth_index。
      */
     fun models(ctx: Context): List<String> {
-        val body = ProxyHost.clientJson(ctx, "/v1/models") ?: return emptyList()
+        // 两个网关的 /v1/models 都是标准 OpenAI 形状，差别只在 baseUrl 与密钥，
+        // 所以优先问正在运行的那个；都在跑时以 WorkBuddy 为准（它是 CodeBuddy 专用）。
+        val body = when {
+            WorkBuddyGateway.isRunning -> panelJsonObject(ctx, "/v1/models", "GET")
+            else -> ProxyHost.clientJson(ctx, "/v1/models")
+        } ?: return emptyList()
         val array = body.optJSONArray("data") ?: body.optJSONArray("models") ?: return emptyList()
         val out = mutableListOf<String>()
         for (i in 0 until array.length()) {
@@ -148,6 +200,46 @@ object OAuthLogin {
         }
         return out
     }
+
+    // ---------- WorkBuddy 网关的 HTTP 调用 ----------
+
+    /**
+     * 向 [WorkBuddyGateway] 发一次请求，返回原始响应体。
+     *
+     * 与 ProxyHost 一样显式绕过系统代理：设备上装有代理软件时，默认 ProxySelector
+     * 会把 127.0.0.1 也交给代理，表现为「网关明明在跑却连不上」。
+     */
+    private fun panelJson(
+        ctx: Context,
+        path: String,
+        method: String,
+        payload: String? = null,
+    ): String? = try {
+        val conn = (java.net.URL(WorkBuddyGateway.baseUrl() + path)
+            .openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 10_000
+            readTimeout = 20_000
+            setRequestProperty("Authorization", "Bearer ${WorkBuddyGateway.apiKey()}")
+            if (payload != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+            }
+        }
+        if (payload != null) {
+            conn.outputStream.use { it.write(payload.toByteArray()) }
+        }
+        val ok = conn.responseCode in 200..299
+        val text = (if (ok) conn.inputStream else conn.errorStream)
+            ?.bufferedReader()?.use { it.readText() }
+        conn.disconnect()
+        if (ok) text else null
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun panelJsonObject(ctx: Context, path: String, method: String): JSONObject? =
+        panelJson(ctx, path, method)?.let { runCatching { JSONObject(it) }.getOrNull() }
 
     /** 从 ProviderStore 里认出哪些是 OAuth 供应商（按 id 与注册表对应）。 */
     fun oauthProvidersInStore(ctx: Context): List<ProviderStore.Provider> =

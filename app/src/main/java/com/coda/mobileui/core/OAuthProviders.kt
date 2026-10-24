@@ -152,6 +152,15 @@ object OAuthProviders {
 
     fun byId(id: String): Provider? = all.firstOrNull { it.id == id }
 
+    /**
+     * 这个供应商是否走独立的 WorkBuddy 网关（[WorkBuddyGateway]）。
+     *
+     * CodeBuddy（国内 workbuddy / 国际 workbuddy-ai）改由 workbuddy2api 承载：
+     * 它自带账号池调度（权重选号、熔断、冷却、积分保底），而插件版是「粘性单账号」，
+     * 池子再完善也只有一个号可轮换。其余六家仍走 CLIProxyAPI + 插件，不受影响。
+     */
+    fun usesWorkBuddyGateway(id: String): Boolean = id == "workbuddy" || id == "workbuddy-ai"
+
     /** 插件在磁盘上的文件名：宿主按 `.so` 扫描插件目录。 */
     fun pluginFile(provider: Provider): String = provider.pluginId + ".so"
 
