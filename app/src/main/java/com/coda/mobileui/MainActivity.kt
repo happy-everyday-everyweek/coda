@@ -121,7 +121,7 @@ class MainActivity : BaseActivity() {
     }
 
     private lateinit var drawerLayout: DrawerLayout
-    private lateinit var inputMessage: EditText
+    private lateinit var inputMessage: MarkdownEditText
     private lateinit var emptyState: View
     private lateinit var chatView: View
 
@@ -364,6 +364,7 @@ class MainActivity : BaseActivity() {
 
         drawerLayout = findViewById(R.id.drawer_layout)
         inputMessage = findViewById(R.id.input_message)
+        inputMessage.renderEnabled = SettingsStore.get(this).inputMarkdownPreview
         // 焦点或文本变化时同步手势拦截状态（失焦/清空后立即恢复手势）
         inputMessage.setOnFocusChangeListener { _, _ -> updateSwipeIntercept() }
         inputMessage.addTextChangedListener(object : android.text.TextWatcher {
@@ -3809,6 +3810,8 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         findViewById<View>(R.id.composer_container).visibility = View.VISIBLE
         // 设置页里可能改过宠物形象与开关，回到会话时对齐一次
         applyPetSettings()
+        // 输入框的 Markdown 渲染开关同理，设置页是主区域内换页、不触发 onResume
+        inputMessage.renderEnabled = SettingsStore.get(this).inputMarkdownPreview
         // 回到会话页，手势拦截规则随之恢复
         updateSwipeIntercept()
     }

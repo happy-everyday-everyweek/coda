@@ -125,6 +125,12 @@ object SettingsData {
                 store.chatAutoScroll,
                 "chat_auto_scroll",
             ),
+            SettingRow.Toggle(
+                "输入框即时渲染 Markdown",
+                "边写边看到粗体、标题、代码的最终形态；关闭则为纯文本",
+                store.inputMarkdownPreview,
+                "input_md_preview",
+            ),
         ),
     )
     /**

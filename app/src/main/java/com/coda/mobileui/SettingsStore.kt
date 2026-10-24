@@ -63,6 +63,10 @@ class SettingsStore private constructor(context: Context) {
     var chatAutoScroll: Boolean
         get() = prefs.getBoolean(KEY_CHAT_AUTO_SCROLL, true)
         set(value) = prefs.edit().putBoolean(KEY_CHAT_AUTO_SCROLL, value).apply()
+    /** 输入框即时渲染 Markdown（粗体、标题、代码等边写边生效）。 */
+    var inputMarkdownPreview: Boolean
+        get() = prefs.getBoolean(KEY_INPUT_MD_PREVIEW, true)
+        set(value) = prefs.edit().putBoolean(KEY_INPUT_MD_PREVIEW, value).apply()
     /** 默认发送模式（0=Yolo，1=Build，2=Chat）。 */
     var defaultSendMode: Int
         get() = prefs.getInt(KEY_DEFAULT_SEND_MODE, 1).coerceIn(0, 2)
@@ -215,6 +219,7 @@ class SettingsStore private constructor(context: Context) {
         private const val KEY_CODE_THEME_LIGHT = "code_theme_light"
         private const val KEY_CODE_THEME_DARK = "code_theme_dark"
         private const val KEY_CHAT_AUTO_SCROLL = "chat_auto_scroll"
+        private const val KEY_INPUT_MD_PREVIEW = "input_md_preview"
         private const val KEY_DEFAULT_SEND_MODE = "default_send_mode"
         private const val KEY_SLASH_RECENT = "slash_recent"
         private const val KEY_WORKSPACE_ROOT = "workspace_root"

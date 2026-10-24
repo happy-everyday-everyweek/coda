@@ -283,7 +283,7 @@
                             android:orientation="horizontal" />
                     </HorizontalScrollView>
 
-                    <EditText
+                    <com.coda.mobileui.MarkdownEditText
                         android:id="@+id/input_message"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"

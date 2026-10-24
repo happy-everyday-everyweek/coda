@@ -260,6 +260,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             renderPage()
             return
         }
+        if (key == "input_md_preview") {
+            store.inputMarkdownPreview = checked
+            renderPage()
+            return
+        }
         val needRecreate = when (key) {
             KEY_AUTO_COLOR -> {
                 store.autoColor = checked
