@@ -72,6 +72,14 @@ object ProxyHost {
     private var process: Process? = null
     private var booting = false
     private var activePort = DEFAULT_PORT
+    /**
+     * 当前运行中的进程实际启用了哪些插件（写进 config.yaml 的那些）。
+     *
+     * 网关只在启动时扫描插件目录，进程活着的时候往目录里丢 `.so` 不会被加载。
+     * 记录这份清单，是为了在插件集合变化时判断「必须重启」，而不是让新的渠道
+     * 一直挂在"装好了但用不了"的状态里。
+     */
+    private var loadedPlugins: Set<String> = emptySet()
 
     /**
      * 最近一次失败的原因。
@@ -423,9 +431,23 @@ object ProxyHost {
                     appendLine("      enabled: true")
                 }
             }
+            // 记下这一份配置实际启用了哪些插件：进程起来后就是它们在生效。
+            // start() 用它判断目录里的插件是否已经超出运行中进程的加载范围。
+            loadedPlugins = present.map { it.pluginId }.toSet()
         }
         configFor(ctx).writeText(text)
     }
+
+    /**
+     * 插件目录里此刻已就位的插件（按 pluginId）。
+     *
+     * 判据与 [ensurePlugin] 一致：文件存在且大小过槛，半截文件不算装好。
+     */
+    private fun installedPluginIds(ctx: Context): Set<String> =
+        OAuthProviders.all.filter { p ->
+            val f = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(p))
+            f.isFile && f.length() > 500_000L
+        }.map { it.pluginId }.toSet()
 
     /**
      * 备好运行前提，但不启动进程：装配 Linux 环境 + 释放宿主二进制。
@@ -458,7 +480,17 @@ object ProxyHost {
      */
     fun start(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
         lastError = null
-        if (isRunning) return true
+        // 已经在跑，但插件集合可能已经变了（用户又授权了别的渠道）：网关只在启动时
+        // 扫描插件目录，进程活着时新丢进去的 .so 不会被加载，表现为"渠道装好了却不可用"。
+        // 这里比对目录里的插件与运行中进程启用的插件，不一致就重启一次。
+        if (isRunning) {
+            val installed = installedPluginIds(ctx)
+            if (installed == loadedPlugins) return true
+            if (!booting) {
+                onProgress("加载新增插件，重启网关…")
+                stop()
+            }
+        }
 
         fun fail(reason: String): Boolean {
             lastError = reason
