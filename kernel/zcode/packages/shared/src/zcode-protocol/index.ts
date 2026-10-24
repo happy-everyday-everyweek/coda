@@ -1681,6 +1681,9 @@ export const zcodeSessionReadParamsSchema = z
     deliveryKind: zcodeDeliveryKindSchema.optional(),
     messageLimit: z.number().int().positive().optional(),
     afterSeq: z.number().int().nonnegative().optional(),
+    // 默认 "current"（快照只带当前模型，省流）；传 "all" 时快照携带完整模型清单，
+    // 供客户端模型选择面板构建列表。桌面端快照体积敏感，移动端需要全量列表。
+    modelAvailability: z.enum(["all", "current"]).optional(),
   })
   .strict();
 export type ZCodeSessionReadParams = z.infer<typeof zcodeSessionReadParamsSchema>;

@@ -1913,7 +1913,8 @@ export async function readSession(context: ZCodeProtocolAgentServerContext, rawP
   record.deliveryKind = params.deliveryKind ?? record.deliveryKind;
   return await snapshot(context, record, undefined, {
     messageLimit: params.messageLimit,
-    modelAvailability: "current",
+    // 调用方可以要全量模型清单（模型选择面板），默认维持只带当前模型的省流行为。
+    modelAvailability: params.modelAvailability ?? "current",
   });
 }
 
