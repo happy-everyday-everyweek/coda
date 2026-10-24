@@ -2,7 +2,6 @@ package com.coda.mobileui.core
 
 import android.content.Context
 import java.io.File
-import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
@@ -37,6 +36,17 @@ object WorkBuddyGateway {
 
     /** 网关对下游的密钥；只在本机回环使用。 */
     private const val API_KEY = "coda-workbuddy-key"
+
+    // ---- 资产来源 ----
+    //
+    // 这三项是「随包」与「联网下载」共用的唯一事实来源：AssetFetcher 先看 APK 内
+    // 有没有，没有就按这些参数去镜像站取。哈希取自本项目 fork 的 GHA 产物
+    // （happy-everyday-everyweek/workbuddy2api-panel 的 build-arm64.yml）。
+    private const val ASSET = "proxy-host/workbuddy2api-arm64"
+    private const val REMOTE_URL =
+        "https://github.com/happy-everyday-everyweek/workbuddy2api-panel/releases/download/dev-latest/workbuddy2api"
+    private const val SHA256 = "ee6120b1ad6636455b4aca4040457eaf217fcf50dc5137dbe8fd1bf2b3d8c4f3"
+    private const val SIZE = 8_388_760L
 
     private var process: Process? = null
     private var booting = false
@@ -85,28 +95,26 @@ object WorkBuddyGateway {
      */
     fun ensureInstalled(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
         val target = binaryFor(ctx)
-        if (target.isFile && target.length() > 1_000_000L) return true
-
-        onProgress("安装 WorkBuddy 网关…")
-        return try {
-            target.parentFile?.mkdirs()
-            ctx.assets.open("proxy-host/workbuddy2api-arm64").use { input ->
-                FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
-            }
-            target.setExecutable(true, false)
-            // setExecutable 在部分 ROM 上对应用私有分区无效，补一次直接改权限位。
-            runCatching { android.system.Os.chmod(target.absolutePath, 493 /* 0755 */) }
+        val spec = AssetFetcher.Spec(
+            assetPath = ASSET,
+            remoteUrl = REMOTE_URL,
+            sha256 = SHA256,
+            size = SIZE,
+        )
+        // 本地已有且校验通过时，AssetFetcher 会直接返回，不会重复搬字节。
+        if (AssetFetcher.ensure(ctx, target, spec, onLog = { AppLog.d("WorkBuddyGateway", it) })) {
+            // 静态二进制也需要执行位：Android 用包内 assets 落盘后默认是 0644。
             if (!target.canExecute()) {
-                lastError = "网关程序无法执行：${target.absolutePath}"
-                onProgress(lastError!!)
-                return false
+                runCatching { android.system.Os.chmod(target.absolutePath, 493 /* 0755 */) }
             }
-            true
-        } catch (t: Throwable) {
-            lastError = "释放网关程序失败：${t.message ?: t.javaClass.simpleName}"
+            if (target.canExecute()) return true
+            lastError = "网关程序无法执行：${target.absolutePath}"
             onProgress(lastError!!)
-            false
+            return false
         }
+        lastError = "无法获取网关程序（安装包内缺失且下载失败）"
+        onProgress(lastError!!)
+        return false
     }
 
     // ---------- 配置 ----------
