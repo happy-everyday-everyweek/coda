@@ -40,12 +40,16 @@ object WorkBuddyGateway {
     // ---- 资产来源 ----
     //
     // 这三项是「随包」与「联网下载」共用的唯一事实来源：AssetFetcher 先看 APK 内
-    // 有没有，没有就按这些参数去镜像站取。哈希取自本项目 fork 的 GHA 产物
-    // （happy-everyday-everyweek/workbuddy2api-panel 的 build-arm64.yml）。
+    // 有没有，没有就按这些参数去镜像站取。
+    //
+    // 【必须同源】assets 里的那个文件必须是 Release 里那份的**同一个文件**，
+    // 不是「同一次提交重新编一遍」。Go 二进制带 build id，两次构建字节不同、
+    // 哈希不同；一旦两边不一致，随包路径会校验失败然后白白走一遍下载。
+    // 实测踩过：assets 用本地构建（ee6120b1…）、Release 用 CI 构建（ce2be67c…）。
     private const val ASSET = "proxy-host/workbuddy2api-arm64"
     private const val REMOTE_URL =
         "https://github.com/happy-everyday-everyweek/workbuddy2api-panel/releases/download/dev-latest/workbuddy2api"
-    private const val SHA256 = "ee6120b1ad6636455b4aca4040457eaf217fcf50dc5137dbe8fd1bf2b3d8c4f3"
+    private const val SHA256 = "ce2be67c02a228469820241d0fc7e0a7c8af13aceba2c815da3bbe8873ff7c19"
     private const val SIZE = 8_388_760L
 
     private var process: Process? = null
