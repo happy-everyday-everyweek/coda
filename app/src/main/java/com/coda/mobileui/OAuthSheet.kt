@@ -222,12 +222,27 @@ class OAuthSheet(
         column.removeAllViews()
         column.addView(hint("完成授权后返回，这一步会自动继续"))
 
+        // WebView 的触摸必须由它自己处理：授权页（Google/各家 OAuth）的表单与页面滚动
+        // 全在 WebView 内部完成。外层卡片是 ScrollView，竖直手势会被它先截走，页面
+        // 就滚不动了——这里声明"别拦截我"，WebView 自己滚；同时意味着卡片拖拽在
+        // WebView 区域失效（授权期间不需要拖卡片，可接受）。
         val view = WebView(host).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             CookieManager.getInstance().setAcceptCookie(true)
             webViewClient = WebViewClient()
-            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(340f))
+            // 授权页常有移动版样式，但也有一些只适配桌面：按视口宽自排、过宽可横向
+            // 滚动，而不是压缩到看不清。
+            settings.loadWithOverviewMode = true
+            settings.useWideViewPort = true
+            // 高度给足：卡片态 340dp 预览太小，全屏后也只占一小块。这里直接按
+            // 屏幕高给（外层 ScrollView 会兜底裁剪），两种停靠态下都能完整浏览。
+            val screenH = host.resources.displayMetrics.heightPixels
+            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, screenH)
+            setOnTouchListener { v, _ ->
+                v.parent?.requestDisallowInterceptTouchEvent(true)
+                false
+            }
             loadUrl(url)
         }
         webView = view
