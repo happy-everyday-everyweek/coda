@@ -3209,7 +3209,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             row.setOnClickListener {
                 store.addSlashRecent(cmd.name)
                 inputMessage.setText("/" + cmd.name + " ")
-                inputMessage.setSelection(inputMessage.text.length)
+                inputMessage.setSelection(inputMessage.text?.length ?: 0)
                 hideSlashPanel()
             }
             panel.addView(
