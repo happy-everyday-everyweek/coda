@@ -33,7 +33,6 @@ object SettingsViewBuilder {
         container: LinearLayout,
         rows: List<SettingRow>,
         listener: SettingsActionListener? = null,
-        onCategoryClick: ((String) -> Unit)? = null,
         /**
          * 行内容的额外水平内缩补偿（像素）。
          *
@@ -41,8 +40,13 @@ object SettingsViewBuilder {
          * 但把同一套行放进半屏卡片时，卡片内容区已经有 24dp，再加上行的 16dp
          * 就会让行内文字比卡片标题明显偏右。传正数把行内容整体左移这么多像素，
          * 只影响行内文字的落点，不影响行的背景、圆角与分隔线。
+         *
+         * 【位置必须在 onCategoryClick 之前】Kotlin 的尾随 lambda 只绑定最后一个
+         * 参数。这个参数放在末尾时，`render(a, b, c) { ... }` 里的花括号会被当成
+         * 往 Int 位置传 lambda，三个调用点会一起编译失败。
          */
         insetCompensationPx: Int = 0,
+        onCategoryClick: ((String) -> Unit)? = null,
     ) {
         val inflater = LayoutInflater.from(context)
         val corner = context.resources.getDimension(R.dimen.settings_card_corner)
