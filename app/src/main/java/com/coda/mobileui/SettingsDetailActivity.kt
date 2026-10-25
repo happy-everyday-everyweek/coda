@@ -102,14 +102,37 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         syncMarketplacesOnEnter()
     }
 
+    /**
+     * 在同一页内切到下一级（如 providers → providers_kind）。
+     *
+     * 用与 CodaSheet.navigate 同方向的位移：旧内容快速淡出，新内容从右侧推入。
+     * 这里没有独立卡片，所以只用内容容器本身做，时长比卡片内略短（110/150ms）。
+     */
+    private fun navigatePage(forward: Boolean, block: () -> Unit) {
+        val container = findViewById<LinearLayout>(R.id.page_container)
+        val out = if (forward) -dp(12).toFloat() else dp(12).toFloat()
+        val inFrom = if (forward) dp(16).toFloat() else -dp(16).toFloat()
+        container.animate().alpha(0f).translationX(out).setDuration(110).withEndAction {
+            block()
+            container.translationX = inFrom
+            container.animate().alpha(1f).translationX(0f).setDuration(150).start()
+        }.start()
+    }
+
     /** 返回：子页先回上一层，根页才退出。 */
     private fun goBack() {
         if (pageKey == PAGE_PROVIDERS_OF_KIND) {
-            pageKey = PAGE_PROVIDERS
-            renderPage()
+            // 回到上一级：方向相反（旧页右滑出、新页从左推入）。
+            navigatePage(forward = false) {
+                pageKey = PAGE_PROVIDERS
+                renderPage()
+            }
             return
         }
         finish()
+        // 退出转场必须与进入成对：settings_in ↔ settings_pop_*。
+        // 不写这一句会用系统默认的缩放淡出，方向感与进入不一致。
+        overridePendingTransition(R.anim.settings_pop_in, R.anim.settings_pop_out)
     }
 
     override fun onResume() {
@@ -188,13 +211,17 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             when (target) {
                 "providers_llm" -> {
                     providerKind = ProviderStore.ProviderKind.LLM
-                    pageKey = PAGE_PROVIDERS_OF_KIND
-                    renderPage()
+                    navigatePage(forward = true) {
+                        pageKey = PAGE_PROVIDERS_OF_KIND
+                        renderPage()
+                    }
                 }
                 "providers_asr" -> {
                     providerKind = ProviderStore.ProviderKind.ASR
-                    pageKey = PAGE_PROVIDERS_OF_KIND
-                    renderPage()
+                    navigatePage(forward = true) {
+                        pageKey = PAGE_PROVIDERS_OF_KIND
+                        renderPage()
+                    }
                 }
                 else -> Unit
             }

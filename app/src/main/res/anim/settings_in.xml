@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  二级页进入：从右侧推入并淡入。
+
+  方向与 CodaSheet.navigate 的换页保持一致（新页从右推入 16dp → 0），
+  这样卡片内分页与整页跳转的「前进」感是同一个方向，不会一处左一处右。
+  距离用屏宽的 12% 而不是 100%：满屏横移在这个应用里太重，
+  而且与卡片内的 16dp 位移差得太远，看起来像两套动画。
+-->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/fast_out_slow_in">
+    <translate
+        android:duration="220"
+        android:fromXDelta="12%"
+        android:toXDelta="0" />
+    <alpha
+        android:duration="220"
+        android:fromAlpha="0.0"
+        android:toAlpha="1.0" />
+</set>

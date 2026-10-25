@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  二级页打开时，下层（主界面）的配合动作：轻微左移并压暗。
+
+  比新页位移小（6% vs 12%）——视觉上「新页盖上来」而不是两块板子同时飞。
+  只压暗到 0.85，不压到全黑：设置页是覆盖在会话页上，不是替换掉它，
+  保留一点底下的信息更符合「还能退回去」的心理预期。
+-->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/fast_out_slow_in">
+    <translate
+        android:duration="220"
+        android:fromXDelta="0"
+        android:toXDelta="-6%" />
+    <alpha
+        android:duration="220"
+        android:fromAlpha="1.0"
+        android:toAlpha="0.85" />
+</set>

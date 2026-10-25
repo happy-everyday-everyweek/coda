@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  二级页退出：向右推出并淡出，与进入方向相反。
+
+  比进入快一点（180ms vs 220ms）：退出的心理预期是「立刻回到刚才那里」，
+  拖得和进入一样长会显得拖沓。
+-->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/fast_out_linear_in">
+    <translate
+        android:duration="180"
+        android:fromXDelta="0"
+        android:toXDelta="12%" />
+    <alpha
+        android:duration="180"
+        android:fromAlpha="1.0"
+        android:toAlpha="0.0" />
+</set>

@@ -3940,6 +3940,9 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 Intent(this, SettingsDetailActivity::class.java)
                     .putExtra(SettingsDetailActivity.EXTRA_PAGE, target),
             )
+            // 二级页统一从这里进：转场与返回的逆动作都成对定义在一处，
+            // 免得两个入口各写一份、日后改了一处忘了另一处。
+            overridePendingTransition(R.anim.settings_in, R.anim.settings_out)
         }
     }
 
@@ -4186,6 +4189,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                                     SettingsDetailActivity.PAGE_PROVIDERS,
                                 ),
                         )
+                        overridePendingTransition(R.anim.settings_in, R.anim.settings_out)
                         showModels(false)
                     }
                 },
