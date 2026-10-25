@@ -53,6 +53,14 @@ class OAuthSheet(
     private var authorized = false
     private var webView: WebView? = null
     private var statusText: TextView? = null
+
+    /**
+     * 网关准备阶段的日志面板。
+     *
+     * 放在字段上而不是局部变量，是因为进度回调来自后台线程，回调里要能拿到
+     * 当前这块面板；卡片被关掉时它会一起消失，`?.` 调用自然短路。
+     */
+    private var progressPanel: ProgressLogView? = null
     private var models: List<String> = emptyList()
 
     private fun dp(v: Float): Int = (v * host.resources.displayMetrics.density + 0.5f).toInt()
@@ -194,14 +202,14 @@ class OAuthSheet(
 
     /** 第二步：装宿主与插件、发起登录，然后按插件给的形态呈现。 */
     private fun renderAuthorize(column: LinearLayout) {
-        val status = TextView(host).apply {
-            text = "正在准备网关…"
-            textSize = 13f
-            setTextColor(onSurfaceVariant)
-            setPadding(0, dp(4f), 0, dp(8f))
-        }
-        statusText = status
-        column.addView(status)
+        // 网关准备过程会连续报很多步（装配环境 → 释放二进制 → 校验 → 启动 → 探活），
+        // 之前只用一个 TextView 覆盖显示最新一行，用户看不到前面发生过什么——
+        // 出问题时最需要的恰恰是「它到底走到哪一步、前一步说了什么」。
+        // 改用日志面板：每步追加一行，配一条来回跑的进度线表示还在动。
+        val panel = ProgressLogView(host)
+        progressPanel = panel
+        column.addView(panel.view)
+        panel.append("准备网关：${provider.name}", emphasis = true)
 
         // 装二进制、装插件、起进程都要几秒，放后台，回来再画授权信息。
         Thread {
@@ -209,32 +217,38 @@ class OAuthSheet(
             val lastStep = arrayOf("")
             val ok = OAuthLogin.prepare(host, provider) { text ->
                 lastStep[0] = text
-                main.post { status.text = text }
+                main.post { progressPanel?.append(text) }
             }
             main.post {
+                val p = progressPanel
                 if (!ok) {
                     // 之前这里硬编码「请检查网络后重试」，把真实原因盖掉了。网关与插件都已随包
                     // 内置、不再联网，这类失败基本与网络无关，必须显示具体卡在哪一步。
                     val reason = ProxyHost.lastError ?: lastStep[0].ifEmpty { "未知原因" }
-                    status.text = "网关启动失败：$reason"
-                    status.setTextColor(0xFFC62828.toInt())
+                    p?.finish()
+                    p?.append("网关启动失败：$reason", emphasis = true)
                     return@post
                 }
+                p?.append("网关已就绪", emphasis = true)
                 val started = OAuthLogin.begin(host, provider, realm)
                 session = started
                 if (started == null) {
                     // 不再只说「请重试」：panelJson 里已经把状态码、响应体、
                     // 或者「字段缺失」这类具体原因记进 lastBeginError。
                     val reason = OAuthLogin.lastBeginError
-                    status.text = if (reason.isNullOrEmpty()) {
+                    val text = if (reason.isNullOrEmpty()) {
                         "无法发起授权，请重试"
                     } else {
                         "无法发起授权：$reason"
                     }
-                    status.setTextColor(0xFFC62828.toInt())
+                    p?.finish()
+                    p?.append(text, emphasis = true)
                     AppLog.d("OAuthSheet", "begin failed: $reason provider=${provider.id} realm=$realm")
                 } else {
-                    status.visibility = View.GONE
+                    // 授权链接要占满这一页，日志面板收起来只留一句结论。
+                    p?.finish()
+                    column.removeView(panel.view)
+                    progressPanel = null
                     showAuthorize(column, started)
                     startPolling()
                 }

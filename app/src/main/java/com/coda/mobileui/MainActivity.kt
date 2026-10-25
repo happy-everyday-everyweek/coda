@@ -5,6 +5,7 @@ import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.UpdateChecker
 import com.coda.mobileui.core.UpdateInstaller
+import com.coda.mobileui.core.SilentUpdater
 import com.coda.mobileui.core.WebUiHost
 import android.content.Intent
 import android.os.Build
@@ -453,9 +454,14 @@ class MainActivity : BaseActivity() {
     }
 
     /**
-     * 启动时静默检查更新。
+     * 启动时静默检查更新，发现新版本就在后台把包下好。
      *
-     * 只在新版本时打扰用户：没有更新、查询失败都静默结束——启动路径上不该弹任何东西。
+     * 【为什么改成「先下再问」】原来是查到新版本就弹卡片问「要不要下」。
+     * 但用户刚打开应用，多数时候正急着用，弹窗只会被点「以后再说」，
+     * 于是这个版本永远不会装。改成先在后台下好，等他愿意装的时候
+     * 只差一次点击——下载那几分钟（几十 MB）被藏在后台了。
+     *
+     * 全程不打扰：查询失败、下载失败都只落日志，不弹任何东西。
      * 延迟 3 秒是让首屏先稳定下来（内核启动、会话恢复都在抢 IO），
      * 别和「首启解包 200MB」那种重活撞在一起。
      *
@@ -466,31 +472,54 @@ class MainActivity : BaseActivity() {
         inputMessage.postDelayed({
             if (isFinishing || isDestroyed) return@postDelayed
             Bg.run {
-                val r = try {
-                    UpdateChecker.check(this@MainActivity)
-                } catch (_: Throwable) {
-                    return@run
-                }
-                if (!r.ok || !r.hasUpdate) return@run
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    showUpdatePrompt(r)
+                // SilentUpdater 自己保证「同一进程只跑一次」，并负责异常与
+                // 架构判断；这里只关心「下好了就提示安装」。
+                SilentUpdater.checkAndFetch(this@MainActivity) { r, _ ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        showUpdatePrompt(r)
+                    }
                 }
             }
         }, 3_000)
     }
 
-    /** 启动时发现新版本：用半屏卡片提示，不打断当前操作。 */
+    /**
+     * 提示有新版本。
+     *
+     * 走到这里时包通常已经下好了（SilentUpdater 在后台下的），
+     * 所以按钮直接是「立即安装」。万一没下好（弱网失败、或用户点了设置里的检查），
+     * 就退回「下载并安装」——两种情况共用一个函数，靠 [readyFile] 区分。
+     */
     private fun showUpdatePrompt(r: UpdateChecker.Result) {
         val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
+        val ready = SilentUpdater.readyFile?.takeIf { it.isFile && it.length() > 0 }
         val sheet = CodaSheet(this)
-            .title("发现新版本")
+            .title(if (ready != null) "新版本已就绪" else "发现新版本")
             .subtitle("${r.versionName} · $sizeMb")
 
         // 先设按钮再 refresh：CodaSheet 的页脚只在 show/refresh 时构建。
-        sheet.primaryAction("下载并安装") { startUpdate(r, it) }
+        if (ready != null) {
+            sheet.primaryAction("立即安装") { s ->
+                // 已经下好了，直接交给安装器，不必再走一遍下载与校验。
+                val ok = UpdateInstaller.install(this, ready)
+                s.refreshContent { col ->
+                    col.addView(
+                        updateBodyText(
+                            if (ok) "已交给系统安装器，按提示完成安装。"
+                            else "无法拉起安装器：请允许本应用「安装未知应用」。"
+                        )
+                    )
+                }
+            }
+        } else {
+            sheet.primaryAction("下载并安装") { startUpdate(r, it) }
+        }
         sheet.secondaryAction("以后再说") { it.dismiss() }
         sheet.content { col ->
+            if (ready != null) {
+                col.addView(updateBodyText("更新包已在后台下载完成并通过校验，点「立即安装」即可。"))
+            }
             if (r.crossesChannel) {
                 col.addView(
                     updateBodyText(
@@ -521,10 +550,18 @@ class MainActivity : BaseActivity() {
         setLineSpacing(4f * resources.displayMetrics.density, 1f)
     }
 
-    /** 下载并安装更新（启动提示与设置页共用）。 */
+    /** 下载并安装更新。下载走 AssetFetcher，带镜像测速与哈希校验。 */
     private fun startUpdate(r: UpdateChecker.Result, sheet: CodaSheet) {
-        sheet.refreshContent { col -> col.addView(updateBodyText("正在探测下载源…")) }
         val activity = this
+        var panel: ProgressLogView? = null
+        // 进度行原地更新：下载回调几百次，每次追加会把前面步骤挤掉。
+        var progressLine: android.widget.TextView? = null
+
+        sheet.refreshContent { col ->
+            panel = ProgressLogView(activity)
+            col.addView(panel.view)
+            panel.append("开始下载 ${r.versionName}", emphasis = true)
+        }
         Bg.run {
             val file = UpdateInstaller.download(
                 activity,
@@ -533,23 +570,30 @@ class MainActivity : BaseActivity() {
                     val pct = if (total > 0) (done * 100 / total).toInt() else 0
                     val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
                     runOnUiThread {
-                        sheet.refreshContent { col -> col.addView(updateBodyText("下载中 $pct%（$mb）")) }
+                        val text = "下载中 $pct%（$mb）"
+                        val line = progressLine
+                        if (line != null && line.parent != null) line.text = text
+                        else {
+                            panel?.append(text)
+                            progressLine = panel?.lastLine()
+                        }
+                    }
+                },
+                onLog = { msg ->
+                    runOnUiThread {
+                        progressLine = null
+                        panel?.append(msg)
                     }
                 },
             )
             runOnUiThread {
+                panel?.finish()
                 if (file == null) {
-                    sheet.refreshContent { col ->
-                        col.addView(updateBodyText("下载失败。可稍后重试，或到 Release 页面手动下载。"))
-                    }
+                    panel?.append("下载失败：可稍后重试，或到 Release 页面手动下载。", emphasis = true)
                 } else if (UpdateInstaller.install(activity, file)) {
-                    sheet.refreshContent { col ->
-                        col.addView(updateBodyText("已交给系统安装器，按提示完成安装。"))
-                    }
+                    panel?.append("已交给系统安装器，按提示完成安装。", emphasis = true)
                 } else {
-                    sheet.refreshContent { col ->
-                        col.addView(updateBodyText("无法拉起安装器：请允许本应用「安装未知应用」。"))
-                    }
+                    panel?.append("无法拉起安装器：请允许本应用「安装未知应用」。", emphasis = true)
                 }
             }
         }

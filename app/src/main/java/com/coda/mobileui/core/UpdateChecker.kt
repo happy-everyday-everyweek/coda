@@ -107,7 +107,7 @@ object UpdateChecker {
      * 正式版用户能看到 dev 的新构建，dev 用户也能在下一个正式版发布后回到正式版。
      * 只有各看各的，装过 dev 就永远回不去。
      */
-    fun check(ctx: Context): Result {
+    fun check(ctx: Context, onLog: (String) -> Unit = {}): Result {
         val headers = mapOf(
             "User-Agent" to "Coda-Android",
             "Accept" to "*/*",
@@ -116,11 +116,14 @@ object UpdateChecker {
         )
 
         // 两个渠道都取。任一拿不到都不影响另一个——单渠道坏掉时仍能更新。
-        val candidates = listOfNotNull(
-            httpGet(DEV_MANIFEST_URL, headers)?.let { parseManifest(it, "dev") },
-            httpGet(RELEASE_MANIFEST_URL, headers)?.let { parseManifest(it, "release") },
-        )
+        onLog("查询版本清单（dev 与 release 两个渠道）")
+        val dev = httpGet(DEV_MANIFEST_URL, headers, onLog)?.let { parseManifest(it, "dev") }
+        onLog(if (dev != null) "dev 清单：${dev.versionCode}" else "dev 清单不可用")
+        val rel = httpGet(RELEASE_MANIFEST_URL, headers, onLog)?.let { parseManifest(it, "release") }
+        onLog(if (rel != null) "release 清单：${rel.versionCode}" else "release 清单不可用")
+        val candidates = listOfNotNull(dev, rel)
         if (candidates.isEmpty()) {
+            onLog("两个渠道都没取到清单")
             return Result(
                 false,
                 error = "无法获取版本信息（网络受限，或两个渠道都还没有发布过版本）",
@@ -182,13 +185,21 @@ object UpdateChecker {
      * 判成功用「能解析成 JSONObject」而不是 HTTP 200：有些镜像对不存在的
      * 文件也返回 200，内容是一段 HTML 错误页。
      */
-    private fun httpGet(url: String, headers: Map<String, String>): JSONObject? {
+    private fun httpGet(
+        url: String,
+        headers: Map<String, String>,
+        onLog: (String) -> Unit = {},
+    ): JSONObject? {
         val ranked = GhMirrors.rank(
             probeUrl = url,
             // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速、只按延迟排序。
             // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
             bytes = 1,
-            onLog = { AppLog.d(TAG, it) },
+            onLog = { msg ->
+                // 两处都要：AppLog 供事后排查，onLog 供界面实时显示。
+                AppLog.d(TAG, msg)
+                onLog(msg)
+            },
         )
         for (mirror in ranked) {
             val json = fetchJson(GhMirrors.wrap(mirror.prefix, url), headers)

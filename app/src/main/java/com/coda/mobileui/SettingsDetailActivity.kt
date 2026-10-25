@@ -3,6 +3,7 @@ package com.coda.mobileui
 import android.content.ClipData
 import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.AppLog
+import com.coda.mobileui.core.SilentUpdater
 import com.coda.mobileui.core.WebUiHost
 import android.content.ClipboardManager
 import android.content.Intent
@@ -1517,25 +1518,33 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val sheet = if (silent) null else CodaSheet(this)
             .title("检查更新")
             .subtitle("${checker.channelLabel} · 当前 ${checker.currentVersionName}")
-        sheet?.content { col -> col.addView(sheetBodyText("正在查询…")) }
+        // 检查过程本身也要有日志：它要先 ping 一遍镜像、再逐个试源。
+        // 之前这里只有一句「正在查询…」，失败时用户完全不知道卡在哪。
+        var panel: ProgressLogView? = null
+        sheet?.content { col ->
+            panel = ProgressLogView(this)
+            col.addView(panel.view)
+        }
         sheet?.show()
 
         Bg.run {
-            val r = checker.check(applicationContext)
+            val r = checker.check(applicationContext) { msg ->
+                runOnUiThread { panel?.append(msg) }
+            }
             runOnUiThread {
                 // 静默检查（启动时）只在新版本时打扰用户，其余情况一概不出现。
                 if (silent) {
                     if (r.ok && r.hasUpdate) showUpdateSheet(r)
                     return@runOnUiThread
                 }
+                panel?.finish()
                 when {
-                    !r.ok -> sheet?.refreshContent { col ->
-                        col.addView(sheetBodyText("检查失败：${r.error ?: "未知原因"}"))
+                    !r.ok -> panel?.append("检查失败：${r.error ?: "未知原因"}", emphasis = true)
+                    !r.hasUpdate -> {
+                        panel?.append("已是最新版本（${checker.currentVersionName}）", emphasis = true)
+                        panel?.append("渠道：${checker.channelLabel}")
                     }
-                    !r.hasUpdate -> sheet?.refreshContent { col ->
-                        col.addView(sheetBodyText("已是最新版本（${checker.currentVersionName}）"))
-                        col.addView(sheetBodyText("渠道：${checker.channelLabel}"))
-                    }
+                    // 有新版本就换成「发现新版本」那张卡，日志留着也没意义。
                     else -> showUpdateSheet(r)
                 }
             }
@@ -1553,12 +1562,28 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
 
         val sheet = CodaSheet(this)
-            .title("发现新版本")
+            .title(if (SilentUpdater.takeReady() != null) "新版本已就绪" else "发现新版本")
             .subtitle("${r.versionName} · $sizeMb")
 
-        // 必须先设按钮再 refresh：refreshContent 才会按当前字段重建底栏。
-        // 反过来写按钮永远不会出现（CodaSheet 的页脚只在 show/refresh 时构建）。
-        sheet.primaryAction("下载并安装") { startUpdateDownload(it, r) }
+        // 启动时很可能已经后台下好了，那就只差一次点击，不必再下一次。
+        val ready = SilentUpdater.takeReady()
+        if (ready != null) {
+            // 必须先设按钮再 refresh：refreshContent 才会按当前字段重建底栏。
+            // 反过来写按钮永远不会出现（CodaSheet 的页脚只在 show/refresh 时构建）。
+            sheet.primaryAction("立即安装") { s ->
+                val ok = com.coda.mobileui.core.UpdateInstaller.install(this, ready.second)
+                s.refreshContent { col ->
+                    col.addView(
+                        sheetBodyText(
+                            if (ok) "已交给系统安装器，按提示完成安装。"
+                            else "无法拉起安装器：请允许本应用「安装未知应用」。"
+                        )
+                    )
+                }
+            }
+        } else {
+            sheet.primaryAction("下载并安装") { startUpdateDownload(it, r) }
+        }
         sheet.content { col ->
             if (r.crossesChannel) {
                 col.addView(
@@ -1583,8 +1608,17 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheet: CodaSheet,
         r: com.coda.mobileui.core.UpdateChecker.Result,
     ) {
-        sheet.refreshContent { col -> col.addView(sheetBodyText("正在探测下载源…")) }
         val activity = this
+        var panel: ProgressLogView? = null
+        // 进度那一行要原地更新，不能每次追加——下载回调几百次，
+        // 每来一次加一行会把前面所有步骤全挤出可视区。
+        var progressLine: android.widget.TextView? = null
+
+        sheet.refreshContent { col ->
+            panel = ProgressLogView(activity)
+            col.addView(panel.view)
+            panel.append("开始下载：版本 ${r.versionCode}（${r.versionName}）", emphasis = true)
+        }
         Bg.run {
             val file = com.coda.mobileui.core.UpdateInstaller.download(
                 activity,
@@ -1593,33 +1627,40 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     val pct = if (total > 0) (done * 100 / total).toInt() else 0
                     val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
                     runOnUiThread {
-                        sheet.refreshContent { col ->
-                            col.addView(sheetBodyText("下载中 $pct%（$mb）"))
+                        val text = "下载中 $pct%（$mb）"
+                        val line = progressLine
+                        if (line != null && line.parent != null) {
+                            line.text = text
+                        } else {
+                            // 第一次进度回调时插入，并且只插一次。
+                            panel?.append(text)
+                            progressLine = panel?.lastLine()
                         }
                     }
                 },
                 onLog = { msg ->
                     runOnUiThread {
-                        sheet.refreshContent { col -> col.addView(sheetBodyText(msg)) }
+                        // 下载进度行之后的新步骤，说明进度阶段已过去，断开引用。
+                        progressLine = null
+                        panel?.append(msg)
                     }
                 },
             )
             runOnUiThread {
                 if (file == null) {
-                    sheet.refreshContent { col ->
-                        col.addView(sheetBodyText("下载失败。可稍后重试，或到 Release 页面手动下载。"))
-                    }
+                    panel?.finish()
+                    panel?.append("下载失败：可稍后重试，或到 Release 页面手动下载。", emphasis = true)
                     return@runOnUiThread
                 }
+                panel?.append("已下载并通过校验：${file.name}", emphasis = true)
+                panel?.finish()
                 val ok = com.coda.mobileui.core.UpdateInstaller.install(activity, file)
-                sheet.refreshContent { col ->
-                    if (ok) {
-                        col.addView(sheetBodyText("已交给系统安装器，按提示完成安装。"))
-                        col.addView(sheetBodyText("安装完成后旧版本的下载包会自动清理。"))
-                    } else {
-                        col.addView(sheetBodyText("无法拉起安装器：请确认已允许本应用「安装未知应用」。"))
-                        col.addView(sheetBodyText("文件位置：${file.absolutePath}"))
-                    }
+                if (ok) {
+                    panel?.append("已交给系统安装器，按提示完成安装。", emphasis = true)
+                    panel?.append("安装完成后旧版本的下载包会自动清理。")
+                } else {
+                    panel?.append("无法拉起安装器：请确认已允许本应用「安装未知应用」。", emphasis = true)
+                    panel?.append("文件位置：${file.absolutePath}")
                 }
             }
         }
