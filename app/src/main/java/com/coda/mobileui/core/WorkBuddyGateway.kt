@@ -106,8 +106,8 @@ object WorkBuddyGateway {
             size = SIZE,
         )
         // 本地已有且校验通过时，AssetFetcher 会直接返回，不会重复搬字节。
-        AppLog.d("WorkBuddyGateway", "校验/释放网关程序 → ${target.absolutePath}")
-        if (AssetFetcher.ensure(ctx, target, spec, onLog = { AppLog.d("WorkBuddyGateway", it) })) {
+        AppLog.i("WorkBuddyGateway", "校验/释放网关程序 → ${target.absolutePath}")
+        if (AssetFetcher.ensure(ctx, target, spec, onLog = { AppLog.i("WorkBuddyGateway", it) })) {
             // 静态二进制也需要执行位：Android 用包内 assets 落盘后默认是 0644。
             if (!target.canExecute()) {
                 runCatching { android.system.Os.chmod(target.absolutePath, 493 /* 0755 */) }
@@ -237,7 +237,7 @@ object WorkBuddyGateway {
         // 启动前的完整现场：路径、端口、配置内容都记下来。之前这条链路几乎
         // 没有日志，出问题时只能看到界面上「启动网关…」停住，无从判断是
         // 二进制没落盘、proot 起不来、还是进程起了但没监听。
-        AppLog.d(
+        AppLog.i(
             "WorkBuddyGateway",
             "启动前 argv=$argv port=$port " +
                 "bin=${binaryFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()},exec=${it.canExecute()})" }} " +
@@ -245,7 +245,7 @@ object WorkBuddyGateway {
                 "rootfs=${LinuxEnv(ctx).rootfs.absolutePath}",
         )
         configFor(ctx).takeIf { it.isFile }?.let {
-            AppLog.d("WorkBuddyGateway", "config=${runCatching { it.readText() }.getOrDefault("").take(600)}")
+            AppLog.i("WorkBuddyGateway", "config=${runCatching { it.readText() }.getOrDefault("").take(600)}")
         }
         return try {
             booting = true
@@ -258,7 +258,7 @@ object WorkBuddyGateway {
             // 不记 pid：Process.toHandle() 要 API 26，而本项目的 minSdk 更低，
             // 直接调会编译不过；为一行日志加版本分支不值得。进程是否活着
             // 由下面的探活与 isAlive 判断，pid 本身不提供额外信息。
-            AppLog.d("WorkBuddyGateway", "进程已拉起")
+            AppLog.i("WorkBuddyGateway", "进程已拉起")
             pump(proc, log)
 
             val ready = awaitReady(port)
@@ -272,7 +272,7 @@ object WorkBuddyGateway {
                 }
                 process = null
                 lastError = (if (alive) "网关启动超时（30 秒内未应答）" else "网关进程退出") + tail
-                AppLog.d(
+                AppLog.i(
                     "WorkBuddyGateway",
                     "启动失败：alive=$alive elapsed=${elapsed}ms exit=${runCatching { proc.exitValue() }.getOrNull()} " +
                         "lastError=$lastError",
@@ -280,7 +280,7 @@ object WorkBuddyGateway {
                 onProgress(lastError!!)
                 return false
             }
-            AppLog.d("WorkBuddyGateway", "就绪：port=$port 耗时 ${elapsed}ms")
+            AppLog.i("WorkBuddyGateway", "就绪：port=$port 耗时 ${elapsed}ms")
             true
         } catch (t: Throwable) {
             runCatching { process?.destroy() }
@@ -335,7 +335,7 @@ object WorkBuddyGateway {
         var attempts = 0
         while (System.currentTimeMillis() < deadline) {
             if (process?.isAlive != true) {
-                AppLog.d("WorkBuddyGateway", "探活中止：进程已退出（已试 $attempts 次，末次 code=$lastCode $lastErr）")
+                AppLog.i("WorkBuddyGateway", "探活中止：进程已退出（已试 $attempts 次，末次 code=$lastCode $lastErr）")
                 return false
             }
             attempts++
@@ -345,7 +345,7 @@ object WorkBuddyGateway {
         }
         // 超时时把末次状态码打出来：401 = 密钥不对，503 = 池里没号且 /healthz 口径，
         // -1 = 端口根本没监听（进程起了但没绑定）。这三种的修法完全不同。
-        AppLog.d("WorkBuddyGateway", "探活超时：attempts=$attempts lastCode=$lastCode")
+        AppLog.i("WorkBuddyGateway", "探活超时：attempts=$attempts lastCode=$lastCode")
         return false
     }
 

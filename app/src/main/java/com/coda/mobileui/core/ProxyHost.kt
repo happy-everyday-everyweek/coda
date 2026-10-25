@@ -248,7 +248,7 @@ object ProxyHost {
             File(glibcDir, "ld-linux-aarch64.so.1").canExecute()
         val ok = bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin) && libsReady
         if (!ok) {
-            AppLog.d(
+            AppLog.i(
                 "ProxyHost",
                 "isInstalled=false: isFile=${bin.isFile} length=${bin.length()} " +
                     "elf=${looksExecutable(bin)} glibc=$libsReady",
@@ -267,7 +267,7 @@ object ProxyHost {
      */
     fun ensureInstalled(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
         val target = binaryFor(ctx)
-        AppLog.d("ProxyHost", "ensureInstalled: target=${target.absolutePath} isFile=${target.isFile}")
+        AppLog.i("ProxyHost", "ensureInstalled: target=${target.absolutePath} isFile=${target.isFile}")
         if (isInstalled(ctx)) return true
 
         onProgress("释放网关程序…")
@@ -296,10 +296,10 @@ object ProxyHost {
             // 启动时 proot 就会报 can't execute（文件不可执行/不完整）。
             val expected = runCatching { assetSize(ctx, name) }.getOrNull()
             if (expected == null) {
-                AppLog.d("ProxyHost", "资产不存在：$name")
+                AppLog.i("ProxyHost", "资产不存在：$name")
                 continue
             }
-            AppLog.d("ProxyHost", "资产存在：$name ${expected}B")
+            AppLog.i("ProxyHost", "资产存在：$name ${expected}B")
             if (expected <= 10_000_000L) continue
             // 写之前先删掉可能残留的半截文件，避免追加到旧内容后面。
             runCatching { target.delete() }

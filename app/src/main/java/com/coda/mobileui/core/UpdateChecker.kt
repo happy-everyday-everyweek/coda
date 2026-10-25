@@ -132,7 +132,15 @@ object UpdateChecker {
 
         // 两个渠道共用一条时间序列，所以「版本号最大」就是「最新」。
         val best = candidates.maxByOrNull { it.versionCode }!!
-        return best.copy(ok = true, hasUpdate = best.versionCode > currentVersionCode)
+        val hasUpdate = best.versionCode > currentVersionCode
+        // 一行结论：排查时先看这句，再决定要不要翻上面的选源细节。
+        AppLog.i(
+            TAG,
+            "清单汇总：dev=${dev?.versionCode ?: "-"} release=${rel?.versionCode ?: "-"} " +
+                "取=$best.versionCode(${best.versionName}) 本地=$currentVersionCode" +
+                " => ${if (hasUpdate) "有更新" else "已最新"}",
+        )
+        return best.copy(ok = true, hasUpdate = hasUpdate)
     }
 
     /**
@@ -197,19 +205,20 @@ object UpdateChecker {
             bytes = 1,
             onLog = { msg ->
                 // 两处都要：AppLog 供事后排查，onLog 供界面实时显示。
-                AppLog.d(TAG, msg)
+                // 用 i() 不用 d()：minLevel 默认 INFO，d() 在正式包里会被丢弃。
+                AppLog.i(TAG, msg)
                 onLog(msg)
             },
         )
         for (mirror in ranked) {
             val json = fetchJson(GhMirrors.wrap(mirror.prefix, url), headers)
             if (json != null) {
-                AppLog.d(TAG, "清单取自 ${mirror.id}")
+                AppLog.i(TAG, "清单取自 ${mirror.id}")
                 return json
             }
-            AppLog.d(TAG, "源 ${mirror.id} 失败，试下一个")
+            AppLog.i(TAG, "源 ${mirror.id} 失败，试下一个")
         }
-        AppLog.d(TAG, "全部 ${ranked.size} 个源都未能取到清单")
+        AppLog.w(TAG, "全部 ${ranked.size} 个源都未能取到清单：$url")
         return null
     }
 

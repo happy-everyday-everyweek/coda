@@ -611,7 +611,7 @@ class CoreRuntime(private val ctx: Context) {
         }
         // 同时进统一日志：内核通信是排障时最常要看的一段，只留在自己的文件里
         // 会让"日志面板"缺掉最关键的一半。用 DEBUG，避免高频协议行淹没 INFO。
-        AppLog.d("Kernel", line)
+        AppLog.i("Kernel", line)
     }
 
     fun logSnapshot(): String = synchronized(logLock) { logBuf.toString() }

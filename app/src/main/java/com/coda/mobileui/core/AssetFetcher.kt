@@ -27,6 +27,9 @@ import java.security.MessageDigest
  */
 object AssetFetcher {
 
+    /** 日志标签。 */
+    private const val TAG = "AssetFetcher"
+
     /** 下载进度回调：当前、总量（字节）。 */
     fun interface Progress {
         fun onBytes(done: Long, total: Long)
@@ -108,6 +111,7 @@ object AssetFetcher {
             if (got && verify(tmp, spec)) {
                 if (tmp.renameTo(target)) {
                     onLog("完成（${m.id}）：${target.name}")
+                    AppLog.i(TAG, "资产就位 ${target.name} 来源=${m.id} 体积=${target.length()}")
                     return true
                 }
             } else if (got) {
@@ -120,6 +124,8 @@ object AssetFetcher {
             runCatching { tmp.delete() }
         }
         onLog("所有源都失败：$errors")
+        // 汇总一行：排错了要看是哪几类失败（:fail 连不上，:hash 内容被改写）。
+        AppLog.w(TAG, "资产获取失败 ${target.name} 试过=${ranked.size} 详情=$errors")
         return false
     }
 
@@ -178,6 +184,9 @@ object AssetFetcher {
         }
         try {
             if (conn.responseCode !in 200..299) {
+                // 状态码一定要留下：401/403 是镜像拒绝，404 是文件不存在，
+                // 502/503 是镜像自己挂了。三种应对完全不同，只记「失败」等于没记。
+                AppLog.w(TAG, "下载失败 $url → HTTP ${conn.responseCode}")
                 conn.errorStream?.close()
                 false
             } else {
@@ -185,12 +194,20 @@ object AssetFetcher {
                 FileOutputStream(out).use { o ->
                     conn.inputStream.use { input -> copy(input, o, total, onProgress) }
                 }
-                if (spec.size > 0 && out.length() != spec.size) false else true
+                if (spec.size > 0 && out.length() != spec.size) {
+                    AppLog.w(TAG, "下载完成但长度不符 $url 期望=${spec.size} 实际=${out.length()}")
+                    false
+                } else {
+                    true
+                }
             }
         } finally {
             conn.disconnect()
         }
-    } catch (_: Throwable) {
+    } catch (t: Throwable) {
+        // 这里以前是 `catch (_: Throwable)`，异常被完全吞掉：
+        // 连接重置、TLS 失败、磁盘写满全都不留痕迹，事后完全查不出为什么失败。
+        AppLog.w(TAG, "下载异常 $url：${t.javaClass.simpleName}: ${t.message}")
         runCatching { out.delete() }
         false
     }

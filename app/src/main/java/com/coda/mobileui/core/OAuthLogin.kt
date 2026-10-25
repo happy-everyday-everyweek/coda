@@ -276,12 +276,12 @@ object OAuthLogin {
             } else {
                 // 把状态码与响应体带出去：面板的错误是 {ok:false,error:"..."}，
                 // 只记「失败了」等于什么都没记。
-                AppLog.d("OAuthLogin", "$path → HTTP $code：${text?.take(300)}")
+                AppLog.i("OAuthLogin", "$path → HTTP $code：${text?.take(300)}")
                 lastBeginError = "面板 HTTP $code：${text?.take(200).orEmpty()}"
                 null
             }
         } catch (t: Throwable) {
-            AppLog.d("OAuthLogin", "$path 请求异常：${t.javaClass.simpleName}: ${t.message}")
+            AppLog.i("OAuthLogin", "$path 请求异常：${t.javaClass.simpleName}: ${t.message}")
             lastBeginError = "请求面板异常：${t.javaClass.simpleName}: ${t.message}"
             null
         }
