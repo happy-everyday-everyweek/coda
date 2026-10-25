@@ -141,6 +141,54 @@ class OAuthSheet(
                 "每次登录都在独立的浏览器会话里进行，互不干扰，可以连续添加多个账号。",
             ),
         )
+        // CodeBuddy 有国内站与国际站两套账号体系，且**同一个网关里可以同时挂两边**。
+        // 所以这里让用户按这一批要加的号来选，而不是按渠道名定死。
+        if (needsRealm) {
+            column.addView(
+                paragraph(
+                    "账号归属",
+                    "下面选这次要登录的是国内版还是国际版。两者是不同的站点与账号体系，" +
+                        "可以先后各加几个，池子里会同时存在。",
+                ),
+            )
+            // 用两行的分组卡片 + 点击弹选择：Radio 行需要 listener 才有响应，
+            // 这里的宿主是自定义 listener，用 Value 行 + sheetPickList 更直接。
+            val group = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
+            column.addView(group)
+            val rows = mutableListOf<SettingRow>()
+            rows += SettingRow.Value(
+                "登录站点",
+                if (realm == "global") "国际版（workbuddy.ai）" else "国内版（copilot.tencent.com）",
+                "pick_realm",
+            )
+            SettingsViewBuilder.render(host, group, rows, listener = object : SettingsActionListener {
+                override fun onRadioSelect(key: String) = Unit
+                override fun onToggleChange(key: String, checked: Boolean) = Unit
+                override fun onValueClick(key: String) {
+                    if (key != "pick_realm") return
+                    val options = listOf("国内版（copilot.tencent.com）", "国际版（workbuddy.ai）")
+                    val sheet2 = CodaSheet(host).title("登录站点")
+                    sheet2.content { col2 ->
+                        val g2 = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
+                        col2.addView(g2)
+                        val r2 = listOf(
+                            SettingRow.Value(options[0], if (realm == "cn") "当前" else "", "realm_cn"),
+                            SettingRow.Value(options[1], if (realm == "global") "当前" else "", "realm_global"),
+                        )
+                        SettingsViewBuilder.render(host, g2, r2, listener = object : SettingsActionListener {
+                            override fun onRadioSelect(key: String) = Unit
+                            override fun onToggleChange(key: String, checked: Boolean) = Unit
+                            override fun onValueClick(key: String) {
+                                realm = if (key == "realm_global") "global" else "cn"
+                                sheet2.dismiss()
+                                sheet.refreshContent { col -> renderDisclaimer(col) }
+                            }
+                        })
+                    }
+                    sheet2.show()
+                }
+            })
+        }
     }
 
     /** 第二步：装宿主与插件、发起登录，然后按插件给的形态呈现。 */
