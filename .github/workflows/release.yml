@@ -34,7 +34,13 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "CODA_TAG=$TAG" >> "$GITHUB_ENV"
           echo "CODA_VERSION_NAME=${TAG#v}" >> "$GITHUB_ENV"
-          echo "CODA_VERSION_CODE=$(( 10000 + ${{ github.run_number }} ))" >> "$GITHUB_ENV"
+          # 与 dev 同一套算法、同一条时间序列，只把渠道位换成 1：
+          #   code = 距基准日的分钟数 * 2 + 1
+          # 这样正式版与 dev 相差 1，且时间越晚号越大，
+          # 用户的「正式版 → dev → 下一个正式版」两个方向都能覆盖安装。
+          CODE="$(python3 tools/version-code.py --channel release)"
+          echo "CODA_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "版本号：$CODE（时间序列 × 2 + 1）" >> "$GITHUB_STEP_SUMMARY"
           # 仓库内固定密钥（keystore/coda-debug.jks）的证书摘要，核对步骤用它比对。
           echo "CODA_SIGNER_SHA256=05011c837e7fd75ae390c9f5d627f4618324676896ff0fbe04146607db841c35" >> "$GITHUB_ENV"
 

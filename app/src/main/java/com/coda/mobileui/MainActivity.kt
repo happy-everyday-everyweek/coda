@@ -3,6 +3,8 @@ package com.coda.mobileui
 import android.content.Context
 import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.Bg
+import com.coda.mobileui.core.UpdateChecker
+import com.coda.mobileui.core.UpdateInstaller
 import com.coda.mobileui.core.WebUiHost
 import android.content.Intent
 import android.os.Build
@@ -447,6 +449,110 @@ class MainActivity : BaseActivity() {
                 imm.showSoftInput(inputMessage, InputMethodManager.SHOW_IMPLICIT)
             }
         }, 700)
+        checkUpdateOnLaunch()
+    }
+
+    /**
+     * 启动时静默检查更新。
+     *
+     * 只在新版本时打扰用户：没有更新、查询失败都静默结束——启动路径上不该弹任何东西。
+     * 延迟 3 秒是让首屏先稳定下来（内核启动、会话恢复都在抢 IO），
+     * 别和「首启解包 200MB」那种重活撞在一起。
+     *
+     * 每次启动都查，不做「每天只查一次」的节流：两个渠道的清单都是静态文件，
+     * 一次查询只有两个很小的 GET，代价远低于让用户错过一个修复版本。
+     */
+    private fun checkUpdateOnLaunch() {
+        inputMessage.postDelayed({
+            if (isFinishing || isDestroyed) return@postDelayed
+            Bg.run {
+                val r = try {
+                    UpdateChecker.check(this@MainActivity)
+                } catch (_: Throwable) {
+                    return@run
+                }
+                if (!r.ok || !r.hasUpdate) return@run
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    showUpdatePrompt(r)
+                }
+            }
+        }, 3_000)
+    }
+
+    /** 启动时发现新版本：用半屏卡片提示，不打断当前操作。 */
+    private fun showUpdatePrompt(r: UpdateChecker.Result) {
+        val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
+        val sheet = CodaSheet(this)
+            .title("发现新版本")
+            .subtitle("${r.versionName} · $sizeMb")
+
+        // 先设按钮再 refresh：CodaSheet 的页脚只在 show/refresh 时构建。
+        sheet.primaryAction("下载并安装") { startUpdate(r, it) }
+        sheet.secondaryAction("以后再说") { it.dismiss() }
+        sheet.content { col ->
+            if (r.crossesChannel) {
+                col.addView(
+                    updateBodyText(
+                        "这是${r.candidateChannelLabel}，当前安装的是${UpdateChecker.channelLabel}。" +
+                            "两个渠道可以互相覆盖，装完不会丢数据。"
+                    )
+                )
+            }
+            if (r.notes.isNotBlank()) {
+                col.addView(updateBodyText(r.notes.replace("\r", "").take(400)))
+            }
+        }
+        sheet.show()
+    }
+
+    private fun updateBodyText(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        // 用 TypedValue.resolveAttribute 读 colorOnSurfaceVariant：
+        // 避免 MaterialColors 的泛型重载在纯 View 上下文里推不出类型（上一轮踩过）。
+        val tv = android.util.TypedValue()
+        if (theme.resolveAttribute(com.google.android.material.R.attr.colorOnSurfaceVariant, tv, true)) {
+            setTextColor(tv.data)
+        } else {
+            setTextColor(0xFF888888.toInt())
+        }
+        // 行距按密度换算；无上下文工具函数，直接用 density 折算。
+        setLineSpacing(4f * resources.displayMetrics.density, 1f)
+    }
+
+    /** 下载并安装更新（启动提示与设置页共用）。 */
+    private fun startUpdate(r: UpdateChecker.Result, sheet: CodaSheet) {
+        sheet.refreshContent { col -> col.addView(updateBodyText("正在探测下载源…")) }
+        val activity = this
+        Bg.run {
+            val file = UpdateInstaller.download(
+                activity,
+                r,
+                onProgress = { done, total ->
+                    val pct = if (total > 0) (done * 100 / total).toInt() else 0
+                    val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
+                    runOnUiThread {
+                        sheet.refreshContent { col -> col.addView(updateBodyText("下载中 $pct%（$mb）")) }
+                    }
+                },
+            )
+            runOnUiThread {
+                if (file == null) {
+                    sheet.refreshContent { col ->
+                        col.addView(updateBodyText("下载失败。可稍后重试，或到 Release 页面手动下载。"))
+                    }
+                } else if (UpdateInstaller.install(activity, file)) {
+                    sheet.refreshContent { col ->
+                        col.addView(updateBodyText("已交给系统安装器，按提示完成安装。"))
+                    }
+                } else {
+                    sheet.refreshContent { col ->
+                        col.addView(updateBodyText("无法拉起安装器：请允许本应用「安装未知应用」。"))
+                    }
+                }
+            }
+        }
     }
 
     /** 抽屉内容：新对话、设置，以及历史会话列表。 */

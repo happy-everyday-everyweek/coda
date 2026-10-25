@@ -132,12 +132,6 @@ object SettingsData {
                 store.inputMarkdownPreview,
                 "input_md_preview",
             ),
-            SettingRow.Header("更新"),
-            SettingRow.Value(
-                "检查更新",
-                "${UpdateChecker.channelLabel} · 当前 ${UpdateChecker.currentVersionName}",
-                "check_update",
-            ),
         ),
     )
     /**
@@ -678,7 +672,12 @@ object SettingsData {
         "关于",
         listOf(
             SettingRow.Header("应用"),
-            SettingRow.Value("版本", appVersion(ctx)),
+            // 点版本号即检查更新：不额外占一行，符合「关于页看版本」的常见直觉。
+            SettingRow.Value(
+                "版本",
+                "${appVersion(ctx)}（${UpdateChecker.channelLabel}）",
+                "check_update",
+            ),
             SettingRow.Value("构建号", appBuild(ctx)),
             SettingRow.Value("包名", "com.coda.mobileui"),
             SettingRow.Header("开源许可"),

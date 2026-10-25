@@ -1435,56 +1435,79 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
-    /** 检查应用更新：按当前渠道查、下载、交给系统安装器。 */
-    private fun checkUpdate() {
+    /** 检查应用更新：两个渠道都查，取更新的那个；下载后交给系统安装器。 */
+    private fun checkUpdate(silent: Boolean = false) {
         val checker = com.coda.mobileui.core.UpdateChecker
         val installer = com.coda.mobileui.core.UpdateInstaller
 
         // 架构先拦一道：目前只出 arm64 包，装在别的架构上会得到一次无意义的下载。
         if (!installer.isSupportedAbi()) {
-            snack("当前设备架构不受支持（仅提供 arm64 安装包）")
+            if (!silent) snack("当前设备架构不受支持（仅提供 arm64 安装包）")
             return
         }
 
-        val sheet = CodaSheet(this)
+        val sheet = if (silent) null else CodaSheet(this)
             .title("检查更新")
             .subtitle("${checker.channelLabel} · 当前 ${checker.currentVersionName}")
-        sheet.content { col -> col.addView(sheetBodyText("正在查询…")) }
-        sheet.show()
+        sheet?.content { col -> col.addView(sheetBodyText("正在查询…")) }
+        sheet?.show()
 
         Bg.run {
             val r = checker.check(applicationContext)
             runOnUiThread {
+                // 静默检查（启动时）只在新版本时打扰用户，其余情况一概不出现。
+                if (silent) {
+                    if (r.ok && r.hasUpdate) showUpdateSheet(r)
+                    return@runOnUiThread
+                }
                 when {
-                    !r.ok -> sheet.refreshContent { col ->
+                    !r.ok -> sheet?.refreshContent { col ->
                         col.addView(sheetBodyText("检查失败：${r.error ?: "未知原因"}"))
                     }
-                    !r.hasUpdate -> sheet.refreshContent { col ->
+                    !r.hasUpdate -> sheet?.refreshContent { col ->
                         col.addView(sheetBodyText("已是最新版本（${checker.currentVersionName}）"))
                         col.addView(sheetBodyText("渠道：${checker.channelLabel}"))
                     }
-                    else -> {
-                        val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
-                        // 必须先设按钮再 refresh：refreshContent 才会按当前字段重建底栏。
-                        // 反过来写按钮永远不会出现（CodaSheet 的页脚只在 show/refresh 时构建）。
-                        sheet.primaryAction("下载并安装") { startUpdateDownload(sheet, r) }
-                        sheet.refreshContent { col ->
-                            col.addView(sheetBodyText("发现新版本 ${r.versionName}（$sizeMb）"))
-                            if (r.notes.isNotBlank()) {
-                                // 更新说明可能很长，截断到 600 字避免卡片被撑爆。
-                                val brief = r.notes.replace("\r", "").take(600)
-                                col.addView(sheetBodyText(brief))
-                                if (r.notes.length > 600) col.addView(sheetBodyText("…（说明过长已截断）"))
-                            }
-                            if (!r.fromManifest) {
-                                // 走 API 兜底时没有哈希，如实告知。
-                                col.addView(sheetBodyText("该版本未提供校验文件，安装前仅能依赖系统签名校验"))
-                            }
-                        }
-                    }
+                    else -> showUpdateSheet(r)
                 }
             }
         }
+    }
+
+    /**
+     * 展示「发现新版本」并给下载按钮。
+     *
+     * 跨渠道时明确写清方向：用户的实际流程是 正式版 → dev → 下一个正式版，
+     * 不说清楚的话，dev 用户看到「正式发行版」会以为是降级。
+     */
+    private fun showUpdateSheet(r: com.coda.mobileui.core.UpdateChecker.Result) {
+        val checker = com.coda.mobileui.core.UpdateChecker
+        val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
+
+        val sheet = CodaSheet(this)
+            .title("发现新版本")
+            .subtitle("${r.versionName} · $sizeMb")
+
+        // 必须先设按钮再 refresh：refreshContent 才会按当前字段重建底栏。
+        // 反过来写按钮永远不会出现（CodaSheet 的页脚只在 show/refresh 时构建）。
+        sheet.primaryAction("下载并安装") { startUpdateDownload(it, r) }
+        sheet.content { col ->
+            if (r.crossesChannel) {
+                col.addView(
+                    sheetBodyText(
+                        "这是${r.candidateChannelLabel}，当前安装的是${checker.channelLabel}。" +
+                            "两个渠道的版本可以互相覆盖，装完不会丢数据。"
+                    )
+                )
+            }
+            col.addView(sheetBodyText("版本号 ${r.versionCode}（当前 ${checker.currentVersionCode}）"))
+            if (r.notes.isNotBlank()) {
+                // 更新说明可能很长，截断到 600 字避免卡片被撑爆。
+                col.addView(sheetBodyText(r.notes.replace("\r", "").take(600)))
+                if (r.notes.length > 600) col.addView(sheetBodyText("…（说明过长已截断）"))
+            }
+        }
+        sheet.show()
     }
 
     /** 下载更新包并拉起系统安装器。下载走 AssetFetcher，带镜像测速与哈希校验。 */

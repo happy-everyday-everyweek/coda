@@ -27,12 +27,14 @@ jobs:
       - name: 解析版本号
         run: |
           BASE="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)"
-          # dev 包必须带真实递增的 versionCode，否则应用内更新无法判断新旧：
-          # 只传 versionName 会让 versionCode 恒为 build.gradle 里的默认值，
-          # 结果是每次构建出来的号都一样，永远判成「已是最新」。
-          # 用 200000 + run_number 与正式版（10000 + run_number）分开，两个渠道互不干扰。
-          BASE_CODE="$(sed -n 's/.*versionCode = .*?: \([0-9]*\)$/\1/p' app/build.gradle.kts | head -1)"
-          echo "CODA_VERSION_CODE=$(( 200000 + ${{ github.run_number }} ))" >> "$GITHUB_ENV"
+          # versionCode 由 tools/version-code.py 按「构建时刻 + 渠道位」算出：
+          #   code = 距基准日的分钟数 * 2 + 渠道位（dev=0 / 正式=1）
+          # 两个渠道落在同一条时间序列上，所以能互相覆盖：
+          #   同一分钟里 正式(…1) > dev(…0) → dev 用户能升到正式版
+          #   而下一分钟的 dev 一定大于上一分钟的正式版 → dev 能覆盖正式版
+          # 用户的实际流程（正式版 → dev → 下一个正式版）正是靠这一点成立的。
+          CODE="$(python3 tools/version-code.py --channel dev)"
+          echo "CODA_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
           echo "CODA_VERSION_NAME=${BASE:-dev}" >> "$GITHUB_ENV"
           # 仓库内固定密钥（keystore/coda-debug.jks）的证书摘要，核对步骤用它比对。
           echo "CODA_SIGNER_SHA256=05011c837e7fd75ae390c9f5d627f4618324676896ff0fbe04146607db841c35" >> "$GITHUB_ENV"
@@ -40,7 +42,7 @@ jobs:
             echo "dev 构建使用 debug 变体。"
             echo ""
             echo "版本名：${BASE:-dev}"
-            echo "版本号：$(( 200000 + ${{ github.run_number }} ))（基线 ${BASE_CODE:-28} + run_number）"
+            echo "版本号：$CODE（时间序列 × 2 + 0）"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: pnpm/action-setup@v4

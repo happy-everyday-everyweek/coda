@@ -60,135 +60,107 @@ object UpdateChecker {
 
     /** 渠道中文名，用于界面文案。 */
     val channelLabel: String
-        get() = if (channel == "dev") "开发预览版" else "正式发行版"
+        get() = labelOf(channel)
 
-    private fun isDev() = channel == "dev"
+    fun labelOf(ch: String): String = if (ch == "dev") "开发预览版" else "正式发行版"
 
-    /** 一次查询的结论。查询失败不是异常，一律 ok=false 并带原因。 */
+    /** 是否 dev 构建。 */
+    val isDevBuild: Boolean
+        get() = channel == "dev"
+
+    /**
+     * 一次查询的结论。查询失败不是异常，一律 ok=false 并带原因。
+     *
+     * [channel] 是**候选版本**所属的渠道，不一定等于当前构建的渠道：
+     * 正式版用户被提示升级到 dev 时，这里是 `dev`。
+     */
     data class Result(
         val ok: Boolean,
         val hasUpdate: Boolean = false,
         val versionCode: Int = 0,
         val versionName: String = "",
+        /** 候选版本所属渠道：`dev` 或 `release`。 */
+        val channel: String = "",
         val tag: String = "",
         val notes: String = "",
         val apkUrl: String = "",
         val apkSize: Long = 0,
         val sha256: String? = null,
         val publishedAt: String = "",
-        /** 是否来自清单：为 true 才能做哈希校验。 */
-        val fromManifest: Boolean = false,
         val error: String? = null,
-    )
+    ) {
+        /** 候选版本是否跨渠道——跨渠道时要提醒用户这是换构建线。 */
+        val crossesChannel: Boolean
+            get() = channel.isNotEmpty() && channel != UpdateChecker.channel
+
+        val candidateChannelLabel: String
+            get() = if (channel.isEmpty()) "" else labelOf(channel)
+    }
 
     /**
-     * 查询当前渠道的最新版本。同步执行，须在后台线程调用。
+     * 查询可用的最新版本。同步执行，须在后台线程调用。
+     *
+     * 两个渠道都查、取版本号更大的那个。这是「渠道互更」的实现：
+     * 正式版用户能看到 dev 的新构建，dev 用户也能在下一个正式版发布后回到正式版。
+     * 只有各看各的，装过 dev 就永远回不去。
      */
     fun check(ctx: Context): Result {
-        val baseHeaders = mapOf(
+        val headers = mapOf(
             "User-Agent" to "Coda-Android",
+            "Accept" to "*/*",
             // 清单可能被中间代理缓存，带 no-cache 让每次都问源站。
             "Cache-Control" to "no-cache",
         )
 
-        // 1. 优先清单（静态下载，不耗 API 限额，且带 sha256）。
-        val manifestUrl = if (isDev()) DEV_MANIFEST_URL else RELEASE_MANIFEST_URL
-        httpGet(manifestUrl, baseHeaders + ("Accept" to "*/*"))
-            ?.let { json -> parseManifest(json)?.let { return it } }
+        // 两个渠道都取。任一拿不到都不影响另一个——单渠道坏掉时仍能更新。
+        val candidates = listOfNotNull(
+            httpGet(DEV_MANIFEST_URL, headers)?.let { parseManifest(it, "dev") },
+            httpGet(RELEASE_MANIFEST_URL, headers)?.let { parseManifest(it, "release") },
+        )
+        if (candidates.isEmpty()) {
+            return Result(
+                false,
+                error = "无法获取版本信息（网络受限，或两个渠道都还没有发布过版本）",
+            )
+        }
 
-        // 2. 兜底：GitHub API（兼容尚未上传清单的历史 Release）。
-        val apiHeaders = baseHeaders.toMutableMap().apply {
-            put("Accept", "application/vnd.github+json")
-            runCatching { GitHub.token(ctx) }.getOrNull()
-                ?.takeIf { it.isNotEmpty() }
-                ?.let { put("Authorization", "Bearer $it") }
-        }
-        val apiUrl = if (isDev()) {
-            "https://api.github.com/repos/$REPO/releases/tags/$DEV_TAG"
-        } else {
-            "https://api.github.com/repos/$REPO/releases/latest"
-        }
-        val body = httpGet(apiUrl, apiHeaders)
-            ?: return Result(false, error = "无法访问 GitHub（网络受限，或已达未登录速率限制）")
-        return parseApi(body)
+        // 两个渠道共用一条时间序列，所以「版本号最大」就是「最新」。
+        val best = candidates.maxByOrNull { it.versionCode }!!
+        return best.copy(ok = true, hasUpdate = best.versionCode > currentVersionCode)
     }
 
     /**
      * 解析 CI 发布的版本清单。
      *
-     * 期望字段：tag / versionCode / versionName / apkUrl / size / sha256 / notes / publishedAt
+     * 期望字段：tag / channel / versionCode / versionName / apkUrl / size / sha256 / notes
      * 缺 versionCode 或 apkUrl 就判为无效——这两个字段没有可替代来源。
+     *
+     * [expectedChannel] 是这份清单应属于的渠道，只用来兜底校验：清单里的 channel
+     * 与它不一致说明被放错了位置（例如 update-dev.json 传到了正式 Release），
+     * 一律丢弃，避免把 dev 包当成正式版发给用户。
      */
-    fun parseManifest(json: JSONObject): Result? {
-        val tag = json.optString("tag")
+    fun parseManifest(json: JSONObject, expectedChannel: String): Result? {
         val versionCode = json.optInt("versionCode", 0)
         val apkUrl = json.optString("apkUrl")
         if (versionCode <= 0 || apkUrl.isEmpty()) return null
 
-        // 兜底校验：发行版绝不接受 dev 的清单。
-        if (!isDev() && tag == DEV_TAG) return null
+        val declared = json.optString("channel")
+        if (declared.isNotEmpty() && declared != expectedChannel) return null
+
+        val tag = json.optString("tag")
 
         return Result(
             ok = true,
-            hasUpdate = versionCode > currentVersionCode,
+            hasUpdate = false,
             versionCode = versionCode,
             versionName = json.optString("versionName").ifEmpty { tag.removePrefix("v") },
+            channel = expectedChannel,
             tag = tag,
             notes = json.optString("notes").trim(),
             apkUrl = apkUrl,
             apkSize = json.optLong("size", 0),
             sha256 = json.optString("sha256").takeIf { it.isNotEmpty() },
             publishedAt = json.optString("publishedAt"),
-            fromManifest = true,
-        )
-    }
-
-    /**
-     * 解析 GitHub API 的 release 对象（兜底路径）。
-     *
-     * 这一条拿不到可靠的 versionCode：GitHub 的 release 对象里没有这个字段。
-     * 唯一可信来源是 tag 里显式写的 `vcNNN`，所以 CI 若没写入就只能判「无法确定」，
-     * 绝不能凭「有 Release」就提示更新——那会让用户永远被同一个版本打扰。
-     */
-    fun parseApi(json: JSONObject): Result {
-        val tag = json.optString("tag_name")
-        val prerelease = json.optBoolean("prerelease", false) || tag == DEV_TAG
-        if (!isDev() && prerelease) {
-            return Result(false, error = "接口返回预发行版，已忽略（发行版只接受正式版）")
-        }
-
-        val versionCode = Regex("vc(\\d{1,9})", RegexOption.IGNORE_CASE)
-            .find(tag)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        if (versionCode <= 0) {
-            return Result(false, error = "tag 未带 versionCode（$tag），无法判断新旧")
-        }
-
-        val assets = json.optJSONArray("assets")
-            ?: return Result(false, error = "该版本没有附件")
-        var url = ""
-        var size = 0L
-        for (i in 0 until assets.length()) {
-            val a = assets.optJSONObject(i) ?: continue
-            if (a.optString("name").endsWith(".apk", ignoreCase = true)) {
-                url = a.optString("browser_download_url")
-                size = a.optLong("size", 0)
-                break
-            }
-        }
-        if (url.isEmpty()) return Result(false, error = "该版本没有 APK 附件")
-
-        return Result(
-            ok = true,
-            hasUpdate = versionCode > currentVersionCode,
-            versionCode = versionCode,
-            versionName = json.optString("name").ifEmpty { tag.removePrefix("v") },
-            tag = tag,
-            notes = json.optString("body").trim(),
-            apkUrl = url,
-            apkSize = size,
-            sha256 = null,
-            publishedAt = json.optString("published_at"),
-            fromManifest = false,
         )
     }
 
