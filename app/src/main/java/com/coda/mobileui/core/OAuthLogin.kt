@@ -107,7 +107,12 @@ object OAuthLogin {
                 method = "POST",
                 payload = org.json.JSONObject().put("realm", effectiveRealm).toString(),
             ) ?: run {
-                lastBeginError = "面板 /panel/api/login/start 无响应（网关在家但接口不通）"
+                // panelJson 失败时已经把具体原因（HTTP 状态码或异常类型）写进
+                // lastBeginError。这里只有在它没写时才兜底，否则会把真实原因
+                // 覆盖成一句「无响应」，诊断信息等于白埋。
+                if (lastBeginError == null) {
+                    lastBeginError = "面板 /panel/api/login/start 无响应（网关在家但接口不通）"
+                }
                 return null
             }
             val body = runCatching { org.json.JSONObject(raw) }.getOrNull() ?: run {

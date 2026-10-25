@@ -92,6 +92,9 @@ object ProxyHost {
     var lastError: String? = null
         private set
 
+    /** 日志标签。 */
+    private const val TAG = "ProxyHost"
+
     /**
      * 就绪探测的首个失败原因。
      *
@@ -682,7 +685,9 @@ object ProxyHost {
     ): String? = try {
         // 与 probe 同理：回环请求必须绕过系统代理，代理软件在场时不能让它截走
         // 管理面调用（发起授权、轮询状态、拉模型列表全在这条路上）。
-        val conn = (URL(baseUrl() + path)
+        val url = baseUrl() + path
+        AppLog.i(TAG, "管理面 $method $url（宿主运行中=${isRunning}）")
+        val conn = (URL(url)
             .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 10_000
@@ -701,8 +706,25 @@ object ProxyHost {
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val text = stream?.bufferedReader()?.use { it.readText() }
         conn.disconnect()
-        if (code in 200..299) text else null
-    } catch (_: Throwable) {
+        if (code in 200..299) {
+            text
+        } else {
+            // 以前这里只返回 null，状态码丢了。管理面失败的常见形态：
+            // 404 = 插件没注册这条路由；401 = 密钥不对；
+            // 502 = 插件内部报错（登录流程本身失败）。
+            AppLog.w(TAG, "管理面失败 $path → HTTP $code：${text?.take(300)}")
+            lastError = "管理面 HTTP $code（$path）：${text?.take(200).orEmpty()}"
+            null
+        }
+    } catch (t: Throwable) {
+        // 同样以前是 catch(_)，异常被吞掉，连「连不上」和「超时」都分不出。
+        val kind = when (t) {
+            is java.net.ConnectException -> "无法连接（宿主未监听该端口）"
+            is java.net.SocketTimeoutException -> "读取超时（${timeoutMs}ms 无响应）"
+            else -> "${t.javaClass.simpleName}: ${t.message}"
+        }
+        AppLog.w(TAG, "管理面异常 $path：$kind")
+        lastError = "管理面请求失败：$kind（$path）"
         null
     }
 

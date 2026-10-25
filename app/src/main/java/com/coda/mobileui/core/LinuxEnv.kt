@@ -331,6 +331,12 @@ class LinuxEnv(private val ctx: Context) {
      * LD_LIBRARY_PATH 必须清掉，否则动态加载器会先去那里找库。
      */
     fun builder(guestArgv: List<String>, extraEnv: Map<String, String> = emptyMap()): ProcessBuilder {
+        // 每次起进程前确保容器内 DNS 可用。这一步是必要的，不是保险：
+        // `env -i` 会清空宿主环境，Go 静态二进制默认用纯 Go 解析器读
+        // /etc/resolv.conf，而 rootfs 里那份通常断链或为空。后果是
+        // 监听回环正常（不查 DNS），但任何要解析域名的请求立刻失败——
+        // 表现为「网关已就绪」紧接着「面板无响应」，两边都说不清原因。
+        ensureResolvConf()
         val command = mutableListOf(prootPath)
         command += launchPrefix()
         command += "/usr/bin/env"
@@ -350,6 +356,55 @@ class LinuxEnv(private val ctx: Context) {
         environment["PROOT_LOADER"] = loaderPath
         environment["PROOT_TMP_DIR"] = tmpDir.absolutePath
         return builder
+    }
+
+    /**
+     * 保证容器内 /etc/resolv.conf 指向可用的 DNS。
+     *
+     * 只在该文件缺失、为空、或内容不含任何 nameserver 时重写，已有可用配置
+     * 一律不动——用户可能自己配过。
+     *
+     * DNS 来源按优先级：当前网络的 LinkProperties（最准，能拿到私有 DNS 与
+     * VPN 的服务器），取不到则用公共 DNS 兜底。写入后 Go 的纯解析器就能
+     * 正常解析域名，`login/start` 这类需要访问上游的请求才不会立刻失败。
+     */
+    private fun ensureResolvConf() {
+        val target = File(rootfs, "etc/resolv.conf")
+        val existing = runCatching {
+            if (target.isFile) target.readText() else ""
+        }.getOrDefault("")
+        if (existing.lineSequence().any { it.trim().startsWith("nameserver ") }) return
+        val servers = currentDnsServers()
+        if (servers.isEmpty()) {
+            AppLog.w("LinuxEnv", "拿不到任何 DNS 服务器地址，容器内域名解析可能失败")
+            return
+        }
+        val text = servers.joinToString("\n") { "nameserver $it" } + "\n"
+        runCatching {
+            target.parentFile?.mkdirs()
+            // rootfs 里这份可能是指向宿主路径的符号链接，先删再写，避免写到别处。
+            if (target.exists() && !target.isFile) target.delete()
+            target.writeText(text)
+            AppLog.i("LinuxEnv", "写入容器 DNS：${servers.joinToString(", ")}")
+        }.onFailure {
+            AppLog.w("LinuxEnv", "写 resolv.conf 失败：${it.message ?: it.javaClass.simpleName}")
+        }
+    }
+
+    /** 当前生效网络的 DNS 地址；取不到时回落到公共 DNS。 */
+    private fun currentDnsServers(): List<String> {
+        val fromSystem: List<String> = runCatching {
+            val cm = ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                as android.net.ConnectivityManager
+            cm.allNetworks.flatMap { net ->
+                cm.getLinkProperties(net)?.dnsServers?.mapNotNull { it.hostAddress } ?: listOf()
+            }
+        }.getOrDefault(listOf())
+        val usable = fromSystem.filter { it.isNotBlank() }.distinct()
+        // IPv6 链路本地地址在 proot 内不一定可达，优先用 IPv4。
+        val ipv4 = usable.filter { !it.contains(':') }
+        return if (ipv4.isNotEmpty()) ipv4 else if (usable.isNotEmpty()) usable
+        else listOf("223.5.5.5", "119.29.29.29")
     }
 
     /** 一次容器内命令的执行结果。 */
