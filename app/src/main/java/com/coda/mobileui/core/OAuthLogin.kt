@@ -75,18 +75,27 @@ object OAuthLogin {
      * 走宿主按插件挂的 `/<pluginId>-auth-url`：宿主替插件调 `auth.login.start`，
      * 回 `{state, url, status}`。插件为每次登录建立独立 cookie jar，连续登录多批账号不会互串。
      * 设备码流程还会带 `user_code`，其余字段名各家略有差异，一并兜住。
+     *
+     * [realm] 只对 CodeBuddy 有意义：`global` 走 workbuddy.ai，其余（含空）走
+     * copilot.tencent.com。它是**账号级**属性而不是供应商级——同一个网关里可以
+     * 同时挂国内号和国际号，所以每次登录都要单独指定，不能按 provider.id 定死。
      */
-    fun begin(ctx: Context, provider: OAuthProviders.Provider): Session? {
-        // CodeBuddy：走 workbuddy2api 内嵌面板的设备授权端点，按 realm 区分国内外。
+    fun begin(
+        ctx: Context,
+        provider: OAuthProviders.Provider,
+        realm: String = "cn",
+    ): Session? {
+        // CodeBuddy：走 workbuddy2api 内嵌面板的设备授权端点。
         if (OAuthProviders.usesWorkBuddyGateway(provider.id)) {
-            val realm = if (provider.id == "workbuddy-ai") "global" else "cn"
+            // 只认 global，其余一律回落到 cn：上游的 loginEndpoints 就是这么兜底的。
+            val effectiveRealm = if (realm == "global") "global" else "cn"
             val body = runCatching {
                 org.json.JSONObject(
                     panelJson(
                         ctx,
                         "/panel/api/login/start",
                         method = "POST",
-                        payload = org.json.JSONObject().put("realm", realm).toString(),
+                        payload = org.json.JSONObject().put("realm", effectiveRealm).toString(),
                     ) ?: return null,
                 )
             }.getOrNull() ?: return null
@@ -172,6 +181,11 @@ object OAuthLogin {
             // 网关对下游的密钥；宿主用同一个管理密钥即可，本机回环不外露。
             apiKey = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey(),
             models = models.toMutableList(),
+            // 关键：标成 OAuth 来源。列表页据此把它认作「OAuth 添加的供应商」，
+            // 点进去直接回到对应平台的管理页，而不是甩一堆手填字段给它看。
+            // 不标记的话，落库后就是一条普通 api-key 供应商，用户会觉得「我明明是授权登录的」。
+            kind = ProviderStore.ProviderKind.LLM,
+            origin = ProviderStore.ProviderOrigin.OAUTH,
         )
         ProviderStore.save(ctx, list)
     }

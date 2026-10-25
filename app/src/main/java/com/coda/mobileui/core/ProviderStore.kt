@@ -11,6 +11,20 @@ import java.io.File
  */
 object ProviderStore {
 
+    enum class ProviderKind {
+        /** 语言模型（对话/补全），走内核原有通路。 */
+        LLM,
+        /** 语音转文字，只用于把录音转成文本。 */
+        ASR,
+    }
+
+    enum class ProviderOrigin {
+        /** 用户手填端点与密钥。 */
+        MANUAL,
+        /** 通过 OAuth 授权添加，凭据在网关侧。 */
+        OAUTH,
+    }
+
     data class Provider(
         var id: String,
         var name: String,
@@ -18,7 +32,15 @@ object ProviderStore {
         var baseUrl: String,
         var apiKey: String,
         var models: MutableList<String>,
-    )
+        /** 这条供应商属于哪类模型。老配置缺这两个字段时按 LLM + MANUAL 处理。 */
+        var kind: ProviderKind = ProviderKind.LLM,
+        /** 这条供应商是怎么加进来的。OAuth 的要在列表里能回到它自己的管理页。 */
+        var origin: ProviderOrigin = ProviderOrigin.MANUAL,
+    ) {
+        /** 是否 OAuth 添加且对应平台仍在注册表里。 */
+        val isOAuthManaged: Boolean
+            get() = origin == ProviderOrigin.OAUTH && OAuthProviders.all.any { it.id == id }
+    }
 
     fun fileFor(ctx: Context): File {
         val base = File(ctx.filesDir, "zcode-data/.zcode/v2")
@@ -56,6 +78,19 @@ object ProviderStore {
                 baseUrl = api?.optString("baseUrl") ?: "",
                 apiKey = cfg.optJSONObject("access")?.optString("apiKey") ?: "",
                 models = models,
+                // 老配置文件没有这两个字段：默认语言模型 + 手动添加，
+                // 保证升级后既有供应商表现不变。
+                kind = when (r.optString("codaKind")) {
+                    "asr" -> ProviderKind.ASR
+                    else -> ProviderKind.LLM
+                },
+                // 来源可以从 id 反推：OAuth 供应商的 id 与注册表里的平台 id 一一对应
+                // （OAuthLogin 落库时就是这么写的）。这样即使字段缺失也能正确识别。
+                origin = when {
+                    r.optString("codaOrigin") == "oauth" -> ProviderOrigin.OAUTH
+                    OAuthProviders.all.any { it.id == r.optString("providerId") } -> ProviderOrigin.OAUTH
+                    else -> ProviderOrigin.MANUAL
+                },
             )
         }
         return out
@@ -73,6 +108,10 @@ object ProviderStore {
         val prules = JSONArray()
         for (p in providers) {
             val r = JSONObject().put("providerId", p.id).put("providerName", p.name)
+            // 这两个是 Coda 自己的扩展字段：内核不认识也不会报错，
+            // 但 App 重读时要靠它把 OAuth 供应商与手填供应商分开。
+            r.put("codaKind", if (p.kind == ProviderKind.ASR) "asr" else "llm")
+            r.put("codaOrigin", if (p.origin == ProviderOrigin.OAUTH) "oauth" else "manual")
             val cfg = JSONObject()
             cfg.put("group", "standard-personal")
             cfg.put("access", JSONObject().put("type", "api-key").put("apiKey", p.apiKey))

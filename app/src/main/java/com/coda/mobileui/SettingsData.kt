@@ -169,44 +169,70 @@ object SettingsData {
 
     /** 模型设置页：读取真实的供应商配置（provider_config.json），支持增删改。 */
     fun providers(ctx: Context): SettingsPage {
-        val providers = ProviderStore.load(ctx)
+        val all = ProviderStore.load(ctx)
+        val llm = all.filter { it.kind == ProviderStore.ProviderKind.LLM }
+        val asr = all.filter { it.kind == ProviderStore.ProviderKind.ASR }
         val rows = mutableListOf<SettingRow>()
-        rows += SettingRow.Header("自定义供应商")
-        if (providers.isEmpty()) {
-            rows += SettingRow.Value(
-                "尚未配置供应商",
-                "点此添加一个 OpenAI / Anthropic 兼容端点",
-                "providers_add",
-            )
+
+        // 第一层只放两类模型的入口。以后再加模型类型（图像、向量、重排…）
+        // 就在这一层加一行，点进去是同一个「某类模型的供应商列表」页。
+        rows += SettingRow.Category(
+            "providers_llm",
+            "LLM 模型",
+            "${llm.size} 个供应商 · 对话与补全" + if (llm.any { it.isOAuthManaged }) "，含 OAuth" else "",
+            R.drawable.ic_chat,
+        )
+        rows += SettingRow.Category(
+            "providers_asr",
+            "ASR 模型",
+            "${asr.size} 个供应商 · 语音转文字",
+            R.drawable.ic_command,
+        )
+        return SettingsPage("模型设置", rows)
+    }
+
+    /**
+     * 某一类模型的供应商列表。
+     *
+     * 第一项永远是「添加供应商」（数量固定为 1），后面是该类已添加的供应商
+     * （数量随用户添加情况变化）。OAuth 添加的供应商点进去直接回到它自己的
+     * 管理页，而不是显示一堆手填字段——那些字段对它没有意义。
+     */
+    fun providersOfKind(ctx: Context, kind: ProviderStore.ProviderKind): SettingsPage {
+        val list = ProviderStore.load(ctx).filter { it.kind == kind }
+        val rows = mutableListOf<SettingRow>()
+        val addKey = if (kind == ProviderStore.ProviderKind.ASR) "providers_add_asr" else "providers_add"
+        rows += SettingRow.Value(
+            "添加供应商",
+            when (kind) {
+                ProviderStore.ProviderKind.ASR -> "OpenAI 兼容的语音转写端点"
+                else -> "OpenAI / Anthropic 通用格式，或 OAuth 授权"
+            },
+            addKey,
+        )
+        if (list.isEmpty()) {
+            rows += SettingRow.Value("尚未添加", "点上面一行开始添加")
         } else {
-            providers.forEach { p ->
+            rows += SettingRow.Header("已添加")
+            list.forEach { p ->
                 rows += SettingRow.Value(
                     p.name,
-                    "${p.models.size} 个模型 · ${p.baseUrl}",
-                    "providers_edit:${p.id}",
+                    if (p.isOAuthManaged) {
+                        "${p.vendorOrChannel()} · OAuth 授权"
+                    } else {
+                        "${p.models.size} 个模型 · ${p.baseUrl}"
+                    },
+                    // OAuth 的直接进平台管理页；手填的进编辑页。
+                    if (p.isOAuthManaged) "providers_oauth_open:${p.id}" else "providers_edit:${p.id}",
                 )
             }
         }
-        rows += SettingRow.Value("添加供应商", "填写 API 端点、模型名称与 Key", "providers_add")
-        // OAuth 供应商：授权登录后由本机网关托管账号，对内核而言仍是一条普通 provider。
-        // 一个平台可以登多个账号，账号本身在网关里，所以这里的「账号」入口列表是全部平台。
-        rows += SettingRow.Header("OAuth 授权")
-        rows += SettingRow.Value(
-            "管理 OAuth 账号",
-            "查看账号健康度、签到、领奖励，同一平台可加多个账号",
-            "providers_oauth_accounts",
-        )
-        rows += SettingRow.Value(
-            "添加 OAuth 供应商",
-            "授权账号，由本机网关托管，可连续添加多个账号",
-            "providers_oauth_pick",
-        )
-        val oauth = OAuthProviders.all.filter { p -> providers.any { it.id == p.id } }
-        for (p in oauth) {
-            rows += SettingRow.Value(p.name, "${p.vendor} · 已授权", "providers_oauth_open:${p.id}")
-        }
-        return SettingsPage("模型设置", rows)
+        return SettingsPage(if (kind == ProviderStore.ProviderKind.ASR) "ASR 模型" else "LLM 模型", rows)
     }
+
+    /** OAuth 供应商显示的平台归属（腾讯 / GitHub 等）。 */
+    private fun ProviderStore.Provider.vendorOrChannel(): String =
+        OAuthProviders.all.firstOrNull { it.id == id }?.vendor ?: "OAuth"
 
     /** 子智能体页：用户级 agents 目录的真实文件。 */
     fun subagents(ctx: Context): SettingsPage =

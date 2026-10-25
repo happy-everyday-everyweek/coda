@@ -63,6 +63,20 @@ class OAuthSheet(
         get() = color(com.google.android.material.R.attr.colorOnSurface, Color.WHITE)
     private val onSurfaceVariant: Int
         get() = color(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
+
+    /**
+     * CodeBuddy 的国内版 / 国际版。
+     *
+     * workbuddy2api 的 realm 是**账号级**的：global 走 workbuddy.ai，
+     * cn 走 copilot.tencent.com。同一个网关里可以同时挂两边账号，
+     * 所以每次登录单独选，不能按 provider.id 定死（那会让 intl 账号只能从
+     * workbuddy-ai 这个渠道进，两个 provider 又共用同一个网关端口）。
+     *
+     * 非 CodeBuddy 平台不显示这一步。
+     */
+    private var realm: String = "cn"
+    private val needsRealm: Boolean
+        get() = OAuthProviders.usesWorkBuddyGateway(provider.id)
     private val primary: Int
         get() = color(androidx.appcompat.R.attr.colorPrimary, Color.BLUE)
 
@@ -157,7 +171,7 @@ class OAuthSheet(
                     status.setTextColor(0xFFC62828.toInt())
                     return@post
                 }
-                val started = OAuthLogin.begin(host, provider)
+                val started = OAuthLogin.begin(host, provider, realm)
                 session = started
                 if (started == null) {
                     status.text = "无法发起授权，请重试"

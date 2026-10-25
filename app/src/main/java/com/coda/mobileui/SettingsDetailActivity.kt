@@ -44,6 +44,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     private lateinit var store: SettingsStore
     private var pageKey: String = PAGE_SYSTEM
+    /** 当前正在看的供应商类型（两级页面共用一页时靠它区分）。 */
+    private var providerKind: ProviderStore.ProviderKind = ProviderStore.ProviderKind.LLM
     private var firstResume = true
     /** 进入插件页时的一次性内置市场源同步标记。 */
     private var marketSyncedOnEnter = false
@@ -90,10 +92,24 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         pageKey = intent.getStringExtra(EXTRA_PAGE) ?: PAGE_SYSTEM
 
         findViewById<View>(R.id.detail_root).applySystemBarsInset()
-        findViewById<View>(R.id.btn_back).setOnClickListener { finish() }
+        findViewById<View>(R.id.btn_back).setOnClickListener { goBack() }
+        // 系统返回键与顶栏返回保持一致：子页先回上一层，根页才退出。
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = goBack()
+        })
         renderPage()
         // 进入插件页时自动写入内置市场源并刷新市场索引。
         syncMarketplacesOnEnter()
+    }
+
+    /** 返回：子页先回上一层，根页才退出。 */
+    private fun goBack() {
+        if (pageKey == PAGE_PROVIDERS_OF_KIND) {
+            pageKey = PAGE_PROVIDERS
+            renderPage()
+            return
+        }
+        finish()
     }
 
     override fun onResume() {
@@ -107,7 +123,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             // 该跑未跑（如从系统设置授权返回）：尝试补启；失败时状态行会显示“已停止”。
             PhoneControl.startServer(this)
         }
-        if (pageKey == PAGE_PROVIDERS || pageKey == PAGE_SUBAGENTS ||
+        if (pageKey == PAGE_PROVIDERS || pageKey == PAGE_PROVIDERS_OF_KIND || pageKey == PAGE_SUBAGENTS ||
             pageKey == PAGE_SKILLS || pageKey == PAGE_COMMANDS ||
             pageKey == PAGE_AUTOMATIONS || pageKey == PAGE_HOOKS || pageKey == PAGE_COMPUTER ||
             pageKey == PAGE_GITHUB || pageKey == PAGE_BROWSER
@@ -130,6 +146,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             SettingsData.pluginMarket(this, extrasCache["plugins"])
         }
         PAGE_PROVIDERS -> SettingsData.providers(this)
+        PAGE_PROVIDERS_OF_KIND -> SettingsData.providersOfKind(this, providerKind)
         PAGE_SUBAGENTS -> SettingsData.subagents(this)
         PAGE_SKILLS -> SettingsData.skills(this)
         PAGE_COMMANDS -> SettingsData.commands(this)
@@ -166,7 +183,22 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         findViewById<TextView>(R.id.detail_title).text = page.title
         val container = findViewById<LinearLayout>(R.id.page_container)
         container.removeAllViews()
-        SettingsViewBuilder.render(this, container, page.rows, listener = this)
+        SettingsViewBuilder.render(this, container, page.rows, listener = this) { target ->
+            // 一级 Category 都是「进子页」，子页统一从 providers_kind 走。
+            when (target) {
+                "providers_llm" -> {
+                    providerKind = ProviderStore.ProviderKind.LLM
+                    pageKey = PAGE_PROVIDERS_OF_KIND
+                    renderPage()
+                }
+                "providers_asr" -> {
+                    providerKind = ProviderStore.ProviderKind.ASR
+                    pageKey = PAGE_PROVIDERS_OF_KIND
+                    renderPage()
+                }
+                else -> Unit
+            }
+        }
     }
 
     override fun onRadioSelect(key: String) {
@@ -331,7 +363,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 pickCodeTheme(getString(R.string.appearance_code_theme_light), isLight = true)
             key == KEY_CODE_THEME_DARK ->
                 pickCodeTheme(getString(R.string.appearance_code_theme_dark), isLight = false)
-            key == "providers_add" -> editProvider(null)
+            key == "providers_add" -> showAddProviderKind()
+            key == "providers_add_asr" -> editProvider(null, kind = ProviderStore.ProviderKind.ASR)
             key == "providers_oauth_pick" -> pickOAuthProvider()
             key == "providers_oauth_accounts" -> OAuthAccountsSheet(this).show()
             key.startsWith("providers_oauth_open:") -> {
@@ -1776,8 +1809,61 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
+    /**
+     * 「添加供应商」第一屏：先选类型。
+     *
+     * 分两块：
+     *  1. 通用格式 —— OpenAI / Anthropic 这类手填端点与密钥的
+     *  2. OAuth 授权 —— 扫码/跳转授权，凭据落在本机网关
+     *
+     * 版式按系统设置的标准分组：同一块里首行上方大圆角、末行下方大圆角、中间行直角，
+     * 相邻行之间插一条与背景同色的细线把卡片断开。直接复用 SettingsViewBuilder
+     * 的分组实现（它已经和 Lawnchair 的 PreferenceGroupItem 对齐），
+     * 不另画一套，避免两处样式漂移。
+     */
+    private fun showAddProviderKind() {
+        val sheet = CodaSheet(this).title("添加供应商").subtitle("先选类型，再填参数")
+        sheet.content { col ->
+            // 用 SettingRow + SettingsViewBuilder 渲染，自动获得分组圆角与分隔线。
+            val group = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            col.addView(group)
+
+            val rows = mutableListOf<SettingRow>()
+            rows += SettingRow.Header("通用格式")
+            rows += SettingRow.Value("OpenAI 兼容", "chat/completions 格式，最常见的端点", "add_openai")
+            rows += SettingRow.Value("Anthropic 兼容", "messages 格式", "add_anthropic")
+            rows += SettingRow.Header("OAuth 授权")
+            rows += SettingRow.Value(
+                "OAuth 登录",
+                "扫码或跳转授权，凭据由本机网关托管",
+                "add_oauth",
+            )
+            SettingsViewBuilder.render(this, group, rows, listener = object : SettingsActionListener {
+                override fun onRadioSelect(key: String) = Unit
+                override fun onToggleChange(key: String, checked: Boolean) = Unit
+                override fun onValueClick(key: String) {
+                    sheet.dismiss()
+                    when (key) {
+                        "add_openai" -> editProvider(null, apiType = "openai-chat-completions", kind = providerKind)
+                        "add_anthropic" -> editProvider(null, apiType = "anthropic", kind = providerKind)
+                        "add_oauth" -> pickOAuthProvider()
+                    }
+                }
+            })
+        }
+        sheet.show()
+    }
+
     /** 供应商编辑（添加 / 修改）：保存后重启核心使配置生效。 */
-    private fun editProvider(existing: ProviderStore.Provider?) {
+    private fun editProvider(
+        existing: ProviderStore.Provider?,
+        apiType: String = "openai-chat-completions",
+        kind: ProviderStore.ProviderKind = ProviderStore.ProviderKind.LLM,
+    ) {
+        // 编辑已有供应商时，沿用它的类型；新增时用调用方指定的类型。
+        val kindOfRecord = existing?.kind ?: kind
+        val typeOfRecord = existing?.apiType ?: apiType
+
         val idInput = EditText(this).apply {
             hint = "供应商 ID，仅英文，如 myai"
             setText(existing?.id ?: "")
@@ -1788,7 +1874,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             setText(existing?.name ?: "")
         }
         val urlInput = EditText(this).apply {
-            hint = "API 端点，如 https://api.example.com/v1"
+            // ASR 只要一个能收 /v1/audio/transcriptions 的端点，与 LLM 同形。
+            hint = if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                "转写端点，如 https://api.example.com/v1"
+            } else {
+                "API 端点，如 https://api.example.com/v1"
+            }
             setText(existing?.baseUrl ?: "")
             inputType = InputType.TYPE_TEXT_VARIATION_URI
         }
@@ -1797,15 +1888,29 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             setText(existing?.apiKey ?: "")
         }
         val modelsInput = EditText(this).apply {
-            hint = "模型名，多个用英文逗号分隔"
+            hint = if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                "转写模型名，如 whisper-1；多个用英文逗号分隔"
+            } else {
+                "模型名，多个用英文逗号分隔"
+            }
             setText(existing?.models?.joinToString(",") ?: "")
         }
-        val apiTypeInput = EditText(this).apply {
-            hint = "接口类型，默认 openai-chat-completions"
-            setText(existing?.apiType ?: "openai-chat-completions")
+        // 接口类型不再让用户手填：路由已经按类型决定了，多一个输入框只会被填错。
+        // 仍然留一行只读展示，方便排查。
+        val apiTypeLabel = TextView(this).apply {
+            text = "接口类型：$typeOfRecord"
+            textSize = 13f
+            setPadding(0, dp(6), 0, dp(2))
         }
+
         val sheet = CodaSheet(this)
-            .title(if (existing == null) "添加供应商" else "编辑供应商")
+            .title(
+                when {
+                    existing != null -> "编辑供应商"
+                    kindOfRecord == ProviderStore.ProviderKind.ASR -> "添加 ASR 供应商"
+                    else -> "添加 LLM 供应商"
+                }
+            )
             .secondaryAction("取消") { it.dismiss() }
         if (existing != null) {
             sheet.headerAction("删除") { s ->
@@ -1814,12 +1919,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             }
         }
         sheet.content { col ->
+            col.addView(apiTypeLabel)
             col.addView(idInput)
             col.addView(nameInput)
             col.addView(urlInput)
             col.addView(keyInput)
             col.addView(modelsInput)
-            col.addView(apiTypeInput)
         }
         sheet.primaryAction("保存") { s ->
             val id = idInput.text.toString().trim()
@@ -1837,11 +1942,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     ProviderStore.Provider(
                         id = id,
                         name = nameInput.text.toString().trim().ifEmpty { id },
-                        apiType = apiTypeInput.text.toString().trim()
-                            .ifEmpty { "openai-chat-completions" },
+                        apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
                         baseUrl = urlInput.text.toString().trim(),
                         apiKey = keyInput.text.toString().trim(),
                         models = models,
+                        kind = kindOfRecord,
+                        // 手填的一律是 MANUAL；OAuth 的那条由 OAuthLogin 落库时自己标 OAUTH，
+                        // 这里覆盖掉会把它降级成普通供应商，所以保留原值。
+                        origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
                     ),
                 )
                 ProviderStore.save(this, list)
@@ -2295,6 +2403,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_ABOUT = "about"
         const val PAGE_PLUGIN_MARKET = "plugin_market"
         const val PAGE_PROVIDERS = "providers"
+        /** 某一类模型的供应商列表。两级页面共用同一个 pageKey，靠 extra 区分类型。 */
+        const val PAGE_PROVIDERS_OF_KIND = "providers_kind"
+        const val EXTRA_PROVIDER_KIND = "extra_provider_kind"
         const val PAGE_SUBAGENTS = "subagents"
         const val PAGE_SKILLS = "skills"
         const val PAGE_COMMANDS = "commands"
