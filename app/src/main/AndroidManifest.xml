@@ -26,7 +26,8 @@
             android:exported="false" />
         <activity
             android:name=".SettingsDetailActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:theme="@style/Theme.Coda.SettingsDetail" />
         <activity
             android:name=".workspace.WorkspaceActivity"
             android:exported="false"

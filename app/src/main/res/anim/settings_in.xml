@@ -6,6 +6,12 @@
   这样卡片内分页与整页跳转的「前进」感是同一个方向，不会一处左一处右。
   距离用屏宽的 12% 而不是 100%：满屏横移在这个应用里太重，
   而且与卡片内的 16dp 位移差得太远，看起来像两套动画。
+
+  【alpha 起点是 0.9 而不是 0】这一项专门针对「左侧闪一下黑条」。
+  之前从 0 开始，第一帧新页几乎全透明，而它又要从右侧滑入，
+  屏幕左侧那时还没有任何不透明内容，透出的就是窗口底色。
+  起点抬到 0.9，第一帧就已经基本盖住，观感上仍是淡入，
+  但不会再有透底的那一瞬间。
 -->
 <set xmlns:android="http://schemas.android.com/apk/res/android"
     android:interpolator="@android:interpolator/fast_out_slow_in">
@@ -15,6 +21,6 @@
         android:toXDelta="0" />
     <alpha
         android:duration="220"
-        android:fromAlpha="0.0"
+        android:fromAlpha="0.9"
         android:toAlpha="1.0" />
 </set>

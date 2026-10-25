@@ -1,17 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  二级页打开时，下层（主界面）的配合动作：轻微左移并压暗。
+  二级页打开时，下层（主界面）的配合动作：轻微放大并压暗。
 
-  比新页位移小（6% vs 12%）——视觉上「新页盖上来」而不是两块板子同时飞。
-  只压暗到 0.85，不压到全黑：设置页是覆盖在会话页上，不是替换掉它，
-  保留一点底下的信息更符合「还能退回去」的心理预期。
+  【为什么是放大而不是平移】黑条的真正来源在这里。之前下层左移 6%，
+  窗口整体离开原位，屏幕右边缘就空出一条**没有任何窗口负责绘制**的缝；
+  WindowManager 没有东西可画，那里露出的是系统壁纸或纯黑。
+  这跟主题无关，所以浅色模式下同样是一条黑边。
+
+  改成从 1.0 放大到 1.06：放大只会往屏幕外扩，四条边永远被自己的内容
+  填满，不存在「让出位置」这回事，缝隙在几何上就不可能产生。
+  观感上仍然是「新页盖上来、旧页退后一点」，方向感没有丢。
+
+  压暗保留（0.85）：这是层次感的主要来源，且 alpha 变小不会露底，
+  因为下层自己还在原处、上面还盖着不透明的新页。
 -->
 <set xmlns:android="http://schemas.android.com/apk/res/android"
     android:interpolator="@android:interpolator/fast_out_slow_in">
-    <translate
+    <scale
         android:duration="220"
-        android:fromXDelta="0"
-        android:toXDelta="-6%" />
+        android:fromXScale="1.0"
+        android:fromYScale="1.0"
+        android:toXScale="1.06"
+        android:toYScale="1.06"
+        android:pivotX="50%"
+        android:pivotY="50%" />
     <alpha
         android:duration="220"
         android:fromAlpha="1.0"

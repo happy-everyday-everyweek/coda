@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  二级页退出：向右推出并淡出，与进入方向相反。
+  二级页退出：向右滑出并淡出。
 
-  比进入快一点（180ms vs 220ms）：退出的心理预期是「立刻回到刚才那里」，
-  拖得和进入一样长会显得拖沓。
+  与进入对称：位移 12%、180ms（比进入快一点，退出预期是「立刻回去」）。
+  alpha 终点是 0.9 而不是 0，理由与 settings_in 的起点同理——
+  留一点不透明度，窗口就不会在滑走前先变成一块透明的存在，
+  下层始终铺满，右侧也不会出现透底的缝。
 -->
 <set xmlns:android="http://schemas.android.com/apk/res/android"
     android:interpolator="@android:interpolator/fast_out_linear_in">
@@ -14,5 +16,5 @@
     <alpha
         android:duration="180"
         android:fromAlpha="1.0"
-        android:toAlpha="0.0" />
+        android:toAlpha="0.9" />
 </set>

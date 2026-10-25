@@ -1,16 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  二级页退出时，下层（主界面）回到原位并恢复亮度。
+  二级页退出时，下层（主界面）回到正常大小并恢复亮度。
 
-  位移与 settings_out 对称（-6% → 0），时长与 settings_pop_out 一致，
-  两块内容同时开始、同时结束，不会出现「上面的走了、下面的还在动」。
+  与 settings_out 严格对称：1.06 → 1.0、0.85 → 1.0、同为 180ms。
+  缩放而不是平移的理由见 settings_out：放大只往屏幕外扩，
+  恢复时也是往里收，全程不会让出任何边缘。
 -->
 <set xmlns:android="http://schemas.android.com/apk/res/android"
     android:interpolator="@android:interpolator/linear_out_slow_in">
-    <translate
+    <scale
         android:duration="180"
-        android:fromXDelta="-6%"
-        android:toXDelta="0" />
+        android:fromXScale="1.06"
+        android:fromYScale="1.06"
+        android:toXScale="1.0"
+        android:toYScale="1.0"
+        android:pivotX="50%"
+        android:pivotY="50%" />
     <alpha
         android:duration="180"
         android:fromAlpha="0.85"

@@ -31,4 +31,20 @@
     </style>
 
     <style name="Theme.Coda" parent="Theme.Coda.Base" />
+
+    <!--
+        设置二级页专用主题。
+
+        只有一件事要在这里定死：窗口背景必须是不透明的 colorSurface。
+
+        转场时这个窗口会整体平移。窗口内如果没有不透明底色，平移过程中
+        WindowManager 没有任何东西可画的地方就会露出系统底色，表现为屏幕上
+        闪出一条黑边——与浅色/深色主题无关，因为露出的不是主题色而是空。
+        继承来的 windowBackground 有可能被系统解析成透明，所以在自己的
+        style 里显式声明，不留给推断。
+    -->
+    <style name="Theme.Coda.SettingsDetail" parent="Theme.Coda">
+        <item name="android:windowBackground">@color/md3_surface</item>
+        <item name="android:windowIsTranslucent">false</item>
+    </style>
 </resources>
