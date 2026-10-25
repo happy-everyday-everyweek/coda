@@ -37,6 +37,9 @@ object UpdateChecker {
     /** dev 渠道固定 tag，由 dev-prerelease.yml 维护，永远只有这一个。 */
     private const val DEV_TAG = "dev-latest"
 
+    /** 日志标签。 */
+    private const val TAG = "UpdateChecker"
+
     /** 与 WebUiHost 保持一致。 */
     private const val REPO = "happy-everyday-everyweek/coda"
 
@@ -164,11 +167,54 @@ object UpdateChecker {
         )
     }
 
-    private fun httpGet(url: String, headers: Map<String, String>): JSONObject? = try {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+    /**
+     * 取一份清单 JSON。
+     *
+     * 【必须走镜像】这里以前是直接 `URL(url).openConnection()` 打 github.com，
+     * 在多数网络环境下 releases/download 的直连会被重置或超时，表现就是
+     * 「检查更新永远失败」。项目里本来就有 37 条镜像清单（GhMirrors），
+     * 资产下载一直用着，只有这个类漏了。
+     *
+     * 顺序照抄资产那边：先 ping 剔除连不上的（只看 TCP 握手，1.5 秒一个），
+     * 再按清单顺序试。清单本身是按实测延迟排的，这里不重复测速——
+     * 一个几 KB 的 JSON 用不上吞吐量排序，测速反而要多花十几秒和 12MB 流量。
+     *
+     * github.com 那条直连留在清单末尾兜底，它在镜像是全部挂掉时仍可能成功。
+     * 这也是为什么下面判成功用「拿到合法 JSON」而不是「HTTP 200」：
+     * 有些镜像对不存在的文件也返回 200，内容是一段 HTML 错误页。
+     */
+    private fun httpGet(url: String, headers: Map<String, String>): JSONObject? {
+        val mirrors = GhMirrors.DEFAULT
+        val alive = MirrorSpeedTester.pingAll(mirrors)
+            .filter { it.ok }
+            .map { it.mirror }
+            .ifEmpty {
+                // 全部 ping 不通时不要直接放弃：ping 走的是 TCP 443，
+                // 有些镜像只允许特定路径、握手阶段就被拒，但实际 GET 能成。
+                AppLog.d(TAG, "所有镜像 ping 不通，按清单顺序盲试")
+                mirrors
+            }
+        AppLog.d(TAG, "取清单：${alive.size}/${mirrors.size} 个源可连通 url=$url")
+
+        for (mirror in alive) {
+            val full = GhMirrors.wrap(mirror.prefix, url)
+            val json = fetchJson(full, headers)
+            if (json != null) {
+                AppLog.d(TAG, "清单取自 ${mirror.id}")
+                return json
+            }
+            AppLog.d(TAG, "源 ${mirror.id} 失败，试下一个")
+        }
+        AppLog.d(TAG, "全部 ${alive.size} 个源都未能取到清单")
+        return null
+    }
+
+    /** 对单个 URL 取 JSON；内容不是合法 JSON 也视为失败（镜像的错误页是 HTML）。 */
+    private fun fetchJson(fullUrl: String, headers: Map<String, String>): JSONObject? = try {
+        val conn = (URL(fullUrl).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
             instanceFollowRedirects = true
-            connectTimeout = 15_000
-            readTimeout = 20_000
+            connectTimeout = 8_000
+            readTimeout = 12_000
             headers.forEach { (k, v) -> setRequestProperty(k, v) }
         }
         try {
@@ -176,7 +222,9 @@ object UpdateChecker {
                 conn.errorStream?.close()
                 null
             } else {
-                JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                // 镜像返回的 HTML 错误页同样会走到这里，JSONObject 会抛异常。
+                runCatching { JSONObject(text) }.getOrNull()
             }
         } finally {
             conn.disconnect()
