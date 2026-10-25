@@ -33,6 +33,16 @@ object OAuthLogin {
     }
 
     /**
+     * 最近一次 begin() 失败的具体原因。
+     *
+     * 之前失败只返回 null，界面只能显示一句「请重试」，但真实情况可能是
+     * 面板没应答、返回非 JSON、或者字段名对不上——三种的修法完全不同。
+     * 这里把原始响应片段也带出来，排查时不用再猜。
+     */
+    var lastBeginError: String? = null
+        private set
+
+    /**
      * 准备宿主：装配 Linux 环境、备好宿主二进制与该供应商的插件，然后启动并等到能应答健康检查。
      *
      * 全部幂等，重复调用只是快速返回。整个过程要放在后台线程。
@@ -85,23 +95,35 @@ object OAuthLogin {
         provider: OAuthProviders.Provider,
         realm: String = "cn",
     ): Session? {
+        // 每次发起前清空，避免失败时显示上一次的陈旧原因。
+        lastBeginError = null
         // CodeBuddy：走 workbuddy2api 内嵌面板的设备授权端点。
         if (OAuthProviders.usesWorkBuddyGateway(provider.id)) {
             // 只认 global，其余一律回落到 cn：上游的 loginEndpoints 就是这么兜底的。
             val effectiveRealm = if (realm == "global") "global" else "cn"
-            val body = runCatching {
-                org.json.JSONObject(
-                    panelJson(
-                        ctx,
-                        "/panel/api/login/start",
-                        method = "POST",
-                        payload = org.json.JSONObject().put("realm", effectiveRealm).toString(),
-                    ) ?: return null,
-                )
-            }.getOrNull() ?: return null
+            val raw = panelJson(
+                ctx,
+                "/panel/api/login/start",
+                method = "POST",
+                payload = org.json.JSONObject().put("realm", effectiveRealm).toString(),
+            ) ?: run {
+                lastBeginError = "面板 /panel/api/login/start 无响应（网关在家但接口不通）"
+                return null
+            }
+            val body = runCatching { org.json.JSONObject(raw) }.getOrNull() ?: run {
+                lastBeginError = "面板返回非 JSON：${raw.take(200)}"
+                return null
+            }
             val state = body.optString("state")
-            val url = body.optString("authUrl")
-            if (state.isEmpty() || url.isEmpty()) return null
+            // 上游实际字段名是 url（不是 authUrl）：loginStart 里
+            // writeJSON(..., {"ok":true,"url":st.AuthURL,"state":st.State,"realm":realm})。
+            // 这里两种都收，优先 url——只认 authUrl 会永远拿不到地址，表现为
+            // 「网关启动成功但无法发起授权」，而日志里看不出任何异常。
+            val url = body.optString("url").ifEmpty { body.optString("authUrl") }
+            if (state.isEmpty() || url.isEmpty()) {
+                lastBeginError = "面板响应缺少字段：${raw.take(300)}"
+                return null
+            }
             return Session(provider.id, state, url, "")
         }
         val body = ProxyHost.managementJson(
@@ -228,28 +250,41 @@ object OAuthLogin {
         path: String,
         method: String,
         payload: String? = null,
-    ): String? = try {
-        val conn = (java.net.URL(WorkBuddyGateway.baseUrl() + path)
-            .openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 10_000
-            readTimeout = 20_000
-            setRequestProperty("Authorization", "Bearer ${WorkBuddyGateway.apiKey()}")
-            if (payload != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+    ): String? {
+        return try {
+            val conn = (java.net.URL(WorkBuddyGateway.baseUrl() + path)
+                .openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection).apply {
+                requestMethod = method
+                connectTimeout = 10_000
+                readTimeout = 20_000
+                setRequestProperty("Authorization", "Bearer ${WorkBuddyGateway.apiKey()}")
+                if (payload != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                }
             }
+            if (payload != null) {
+                conn.outputStream.use { it.write(payload.toByteArray()) }
+            }
+            code = conn.responseCode
+            val ok = code in 200..299
+            val text = (if (ok) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() }
+            conn.disconnect()
+            if (ok) {
+                text
+            } else {
+                // 把状态码与响应体带出去：面板的错误是 {ok:false,error:"..."}，
+                // 只记「失败了」等于什么都没记。
+                AppLog.d("OAuthLogin", "$path → HTTP $code：${text?.take(300)}")
+                lastBeginError = "面板 HTTP $code：${text?.take(200).orEmpty()}"
+                null
+            }
+        } catch (t: Throwable) {
+            AppLog.d("OAuthLogin", "$path 请求异常：${t.javaClass.simpleName}: ${t.message}")
+            lastBeginError = "请求面板异常：${t.javaClass.simpleName}: ${t.message}"
+            null
         }
-        if (payload != null) {
-            conn.outputStream.use { it.write(payload.toByteArray()) }
-        }
-        val ok = conn.responseCode in 200..299
-        val text = (if (ok) conn.inputStream else conn.errorStream)
-            ?.bufferedReader()?.use { it.readText() }
-        conn.disconnect()
-        if (ok) text else null
-    } catch (_: Throwable) {
-        null
     }
 
     private fun panelJsonObject(ctx: Context, path: String, method: String): JSONObject? =

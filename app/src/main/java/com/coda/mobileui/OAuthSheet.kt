@@ -222,7 +222,16 @@ class OAuthSheet(
                 val started = OAuthLogin.begin(host, provider, realm)
                 session = started
                 if (started == null) {
-                    status.text = "无法发起授权，请重试"
+                    // 不再只说「请重试」：panelJson 里已经把状态码、响应体、
+                    // 或者「字段缺失」这类具体原因记进 lastBeginError。
+                    val reason = OAuthLogin.lastBeginError
+                    status.text = if (reason.isNullOrEmpty()) {
+                        "无法发起授权，请重试"
+                    } else {
+                        "无法发起授权：$reason"
+                    }
+                    status.setTextColor(0xFFC62828.toInt())
+                    AppLog.d("OAuthSheet", "begin failed: $reason provider=${provider.id} realm=$realm")
                 } else {
                     status.visibility = View.GONE
                     showAuthorize(column, started)

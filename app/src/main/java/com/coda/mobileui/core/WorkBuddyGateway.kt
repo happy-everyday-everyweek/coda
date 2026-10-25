@@ -106,6 +106,7 @@ object WorkBuddyGateway {
             size = SIZE,
         )
         // 本地已有且校验通过时，AssetFetcher 会直接返回，不会重复搬字节。
+        AppLog.d("WorkBuddyGateway", "校验/释放网关程序 → ${target.absolutePath}")
         if (AssetFetcher.ensure(ctx, target, spec, onLog = { AppLog.d("WorkBuddyGateway", it) })) {
             // 静态二进制也需要执行位：Android 用包内 assets 落盘后默认是 0644。
             if (!target.canExecute()) {
@@ -233,16 +234,32 @@ object WorkBuddyGateway {
             "-config",
             guestPath(ctx, configFor(ctx)),
         )
+        // 启动前的完整现场：路径、端口、配置内容都记下来。之前这条链路几乎
+        // 没有日志，出问题时只能看到界面上「启动网关…」停住，无从判断是
+        // 二进制没落盘、proot 起不来、还是进程起了但没监听。
+        AppLog.d(
+            "WorkBuddyGateway",
+            "启动前 argv=$argv port=$port " +
+                "bin=${binaryFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()},exec=${it.canExecute()})" }} " +
+                "cfg=${configFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()})" }} " +
+                "rootfs=${LinuxEnv(ctx).rootfs.absolutePath}",
+        )
+        configFor(ctx).takeIf { it.isFile }?.let {
+            AppLog.d("WorkBuddyGateway", "config=${runCatching { it.readText() }.getOrDefault("").take(600)}")
+        }
         return try {
             booting = true
             val log = logFor(ctx)
             log.parentFile?.mkdirs()
             log.writeText("")
+            val started = System.currentTimeMillis()
             val proc = env.builder(argv, mapOf("HOME" to "/root")).start()
             process = proc
+            AppLog.d("WorkBuddyGateway", "进程已拉起 pid=${runCatching { proc.pid() }.getOrNull()}")
             pump(proc, log)
 
             val ready = awaitReady(port)
+            val elapsed = System.currentTimeMillis() - started
             if (!ready) {
                 val tail = logTail(log)
                 val alive = process?.isAlive == true
@@ -252,14 +269,21 @@ object WorkBuddyGateway {
                 }
                 process = null
                 lastError = (if (alive) "网关启动超时（30 秒内未应答）" else "网关进程退出") + tail
+                AppLog.d(
+                    "WorkBuddyGateway",
+                    "启动失败：alive=$alive elapsed=${elapsed}ms exit=${runCatching { proc.exitValue() }.getOrNull()} " +
+                        "lastError=$lastError",
+                )
                 onProgress(lastError!!)
                 return false
             }
+            AppLog.d("WorkBuddyGateway", "就绪：port=$port 耗时 ${elapsed}ms")
             true
         } catch (t: Throwable) {
             runCatching { process?.destroy() }
             process = null
             lastError = "网关启动失败：${t.message ?: t.javaClass.simpleName}"
+            AppLog.e("WorkBuddyGateway", "启动抛异常：$lastError", t)
             onProgress(lastError!!)
             false
         } finally {
@@ -303,19 +327,27 @@ object WorkBuddyGateway {
 
     private fun awaitReady(port: Int): Boolean {
         val deadline = System.currentTimeMillis() + READY_TIMEOUT_MS
+        var lastCode = -1
+        var lastErr = ""
+        var attempts = 0
         while (System.currentTimeMillis() < deadline) {
-            if (process?.isAlive != true) return false
-            if (probe(port)) return true
+            if (process?.isAlive != true) {
+                AppLog.d("WorkBuddyGateway", "探活中止：进程已退出（已试 $attempts 次，末次 code=$lastCode $lastErr）")
+                return false
+            }
+            attempts++
+            lastCode = probeCode(port).also { if (it in 200..299) return true }
+            if (lastCode == -1) lastErr = "连接失败"
             Thread.sleep(PROBE_INTERVAL_MS)
         }
+        // 超时时把末次状态码打出来：401 = 密钥不对，503 = 池里没号且 /healthz 口径，
+        // -1 = 端口根本没监听（进程起了但没绑定）。这三种的修法完全不同。
+        AppLog.d("WorkBuddyGateway", "探活超时：attempts=$attempts lastCode=$lastCode")
         return false
     }
 
-    /**
-     * 探活。回环请求必须显式绕过系统代理——与 ProxyHost 同一原因：
-     * 设备上装了代理软件时，默认 ProxySelector 会把 127.0.0.1 也交给代理。
-     */
-    private fun probe(port: Int): Boolean = try {
+    /** 返回 HTTP 状态码；连不上返回 -1。 */
+    private fun probeCode(port: Int): Int = try {
         val conn = (URL("http://127.0.0.1:$port/v1/models")
             .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
             requestMethod = "GET"
@@ -326,13 +358,12 @@ object WorkBuddyGateway {
         val code = conn.responseCode
         if (code in 200..299) {
             conn.inputStream?.close()
-            true
         } else {
             conn.errorStream?.close()
-            false
         }
+        code
     } catch (_: Throwable) {
-        false
+        -1
     }
 
     private fun pump(proc: Process, log: File) {
