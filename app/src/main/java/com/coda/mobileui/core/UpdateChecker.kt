@@ -183,7 +183,13 @@ object UpdateChecker {
      * 文件也返回 200，内容是一段 HTML 错误页。
      */
     private fun httpGet(url: String, headers: Map<String, String>): JSONObject? {
-        val ranked = GhMirrors.rank(probeUrl = url, onLog = { AppLog.d(TAG, it) })
+        val ranked = GhMirrors.rank(
+            probeUrl = url,
+            // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速、只按延迟排序。
+            // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
+            bytes = 1,
+            onLog = { AppLog.d(TAG, it) },
+        )
         for (mirror in ranked) {
             val json = fetchJson(GhMirrors.wrap(mirror.prefix, url), headers)
             if (json != null) {

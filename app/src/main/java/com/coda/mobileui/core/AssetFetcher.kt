@@ -95,6 +95,8 @@ object AssetFetcher {
         val ranked = GhMirrors.rank(
             probeUrl = spec.remoteUrl,
             mirrors = GhMirrors.DEFAULT,
+            // 体积决定要不要测速：小文件不值当（见 SPEEDTEST_MIN_BYTES）。
+            bytes = spec.size,
             onLog = onLog,
         )
 

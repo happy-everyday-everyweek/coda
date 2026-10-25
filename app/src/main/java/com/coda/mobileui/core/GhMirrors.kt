@@ -71,6 +71,15 @@ object GhMirrors {
         else prefix + rawUrl
 
     /**
+     * 小于这个体积的目标跳过测速。
+     *
+     * 测速要真实拉一段数据（十几 MB），比几 KB 的清单本身大三个数量级；
+     * 在这种量级上比较吞吐没有意义，多等十几秒纯属浪费。ping 仍然做，
+     * 因为它只做 TCP 握手、几乎不花流量，筛掉死源的价值还是有的。
+     */
+    const val SPEEDTEST_MIN_BYTES = 1L * 1024 * 1024
+
+    /**
      * 排出一批「按可信度降序」的候选源，供逐个降级尝试。
      *
      * 这是「ping 筛活 → 测速排序」的唯一实现。之前 AssetFetcher 里有一份，
@@ -80,15 +89,21 @@ object GhMirrors {
      * 测速是固定步骤，不做成可选：清单顺序是历史观测，跟当前网络无关，
      * 只按它挑源等于放弃择优。慢源上多等的时间，比测速本身花掉的更多。
      *
-     * @param probeUrl 用哪个真实链接测吞吐。必须传——不做「小文件跳过测速」的
-     *   分支：小文件确实花不起 12MB，但跳过测速就退化成猜，宁可多花这一次。
-     *   幂等资源（同一链接重复请求得到同样内容）才适合传；这正是本类服务的场景。
+     * 唯一例外是体积：小于 [SPEEDTEST_MIN_BYTES]（1MB）的目标跳过测速，
+     * 只按 ping 延迟排序。测速自身要拉的数据比目标还大，为几 KB 的清单
+     * 花掉十几秒和十几 MB 不划算；但 ping 仍然做，它几乎不花流量。
+     *
+     * @param probeUrl 用哪个真实链接测吞吐，必须传。同时它也是被测量的对象，
+     *   所以必须是幂等资源（同一链接重复请求得到同样内容）——本类服务的
+     *   releases 静态下载正是这种。
+     * @param bytes 目标体积，用来判断值不值得测速；<= 0 视为未知，按测速处理。
      * @return 原始清单的一个排列，不会丢源。全部 ping 不通时按清单原顺序返回
      *   ——有些镜像在 TCP 握手阶段就拒，实际 GET 却能过，不能因为 ping 失败就放弃它。
      */
     fun rank(
         probeUrl: String,
         mirrors: List<GhMirror> = DEFAULT,
+        bytes: Long = 0,
         onLog: (String) -> Unit = {},
     ): List<GhMirror> {
         require(probeUrl.isNotBlank()) { "rank() 必须给出真实链接用于测速" }
@@ -101,6 +116,11 @@ object GhMirrors {
             return mirrors
         }
         onLog("${alive.size}/${mirrors.size} 个镜像可连通")
+
+        if (bytes in 1 until SPEEDTEST_MIN_BYTES) {
+            onLog("目标 ${bytes / 1024}KB，小于 1MB，跳过测速（按 ping 延迟排序）")
+            return alive
+        }
 
         onLog("测速挑选镜像…")
         val usable = MirrorSpeedTester.testAll(alive, probeUrl)
