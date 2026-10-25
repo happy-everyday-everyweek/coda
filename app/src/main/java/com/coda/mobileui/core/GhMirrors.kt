@@ -69,4 +69,49 @@ object GhMirrors {
     fun wrap(prefix: String, rawUrl: String): String =
         if (prefix.contains("github.com/") && rawUrl.startsWith("https://github.com/")) rawUrl
         else prefix + rawUrl
+
+    /**
+     * 排出一批「按可信度降序」的候选源，供逐个降级尝试。
+     *
+     * 这是「ping 筛活 → 测速排序」的唯一实现。之前 AssetFetcher 里有一份，
+     * 检查更新又照着写了一份——同一套策略写两遍，改一处必然漏一处。抽到这里
+     * 之后两边都只调这一个函数，策略只有一处可改。
+     *
+     * 测速是固定步骤，不做成可选：清单顺序是历史观测，跟当前网络无关，
+     * 只按它挑源等于放弃择优。慢源上多等的时间，比测速本身花掉的更多。
+     *
+     * @param probeUrl 用哪个真实链接测吞吐。必须传——不做「小文件跳过测速」的
+     *   分支：小文件确实花不起 12MB，但跳过测速就退化成猜，宁可多花这一次。
+     *   幂等资源（同一链接重复请求得到同样内容）才适合传；这正是本类服务的场景。
+     * @return 原始清单的一个排列，不会丢源。全部 ping 不通时按清单原顺序返回
+     *   ——有些镜像在 TCP 握手阶段就拒，实际 GET 却能过，不能因为 ping 失败就放弃它。
+     */
+    fun rank(
+        probeUrl: String,
+        mirrors: List<GhMirror> = DEFAULT,
+        onLog: (String) -> Unit = {},
+    ): List<GhMirror> {
+        require(probeUrl.isNotBlank()) { "rank() 必须给出真实链接用于测速" }
+        onLog("探测镜像连通性…")
+        val alive = MirrorSpeedTester.pingAll(mirrors)
+            .filter { it.ok }
+            .map { it.mirror }
+        if (alive.isEmpty()) {
+            onLog("没有镜像能 ping 通，按清单顺序盲试")
+            return mirrors
+        }
+        onLog("${alive.size}/${mirrors.size} 个镜像可连通")
+
+        onLog("测速挑选镜像…")
+        val usable = MirrorSpeedTester.testAll(alive, probeUrl)
+            .filter { it.ok && it.sustainedBps > 0 }
+        if (usable.isEmpty()) {
+            onLog("测速无结果，按 ping 延迟顺序尝试")
+            return alive
+        }
+        val best = usable.first()
+        onLog("选定 ${best.mirror.id}（${"%.1f MB/s".format(best.sustainedBps / 1024.0 / 1024.0)}）")
+        // 测出速度的排前面，剩下的活源接在后面：前者优先，但一个都不丢。
+        return usable.map { it.mirror } + alive.filter { m -> usable.none { it.mirror.id == m.id } }
+    }
 }

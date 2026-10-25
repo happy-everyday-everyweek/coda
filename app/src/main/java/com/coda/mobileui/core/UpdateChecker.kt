@@ -172,40 +172,27 @@ object UpdateChecker {
      *
      * 【必须走镜像】这里以前是直接 `URL(url).openConnection()` 打 github.com，
      * 在多数网络环境下 releases/download 的直连会被重置或超时，表现就是
-     * 「检查更新永远失败」。项目里本来就有 37 条镜像清单（GhMirrors），
+     * 「检查更新永远失败」。项目里本来就有镜像清单（GhMirrors），
      * 资产下载一直用着，只有这个类漏了。
      *
-     * 顺序照抄资产那边：先 ping 剔除连不上的（只看 TCP 握手，1.5 秒一个），
-     * 再按清单顺序试。清单本身是按实测延迟排的，这里不重复测速——
-     * 一个几 KB 的 JSON 用不上吞吐量排序，测速反而要多花十几秒和 12MB 流量。
+     * 挑源的策略全部复用 GhMirrors.rank（ping 筛活 → 测速排序），
+     * 与资产下载共用同一份实现，不再各写一遍。
      *
-     * github.com 那条直连留在清单末尾兜底，它在镜像是全部挂掉时仍可能成功。
-     * 这也是为什么下面判成功用「拿到合法 JSON」而不是「HTTP 200」：
-     * 有些镜像对不存在的文件也返回 200，内容是一段 HTML 错误页。
+     * github.com 那条直连在清单末尾兜底，镜像全挂时它仍可能成功。
+     * 判成功用「能解析成 JSONObject」而不是 HTTP 200：有些镜像对不存在的
+     * 文件也返回 200，内容是一段 HTML 错误页。
      */
     private fun httpGet(url: String, headers: Map<String, String>): JSONObject? {
-        val mirrors = GhMirrors.DEFAULT
-        val alive = MirrorSpeedTester.pingAll(mirrors)
-            .filter { it.ok }
-            .map { it.mirror }
-            .ifEmpty {
-                // 全部 ping 不通时不要直接放弃：ping 走的是 TCP 443，
-                // 有些镜像只允许特定路径、握手阶段就被拒，但实际 GET 能成。
-                AppLog.d(TAG, "所有镜像 ping 不通，按清单顺序盲试")
-                mirrors
-            }
-        AppLog.d(TAG, "取清单：${alive.size}/${mirrors.size} 个源可连通 url=$url")
-
-        for (mirror in alive) {
-            val full = GhMirrors.wrap(mirror.prefix, url)
-            val json = fetchJson(full, headers)
+        val ranked = GhMirrors.rank(probeUrl = url, onLog = { AppLog.d(TAG, it) })
+        for (mirror in ranked) {
+            val json = fetchJson(GhMirrors.wrap(mirror.prefix, url), headers)
             if (json != null) {
                 AppLog.d(TAG, "清单取自 ${mirror.id}")
                 return json
             }
             AppLog.d(TAG, "源 ${mirror.id} 失败，试下一个")
         }
-        AppLog.d(TAG, "全部 ${alive.size} 个源都未能取到清单")
+        AppLog.d(TAG, "全部 ${ranked.size} 个源都未能取到清单")
         return null
     }
 

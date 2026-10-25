@@ -87,41 +87,16 @@ object AssetFetcher {
             onLog("安装包内资产校验失败，转下载：${target.name}")
         }
 
-        // 3. 联网：ping 剔除死源 → 测速排序 → 按序下载。
+        // 3. 联网：ping 筛活 → 测速排序 → 按序下载。
         //
-        // 三段的理由：
-        //  - ping 只做 TCP 握手，1.5 秒内就能确认一个域名是不是根本连不上。
-        //    不让测速去发现死源，是因为一条死源要等满 6 秒窗口才判失败。
-        //  - 测速拿真实吞吐排序，避免「清单顺序」把流量导到一个很慢但活着的源。
-        //  - 下载按序降级，前一个内容校验不过（镜像返回被改写的内容）就换下一个。
-        //
-        // 小文件（<2MB）跳过测速：测速本身要拉 12MB，比文件还大。ping 仍然做，
-        // 因为它几乎不花流量。
-        onLog("探测镜像连通性…")
-        val alive = MirrorSpeedTester.pingAll(GhMirrors.DEFAULT)
-            .filter { it.ok }
-            .map { it.mirror }
-        if (alive.isEmpty()) {
-            onLog("没有可用镜像（全部连接失败）")
-            return false
-        }
-        onLog("${alive.size}/${GhMirrors.DEFAULT.size} 个镜像可连通")
-
-        val ranked: List<GhMirror> = if (spec.size <= 0 || spec.size >= 2L * 1024 * 1024) {
-            onLog("测速挑选镜像…")
-            val results = MirrorSpeedTester.testAll(alive, spec.remoteUrl)
-            val usable = results.filter { it.ok && it.sustainedBps > 0 }
-            if (usable.isEmpty()) {
-                onLog("测速无结果，按 ping 延迟顺序尝试")
-                alive
-            } else {
-                val best = usable.first()
-                onLog("选定 ${best.mirror.id}（${fmtSpeed(best.sustainedBps)}）")
-                usable.map { it.mirror } + alive.filter { m -> usable.none { it.mirror.id == m.id } }
-            }
-        } else {
-            alive
-        }
+        // 三步的策略本身在 GhMirrors.rank 里，这里只负责「拿到顺序后逐个降级下载」。
+        // 之所以把这套排序抽走：检查更新（UpdateChecker）要做完全一样的挑选，
+        // 两边各写一份必然出现「改了这边漏了那边」。
+        val ranked = GhMirrors.rank(
+            probeUrl = spec.remoteUrl,
+            mirrors = GhMirrors.DEFAULT,
+            onLog = onLog,
+        )
 
         val errors = StringBuilder()
         for (m in ranked) {
@@ -144,12 +119,6 @@ object AssetFetcher {
         }
         onLog("所有源都失败：$errors")
         return false
-    }
-
-    private fun fmtSpeed(bps: Long): String = when {
-        bps >= 1024 * 1024 -> "%.1f MB/s".format(bps / 1024.0 / 1024.0)
-        bps >= 1024 -> "%.0f KB/s".format(bps / 1024.0)
-        else -> "$bps B/s"
     }
 
     // ---------- 校验 ----------
