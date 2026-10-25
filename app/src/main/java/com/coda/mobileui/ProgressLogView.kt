@@ -7,13 +7,26 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Handler
 import android.os.Looper
+import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import com.google.android.material.color.MaterialColors
+
+/**
+ * 从主题里取一个颜色。
+ *
+ * 不用 MaterialColors.getColor：那个重载要求第一个参数是 View 或 Activity，
+ * 传 Context 时推不出类型，会连带把它后面的 attr 引用一起报成 Unresolved
+ * （上一版就是因此编译失败）。TypedValue.resolveAttribute 是平台 API，
+ * 只要 Context 就够，而且项目里已经有同样的用法。
+ */
+private fun themeColor(context: Context, attr: Int, fallback: Int): Int {
+    val tv = TypedValue()
+    return if (context.theme.resolveAttribute(attr, tv, true)) tv.data else fallback
+}
 
 /**
  * 不确定进度条：一条线在轨道里来回跑。
@@ -28,18 +41,14 @@ import com.google.android.material.color.MaterialColors
 class IndeterminateProgressView(context: Context) : View(context) {
 
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = MaterialColors.getColor(
-            this@IndeterminateProgressView,
+        color = themeColor(
+            context,
             com.google.android.material.R.attr.colorSurfaceVariant,
             Color.DKGRAY,
         )
     }
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = MaterialColors.getColor(
-            this@IndeterminateProgressView,
-            com.google.android.material.R.attr.colorPrimary,
-            Color.WHITE,
-        )
+        color = themeColor(context, com.google.android.material.R.attr.colorPrimary, Color.WHITE)
     }
 
     private val rect = RectF()
@@ -123,50 +132,52 @@ class IndeterminateProgressView(context: Context) : View(context) {
  * 这里改成累积：每行追加到底部，自动滚到最后一行，只保留最近
  * [maxLines] 行（早期步骤的信息价值随时间衰减，但不该让视图无限长）。
  * 进度条则表示「还在动」，避免长任务看起来像死掉。
+ *
+ * 注意构造参数必须存成属性（`private val ctx`）：不存的写法下，
+ * 类体内没有 `context` 这个成员，`TextView(context)` 会直接报
+ * Unresolved reference——上一版就是这么错的。
  */
-class ProgressLogView(context: Context) {
+class ProgressLogView(private val ctx: Context) {
 
-    private val density = context.resources.displayMetrics.density
+    private val density = ctx.resources.displayMetrics.density
     private fun dp(v: Float): Int = (v * density + 0.5f).toInt()
 
-    private val onSurface: Int = MaterialColors.getColor(
-        context.window?.decorView ?: View(context),
-        com.google.android.material.R.attr.colorOnSurface,
-        Color.WHITE,
-    )
-    private val onSurfaceVariant: Int = MaterialColors.getColor(
-        context.window?.decorView ?: View(context),
-        com.google.android.material.R.attr.colorOnSurfaceVariant,
-        Color.GRAY,
-    )
+    private val onSurface: Int =
+        themeColor(ctx, com.google.android.material.R.attr.colorOnSurface, Color.WHITE)
+    private val onSurfaceVariant: Int =
+        themeColor(ctx, com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
 
     /** 整体容器：进度条 + 日志滚动区。直接把这个加进卡片。 */
-    val view: LinearLayout = LinearLayout(context).apply {
+    val view: LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
     }
 
-    private val bar = IndeterminateProgressView(context).apply {
+    private val bar = IndeterminateProgressView(ctx).apply {
         layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
             bottomMargin = dp(10f)
         }
     }
 
-    private val logColumn = LinearLayout(context).apply {
+    private val logColumn = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
     }
 
-    private val scroll = ScrollView(context).apply {
+    /**
+     * 日志区。不用 ScrollView 限高——
+     * LinearLayout.LayoutParams 上没有 maximumHeight 这个字段（那是
+     * MaxHeightScrollView 才有的东西），直接写会编译不过。
+     * 这里靠 maxLines 限制行数，行数有限自然就不会无限长，
+     * 外层卡片本来也有滚动，不需要再套一层。
+     */
+    private val scroll = ScrollView(ctx).apply {
         isFillViewport = false
-        // 日志本身不该抢走卡片的滚动手势，但内容长了必须能看。
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-            maximumHeight = dp(220f)
-        }
+        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
         addView(logColumn)
     }
 
     /** 保留的最大行数。再多也不会让视图无限长。 */
-    private var maxLines = 80
+    private val maxLines = 80
 
     init {
         view.addView(bar)
@@ -181,7 +192,7 @@ class ProgressLogView(context: Context) {
      */
     fun append(text: String, emphasis: Boolean = false) {
         if (text.isBlank()) return
-        val line = TextView(context).apply {
+        val line = TextView(ctx).apply {
             this.text = text
             textSize = 12f
             setTextColor(if (emphasis) onSurface else onSurfaceVariant)
