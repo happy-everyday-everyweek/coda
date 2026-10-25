@@ -24,8 +24,15 @@ import java.util.concurrent.Executors
  * 这个平台上有几个号、各自还健康吗。右上角给批量动作（全部签到、刷新额度、加新账号）。
  *
  * 数据每次都从宿主现取，不在客户端留副本——账号可能在网关内部被自动禁用或删除，缓存会骗人。
+ *
+ * @param onlyProviderId 非空时只看这一个平台。从「模型设置 → 某个已添加的供应商」
+ *   点进来就是这种情形：用户点的是某一条 provider，想看的是它下面的账号，
+ *   不该把所有平台的账号都铺一遍。从旧的「OAuth 账号」总入口进来时为空，保持全量。
  */
-class OAuthAccountsSheet(private val host: BaseActivity) {
+class OAuthAccountsSheet(
+    private val host: BaseActivity,
+    private val onlyProviderId: String? = null,
+) {
 
     private val sheet = CodaSheet(host)
     private val main = Handler(Looper.getMainLooper())
@@ -66,8 +73,9 @@ class OAuthAccountsSheet(private val host: BaseActivity) {
     }
 
     fun show() {
+        val one = onlyProviderId?.let { OAuthProviders.byId(it) }
         sheet
-            .title("OAuth 账号")
+            .title(one?.let { "${it.name} 账号" } ?: "OAuth 账号")
             .subtitle("点账号查看健康与签到")
             .headerAction("＋") { openAdd() }
             .content { col ->
@@ -90,7 +98,12 @@ class OAuthAccountsSheet(private val host: BaseActivity) {
 
         io.execute {
             val store = com.coda.mobileui.core.ProviderStore.load(host)
-            val rows = OAuthProviders.all.map { p ->
+            // 指定了平台就只画它一张卡：从某条 provider 点进来时，用户看的是
+            // 「这条供应商下有几个账号」，铺出其它平台只是噪声。
+            val platforms = onlyProviderId
+                ?.let { id -> OAuthProviders.all.filter { it.id == id } }
+                ?: OAuthProviders.all
+            val rows = platforms.map { p ->
                 // 只有已经落成 provider 的平台才去问账号，没授权过的平台问了也是空的。
                 val authorized = store.any { it.id == p.id }
                 PlatformRow(p, if (authorized) OAuthAccounts.list(host, p) else emptyList())

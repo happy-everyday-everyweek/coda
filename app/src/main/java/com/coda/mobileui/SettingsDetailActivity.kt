@@ -395,9 +395,17 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             key == "providers_oauth_pick" -> pickOAuthProvider()
             key == "providers_oauth_accounts" -> OAuthAccountsSheet(this).show()
             key.startsWith("providers_oauth_open:") -> {
-                // 已经授权过的，再点一次就是重新登录一个账号，方便连续纳管。
-                OAuthProviders.byId(key.removePrefix("providers_oauth_open:"))?.let {
-                    OAuthSheet(this, it).show()
+                // 点已添加的供应商 = 进它的管理页，而不是再走一遍授权向导。
+                // 之前的写法直接开 OAuthSheet（授权流程），用户点自己已有的供应商
+                // 却看到「添加账号」的界面，与「点进去看/管这条配置」的预期不符。
+                // 加号（headerAction）才是「再加一个账号」的入口。
+                val id = key.removePrefix("providers_oauth_open:")
+                if (OAuthProviders.byId(id) != null) {
+                    OAuthAccountsSheet(this, onlyProviderId = id).show()
+                } else {
+                    // 注册表里没有的（理论上不该出现）退回手填编辑页，至少能改能删。
+                    val p = ProviderStore.load(this).firstOrNull { it.id == id }
+                    if (p != null) editProvider(p) else renderPage()
                 }
             }
             key.startsWith("providers_edit:") -> {
