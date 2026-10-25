@@ -34,23 +34,32 @@ object SettingsViewBuilder {
         rows: List<SettingRow>,
         listener: SettingsActionListener? = null,
         /**
-         * 行内容的额外水平内缩补偿（像素）。
+         * 行内文字的水平内边距（像素）。
          *
-         * 设置页里行自带 16dp 内边距、外层页面也有自己的边距，两处叠加是设计好的。
-         * 但把同一套行放进半屏卡片时，卡片内容区已经有 24dp，再加上行的 16dp
-         * 就会让行内文字比卡片标题明显偏右。传正数把行内容整体左移这么多像素，
-         * 只影响行内文字的落点，不影响行的背景、圆角与分隔线。
+         * 行本身不再自带左右 padding（见 view_settings_row.xml 的注释），
+         * 改由这里统一设置。这样「行内文字的左右缘」只由这一个数决定，
+         * 不再随宿主多套一层而叠加——之前卡片里是 24(卡片)+16(行) = 40dp，
+         * 而同一张卡片的标题在 24dp，视觉上内容偏右、标题相对偏左。
+         *
+         * 宿主在把自己的 content_padding_h 传进来时，行内文字与同容器的标题
+         * 天然落在同一条竖线上。
          *
          * 【位置必须在 onCategoryClick 之前】Kotlin 的尾随 lambda 只绑定最后一个
          * 参数。这个参数放在末尾时，`render(a, b, c) { ... }` 里的花括号会被当成
          * 往 Int 位置传 lambda，三个调用点会一起编译失败。
          */
-        insetCompensationPx: Int = 0,
+        horizontalInsetPx: Int = -1,
         onCategoryClick: ((String) -> Unit)? = null,
     ) {
         val inflater = LayoutInflater.from(context)
         val corner = context.resources.getDimension(R.dimen.settings_card_corner)
         val radioRows = mutableListOf<Pair<View, MaterialRadioButton>>()
+        // 未显式指定时用全局统一值，保证任何宿主都不会「忘了传」而回到旧外观。
+        val insetH = if (horizontalInsetPx >= 0) {
+            horizontalInsetPx
+        } else {
+            context.resources.getDimensionPixelSize(R.dimen.content_padding_h)
+        }
 
         rows.forEachIndexed { index, row ->
             if (row is SettingRow.Header) {
@@ -71,11 +80,13 @@ object SettingsViewBuilder {
             val view = buildRow(inflater, container, row, radioRows, listener, onCategoryClick)
                 ?: return@forEachIndexed
             if (!isCustom) applyGroupShape(view, corner, isFirstInGroup, isLastInGroup)
-            // 行内边距补偿：把行整体左移一点，使「行内文字」的左缘与页面标题对齐。
-            // 用 translationX 而不是改 padding——行文字在 MaterialCardView 的子视图里，
-            // 给外层 setPadding 不会影响内部内容的落点；translationX 是纯绘制期位移，
-            // 圆角与间距跟着一起移，不会被裁切。
-            if (insetCompensationPx != 0) view.translationX = -insetCompensationPx.toFloat()
+            // 行内水平内边距在这里统一设置，而不是用 translationX 硬挪。
+            // 硬挪会让行的背景与分隔线跟着偏移（圆角对不齐容器），
+            // 而且偏移量还得在每个调用点各自算准；设 padding 则是行的真实布局，
+            // 背景、圆角、分隔线都不动，只有文字往里收。
+            view.findViewById<View?>(R.id.row_inner)?.let { inner ->
+                inner.setPadding(insetH, inner.paddingTop, insetH, inner.paddingBottom)
+            }
             container.addView(view)
         }
 

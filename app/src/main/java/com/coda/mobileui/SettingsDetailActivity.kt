@@ -1928,7 +1928,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                         "add_oauth" -> showOAuthPicker(sheet)
                     }
                 }
-            }, insetCompensationPx = dp(16))
+            }, horizontalInsetPx = resources.getDimensionPixelSize(R.dimen.content_padding_h))
         }
         sheet.show()
     }
@@ -1966,7 +1966,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                             OAuthSheet(this@SettingsDetailActivity, p).attachTo(sheet)
                         }
                     },
-                    insetCompensationPx = dp(16),
+                    horizontalInsetPx = resources.getDimensionPixelSize(R.dimen.content_padding_h),
                 )
             }
         }
@@ -2128,7 +2128,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                         }
                     }
                 },
-                insetCompensationPx = dp(16),
+                horizontalInsetPx = resources.getDimensionPixelSize(R.dimen.content_padding_h),
             )
         }
     }

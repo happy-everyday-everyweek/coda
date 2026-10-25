@@ -241,7 +241,7 @@ class CodaSheet(private val activity: Activity) {
         // 内容滚动区
         val contentCol = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(24f), dp(8f), dp(24f), dp(20f))
+            setPadding(insetH(), dp(8f), insetH(), dp(20f))
         }
         liveContentCol = contentCol
         val scroll: ScrollView = if (compactMode) {
@@ -306,7 +306,7 @@ class CodaSheet(private val activity: Activity) {
             val footer = LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
+                setPadding(insetH(), dp(10f), insetH(), dp(24f))
             }
             fun footerButton(
                 label: String,
@@ -580,7 +580,7 @@ class CodaSheet(private val activity: Activity) {
         val footer = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
+            setPadding(insetH(), dp(10f), insetH(), dp(24f))
         }
         fun footerButton(label: String, filled: Boolean, block: (CodaSheet) -> Unit): TextView =
             TextView(activity).apply {
@@ -677,7 +677,7 @@ class CodaSheet(private val activity: Activity) {
             val footer = LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
+                setPadding(insetH(), dp(10f), insetH(), dp(24f))
             }
             fun footerButton(label: String, filled: Boolean, block: (CodaSheet) -> Unit): TextView =
                 TextView(activity).apply {
@@ -727,7 +727,7 @@ class CodaSheet(private val activity: Activity) {
         // 紧凑模式：卡片高度由内容自适应（WRAP_CONTENT），走 applyDock 会被改成固定半屏，
         // 换个页卡片高度就跳变。这里只刷新底栏的内边距，不动高度。
         if (compactMode) {
-            footerRow?.setPadding(dp(20f), dp(10f), dp(20f), dp(24f))
+            footerRow?.setPadding(insetH(), dp(10f), insetH(), dp(24f))
             return
         }
         // 底栏内边距不能在这里写死：applyDock 会按停靠状态叠加导航栏避让（全屏态才加），
@@ -872,6 +872,15 @@ class CodaSheet(private val activity: Activity) {
     } catch (e: Throwable) {
         dp(24f)
     }
+
+    /**
+     * 卡片内容的水平边距。
+     *
+     * 全项目共用 R.dimen.content_padding_h：标题、内容、页脚按钮都用它，
+     * 因此三者左缘必然对齐。之前内容区 24dp、页脚 20dp、设置行又各自带
+     * 16dp，加上外层页面自己的边距，每个页面看起来的留白都不一样。
+     */
+    private fun insetH(): Int = activity.resources.getDimensionPixelSize(R.dimen.content_padding_h)
 
     private fun navBarHeightPx(): Int = try {
         val id = activity.resources.getIdentifier("navigation_bar_height", "dimen", "android")

@@ -9,8 +9,8 @@
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="56dp"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp">
+        android:paddingStart="@dimen/settings_card_margin"
+        android:paddingEnd="@dimen/settings_card_margin">
 
         <ImageButton
             android:id="@+id/btn_back"
@@ -27,8 +27,8 @@
         android:id="@+id/detail_title"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
+        android:paddingStart="@dimen/content_inset_total"
+        android:paddingEnd="@dimen/content_inset_total"
         android:paddingBottom="12dp"
         android:textAppearance="?attr/textAppearanceHeadlineMedium"
         android:textColor="?attr/colorOnSurface" />

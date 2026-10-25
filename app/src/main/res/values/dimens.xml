@@ -4,6 +4,36 @@
     <dimen name="settings_card_corner">16dp</dimen>
     <!-- 分组内相邻行之间的断开缝（与页面背景同色的细线）。 -->
     <dimen name="settings_card_gap">3dp</dimen>
-    <!-- 卡片左右外边距。 -->
+    <!--
+        卡片左右外边距。
+
+        行为要与「标题文字」对齐，所以这里只负责卡片自身的左右间距；
+        卡片内文字的左缘 = 这个值 + content_padding_h。
+        标题（detail_title / 卡片标题）的水平边距也取同一个和值，
+        见下面的 content_inset_total。
+    -->
     <dimen name="settings_card_margin">16dp</dimen>
+
+    <!--
+        行/段落的水平内边距。
+
+        这是「一层容器」的留白。之前这个值在四处各写了一遍：
+        CodaSheet 内容区 24dp、页脚 20dp、设置行自带 16dp、二级页标题 16dp。
+        结果是每个页面看起来的左右留白都不一样，而且行放进卡片后会叠加
+        （24+16 = 40dp），文字比同一容器的标题明显偏右。
+
+        现在统一成 20dp：比原来的 24dp 略窄（用户反馈「大部分页面都过于窄」），
+        又比 16dp 宽松，是两端折中。所有容器都引用它，行本身不再自带水平
+        padding（由 SettingsViewBuilder 统一设置），因此不会再叠加。
+    -->
+    <dimen name="content_padding_h">20dp</dimen>
+
+    <!--
+        顶层标题的水平边距 = 卡片外距 + 行内边距。
+
+        标题在最外层，它要让文字与卡片内的文字对齐，就必须把这两层都算进来。
+        写成一个具名 dimen 而不是让各处自己相加：以后调任何一个数，
+        标题都会自动跟着对齐，不会出现「改了行距忘了改标题」。
+    -->
+    <dimen name="content_inset_total">36dp</dimen>
 </resources>
