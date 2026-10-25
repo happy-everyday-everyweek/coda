@@ -255,10 +255,10 @@ object WorkBuddyGateway {
             val started = System.currentTimeMillis()
             val proc = env.builder(argv, mapOf("HOME" to "/root")).start()
             process = proc
-            // pid 只能从 ProcessHandle 拿（Java 8 的 Process 没有 pid()）。
-            // 拿不到不是错误，日志里留个 -1 即可，不值得为它加分支。
-            val pid = runCatching { proc.toHandle().pid() }.getOrDefault(-1L)
-            AppLog.d("WorkBuddyGateway", "进程已拉起 pid=$pid")
+            // 不记 pid：Process.toHandle() 要 API 26，而本项目的 minSdk 更低，
+            // 直接调会编译不过；为一行日志加版本分支不值得。进程是否活着
+            // 由下面的探活与 isAlive 判断，pid 本身不提供额外信息。
+            AppLog.d("WorkBuddyGateway", "进程已拉起")
             pump(proc, log)
 
             val ready = awaitReady(port)
