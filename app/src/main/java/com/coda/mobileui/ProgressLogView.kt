@@ -48,7 +48,11 @@ class IndeterminateProgressView(context: Context) : View(context) {
         )
     }
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = themeColor(context, com.google.android.material.R.attr.colorPrimary, Color.WHITE)
+        // colorPrimary 属于 appcompat，不在 material 的 R.attr 里。
+        // material 只有 colorPrimaryContainer / colorPrimaryVariant 这些变体，
+        // 写 material.R.attr.colorPrimary 会 Unresolved（已踩过一次）。
+        // CodaSheet 取主色用的也是 appcompat 这一份。
+        color = themeColor(context, androidx.appcompat.R.attr.colorPrimary, Color.WHITE)
     }
 
     private val rect = RectF()
