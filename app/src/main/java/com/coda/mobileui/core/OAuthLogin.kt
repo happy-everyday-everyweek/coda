@@ -251,12 +251,16 @@ object OAuthLogin {
         method: String,
         payload: String? = null,
     ): String? {
+        val url = WorkBuddyGateway.baseUrl() + path
+        AppLog.i("OAuthLogin", "面板请求 $method $url（网关运行中=${WorkBuddyGateway.isRunning}）")
         return try {
-            val conn = (java.net.URL(WorkBuddyGateway.baseUrl() + path)
+            val conn = (java.net.URL(url)
                 .openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = 10_000
-                readTimeout = 20_000
+                // login/start 要拿上游的 state，慢起来能到十几秒；给 30 秒避免
+                // 把「上游慢」误报成「面板不通」。
+                readTimeout = 30_000
                 setRequestProperty("Authorization", "Bearer ${WorkBuddyGateway.apiKey()}")
                 if (payload != null) {
                     doOutput = true
@@ -276,13 +280,20 @@ object OAuthLogin {
             } else {
                 // 把状态码与响应体带出去：面板的错误是 {ok:false,error:"..."}，
                 // 只记「失败了」等于什么都没记。
-                AppLog.i("OAuthLogin", "$path → HTTP $code：${text?.take(300)}")
-                lastBeginError = "面板 HTTP $code：${text?.take(200).orEmpty()}"
+                AppLog.w("OAuthLogin", "$path → HTTP $code：${text?.take(300)}")
+                lastBeginError = "面板 HTTP $code（$url）：${text?.take(200).orEmpty()}"
                 null
             }
         } catch (t: Throwable) {
-            AppLog.i("OAuthLogin", "$path 请求异常：${t.javaClass.simpleName}: ${t.message}")
-            lastBeginError = "请求面板异常：${t.javaClass.simpleName}: ${t.message}"
+            // 区分「连不上」与「连上了但没回」：前者是进程/端口问题，
+            // 后者是上游卡住。两者的排查方向完全相反，不能混成一句话。
+            val kind = when (t) {
+                is java.net.ConnectException -> "无法连接（网关未监听该端口）"
+                is java.net.SocketTimeoutException -> "读取超时（面板已连接但 30 秒无响应，多半卡在等上游）"
+                else -> "${t.javaClass.simpleName}: ${t.message}"
+            }
+            AppLog.w("OAuthLogin", "$path 请求失败：$kind url=$url")
+            lastBeginError = "面板请求失败：$kind（$url）"
             null
         }
     }
