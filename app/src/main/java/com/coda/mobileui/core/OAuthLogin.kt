@@ -266,7 +266,7 @@ object OAuthLogin {
             if (payload != null) {
                 conn.outputStream.use { it.write(payload.toByteArray()) }
             }
-            code = conn.responseCode
+            val code = conn.responseCode
             val ok = code in 200..299
             val text = (if (ok) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() }

@@ -1903,7 +1903,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             // navigate 开始时已把上一页的按钮字段清空，这一步本来就没有主按钮，不必再设。
             secondaryAction("返回") { self ->
                 // 返回上一层：重建「选类型」页
-                self.navigate { rebuildAddProviderKindPage(self) }
+                self.navigate { rebuildAddProviderKindPage() }
             }
             content { col ->
                 val group = LinearLayout(this@SettingsDetailActivity).apply {
@@ -2048,8 +2048,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
-    /** 把「选类型」那一页的内容填回一张卡片（供 navigate 里重建用）。 */
-    private fun rebuildAddProviderKindPage(sheet: CodaSheet) {
+    /**
+     * 把「选类型」那一页的内容填回一张卡片（供 navigate 里重建用）。
+     *
+     * 写成 CodaSheet 的扩展函数：title / subtitle / secondaryAction / content
+     * 都是 CodaSheet 的成员，不在扩展接收者上调用会全部解析不到。
+     */
+    private fun CodaSheet.rebuildAddProviderKindPage() {
+        val sheet = this
         title("添加供应商")
         subtitle("先选类型，再填参数")
         secondaryAction("取消") { it.dismiss() }

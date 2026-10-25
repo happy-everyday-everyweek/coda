@@ -15,6 +15,7 @@ import android.webkit.WebViewClient
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.OAuthLogin
 import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.ProxyHost
