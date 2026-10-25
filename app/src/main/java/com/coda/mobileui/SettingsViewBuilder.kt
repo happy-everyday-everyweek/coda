@@ -34,6 +34,15 @@ object SettingsViewBuilder {
         rows: List<SettingRow>,
         listener: SettingsActionListener? = null,
         onCategoryClick: ((String) -> Unit)? = null,
+        /**
+         * 行内容的额外水平内缩补偿（像素）。
+         *
+         * 设置页里行自带 16dp 内边距、外层页面也有自己的边距，两处叠加是设计好的。
+         * 但把同一套行放进半屏卡片时，卡片内容区已经有 24dp，再加上行的 16dp
+         * 就会让行内文字比卡片标题明显偏右。传正数把行内容整体左移这么多像素，
+         * 只影响行内文字的落点，不影响行的背景、圆角与分隔线。
+         */
+        insetCompensationPx: Int = 0,
     ) {
         val inflater = LayoutInflater.from(context)
         val corner = context.resources.getDimension(R.dimen.settings_card_corner)
@@ -58,6 +67,11 @@ object SettingsViewBuilder {
             val view = buildRow(inflater, container, row, radioRows, listener, onCategoryClick)
                 ?: return@forEachIndexed
             if (!isCustom) applyGroupShape(view, corner, isFirstInGroup, isLastInGroup)
+            // 行内边距补偿：把行整体左移一点，使「行内文字」的左缘与页面标题对齐。
+            // 用 translationX 而不是改 padding——行文字在 MaterialCardView 的子视图里，
+            // 给外层 setPadding 不会影响内部内容的落点；translationX 是纯绘制期位移，
+            // 圆角与间距跟着一起移，不会被裁切。
+            if (insetCompensationPx != 0) view.translationX = -insetCompensationPx.toFloat()
             container.addView(view)
         }
 

@@ -1842,16 +1842,213 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 override fun onRadioSelect(key: String) = Unit
                 override fun onToggleChange(key: String, checked: Boolean) = Unit
                 override fun onValueClick(key: String) {
-                    sheet.dismiss()
                     when (key) {
-                        "add_openai" -> editProvider(null, apiType = "openai-chat-completions", kind = providerKind)
-                        "add_anthropic" -> editProvider(null, apiType = "anthropic", kind = providerKind)
-                        "add_oauth" -> pickOAuthProvider()
+                        // 这三条都在同一张卡片里换页（navigate），沿用项目统一的过渡动画，
+                        // 不再 dismiss 再另开——那样会出现关-开两个动画互相抢同一层。
+                        "add_openai", "add_anthropic" -> {
+                            val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
+                            showProviderEditor(sheet, null, t, providerKind)
+                        }
+                        "add_oauth" -> showOAuthPicker(sheet)
                     }
                 }
-            })
+            }, insetCompensationPx = dp(16))
         }
         sheet.show()
+    }
+
+    /**
+     * 选 OAuth 平台，在同一张卡片里换页（沿用 navigate 的过渡动画）。
+     */
+    private fun showOAuthPicker(sheet: CodaSheet) {
+        val providers = OAuthProviders.all
+        sheet.navigate {
+            title("选择 OAuth 供应商")
+            subtitle("授权后由本机网关托管")
+            // navigate 开始时已把上一页的按钮字段清空，这一步本来就没有主按钮，不必再设。
+            secondaryAction("返回") { self ->
+                // 返回上一层：重建「选类型」页
+                self.navigate { rebuildAddProviderKindPage(self) }
+            }
+            content { col ->
+                val group = LinearLayout(this@SettingsDetailActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                }
+                col.addView(group)
+                val rows = providers.map { p ->
+                    SettingRow.Value(p.name, "${p.vendor} · ${p.note}", "oauth_pick:${p.id}")
+                }
+                SettingsViewBuilder.render(
+                    this@SettingsDetailActivity,
+                    group,
+                    rows,
+                    listener = object : SettingsActionListener {
+                        override fun onRadioSelect(key: String) = Unit
+                        override fun onToggleChange(key: String, checked: Boolean) = Unit
+                        override fun onValueClick(key: String) {
+                            val p = OAuthProviders.byId(key.removePrefix("oauth_pick:")) ?: return
+                            OAuthSheet(this@SettingsDetailActivity, p).attachTo(sheet)
+                        }
+                    },
+                    insetCompensationPx = dp(16),
+                )
+            }
+        }
+    }
+
+    /**
+     * 卡片里的分组容器。
+     *
+     * 直接塞 SettingsViewBuilder 会双重内缩：卡片内容区本身有 24dp 内边距，
+     * 而 view_settings_row 自带 16dp，叠起来文字落在 40dp 处，比标题明显偏右。
+     *
+     * 用负 margin 抵消在 LinearLayout 里不可靠（部分版本会把负值当 0 处理），
+     * 所以改为给 render 传一个「行内边距补偿」：正数表示把行内容整体左移，
+     * 由 SettingsViewBuilder 在行内部处理，不动外层布局。
+     */
+    private fun groupedRowsIn(column: LinearLayout): LinearLayout {
+        val g = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        column.addView(
+            g,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        return g
+    }
+
+    /**
+     * 供应商编辑器，在同一张卡片里换页（沿用 navigate 的过渡动画）。
+     *
+     * 与 editProvider 的区别只有承载方式：这里不 new 一张新卡片，而是复用调用方的
+     * 卡片换页；表单字段与保存逻辑完全一致，避免两套实现漂移。
+     */
+    private fun showProviderEditor(
+        sheet: CodaSheet,
+        existing: ProviderStore.Provider?,
+        apiType: String,
+        kind: ProviderStore.ProviderKind,
+    ) {
+        val kindOfRecord = existing?.kind ?: kind
+        val typeOfRecord = existing?.apiType ?: apiType
+
+        val idInput = EditText(this).apply {
+            hint = "供应商 ID，仅英文，如 myai"
+            setText(existing?.id ?: "")
+            isEnabled = existing == null
+        }
+        val nameInput = EditText(this).apply {
+            hint = "显示名称"
+            setText(existing?.name ?: "")
+        }
+        val urlInput = EditText(this).apply {
+            hint = if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                "转写端点，如 https://api.example.com/v1"
+            } else {
+                "API 端点，如 https://api.example.com/v1"
+            }
+            setText(existing?.baseUrl ?: "")
+            inputType = InputType.TYPE_TEXT_VARIATION_URI
+        }
+        val keyInput = EditText(this).apply {
+            hint = "API Key"
+            setText(existing?.apiKey ?: "")
+        }
+        val modelsInput = EditText(this).apply {
+            hint = if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                "转写模型名，如 whisper-1；多个用英文逗号分隔"
+            } else {
+                "模型名，多个用英文逗号分隔"
+            }
+            setText(existing?.models?.joinToString(",") ?: "")
+        }
+
+        sheet.navigate {
+            title(
+                when {
+                    existing != null -> "编辑供应商"
+                    kindOfRecord == ProviderStore.ProviderKind.ASR -> "添加 ASR 供应商"
+                    else -> "添加 LLM 供应商"
+                }
+            )
+            subtitle("接口类型：$typeOfRecord")
+            secondaryAction("取消") { it.dismiss() }
+            content { col ->
+                col.addView(idInput)
+                col.addView(nameInput)
+                col.addView(urlInput)
+                col.addView(keyInput)
+                col.addView(modelsInput)
+            }
+            primaryAction("保存") { s ->
+                val id = idInput.text.toString().trim()
+                val models = modelsInput.text.toString()
+                    .split(',', '，')
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .toMutableList()
+                if (id.isEmpty() || models.isEmpty()) {
+                    snack("供应商 ID 与至少一个模型名不能为空")
+                } else {
+                    val list = ProviderStore.load(this@SettingsDetailActivity)
+                    list.removeAll { it.id == id }
+                    list.add(
+                        ProviderStore.Provider(
+                            id = id,
+                            name = nameInput.text.toString().trim().ifEmpty { id },
+                            apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
+                            baseUrl = urlInput.text.toString().trim(),
+                            apiKey = keyInput.text.toString().trim(),
+                            models = models,
+                            kind = kindOfRecord,
+                            origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
+                        ),
+                    )
+                    ProviderStore.save(this@SettingsDetailActivity, list)
+                    s.dismiss()
+                    applyProviderChange()
+                }
+            }
+        }
+    }
+
+    /** 把「选类型」那一页的内容填回一张卡片（供 navigate 里重建用）。 */
+    private fun rebuildAddProviderKindPage(sheet: CodaSheet) {
+        title("添加供应商")
+        subtitle("先选类型，再填参数")
+        secondaryAction("取消") { it.dismiss() }
+        content { col ->
+            val group = LinearLayout(this@SettingsDetailActivity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            col.addView(group)
+            val rows = mutableListOf<SettingRow>()
+            rows += SettingRow.Header("通用格式")
+            rows += SettingRow.Value("OpenAI 兼容", "chat/completions 格式，最常见的端点", "add_openai")
+            rows += SettingRow.Value("Anthropic 兼容", "messages 格式", "add_anthropic")
+            rows += SettingRow.Header("OAuth 授权")
+            rows += SettingRow.Value("OAuth 登录", "扫码或跳转授权，凭据由本机网关托管", "add_oauth")
+            SettingsViewBuilder.render(
+                this@SettingsDetailActivity,
+                group,
+                rows,
+                listener = object : SettingsActionListener {
+                    override fun onRadioSelect(key: String) = Unit
+                    override fun onToggleChange(key: String, checked: Boolean) = Unit
+                    override fun onValueClick(key: String) {
+                        when (key) {
+                            "add_openai", "add_anthropic" -> {
+                                val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
+                                showProviderEditor(sheet, null, t, providerKind)
+                            }
+                            "add_oauth" -> showOAuthPicker(sheet)
+                        }
+                    }
+                },
+                insetCompensationPx = dp(16),
+            )
+        }
     }
 
     /** 供应商编辑（添加 / 修改）：保存后重启核心使配置生效。 */

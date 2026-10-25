@@ -227,6 +227,8 @@ object SettingsData {
                 )
             }
         }
+        // OAuth 的入口不在这里：它属于「添加供应商」那一步（半屏第一屏选类型），
+        // 不要在列表页重复开一个入口，否则同一个动作有两个来源，用户不知道该点哪。
         return SettingsPage(if (kind == ProviderStore.ProviderKind.ASR) "ASR 模型" else "LLM 模型", rows)
     }
 
