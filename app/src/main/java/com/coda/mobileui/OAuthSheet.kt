@@ -165,9 +165,11 @@ class OAuthSheet(
             val group = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
             column.addView(group)
             val rows = mutableListOf<SettingRow>()
+            // 这一行直接用当前站点当主标题：原来「登录站点」是标题、站点名是副标题，
+            // 副标题比标题更有信息量，反过来显示更省一行。
             rows += SettingRow.Value(
-                "登录站点",
                 if (realm == "global") "国际版（workbuddy.ai）" else "国内版（copilot.tencent.com）",
+                "",
                 "pick_realm",
             )
             // 已在 CodaSheet 内容区里，留白由 CodaSheet 统一负责，这里不再叠加。

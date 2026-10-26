@@ -1906,14 +1906,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
             val rows = mutableListOf<SettingRow>()
             rows += SettingRow.Header("通用格式")
-            rows += SettingRow.Value("OpenAI 兼容", "chat/completions 格式，最常见的端点", "add_openai")
-            rows += SettingRow.Value("Anthropic 兼容", "messages 格式", "add_anthropic")
+            rows += SettingRow.Value("OpenAI 兼容", "", "add_openai")
+            rows += SettingRow.Value("Anthropic 兼容", "", "add_anthropic")
             rows += SettingRow.Header("OAuth 授权")
-            rows += SettingRow.Value(
-                "OAuth 登录",
-                "扫码或跳转授权，凭据由本机网关托管",
-                "add_oauth",
-            )
+            rows += SettingRow.Value("OAuth 登录", "", "add_oauth")
             SettingsViewBuilder.render(
                 this, group, rows,
                 // 这张列表已经在 CodaSheet 的 content 里，而 CodaSheet 本身

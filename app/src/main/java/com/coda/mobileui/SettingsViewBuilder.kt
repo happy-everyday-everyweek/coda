@@ -128,7 +128,9 @@ object SettingsViewBuilder {
                 findViewById<TextView>(R.id.row_title).text = row.title
                 findViewById<TextView>(R.id.row_subtitle).apply {
                     text = row.value
-                    visibility = View.VISIBLE
+                    // 空描述就不占位：以前无条件 VISIBLE，传空串会留出一块
+                    // 空白高度，行看起来像多了一段莫名间隙。
+                    visibility = if (row.value.isEmpty()) View.GONE else View.VISIBLE
                 }
                 if (row.key.isNotEmpty() && listener != null) {
                     setOnClickListener { listener.onValueClick(row.key) }
