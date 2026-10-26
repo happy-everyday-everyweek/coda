@@ -1984,7 +1984,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                             OAuthSheet(this@SettingsDetailActivity, p).attachTo(sheet)
                         }
                     },
-                    horizontalInsetPx = resources.getDimensionPixelSize(R.dimen.content_padding_h),
+                    // 本列表已在 CodaSheet 的内容区里，那层已有 content_padding_h 留白；
+                    // 再传 20dp 会叠加成双倍缩进，卡片左缘与标题对不齐。
+                    horizontalInsetPx = 0,
                 )
             }
         }
@@ -2146,7 +2148,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                         }
                     }
                 },
-                horizontalInsetPx = resources.getDimensionPixelSize(R.dimen.content_padding_h),
+                // 本列表已在 CodaSheet 的内容区里，那层已有 content_padding_h 留白；
+                // 再传 20dp 会叠加成双倍缩进，卡片左缘与标题对不齐。
+                horizontalInsetPx = 0,
             )
         }
     }

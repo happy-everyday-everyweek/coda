@@ -1,12 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 分组标题（对齐 Lawnchair 16：48dp 高、水平 32dp、titleSmall + 主题色）。 -->
+<!--
+    分组标题。
+
+    原来写死 48dp 高、水平 32dp，在 CodaSheet 里比卡片左缘还多缩 32dp，
+    与「添加供应商」这种卡片标题完全对不齐。现在：
+      · 水平内边距由 SettingsViewBuilder 按 horizontalInsetPx 统一设置，
+        这里不再写死，避免又多一处各自为政的对齐；
+      · 高度改为 wrap_content + 上下 padding，密度更接近系统设置的分组标题。
+-->
 <TextView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/header_title"
     android:layout_width="match_parent"
-    android:layout_height="48dp"
+    android:layout_height="wrap_content"
     android:gravity="center_vertical"
-    android:paddingStart="32dp"
-    android:paddingEnd="32dp"
+    android:paddingTop="14dp"
+    android:paddingBottom="6dp"
     android:textAppearance="?attr/textAppearanceTitleSmall"
     android:textColor="?attr/colorPrimary"
     android:textStyle="bold" />

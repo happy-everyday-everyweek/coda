@@ -65,6 +65,9 @@ object SettingsViewBuilder {
             if (row is SettingRow.Header) {
                 val header = inflater.inflate(R.layout.view_settings_header, container, false)
                 header.findViewById<TextView>(R.id.header_title).text = row.title
+                // 分组标题的水平位置也归 insetH 管。layout 里已经不再写死 32dp，
+                // 这里补上；否则它会贴到容器最左边，比卡片还靠外。
+                header.setPadding(insetH, header.paddingTop, insetH, header.paddingBottom)
                 container.addView(header)
                 return@forEachIndexed
             }
@@ -75,7 +78,18 @@ object SettingsViewBuilder {
             val isCustom = row is SettingRow.Custom
             val prevIsCustom = index > 0 && rows[index - 1] is SettingRow.Custom
             if (!isFirstInGroup && !isCustom && !prevIsCustom) {
-                container.addView(inflater.inflate(R.layout.view_settings_gap, container, false))
+                val gap = inflater.inflate(R.layout.view_settings_gap, container, false)
+                // 断开缝要跟卡片同宽：卡片此时可能有 0 或 16dp 的左右外距，
+                // 让缝也带上同样的外距，否则缝会比卡片宽出一截，
+                // 分组之间看起来就是「一条线横穿整屏」。
+                if (horizontalInsetPx == 0) {
+                    (gap.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
+                        lp.marginStart = 0
+                        lp.marginEnd = 0
+                        gap.layoutParams = lp
+                    }
+                }
+                container.addView(gap)
             }
             val view = buildRow(inflater, container, row, radioRows, listener, onCategoryClick)
                 ?: return@forEachIndexed
@@ -86,6 +100,23 @@ object SettingsViewBuilder {
             // 背景、圆角、分隔线都不动，只有文字往里收。
             view.findViewById<View?>(R.id.row_inner)?.let { inner ->
                 inner.setPadding(insetH, inner.paddingTop, insetH, inner.paddingBottom)
+            }
+            // 卡片自身的左右外边距也必须归这个参数管。
+            // 之前只有行内 padding 跟 horizontalInsetPx 走，layout 里还写死一个
+            // settings_card_margin(16dp)：传 0 只把文字内缩清零，卡片边缘仍然
+            // 比宿主内容区多缩 16dp，于是「卡片的左缘 ≠ 标题的左缘」。
+            // 数值对得上：content_padding_h(20) + settings_card_margin(16) = 36dp，
+            // 而标题在 20dp，差的正好是那 16dp。
+            //
+            // 语义约定：只在调用方显式传了 0（表示「本列表已经在有留白的容器里」）
+            // 时才把卡片外距清零。默认情况保持 layout 里的 16dp，
+            // 否则设置主页面那几页会从 16 变成 20，白改一轮。
+            if (horizontalInsetPx == 0) {
+                (view.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
+                    lp.marginStart = 0
+                    lp.marginEnd = 0
+                    view.layoutParams = lp
+                }
             }
             container.addView(view)
         }
