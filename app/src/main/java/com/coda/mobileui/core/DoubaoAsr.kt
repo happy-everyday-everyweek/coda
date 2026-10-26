@@ -287,10 +287,10 @@ object DoubaoAsr {
 
         try {
             send("StartTask")
-            val startedResp = incoming.poll(timeoutSec, TimeUnit.SECONDS)
-                ?: throw AsrError("等待 TaskStarted 超时")
-            process(startedResp)
-            taskId = (startedResp as JSONObject).optString("task_id")
+            // 必须等到 TaskStarted 这一帧，不能只拿队列里的下一条：
+            // 服务端可能先推别的通知，那样会把无关帧当成应答。
+            val startedResp = waitForReturning("TaskStarted")
+            taskId = startedResp.optString("task_id")
             if (taskId.isEmpty()) throw AsrError("创建语音任务后未收到 task_id")
 
             send(
@@ -438,10 +438,9 @@ object DoubaoAsr {
                 throw AsrError("语音连接超时")
             }
             send("StartTask")
-            val resp = incoming.poll(timeoutSec, TimeUnit.SECONDS)
-                ?: throw AsrError("等待 TaskStarted 超时")
-            process(resp)
-            taskId = (resp as JSONObject).optString("task_id")
+            // 与一次性模式一致：必须等到 TaskStarted，不能只取队列下一条。
+            val resp = waitForReturning("TaskStarted")
+            taskId = resp.optString("task_id")
             if (taskId.isEmpty()) throw AsrError("创建语音任务后未收到 task_id")
             send(
                 "StartSession",
@@ -552,19 +551,27 @@ object DoubaoAsr {
                     val item = results.optJSONObject(i) ?: continue
                     val text = item.optString("text")
                     if (text.isEmpty()) continue
-                    val interim = !item.has("is_interim") || item.optBoolean("is_interim")
-                    if (interim) {
-                        // 中间结果直接推给界面，不进入 finals。
-                        onText(text, false)
-                    } else {
+                    // 与参考实现严格对齐：只有 is_interim 明确为 false 才是最终结果。
+                    // 缺这个字段的一律不认——不能默认当成最终结果，否则会把
+                    // 中间态当成定稿拼进正文，出现重复字。
+                    val isFinal = item.has("is_interim") && !item.optBoolean("is_interim")
+                    if (isFinal) {
                         finals += text
                         onText(text, true)
+                    } else {
+                        // 中间结果直接推给界面，不进入 finals。
+                        onText(text, false)
                     }
                 }
             }
         }
 
         private fun waitFor(expected: String) {
+            waitForReturning(expected)
+        }
+
+        /** 等到指定事件，并把它整帧返回（用来取 task_id 这类字段）。 */
+        fun waitForReturning(expected: String): JSONObject {
             val deadline = System.currentTimeMillis() + timeoutSec * 1000
             while (true) {
                 val remain = deadline - System.currentTimeMillis()
@@ -572,8 +579,8 @@ object DoubaoAsr {
                 val raw = incoming.poll(remain, TimeUnit.MILLISECONDS)
                     ?: throw AsrError("等待 $expected 超时")
                 process(raw)
-                // process 已经判定过失败；这里只比较事件名。
-                if ((raw as JSONObject).optString("event") == expected) return
+                val o = raw as JSONObject
+                if (o.optString("event") == expected) return o
             }
         }
     }

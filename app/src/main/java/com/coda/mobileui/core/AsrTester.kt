@@ -231,6 +231,7 @@ object AsrTester {
         provider: ProviderStore.Provider,
         audio: File,
         model: String,
+        language: String = "zh",
     ): Result {
         if (ProviderStore.isBuiltin(provider)) return transcribeBuiltin(audio, model)
         if (provider.baseUrl.isBlank()) return Result.Fail("供应商未填写转写端点")
@@ -242,12 +243,19 @@ object AsrTester {
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("model", model)
                 .addFormDataPart("response_format", "json")
-                // 官方要求「带扩展名的文件名 + 匹配的 content type」，否则服务端可能认不出格式。
+                // 官方要求「带扩展名的文件名 + 匹配的 content type」，
+                // 否则服务端可能认不出格式。文件名与 MIME 都从实际文件推断，
+                // 不再写死 audio.wav——那是只有本项目自录 wav 时才成立的假设。
                 .addFormDataPart(
                     "file",
-                    "audio.wav",
-                    audio.asRequestBody("audio/wav".toMediaType()),
+                    audio.name,
+                    audio.asRequestBody(mimeOf(audio).toMediaType()),
                 )
+                .apply {
+                    // 中文场景必须显式指定语言。whisper 类模型不给 language 时
+                    // 会自己猜，中文长音频有概率被猜成粤语或直接输出英文翻译。
+                    if (language.isNotBlank()) addFormDataPart("language", language)
+                }
                 .build()
             val req = Request.Builder()
                 .url(url)
@@ -294,6 +302,25 @@ object AsrTester {
     fun endpoint(baseUrl: String): String {
         val base = baseUrl.trim().trimEnd('/')
         return if (base.endsWith("/v1")) "$base/audio/transcriptions" else "$base/v1/audio/transcriptions"
+    }
+
+    /**
+     * 按扩展名推断 MIME。
+     *
+     * 官方明确要求「带扩展名的文件名 + 匹配的 content type」，两份元数据
+     * 都要够服务端认出格式。这里只覆盖官方 list 里那些：
+     * flac / mp3 / mp4 / mpeg / mpga / m4a / ogg / wav / webm。
+     * 认不出就退回 application/octet-stream，让服务端自己嗅探。
+     */
+    fun mimeOf(file: File): String = when (file.extension.lowercase()) {
+        "wav" -> "audio/wav"
+        "mp3", "mpga" -> "audio/mpeg"
+        "mp4", "m4a" -> "audio/mp4"
+        "mpeg" -> "audio/mpeg"
+        "flac" -> "audio/flac"
+        "ogg" -> "audio/ogg"
+        "webm" -> "audio/webm"
+        else -> "application/octet-stream"
     }
 
     /** 设置页上显示给用户的「目标」描述，内置 provider 没有 URL。 */
@@ -429,18 +456,36 @@ object AsrTester {
         }
     }
 
-    /** 转写响应取文本：优先 `text`，其次 `results[0]` 这一类常见变体。 */
+    /**
+     * 取转写文本。
+     *
+     * 官方 `response_format=json` 返回 `{"text": "..."}`；`verbose_json` 也带
+     * `text`，同时有 `segments`。但 `response_format=text` 时服务端直接返回
+     * 裸文本，一个字符都不是 JSON——所以不能只看「像不像 JSON」，
+     * 要先真的试着解析，失败才当纯文本。
+     */
     private fun parseText(body: String): String {
-        if (body.isBlank()) return ""
-        runCatching {
-            val o = JSONObject(body)
-            o.optString("text").takeIf { it.isNotBlank() }?.let { return it.trim() }
-            o.optJSONArray("results")?.optJSONObject(0)?.optString("text")
-                ?.takeIf { it.isNotBlank() }?.let { return it.trim() }
-            o.optJSONArray("segments")?.optJSONObject(0)?.optString("text")
-                ?.takeIf { it.isNotBlank() }?.let { return it.trim() }
+        val trimmed = body.trim()
+        if (trimmed.isEmpty()) return ""
+        // 只有长得像 JSON 才尝试解析，避免把纯文本里的花括号当结构。
+        if (trimmed.startsWith("{")) {
+            val parsed = runCatching { JSONObject(trimmed) }.getOrNull()
+            if (parsed != null) {
+                parsed.optString("text").takeIf { it.isNotBlank() }?.let { return it.trim() }
+                parsed.optJSONArray("results")?.optJSONObject(0)?.optString("text")
+                    ?.takeIf { it.isNotBlank() }?.let { return it.trim() }
+                parsed.optJSONArray("segments")?.let { segs ->
+                    // verbose_json：没有顶层 text 时把各段拼起来。
+                    val sb = StringBuilder()
+                    for (i in 0 until segs.length()) {
+                        val t = segs.optJSONObject(i)?.optString("text").orEmpty()
+                        if (t.isNotBlank()) sb.append(t)
+                    }
+                    if (sb.isNotBlank()) return sb.toString().trim()
+                }
+            }
         }
-        // 不是 JSON：有些自建端点直接返回纯文本，原样当结果用。
-        return body.trim().takeIf { !it.startsWith("{") && !it.startsWith("<") } ?: ""
+        // 真的是裸文本（response_format=text 的返回），原样用。
+        return trimmed
     }
 }
