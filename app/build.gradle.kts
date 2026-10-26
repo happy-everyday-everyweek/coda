@@ -106,4 +106,9 @@ dependencies {
     implementation("com.google.android.material:material:1.13.0")
     // AI 回复的 Markdown 渲染（加粗、列表、代码块、引用、链接等）
     implementation("io.noties.markwon:core:4.6.2")
+    // 网络层：WebSocket（豆包语音反代）、multipart 上传（ASR 转写）、
+    // 超时与取消。之前用裸 HttpURLConnection，豆包那条要走 WebSocket，
+    // 手写握手与帧掩码不值得，直接上 OkHttp。
+    // 4.12.0 是最后一个支持 API 21+ 的稳定版，minSdk 26 完全覆盖。
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

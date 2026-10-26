@@ -34,6 +34,7 @@ import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.OAuthProviders
+import com.coda.mobileui.core.AsrTester
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.core.ZController
 import java.io.File
@@ -413,6 +414,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 val id = key.removePrefix("providers_edit:")
                 val p = ProviderStore.load(this).firstOrNull { it.id == id }
                 if (p != null) editProvider(p) else renderPage()
+            }
+            key.startsWith("providers_test:") -> {
+                val id = key.removePrefix("providers_test:")
+                val p = ProviderStore.load(this).firstOrNull { it.id == id }
+                if (p != null) showAsrTestMenu(p) else renderPage()
             }
             key.startsWith("assets_new:") -> {
                 val kind = parseAssetKind(key.removePrefix("assets_new:"))
@@ -2208,6 +2214,57 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             col.addView(urlInput)
             col.addView(keyInput)
             col.addView(modelsInput)
+            // ASR 供应商多一个测试入口：录一段音直接打这个端点，
+            // 把识别结果或失败原因就地显示。聊天框不接这条通路，
+            // 所以这是唯一能验证配置是否可用的地方。
+            if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                col.addView(
+                    TextView(this).apply {
+                        text = "填完保存后可用下方测试验证端点与密钥是否可用。"
+                        textSize = 12f
+                        setTextColor(onSurfaceVariantColor())
+                        setPadding(0, dp(8), 0, 0)
+                    },
+                )
+                val testBtn = com.google.android.material.button.MaterialButton(
+                    this,
+                    null,
+                    com.google.android.material.R.attr.materialButtonOutlinedStyle,
+                ).apply {
+                    text = "保存并测试"
+                    setPadding(0, dp(4), 0, dp(4))
+                }
+                testBtn.setOnClickListener {
+                    // 先落库再测：用户在表单里改过的端点/密钥应该立即生效，
+                    // 否则测的还是旧配置，结论没有意义。
+                    val id = idInput.text.toString().trim()
+                    val models = modelsInput.text.toString()
+                        .split(',', '，')
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .toMutableList()
+                    if (id.isEmpty() || models.isEmpty()) {
+                        snack("供应商 ID 与至少一个模型名不能为空")
+                        return@setOnClickListener
+                    }
+                    val list = ProviderStore.load(this)
+                    list.removeAll { it.id == id }
+                    val record = ProviderStore.Provider(
+                        id = id,
+                        name = nameInput.text.toString().trim().ifEmpty { id },
+                        apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
+                        baseUrl = urlInput.text.toString().trim(),
+                        apiKey = keyInput.text.toString().trim(),
+                        models = models,
+                        kind = kindOfRecord,
+                        origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
+                    )
+                    list.add(record)
+                    ProviderStore.save(this, list)
+                    startAsrTest(record)
+                }
+                col.addView(testBtn)
+            }
         }
         sheet.primaryAction("保存") { s ->
             val id = idInput.text.toString().trim()
@@ -2241,6 +2298,376 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             }
         }
         sheet.show()
+    }
+
+    // ------------------------------------------------------------ ASR 测试
+
+    /**
+     * ASR 测试入口菜单。
+     *
+     * 内置豆包支持两种模式，所以先让用户选：
+     *   · 实时识别：边说边出字，走豆包的流式协议。
+     *   · 录完再识别：录一段音，一次性上传或一次性推流。
+     * 普通 OpenAI 兼容端点只有后者。
+     */
+    private fun showAsrTestMenu(provider: ProviderStore.Provider) {
+        val sheet = CodaSheet(this)
+            .title("测试 ${provider.name}")
+            .subtitle(AsrTester.endpointLabel(provider))
+        val rows = mutableListOf<SettingRow>()
+        if (AsrTester.realtimeSupported(provider)) {
+            rows += SettingRow.Value("实时识别", "边说边出字，说完自动收尾", "asr_live")
+        }
+        rows += SettingRow.Value(
+            "录完再识别",
+            if (ProviderStore.isBuiltin(provider)) "录一段音，推流后一次返回" else "录一段音，上传到转写端点",
+            "asr_once",
+        )
+        sheet.content { col ->
+            val group = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            col.addView(group)
+            SettingsViewBuilder.render(
+                this,
+                group,
+                rows,
+                listener = object : SettingsActionListener {
+                    override fun onRadioSelect(key: String) = Unit
+                    override fun onToggleChange(key: String, checked: Boolean) = Unit
+                    override fun onValueClick(key: String) {
+                        when (key) {
+                            "asr_live" -> {
+                                sheet.dismiss()
+                                startAsrTest(provider, live = true)
+                            }
+                            "asr_once" -> {
+                                sheet.dismiss()
+                                startAsrTest(provider, live = false)
+                            }
+                        }
+                    }
+                },
+                horizontalInsetPx = 0,
+            )
+        }
+        sheet.secondaryAction("关闭") { it.dismiss() }
+        sheet.show()
+    }
+
+    /** 正在跑的录音器；同一时刻只允许一个测试。 */
+    private var asrRecorder: AsrTester.Recorder? = null
+
+    /** 录音超时的兜底任务，防止用户开着录音忘记停。 */
+    private var asrTimeout: Runnable? = null
+
+    /** 权限申请返回后要接着测的供应商。 */
+    private var pendingAsrTest: ProviderStore.Provider? = null
+
+    /** 权限申请返回后要接着测的模式（实时 / 一次性）。 */
+    private var pendingAsrLive: Boolean = false
+
+    /** 正在跑的实时会话。 */
+    private var liveSession: AsrTester.LiveAsr? = null
+
+    private companion object {
+        /** 录音权限的请求码。 */
+        const val REQ_ASR_AUDIO = 1002
+    }
+
+    /**
+     * ASR 测试主流程：要权限 → 录音 →（实时边录边识别 / 一次性上传）→ 显示结果。
+     *
+     * [live] 为 true 时走实时模式：录音 PCM 直接喂给 [AsrTester.LiveAsr]，
+     * 中间结果实时刷新在面板上。这种模式只有内置豆包支持，因为它原生是流式协议；
+     * OpenAI 兼容端点只接受完整文件，只能走一次性。
+     *
+     * 聊天框不接这条通路，所以这是验证 ASR 配置是否真的可用的唯一入口。
+     * 每一步失败都要说清楚是哪一步，不能只给一句「失败」。
+     */
+    private fun startAsrTest(provider: ProviderStore.Provider, live: Boolean = false) {
+        if (asrRecorder != null) {
+            snack("已有一个录音正在进行")
+            return
+        }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingAsrTest = provider
+            pendingAsrLive = live
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), REQ_ASR_AUDIO)
+            return
+        }
+        val model = provider.models.firstOrNull().orEmpty()
+        if (live && !AsrTester.realtimeSupported(provider)) {
+            showAsrResult(provider, model, AsrTester.Result.Fail("这个供应商不支持实时识别，请用「录完再识别」"))
+            return
+        }
+        if (live) {
+            startLiveAsr(provider, model)
+        } else {
+            startOnceAsr(provider, model)
+        }
+    }
+
+    /** 一次性模式：录成 wav，停止后上传或推流。 */
+    private fun startOnceAsr(provider: ProviderStore.Provider, model: String) {
+        val recorder = AsrTester.Recorder(this)
+        if (!recorder.start()) {
+            showAsrResult(
+                provider,
+                model,
+                AsrTester.Result.Fail("麦克风打不开（被其他应用占用，或系统禁止录音）"),
+            )
+            return
+        }
+        asrRecorder = recorder
+        val sheet = CodaSheet(this)
+            .title("录完再识别")
+            .subtitle(AsrTester.endpointLabel(provider))
+        val statusText = TextView(this).apply {
+            text = "正在录音…说一句话后点「停止并识别」"
+            textSize = 14f
+            setTextColor(onSurfaceColor())
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        sheet.content { col -> col.addView(statusText) }
+        sheet.secondaryAction("取消") { s ->
+            cancelAsrRecording()
+            s.dismiss()
+        }
+        sheet.primaryAction("停止并识别") { s ->
+            asrTimeout?.let { providerRestartHandler.removeCallbacks(it) }
+            asrTimeout = null
+            val rec = asrRecorder
+            asrRecorder = null
+            s.dismiss()
+            if (rec != null) {
+                // stop() 与上传都必须离开主线程。
+                Thread {
+                    val file = rec.stop()
+                    if (file == null) {
+                        main.post {
+                            showAsrResult(
+                                provider,
+                                model,
+                                AsrTester.Result.Fail("录音太短或没采到声音，请说满一秒再停"),
+                            )
+                        }
+                    } else {
+                        main.post { snack("正在识别，请稍候…") }
+                        val result = AsrTester.transcribe(provider, file, model)
+                        main.post { showAsrResult(provider, model, result) }
+                    }
+                }.start()
+            }
+        }
+        sheet.show()
+        scheduleAsrTimeout()
+    }
+
+    /** 实时模式：边说边出字。 */
+    private fun startLiveAsr(provider: ProviderStore.Provider, model: String) {
+        val sheet = CodaSheet(this)
+            .title("实时识别")
+            .subtitle(AsrTester.endpointLabel(provider))
+        val liveText = TextView(this).apply {
+            text = ""
+            textSize = 16f
+            setTextColor(onSurfaceColor())
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val statusText = TextView(this).apply {
+            text = "正在连接…"
+            textSize = 12f
+            setTextColor(onSurfaceVariantColor())
+        }
+        sheet.content { col ->
+            col.addView(liveText)
+            col.addView(statusText)
+        }
+        val live = AsrTester.openLive { text, isFinal ->
+            // 回调来自网络线程，必须切回主线程刷 UI。
+            main.post {
+                liveText.append(text)
+                statusText.text = if (isFinal) "已确认 ${liveText.text.length} 字" else "识别中…"
+            }
+        }
+        // 录音回调直接在音频采集线程上喂给会话，避免再拷贝一层。
+        val recorder = AsrTester.Recorder(this)
+        val started = try {
+            live.start()
+            true
+        } catch (e: Throwable) {
+            main.post {
+                sheet.dismiss()
+                showAsrResult(
+                    provider,
+                    model,
+                    AsrTester.Result.Fail("实时连接失败：${e.message ?: e.javaClass.simpleName}"),
+                )
+            }
+            false
+        }
+        if (!started) {
+            live.cancel()
+            return
+        }
+        if (!recorder.start { pcm -> live.feed(pcm) }) {
+            live.cancel()
+            showAsrResult(provider, model, AsrTester.Result.Fail("麦克风打不开（被其他应用占用，或系统禁止录音）"))
+            return
+        }
+        asrRecorder = recorder
+        liveSession = live
+        statusText.text = "正在录音…说完点「结束」"
+        sheet.secondaryAction("取消") { s ->
+            cancelAsrRecording()
+            s.dismiss()
+        }
+        sheet.primaryAction("结束") { s ->
+            asrTimeout?.let { providerRestartHandler.removeCallbacks(it) }
+            asrTimeout = null
+            val rec = asrRecorder
+            asrRecorder = null
+            val session = liveSession
+            liveSession = null
+            s.dismiss()
+            Thread {
+                rec?.stop()
+                val result = session?.finish() ?: AsrTester.Result.Fail("实时会话已中断")
+                main.post { showAsrResult(provider, model, result) }
+            }.start()
+        }
+        sheet.show()
+        scheduleAsrTimeout()
+    }
+
+    /** 录音上限的兜底计时，两条路径共用。 */
+    private fun scheduleAsrTimeout() {
+        val timeout = Runnable {
+            asrTimeout = null
+            val rec = asrRecorder
+            asrRecorder = null
+            val session = liveSession
+            liveSession = null
+            if (rec != null) {
+                snack("已达 ${AsrTester.MAX_RECORD_MS / 1000} 秒上限，自动结束")
+                Thread {
+                    rec.stop()
+                    session?.cancel()
+                }.start()
+            }
+        }
+        asrTimeout = timeout
+        providerRestartHandler.postDelayed(timeout, AsrTester.MAX_RECORD_MS.toLong())
+    }
+
+    private fun onSurfaceColor(): Int = MaterialColors.getColor(
+        this,
+        com.google.android.material.R.attr.colorOnSurface,
+        android.graphics.Color.BLACK,
+    )
+
+    private fun onSurfaceVariantColor(): Int = MaterialColors.getColor(
+        this,
+        com.google.android.material.R.attr.colorOnSurfaceVariant,
+        android.graphics.Color.GRAY,
+    )
+
+    /** 放弃当前录音（取消按钮与页面销毁都要走这里）。 */
+    private fun cancelAsrRecording() {
+        asrTimeout?.let { providerRestartHandler.removeCallbacks(it) }
+        asrTimeout = null
+        val rec = asrRecorder
+        asrRecorder = null
+        val session = liveSession
+        liveSession = null
+        rec?.cancel()
+        session?.cancel()
+    }
+
+    /** 把测试结果摊开显示：成功给文本，失败给具体原因。 */
+    private fun showAsrResult(
+        provider: ProviderStore.Provider,
+        model: String,
+        result: AsrTester.Result,
+    ) {
+        val sheet = CodaSheet(this)
+            .title(if (result is AsrTester.Result.Ok) "识别成功" else "测试失败")
+            .subtitle("${provider.name} · ${model.ifEmpty { "未填模型" }}")
+        val body = TextView(this).apply {
+            textSize = 14f
+            setTextColor(
+                MaterialColors.getColor(
+                    this@SettingsDetailActivity,
+                    com.google.android.material.R.attr.colorOnSurface,
+                    android.graphics.Color.BLACK,
+                ),
+            )
+            setTextIsSelectable(true)
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val meta = TextView(this).apply {
+            textSize = 12f
+            setTextColor(
+                MaterialColors.getColor(
+                    this@SettingsDetailActivity,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                ),
+            )
+        }
+        when (result) {
+            is AsrTester.Result.Ok -> {
+                body.text = result.text
+                meta.text = "耗时 ${result.elapsedMs} ms · 端点 ${AsrTester.endpoint(provider.baseUrl)}"
+            }
+            is AsrTester.Result.Fail -> {
+                body.text = result.reason
+                meta.text = "端点 ${AsrTester.endpoint(provider.baseUrl)}"
+            }
+        }
+        sheet.content { col ->
+            col.addView(body)
+            col.addView(meta)
+        }
+        sheet.primaryAction("知道了") { it.dismiss() }
+        if (result is AsrTester.Result.Ok) {
+            sheet.secondaryAction("重测") { s ->
+                s.dismiss()
+                startAsrTest(provider)
+            }
+        }
+        sheet.show()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_ASR_AUDIO) return
+        val target = pendingAsrTest
+        pendingAsrTest = null
+        if (target == null) return
+        val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            startAsrTest(target, pendingAsrLive)
+        } else {
+            showAsrResult(
+                target,
+                target.models.firstOrNull().orEmpty(),
+                AsrTester.Result.Fail(
+                    "没有录音权限。测试必须现场录音，请在系统设置里允许本应用录音后重试。",
+                ),
+            )
+        }
+    }
+
+    override fun onDestroy() {
+        cancelAsrRecording()
+        super.onDestroy()
     }
 
     /** 保存后的统一步骤：防抖合并连续保存，随后重启核心使配置生效。 */

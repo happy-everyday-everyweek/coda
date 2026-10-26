@@ -23,6 +23,8 @@ object ProviderStore {
         MANUAL,
         /** 通过 OAuth 授权添加，凭据在网关侧。 */
         OAUTH,
+        /** App 自带的实现（如豆包网页匿名反代），不需要端点与密钥。 */
+        BUILTIN,
     }
 
     data class Provider(
@@ -50,12 +52,62 @@ object ProviderStore {
 
     fun load(ctx: Context): MutableList<Provider> {
         val f = fileFor(ctx)
-        if (!f.exists()) return mutableListOf()
-        return try {
-            parse(JSONObject(f.readText()))
-        } catch (_: Throwable) {
+        val parsed = if (!f.exists()) {
             mutableListOf()
+        } else {
+            try {
+                parse(JSONObject(f.readText()))
+            } catch (_: Throwable) {
+                mutableListOf()
+            }
         }
+        return mergeBuiltins(parsed)
+    }
+
+    // ------------------------------------------------------------ 内置供应商
+
+    /**
+     * 内置豆包语音（网页匿名反代）的 provider id。
+     *
+     * 它不是真实端点：baseUrl 写的是内部标记，转写时走 [DoubaoAsr] 而不是 HTTP。
+     * 这样它在设置页里长得跟其他 ASR 供应商一样，可以点进去测、可以看状态，
+     * 但不需要用户填任何东西——开箱即用。
+     */
+    const val BUILTIN_DOUBAO_ASR = "coda_doubao_web"
+
+    /** `baseUrl` 的内部标记，用来在转写分发时认出内置 provider。 */
+    const val BUILTIN_DOUBAO_SCHEME = "coda-doubao-web://anonymous"
+
+    /** 定义所有内置 provider（当前只有一个，后续可加）。 */
+    fun builtins(): List<Provider> = listOf(
+        Provider(
+            id = BUILTIN_DOUBAO_ASR,
+            name = "豆包语音（内置）",
+            apiType = "doubao-web-anonymous",
+            baseUrl = BUILTIN_DOUBAO_SCHEME,
+            apiKey = "",
+            models = mutableListOf("doubao-voice"),
+            kind = ProviderKind.ASR,
+            origin = ProviderOrigin.BUILTIN,
+        ),
+    )
+
+    /** 这条 provider 是不是内置的（不需要端点、不需要密钥）。 */
+    fun isBuiltin(p: Provider): Boolean = p.id == BUILTIN_DOUBAO_ASR || p.origin == ProviderOrigin.BUILTIN
+
+    /**
+     * 把内置 provider 并进读取结果。
+     *
+     * 只在内存里合并，不落盘：用户配置文件里永远没有它，卸载重装或改内置定义
+     * 都自然生效，也不会因为版本升级留下过期条目。用户自己删不掉它（删了下次
+     * 读取又会补回来），这符合「自带、默认接入」的要求。
+     */
+    private fun mergeBuiltins(parsed: MutableList<Provider>): MutableList<Provider> {
+        val out = parsed.toMutableList()
+        for (b in builtins()) {
+            if (out.none { it.id == b.id }) out.add(0, b)
+        }
+        return out
     }
 
     fun parse(root: JSONObject): MutableList<Provider> {
@@ -100,18 +152,26 @@ object ProviderStore {
         val root = JSONObject()
         root.put("schemaVersion", 1)
         val config = JSONObject()
-
         val order = JSONArray()
-        providers.forEach { order.put(it.id) }
+        // 内置 provider 不落盘：它由 code 定义，写进配置会在升级后留下过期副本，
+        // 也会让用户以为能改能删。这里统一过滤掉。
+        val persist = providers.filter { !isBuiltin(it) }
+        persist.forEach { order.put(it.id) }
         config.put("providerOrder", order)
-
         val prules = JSONArray()
-        for (p in providers) {
+        for (p in persist) {
             val r = JSONObject().put("providerId", p.id).put("providerName", p.name)
             // 这两个是 Coda 自己的扩展字段：内核不认识也不会报错，
             // 但 App 重读时要靠它把 OAuth 供应商与手填供应商分开。
             r.put("codaKind", if (p.kind == ProviderKind.ASR) "asr" else "llm")
-            r.put("codaOrigin", if (p.origin == ProviderOrigin.OAUTH) "oauth" else "manual")
+            r.put(
+                "codaOrigin",
+                when (p.origin) {
+                    ProviderOrigin.OAUTH -> "oauth"
+                    ProviderOrigin.BUILTIN -> "builtin"
+                    else -> "manual"
+                },
+            )
             val cfg = JSONObject()
             cfg.put("group", "standard-personal")
             cfg.put("access", JSONObject().put("type", "api-key").put("apiKey", p.apiKey))

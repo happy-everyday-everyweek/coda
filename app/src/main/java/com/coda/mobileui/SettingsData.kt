@@ -2,6 +2,7 @@ package com.coda.mobileui
 
 import android.content.Context
 import com.coda.mobileui.core.AgentAssets
+import com.coda.mobileui.core.AsrTester
 import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
@@ -185,8 +186,12 @@ object SettingsData {
         rows += SettingRow.Category(
             "providers_asr",
             "ASR 模型",
-            "${asr.size} 个供应商 · 语音转文字",
-            R.drawable.ic_command,
+            if (asr.isEmpty()) {
+                "未配置 · 语音转文字"
+            } else {
+                "${asr.size} 个供应商 · 语音转文字"
+            },
+            R.drawable.ic_mic,
         )
         return SettingsPage("模型设置", rows)
     }
@@ -217,13 +222,20 @@ object SettingsData {
             list.forEach { p ->
                 rows += SettingRow.Value(
                     p.name,
-                    if (p.isOAuthManaged) {
-                        "${p.vendorOrChannel()} · OAuth 授权"
-                    } else {
-                        "${p.models.size} 个模型 · ${p.baseUrl}"
+                    when {
+                        // 内置实现不需要端点与密钥，标明「免配置」，
+                        // 点进去是测试页而不是编辑表单。
+                        ProviderStore.isBuiltin(p) ->
+                            "内置 · 免密钥 · ${if (AsrTester.realtimeSupported(p)) "支持实时" else "仅一次性"}"
+                        p.isOAuthManaged -> "${p.vendorOrChannel()} · OAuth 授权"
+                        else -> "${p.models.size} 个模型 · ${p.baseUrl}"
                     },
-                    // OAuth 的直接进平台管理页；手填的进编辑页。
-                    if (p.isOAuthManaged) "providers_oauth_open:${p.id}" else "providers_edit:${p.id}",
+                    // 内置的进自测页；OAuth 的进平台管理页；手填的进编辑页。
+                    when {
+                        ProviderStore.isBuiltin(p) -> "providers_test:${p.id}"
+                        p.isOAuthManaged -> "providers_oauth_open:${p.id}"
+                        else -> "providers_edit:${p.id}"
+                    },
                 )
             }
         }
