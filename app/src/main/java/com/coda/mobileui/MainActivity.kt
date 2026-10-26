@@ -3984,9 +3984,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 Intent(this, SettingsDetailActivity::class.java)
                     .putExtra(SettingsDetailActivity.EXTRA_PAGE, target),
             )
-            // 二级页统一从这里进：转场与返回的逆动作都成对定义在一处，
-            // 免得两个入口各写一份、日后改了一处忘了另一处。
-            overridePendingTransition(R.anim.settings_in, R.anim.settings_out)
+            // 设置页 → 一级页（点设置项打开的那一层）用系统默认转场。
+            // 之前套的是自定义方向动画，实测有明显顿挫：两个 Activity 都要
+            // 在转场期间完成初始布局，位移叠加后看起来一顿一顿的。
+            // 方向性动画只保留给一级页 → 二级页（同一 Activity 内的
+            // navigatePage，那段只动 View，开销小、也更需要方向感）。
+            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
         }
     }
 
@@ -4233,7 +4236,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                                     SettingsDetailActivity.PAGE_PROVIDERS,
                                 ),
                         )
-                        overridePendingTransition(R.anim.settings_in, R.anim.settings_out)
+                        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                         showModels(false)
                     }
                 },

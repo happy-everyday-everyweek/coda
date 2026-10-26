@@ -131,9 +131,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             return
         }
         finish()
-        // 退出转场必须与进入成对：settings_in ↔ settings_pop_*。
-        // 不写这一句会用系统默认的缩放淡出，方向感与进入不一致。
-        overridePendingTransition(R.anim.settings_pop_in, R.anim.settings_pop_out)
+        // 与进入成对：进来是淡入，退回去也要淡出。若这里仍用带位移的
+        // settings_pop_*，返回时会跟进入的方向感对不上，看起来又是一次顿挫。
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
     override fun onResume() {
