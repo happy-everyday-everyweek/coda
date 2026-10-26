@@ -230,28 +230,36 @@ class OAuthSheet(
                     return@post
                 }
                 p?.append("网关已就绪", emphasis = true)
-                val started = OAuthLogin.begin(host, provider, realm)
-                session = started
-                if (started == null) {
-                    // 不再只说「请重试」：panelJson 里已经把状态码、响应体、
-                    // 或者「字段缺失」这类具体原因记进 lastBeginError。
+                // begin() 内部要发 HTTP 请求（面板 /panel/api/login/start），
+                // 不能在主线程调，否则抛 NetworkOnMainThreadException。
+                // 之前这一步踩了：prepare 走的是后台线程，到了 begin 却已经
+                // 被 main.post 切回主线程，于是网关什么都准备好了，卡在最后一步。
+                Thread {
+                    val started = OAuthLogin.begin(host, provider, realm)
                     val reason = OAuthLogin.lastBeginError
-                    val text = if (reason.isNullOrEmpty()) {
-                        "无法发起授权，请重试"
-                    } else {
-                        "无法发起授权：$reason"
+                    main.post {
+                        session = started
+                        if (started == null) {
+                            // 不再只说「请重试」：panelJson 里已经把状态码、响应体、
+                            // 或者「字段缺失」这类具体原因记进 lastBeginError。
+                            val text = if (reason.isNullOrEmpty()) {
+                                "无法发起授权，请重试"
+                            } else {
+                                "无法发起授权：$reason"
+                            }
+                            p?.finish()
+                            p?.append(text, emphasis = true)
+                            AppLog.d("OAuthSheet", "begin failed: $reason provider=${provider.id} realm=$realm")
+                        } else {
+                            // 授权链接要占满这一页，日志面板收起来只留一句结论。
+                            p?.finish()
+                            column.removeView(panel.view)
+                            progressPanel = null
+                            showAuthorize(column, started)
+                            startPolling()
+                        }
                     }
-                    p?.finish()
-                    p?.append(text, emphasis = true)
-                    AppLog.d("OAuthSheet", "begin failed: $reason provider=${provider.id} realm=$realm")
-                } else {
-                    // 授权链接要占满这一页，日志面板收起来只留一句结论。
-                    p?.finish()
-                    column.removeView(panel.view)
-                    progressPanel = null
-                    showAuthorize(column, started)
-                    startPolling()
-                }
+                }.apply { isDaemon = true }.start()
             }
         }.apply { isDaemon = true }.start()
     }

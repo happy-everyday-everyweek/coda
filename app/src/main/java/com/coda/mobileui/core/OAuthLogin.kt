@@ -38,7 +38,11 @@ object OAuthLogin {
      * 之前失败只返回 null，界面只能显示一句「请重试」，但真实情况可能是
      * 面板没应答、返回非 JSON、或者字段名对不上——三种的修法完全不同。
      * 这里把原始响应片段也带出来，排查时不用再猜。
+     *
+     * begin() 跑在后台线程（它要发 HTTP），界面在主线程读这个字段，
+     * 所以必须 @Volatile，否则可能读到旧值、把上一次的原因当成这一次的。
      */
+    @Volatile
     var lastBeginError: String? = null
         private set
 
@@ -131,11 +135,25 @@ object OAuthLogin {
             }
             return Session(provider.id, state, url, "")
         }
+        val authUrlPath = "/v0/management/${provider.pluginId}-auth-url"
         val body = ProxyHost.managementJson(
             ctx,
-            "/v0/management/${provider.pluginId}-auth-url",
+            authUrlPath,
             method = "GET",
-        ) ?: return null
+        ) ?: run {
+            // 宿主的管理面是把请求转发给插件处理的（pluginabi 里是
+            // management.register / management.handle 两个方法），没有固定的
+            // 路径表。所以这里拿不到时，必须把「请求了哪条路径」和
+            // 「ProxyHost 记下的原因」一起带出来——只显示一句「请重试」，
+            // 排查时无从下手。
+            val detail = ProxyHost.lastError
+            lastBeginError = if (detail.isNullOrEmpty()) {
+                "宿主管理面 $authUrlPath 无响应（宿主可能未就绪或该插件未注册该路由）"
+            } else {
+                "宿主管理面 $authUrlPath 失败：$detail"
+            }
+            return null
+        }
         // 宿主的这层响应是扁平的，没有 data 包装，但兼容一层以防上游改形。
         val data = body.optJSONObject("data") ?: body
         val state = data.optString("state").ifEmpty { data.optString("flow_id") }
@@ -145,7 +163,12 @@ object OAuthLogin {
             .ifEmpty { data.optString("verification_uri_complete") }
             .ifEmpty { data.optString("verification_uri") }
         val code = data.optString("user_code")
-        if (state.isEmpty() && url.isEmpty()) return null
+        if (state.isEmpty() && url.isEmpty()) {
+            // 同样不能静默返回：拿到响应但字段都不认识，说明插件返回的形状
+            // 与预期不同，必须把原文片段带出来才定位得了。
+            lastBeginError = "宿主管理面响应缺少 state/url 字段：${body.toString().take(300)}"
+            return null
+        }
         return Session(provider.id, state, url, code)
     }
 
