@@ -9,6 +9,7 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -297,9 +298,12 @@ class OAuthSheet(
             return
         }
 
+        // 显示补全后的绝对地址：上游给的是相对路径，直接显示会在排查时误导人
+        // （看起来像文件路径）。真正要让用户看的是 WebView 会加载的那个。
+        val shownUrl = resolveAuthUrl(session.authUrl)
         column.addView(
             TextView(host).apply {
-                text = session.authUrl
+                text = shownUrl
                 textSize = 11f
                 setTextColor(onSurfaceVariant)
                 setPadding(0, dp(4f), 0, dp(8f))
@@ -307,7 +311,7 @@ class OAuthSheet(
                 setTextIsSelectable(true)
             },
         )
-        column.addView(button("在应用内打开授权页") { openInWebView(column, session.authUrl) })
+        column.addView(button("在应用内打开授权页") { openInWebView(column, shownUrl) })
     }
 
     /**
@@ -335,7 +339,24 @@ class OAuthSheet(
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             CookieManager.getInstance().setAcceptCookie(true)
-            webViewClient = WebViewClient()
+            // 授权页里的跳转会带相对路径（Location: /v0/resource/...），
+            // 默认 WebViewClient 同样会按 file:// 解析。这里统一补成网关绝对地址；
+            // 指向外部站点的（https://accounts.google.com 等）原样放行。
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    v: WebView?,
+                    request: WebResourceRequest?,
+                ): Boolean {
+                    val next = request?.url?.toString() ?: return false
+                    val absolute = resolveAuthUrl(next)
+                    if (absolute != next) {
+                        AppLog.i("OAuthSheet", "相对跳转补全：$next -> $absolute")
+                        v?.loadUrl(absolute)
+                        return true
+                    }
+                    return false
+                }
+            }
             // 授权页常有移动版样式，但也有一些只适配桌面：按视口宽自排、过宽可横向
             // 滚动，而不是压缩到看不清。
             settings.loadWithOverviewMode = true
@@ -348,10 +369,41 @@ class OAuthSheet(
                 v.parent?.requestDisallowInterceptTouchEvent(true)
                 false
             }
-            loadUrl(url)
+            // 上游给的可能是相对路径（/v0/resource/plugins/xxx/browser-login?state=...）。
+            // WebView 在没有 baseUrl 的情况下会把以 / 开头的路径当成 file 路径，
+            // 于是变成 file:///v0/resource/... 并且把查询串里的 ? 编成 %3F，
+            // 页面自然打不开（真机上表现为「网页无法加载」）。
+            // 这里统一补成网关的绝对地址；已经是 http(s) 的原样用，
+            // 不能重复拼前缀。
+            val full = resolveAuthUrl(url)
+            AppLog.i("OAuthSheet", "授权页加载：$full")
+            loadUrl(full)
         }
         webView = view
         column.addView(view)
+    }
+
+    /**
+     * 把授权地址补成 WebView 能直接加载的绝对 URL。
+     *
+     * 上游（插件的 browser-login 路由）返回的是相对路径，形如
+     * `/v0/resource/plugins/traework-provider/browser-login?state=trw-xxx`。
+     * 直接丢给 `WebView.loadUrl` 时，因为没有 base URL，以 `/` 开头的字符串
+     * 会被当成文件路径解析，最终变成 `file:///v0/resource/...`，
+     * 而且 `?` 会被当成路径字符编码成 `%3F`，真机上就报「网页无法加载」。
+     *
+     * 规则：
+     *   · 已经是 http:// 或 https:// 的原样返回，避免重复拼前缀；
+     *   · 以 / 开头的补网关地址；
+     *   · 其余（像是裸主机名或别的 scheme）也按相对路径处理，
+     *     交由网关转发——插件的所有路由都挂在网关下。
+     */
+    private fun resolveAuthUrl(url: String): String {
+        val trimmed = url.trim()
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+        val base = ProxyHost.baseUrl().trimEnd('/')
+        val path = if (trimmed.startsWith("/")) trimmed else "/$trimmed"
+        return base + path
     }
 
     /** 第三步：向网关要可用模型，确认账号真的能用。 */
