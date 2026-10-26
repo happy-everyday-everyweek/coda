@@ -72,6 +72,13 @@ class ProgressLogView(private val ctx: Context) {
      * 4dp 厚度配 2dp 圆角，与之前自绘的 3.5dp 视觉密度接近。
      */
     private val bar = LinearProgressIndicator(ctx).apply {
+        // 颜色先设、类型后设。CONTIGUOUS 在 Material 里有硬性约束：
+        // LinearProgressIndicatorSpec.validateSpec 要求 indicatorColors.size >= 3，
+        // 否则 setIndeterminateAnimationType 当场抛
+        // IllegalArgumentException（真机崩在 ProgressLogView 构造第 77 行）。
+        // 这里同一颜色传三次：动画内部是三条重叠色段各自长大缩小，
+        // 同色即视觉上仍是一条纯色游走，正是系统安装界面的样子。
+        setIndicatorColor(primary, primary, primary)
         isIndeterminate = true
         // 连续型：色块变长变短来回游走，与系统安装界面一致。
         indeterminateAnimationType =
@@ -80,7 +87,6 @@ class ProgressLogView(private val ctx: Context) {
         trackCornerRadius = dp(2f)
         // MD3 默认在轨道末端画一个小停靠点，短轨道上显得多余。
         trackStopIndicatorSize = 0
-        setIndicatorColor(primary)
         setTrackColor(surfaceVariant)
         layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
             bottomMargin = dp(10f)
