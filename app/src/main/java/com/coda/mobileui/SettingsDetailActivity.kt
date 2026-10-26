@@ -158,6 +158,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     override fun onDestroy() {
+        // ASR 测试可能还在录音或挂着实时会话，页面退出时必须收干净，
+        // 否则麦克风会一直被占用。
+        cancelAsrRecording()
         stopGitHubPolling()
         super.onDestroy()
     }
@@ -2368,11 +2371,6 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 正在跑的实时会话。 */
     private var liveSession: AsrTester.LiveAsr? = null
 
-    private companion object {
-        /** 录音权限的请求码。 */
-        const val REQ_ASR_AUDIO = 1002
-    }
-
     /**
      * ASR 测试主流程：要权限 → 录音 →（实时边录边识别 / 一次性上传）→ 显示结果。
      *
@@ -2663,11 +2661,6 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 ),
             )
         }
-    }
-
-    override fun onDestroy() {
-        cancelAsrRecording()
-        super.onDestroy()
     }
 
     /** 保存后的统一步骤：防抖合并连续保存，随后重启核心使配置生效。 */
@@ -3106,6 +3099,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     companion object {
         const val EXTRA_PAGE = "extra_page"
+
+        /** ASR 测试申请录音权限的请求码。 */
+        const val REQ_ASR_AUDIO = 1002
 
         const val PAGE_SYSTEM = "system"
         const val PAGE_APPEARANCE = "appearance"
