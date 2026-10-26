@@ -114,23 +114,23 @@ object VoiceGenieProtocol {
             val number = (tag ushr 3).toInt()
             val wire = (tag and 7L).toInt()
             if (number == 0) throw ProtocolError("无效 protobuf 字段编号")
-            val value: ByteArray
+            // wire 0 是 varint，其余是可跳过的定长/长度前缀块。
             var intValue = 0L
+            var bytesValue: ByteArray? = null
             when (wire) {
                 0 -> intValue = readVarint()
                 1, 5 -> {
                     val len = if (wire == 1) 8 else 4
                     val end = offset + len
                     if (end > data.size) throw ProtocolError("响应字段被截断")
-                    value = data.copyOfRange(offset, end)
+                    bytesValue = data.copyOfRange(offset, end)
                     offset = end
-                    continue
                 }
                 2 -> {
                     val len = readVarint().toInt()
                     val end = offset + len
                     if (end > data.size) throw ProtocolError("响应字段被截断")
-                    value = data.copyOfRange(offset, end)
+                    bytesValue = data.copyOfRange(offset, end)
                     offset = end
                 }
                 else -> throw ProtocolError("不支持的 protobuf wire type: $wire")
@@ -140,11 +140,14 @@ object VoiceGenieProtocol {
             if (wire != expectedWire) throw ProtocolError("已知响应字段的 wire type 不符")
             if (wire == 0) {
                 result.put(name, intValue)
-            } else if (number == 8) {
-                // data 字段保持字节，不强行当 UTF-8 解。
-                result.put(name, value.size)
             } else {
-                result.put(name, value.toString(Charsets.UTF_8))
+                val bytes = bytesValue ?: ByteArray(0)
+                if (number == 8) {
+                    // data 字段保持字节，不强行当 UTF-8 解。
+                    result.put(name, bytes.size)
+                } else {
+                    result.put(name, bytes.toString(Charsets.UTF_8))
+                }
             }
         }
         return result

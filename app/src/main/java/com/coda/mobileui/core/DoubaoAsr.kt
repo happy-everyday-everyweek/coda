@@ -522,14 +522,14 @@ object DoubaoAsr {
             }
         }
 
-        private fun send(event: String, payload: String = "{}", audio: ByteArray? = null, s: Long? = null) {
+        private fun send(event: String, payload: String = "{}", audio: ByteArray? = null, sequence: Long? = null) {
             val frame = VoiceGenieProtocol.encodeRequest(
                 event = event,
                 appKey = APP_KEY,
                 taskId = taskId,
                 payload = payload,
                 audio = audio,
-                sequence = s ?: seq,
+                sequence = sequence,
             )
             val socket = ws ?: throw AsrError("语音连接尚未建立")
             if (!socket.send(frame.toByteString())) throw AsrError("发送 $event 失败（连接已关闭）")

@@ -1928,20 +1928,21 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 // 与标题落在同一条竖线。
                 horizontalInsetPx = 0,
                 listener = object : SettingsActionListener {
-                override fun onRadioSelect(key: String) = Unit
-                override fun onToggleChange(key: String, checked: Boolean) = Unit
-                override fun onValueClick(key: String) {
-                    when (key) {
-                        // 这三条都在同一张卡片里换页（navigate），沿用项目统一的过渡动画，
-                        // 不再 dismiss 再另开——那样会出现关-开两个动画互相抢同一层。
-                        "add_openai", "add_anthropic" -> {
-                            val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
-                            showProviderEditor(sheet, null, t, providerKind)
+                    override fun onRadioSelect(key: String) = Unit
+                    override fun onToggleChange(key: String, checked: Boolean) = Unit
+                    override fun onValueClick(key: String) {
+                        when (key) {
+                            // 这三条都在同一张卡片里换页（navigate），沿用项目统一的过渡动画，
+                            // 不再 dismiss 再另开——那样会出现关-开两个动画互相抢同一层。
+                            "add_openai", "add_anthropic" -> {
+                                val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
+                                showProviderEditor(sheet, null, t, providerKind)
+                            }
+                            "add_oauth" -> showOAuthPicker(sheet)
                         }
-                        "add_oauth" -> showOAuthPicker(sheet)
                     }
-                }
-            }, horizontalInsetPx = resources.getDimensionPixelSize(R.dimen.content_padding_h))
+                },
+            )
         }
         sheet.show()
     }
@@ -2443,7 +2444,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 Thread {
                     val file = rec.stop()
                     if (file == null) {
-                        main.post {
+                        postToUi {
                             showAsrResult(
                                 provider,
                                 model,
@@ -2451,9 +2452,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                             )
                         }
                     } else {
-                        main.post { snack("正在识别，请稍候…") }
+                        postToUi { snack("正在识别，请稍候…") }
                         val result = AsrTester.transcribe(provider, file, model)
-                        main.post { showAsrResult(provider, model, result) }
+                        postToUi { showAsrResult(provider, model, result) }
                     }
                 }.start()
             }
@@ -2484,7 +2485,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
         val live = AsrTester.openLive { text, isFinal ->
             // 回调来自网络线程，必须切回主线程刷 UI。
-            main.post {
+            postToUi {
                 liveText.append(text)
                 statusText.text = if (isFinal) "已确认 ${liveText.text.length} 字" else "识别中…"
             }
@@ -2495,7 +2496,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             live.start()
             true
         } catch (e: Throwable) {
-            main.post {
+            postToUi {
                 sheet.dismiss()
                 showAsrResult(
                     provider,
@@ -2532,7 +2533,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             Thread {
                 rec?.stop()
                 val result = session?.finish() ?: AsrTester.Result.Fail("实时会话已中断")
-                main.post { showAsrResult(provider, model, result) }
+                postToUi { showAsrResult(provider, model, result) }
             }.start()
         }
         sheet.show()
@@ -2558,12 +2559,16 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         asrTimeout = timeout
         providerRestartHandler.postDelayed(timeout, AsrTester.MAX_RECORD_MS.toLong())
     }
-
-    private fun onSurfaceColor(): Int = MaterialColors.getColor(
+private fun onSurfaceColor(): Int = MaterialColors.getColor(
         this,
         com.google.android.material.R.attr.colorOnSurface,
         android.graphics.Color.BLACK,
     )
+
+    /** 后台线程回到主线程刷 UI。 */
+    private fun postToUi(block: () -> Unit) {
+        providerRestartHandler.post(block)
+    }
 
     private fun onSurfaceVariantColor(): Int = MaterialColors.getColor(
         this,

@@ -388,7 +388,7 @@ object AsrTester {
 
         /** 建连并开会话。失败抛异常，调用方转成提示。 */
         fun start() {
-            val s = DoubaoAsr.LiveSession { text, isFinal -> onText(text, isFinal) }
+            val s = DoubaoAsr.LiveSession(onText = { text, isFinal -> onText(text, isFinal) })
             s.start()
             session = s
         }
