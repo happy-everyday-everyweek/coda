@@ -472,7 +472,7 @@ object DoubaoAsr {
             pending = if (pending.isEmpty()) chunk else pending + chunk
             var offset = 0
             while (pending.size - offset >= CHUNK_BYTES) {
-                send("TaskRequest", audio = pending.copyOfRange(offset, offset + CHUNK_BYTES), seq = seq)
+                send("TaskRequest", audio = pending.copyOfRange(offset, offset + CHUNK_BYTES), sequence = seq)
                 seq += 1
                 offset += CHUNK_BYTES
             }
@@ -484,7 +484,7 @@ object DoubaoAsr {
         /** 收尾：发完尾巴、EndASR、等最终结果。返回拼好的全文。 */
         fun finish(): String {
             if (pending.isNotEmpty()) {
-                send("TaskRequest", audio = pending, seq = seq)
+                send("TaskRequest", audio = pending, sequence = seq)
                 seq += 1
                 pending = ByteArray(0)
             }
