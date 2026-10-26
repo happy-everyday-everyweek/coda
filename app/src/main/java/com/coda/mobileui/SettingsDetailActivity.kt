@@ -34,6 +34,7 @@ import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.OAuthProviders
+import com.coda.mobileui.core.AsrClient
 import com.coda.mobileui.core.AsrTester
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.core.ZController
@@ -159,8 +160,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     override fun onDestroy() {
         // ASR 测试可能还在录音或挂着实时会话，页面退出时必须收干净，
-        // 否则麦克风会一直被占用。
-        cancelAsrRecording()
+        // 否则麦克风会一直被占用。取消 scope 会连带触发
+        // transcribeStream 的 awaitClose，那里负责停录音与关会话。
+        AppLog.i("AsrUi", "页面销毁，取消全部 ASR 任务")
+        asrJob?.cancel()
+        asrScope.cancel()
         stopGitHubPolling()
         super.onDestroy()
     }
@@ -2357,11 +2361,24 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheet.show()
     }
 
-    /** 正在跑的录音器；同一时刻只允许一个测试。 */
-    private var asrRecorder: AsrTester.Recorder? = null
+    // ------------------------------------------------------------ ASR 测试
 
-    /** 录音超时的兜底任务，防止用户开着录音忘记停。 */
-    private var asrTimeout: Runnable? = null
+    /** 统一入口。录音、转写、流式会话、超时与清理都在它内部。 */
+    private val asrClient: AsrClient by lazy { AsrClient(this) }
+
+    /**
+     * 本页的协程作用域。
+     *
+     * 不用 lifecycleScope：那需要 activity-ktx 依赖，本项目没引。
+     * 自己建一个反而更明确——页面销毁时在 onDestroy 里 cancel 掉，
+     * 所有 ASR 任务（含录音器、WebSocket 会话）一起收干净。
+     */
+    private val asrScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate,
+    )
+
+    /** 本页正在跑的识别任务；换页或取消时一起取消。 */
+    private var asrJob: kotlinx.coroutines.Job? = null
 
     /** 权限申请返回后要接着测的供应商。 */
     private var pendingAsrTest: ProviderStore.Provider? = null
@@ -2369,21 +2386,15 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 权限申请返回后要接着测的模式（实时 / 一次性）。 */
     private var pendingAsrLive: Boolean = false
 
-    /** 正在跑的实时会话。 */
-    private var liveSession: AsrTester.LiveAsr? = null
-
     /**
-     * ASR 测试主流程：要权限 → 录音 →（实时边录边识别 / 一次性上传）→ 显示结果。
+     * ASR 测试主流程：要权限 → 交给 AsrClient。
      *
-     * [live] 为 true 时走实时模式：录音 PCM 直接喂给 [AsrTester.LiveAsr]，
-     * 中间结果实时刷新在面板上。这种模式只有内置豆包支持，因为它原生是流式协议；
-     * OpenAI 兼容端点只接受完整文件，只能走一次性。
-     *
-     * 聊天框不接这条通路，所以这是验证 ASR 配置是否真的可用的唯一入口。
-     * 每一步失败都要说清楚是哪一步，不能只给一句「失败」。
+     * 这里只剩「要权限」和「按模式分派」两件事。录音生命周期、
+     * 收尾顺序、异常归类都在 AsrClient 里，调用方不再各写一套
+     * Thread + postToUi + postDelayed。
      */
     private fun startAsrTest(provider: ProviderStore.Provider, live: Boolean = false) {
-        if (asrRecorder != null) {
+        if (asrJob?.isActive == true) {
             snack("已有一个录音正在进行")
             return
         }
@@ -2396,32 +2407,19 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             return
         }
         val model = provider.models.firstOrNull().orEmpty()
-        if (live && !AsrTester.realtimeSupported(provider)) {
+        if (live && !asrClient.supportsStreaming(provider)) {
             showAsrResult(provider, model, AsrTester.Result.Fail("这个供应商不支持实时识别，请用「录完再识别」"))
             return
         }
-        if (live) {
-            startLiveAsr(provider, model)
-        } else {
-            startOnceAsr(provider, model)
-        }
+        AppLog.i("AsrUi", "启动测试：provider=${provider.id} live=$live model=$model")
+        if (live) startLiveAsr(provider) else startOnceAsr(provider, model)
     }
 
     /** 一次性模式：录成 wav，停止后上传或推流。 */
     private fun startOnceAsr(provider: ProviderStore.Provider, model: String) {
-        val recorder = AsrTester.Recorder(this)
-        if (!recorder.start()) {
-            showAsrResult(
-                provider,
-                model,
-                AsrTester.Result.Fail("麦克风打不开（被其他应用占用，或系统禁止录音）"),
-            )
-            return
-        }
-        asrRecorder = recorder
         val sheet = CodaSheet(this)
             .title("录完再识别")
-            .subtitle(AsrTester.endpointLabel(provider))
+            .subtitle(asrClient.describe(provider))
         val statusText = TextView(this).apply {
             text = "正在录音…说一句话后点「停止并识别」"
             textSize = 14f
@@ -2429,45 +2427,34 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             setPadding(0, dp(8), 0, dp(8))
         }
         sheet.content { col -> col.addView(statusText) }
+        // 用信号控制「什么时候停」，而不是让 UI 直接碰录音器。
+        val stop = kotlinx.coroutines.CompletableDeferred<Unit>()
         sheet.secondaryAction("取消") { s ->
-            cancelAsrRecording()
             s.dismiss()
+            asrJob?.cancel()
         }
         sheet.primaryAction("停止并识别") { s ->
-            asrTimeout?.let { providerRestartHandler.removeCallbacks(it) }
-            asrTimeout = null
-            val rec = asrRecorder
-            asrRecorder = null
             s.dismiss()
-            if (rec != null) {
-                // stop() 与上传都必须离开主线程。
-                Thread {
-                    val file = rec.stop()
-                    if (file == null) {
-                        postToUi {
-                            showAsrResult(
-                                provider,
-                                model,
-                                AsrTester.Result.Fail("录音太短或没采到声音，请说满一秒再停"),
-                            )
-                        }
-                    } else {
-                        postToUi { snack("正在识别，请稍候…") }
-                        val result = AsrTester.transcribe(provider, file, model)
-                        postToUi { showAsrResult(provider, model, result) }
-                    }
-                }.start()
-            }
+            stop.complete(Unit)
         }
         sheet.show()
-        scheduleAsrTimeout()
+        asrJob = asrScope.launch {
+            val result = asrClient.transcribe(
+                provider = provider,
+                model = model,
+                stopSignal = stop,
+            )
+            if (isFinishing || isDestroyed) return@launch
+            showAsrResult(provider, model, result)
+        }
     }
 
-    /** 实时模式：边说边出字。 */
-    private fun startLiveAsr(provider: ProviderStore.Provider, model: String) {
+    /** 实时模式：边说边出字。collect 这个 Flow 就是「开始」，取消就是「停止」。 */
+    private fun startLiveAsr(provider: ProviderStore.Provider) {
+        val model = provider.models.firstOrNull().orEmpty()
         val sheet = CodaSheet(this)
             .title("实时识别")
-            .subtitle(AsrTester.endpointLabel(provider))
+            .subtitle(asrClient.describe(provider))
         val liveText = TextView(this).apply {
             text = ""
             textSize = 16f
@@ -2483,110 +2470,57 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             col.addView(liveText)
             col.addView(statusText)
         }
-        val live = AsrTester.openLive { text, isFinal ->
-            // 回调来自网络线程，必须切回主线程刷 UI。
-            postToUi {
-                liveText.append(text)
-                statusText.text = if (isFinal) "已确认 ${liveText.text.length} 字" else "识别中…"
-            }
-        }
-        // 录音回调直接在音频采集线程上喂给会话，避免再拷贝一层。
-        val recorder = AsrTester.Recorder(this)
-        val started = try {
-            live.start()
-            true
-        } catch (e: Throwable) {
-            postToUi {
-                sheet.dismiss()
-                showAsrResult(
-                    provider,
-                    model,
-                    AsrTester.Result.Fail("实时连接失败：${e.message ?: e.javaClass.simpleName}"),
-                )
-            }
-            false
-        }
-        if (!started) {
-            live.cancel()
-            return
-        }
-        if (!recorder.start { pcm -> live.feed(pcm) }) {
-            live.cancel()
-            showAsrResult(provider, model, AsrTester.Result.Fail("麦克风打不开（被其他应用占用，或系统禁止录音）"))
-            return
-        }
-        asrRecorder = recorder
-        liveSession = live
-        statusText.text = "正在录音…说完点「结束」"
         sheet.secondaryAction("取消") { s ->
-            cancelAsrRecording()
             s.dismiss()
+            asrJob?.cancel()
         }
         sheet.primaryAction("结束") { s ->
-            asrTimeout?.let { providerRestartHandler.removeCallbacks(it) }
-            asrTimeout = null
-            val rec = asrRecorder
-            asrRecorder = null
-            val session = liveSession
-            liveSession = null
             s.dismiss()
-            Thread {
-                rec?.stop()
-                val result = session?.finish() ?: AsrTester.Result.Fail("实时会话已中断")
-                postToUi { showAsrResult(provider, model, result) }
-            }.start()
+            // 取消 collect 即让 Flow 走 awaitClose，那里会收录音、关会话。
+            asrJob?.cancel()
         }
         sheet.show()
-        scheduleAsrTimeout()
-    }
-
-    /** 录音上限的兜底计时，两条路径共用。 */
-    private fun scheduleAsrTimeout() {
-        val timeout = Runnable {
-            asrTimeout = null
-            val rec = asrRecorder
-            asrRecorder = null
-            val session = liveSession
-            liveSession = null
-            if (rec != null) {
-                snack("已达 ${AsrTester.MAX_RECORD_MS / 1000} 秒上限，自动结束")
-                Thread {
-                    rec.stop()
-                    session?.cancel()
-                }.start()
+        asrJob = asrScope.launch {
+            // 已定稿的文本。中间结果每次都覆盖「最后一句」，不追加。
+            val settled = StringBuilder()
+            try {
+                asrClient.transcribeStream(provider).collect { chunk ->
+                    statusText.text = "正在录音…说完点「结束」"
+                    liveText.text = if (chunk.isFinal) {
+                        settled.append(chunk.text)
+                        settled.toString()
+                    } else {
+                        // 中间结果接在已定稿内容之后覆盖显示。
+                        settled.toString() + chunk.text
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 用户主动结束，不是错误。
+                AppLog.i("AsrUi", "实时识别由用户结束，已定稿 ${settled.length} 字")
+            } catch (e: Throwable) {
+                AppLog.i("AsrUi", "实时识别出错：${e.javaClass.simpleName}: ${e.message}")
+                if (!isFinishing && !isDestroyed) {
+                    showAsrResult(
+                        provider,
+                        model,
+                        AsrTester.Result.Fail(e.message ?: e.javaClass.simpleName),
+                    )
+                }
             }
         }
-        asrTimeout = timeout
-        providerRestartHandler.postDelayed(timeout, AsrTester.MAX_RECORD_MS.toLong())
     }
-private fun onSurfaceColor(): Int = MaterialColors.getColor(
+
+    private fun onSurfaceColor(): Int = MaterialColors.getColor(
         this,
         com.google.android.material.R.attr.colorOnSurface,
         android.graphics.Color.BLACK,
     )
-
-    /** 后台线程回到主线程刷 UI。 */
-    private fun postToUi(block: () -> Unit) {
-        providerRestartHandler.post(block)
-    }
 
     private fun onSurfaceVariantColor(): Int = MaterialColors.getColor(
         this,
         com.google.android.material.R.attr.colorOnSurfaceVariant,
         android.graphics.Color.GRAY,
     )
-
-    /** 放弃当前录音（取消按钮与页面销毁都要走这里）。 */
-    private fun cancelAsrRecording() {
-        asrTimeout?.let { providerRestartHandler.removeCallbacks(it) }
-        asrTimeout = null
-        val rec = asrRecorder
-        asrRecorder = null
-        val session = liveSession
-        liveSession = null
-        rec?.cancel()
-        session?.cancel()
-    }
 
     /** 把测试结果摊开显示：成功给文本，失败给具体原因。 */
     private fun showAsrResult(
