@@ -170,7 +170,11 @@ class OAuthSheet(
                 if (realm == "global") "国际版（workbuddy.ai）" else "国内版（copilot.tencent.com）",
                 "pick_realm",
             )
-            SettingsViewBuilder.render(host, group, rows, listener = object : SettingsActionListener {
+            // 已在 CodaSheet 内容区里，留白由 CodaSheet 统一负责，这里不再叠加。
+            SettingsViewBuilder.render(
+                host, group, rows,
+                horizontalInsetPx = 0,
+                listener = object : SettingsActionListener {
                 override fun onRadioSelect(key: String) = Unit
                 override fun onToggleChange(key: String, checked: Boolean) = Unit
                 override fun onValueClick(key: String) {
@@ -184,7 +188,10 @@ class OAuthSheet(
                             SettingRow.Value(options[0], if (realm == "cn") "当前" else "", "realm_cn"),
                             SettingRow.Value(options[1], if (realm == "global") "当前" else "", "realm_global"),
                         )
-                        SettingsViewBuilder.render(host, g2, r2, listener = object : SettingsActionListener {
+                        SettingsViewBuilder.render(
+                            host, g2, r2,
+                            horizontalInsetPx = 0,
+                            listener = object : SettingsActionListener {
                             override fun onRadioSelect(key: String) = Unit
                             override fun onToggleChange(key: String, checked: Boolean) = Unit
                             override fun onValueClick(key: String) {
@@ -192,11 +199,13 @@ class OAuthSheet(
                                 sheet2.dismiss()
                                 sheet.refreshContent { col -> renderDisclaimer(col) }
                             }
-                        })
+                        },
+                        )
                     }
                     sheet2.show()
                 }
-            })
+            },
+            )
         }
     }
 

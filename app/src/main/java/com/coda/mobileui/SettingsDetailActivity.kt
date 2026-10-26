@@ -1914,7 +1914,15 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 "扫码或跳转授权，凭据由本机网关托管",
                 "add_oauth",
             )
-            SettingsViewBuilder.render(this, group, rows, listener = object : SettingsActionListener {
+            SettingsViewBuilder.render(
+                this, group, rows,
+                // 这张列表已经在 CodaSheet 的 content 里，而 CodaSheet 本身
+                // 已经用 content_padding_h 做过左右留白。这里再套一层 20dp，
+                // 卡片文字就会比上面的标题多缩进 20dp——截图里「OpenAI 兼容」
+                // 与「添加供应商」标题没对齐就是这个原因。传 0 让卡片边缘
+                // 与标题落在同一条竖线。
+                horizontalInsetPx = 0,
+                listener = object : SettingsActionListener {
                 override fun onRadioSelect(key: String) = Unit
                 override fun onToggleChange(key: String, checked: Boolean) = Unit
                 override fun onValueClick(key: String) {
