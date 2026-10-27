@@ -95,30 +95,49 @@ object AssetFetcher {
         // 三步的策略本身在 GhMirrors.rank 里，这里只负责「拿到顺序后逐个降级下载」。
         // 之所以把这套排序抽走：检查更新（UpdateChecker）要做完全一样的挑选，
         // 两边各写一份必然出现「改了这边漏了那边」。
+        // 打分要区分网络环境：Wi-Fi 和蜂窝下同一镜像的表现常差两个数量级，
+// 合并统计会互相污染，所以按当前网络取对应那本账。
+        val net = MirrorScoreboard.currentNet(ctx)
+        val history = MirrorScoreboard.load(ctx, net)
         val ranked = GhMirrors.rank(
             probeUrl = spec.remoteUrl,
             mirrors = GhMirrors.DEFAULT,
-            // 体积决定要不要测速：小文件不值当（见 SPEEDTEST_MIN_BYTES）。
+            // 体积决定要不要测速：小文件不值当（见 SPEEDTEST_MIN_BYTES），
+            // 但小文件更要靠历史成绩排序，否则只能按写死的清单顺序盲试。
             bytes = spec.size,
+            history = history,
             onLog = onLog,
         )
-
+        onLog("网络环境：${netLabel(net)}")
         val errors = StringBuilder()
         for (m in ranked) {
             val url = GhMirrors.wrap(m.prefix, spec.remoteUrl)
             onLog("下载 ${m.id}…")
+            val t0 = System.currentTimeMillis()
             val got = download(url, tmp, spec, onProgress)
+            val cost = System.currentTimeMillis() - t0
             if (got && verify(tmp, spec)) {
                 if (tmp.renameTo(target)) {
+                    MirrorScoreboard.record(
+                        ctx, net, m.id, MirrorScoreboard.Outcome.VERIFIED,
+                        bytes = tmp.length(), elapsedMs = cost,
+                    )
                     onLog("完成（${m.id}）：${target.name}")
                     AppLog.i(TAG, "资产就位 ${target.name} 来源=${m.id} 体积=${target.length()}")
                     return true
                 }
             } else if (got) {
                 // 大小对、内容不对：镜像返回了被改写的内容。换源重试，这是唯一可靠的应对。
+                // 记账要单独记成 HASH_FAILED：它比「连不上」更该被拉黑。
+                MirrorScoreboard.record(
+                    ctx, net, m.id, MirrorScoreboard.Outcome.HASH_FAILED, elapsedMs = cost,
+                )
                 onLog("${m.id} 内容校验不通过，换源")
                 errors.append(m.id).append(":hash ")
             } else {
+                MirrorScoreboard.record(
+                    ctx, net, m.id, MirrorScoreboard.Outcome.FAILED, elapsedMs = cost,
+                )
                 errors.append(m.id).append(":fail ")
             }
             runCatching { tmp.delete() }
@@ -130,6 +149,13 @@ object AssetFetcher {
     }
 
     // ---------- 校验 ----------
+
+    /** 网络类型的中文表述，用于界面日志。 */
+    fun netLabel(net: MirrorScoreboard.Net): String = when (net) {
+        MirrorScoreboard.Net.WIFI -> "Wi-Fi"
+        MirrorScoreboard.Net.CELLULAR -> "移动数据"
+        MirrorScoreboard.Net.OTHER -> "其他网络"
+    }
 
     /** 按 spec 校验文件；spec 没给 sha256 也没有 size 时退化为「文件非空」。 */
     fun verify(file: File, spec: Spec): Boolean {

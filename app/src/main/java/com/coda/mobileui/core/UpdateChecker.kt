@@ -117,9 +117,9 @@ object UpdateChecker {
 
         // 两个渠道都取。任一拿不到都不影响另一个——单渠道坏掉时仍能更新。
         onLog("查询版本清单（dev 与 release 两个渠道）")
-        val dev = httpGet(DEV_MANIFEST_URL, headers, onLog)?.let { parseManifest(it, "dev") }
+        val dev = httpGet(ctx, DEV_MANIFEST_URL, headers, onLog)?.let { parseManifest(it, "dev") }
         onLog(if (dev != null) "dev 清单：${dev.versionCode}" else "dev 清单不可用")
-        val rel = httpGet(RELEASE_MANIFEST_URL, headers, onLog)?.let { parseManifest(it, "release") }
+        val rel = httpGet(ctx, RELEASE_MANIFEST_URL, headers, onLog)?.let { parseManifest(it, "release") }
         onLog(if (rel != null) "release 清单：${rel.versionCode}" else "release 清单不可用")
         val candidates = listOfNotNull(dev, rel)
         if (candidates.isEmpty()) {
@@ -194,15 +194,22 @@ object UpdateChecker {
      * 文件也返回 200，内容是一段 HTML 错误页。
      */
     private fun httpGet(
+        ctx: Context?,
         url: String,
         headers: Map<String, String>,
         onLog: (String) -> Unit = {},
     ): JSONObject? {
+        // 有了 ctx 就能查账本；没有就退化为纯 ping 排序（历史为空）。
+        val net = ctx?.let { MirrorScoreboard.currentNet(it) } ?: MirrorScoreboard.Net.OTHER
+        val history = ctx?.let { MirrorScoreboard.load(it, net) } ?: emptyMap()
         val ranked = GhMirrors.rank(
             probeUrl = url,
-            // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速、只按延迟排序。
+            // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速。
             // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
+            // 但这种场景恰恰最需要历史成绩：几 KB 的文件卡在慢源上，
+            // 用户要等几分钟，而 ping 只看握手完全反映不出来。
             bytes = 1,
+            history = history,
             onLog = { msg ->
                 // 两处都要：AppLog 供事后排查，onLog 供界面实时显示。
                 // 用 i() 不用 d()：minLevel 默认 INFO，d() 在正式包里会被丢弃。
@@ -211,10 +218,22 @@ object UpdateChecker {
             },
         )
         for (mirror in ranked) {
+            val t0 = System.currentTimeMillis()
             val json = fetchJson(GhMirrors.wrap(mirror.prefix, url), headers)
+            val cost = System.currentTimeMillis() - t0
             if (json != null) {
+                ctx?.let {
+                    MirrorScoreboard.record(
+                        it, net, mirror.id, MirrorScoreboard.Outcome.VERIFIED, elapsedMs = cost,
+                    )
+                }
                 AppLog.i(TAG, "清单取自 ${mirror.id}")
                 return json
+            }
+            ctx?.let {
+                MirrorScoreboard.record(
+                    it, net, mirror.id, MirrorScoreboard.Outcome.FAILED, elapsedMs = cost,
+                )
             }
             AppLog.i(TAG, "源 ${mirror.id} 失败，试下一个")
         }

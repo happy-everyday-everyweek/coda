@@ -104,13 +104,15 @@ object GhMirrors {
         probeUrl: String,
         mirrors: List<GhMirror> = DEFAULT,
         bytes: Long = 0,
+        /** 历史账本（按当前网络类型取出）。传空表示没有历史。 */
+        history: Map<String, MirrorScoreboard.Stat> = emptyMap(),
         onLog: (String) -> Unit = {},
     ): List<GhMirror> {
         require(probeUrl.isNotBlank()) { "rank() 必须给出真实链接用于测速" }
         onLog("探测镜像连通性…")
-        val alive = MirrorSpeedTester.pingAll(mirrors)
-            .filter { it.ok }
-            .map { it.mirror }
+        val pinged = MirrorSpeedTester.pingAll(mirrors)
+        val latencyOf = pinged.filter { it.ok }.associate { it.mirror.id to it.latencyMs }
+        val alive = pinged.filter { it.ok }.map { it.mirror }
         if (alive.isEmpty()) {
             onLog("没有镜像能 ping 通，按清单顺序盲试")
             return mirrors
@@ -118,8 +120,28 @@ object GhMirrors {
         onLog("${alive.size}/${mirrors.size} 个镜像可连通")
 
         if (bytes in 1 until SPEEDTEST_MIN_BYTES) {
-            onLog("目标 ${bytes / 1024}KB，小于 1MB，跳过测速（按 ping 延迟排序）")
-            return alive
+            // 小文件的核心改动：以前这里直接 `return alive`，也就是只按 ping 延迟排。
+            // 但 ping 只测 TCP 握手，一个「握手 80ms、传数据 3KB/s」的镜像会排在
+            // 前面，几 KB 的清单被它拖上几分钟。现在把历史成绩折算成分数参与排序：
+            // 大小和延迟之外，谁在这类网络下真递过正确内容，谁就往前站。
+            val scored = alive.map { m ->
+                val stat = history[m.id]
+                val score = MirrorScoreboard.scoreOf(stat)
+                // 延迟做次级排序：同分时快的在前。把毫秒量级压到很小的权重，
+                // 不至于盖过「校验通过」这种强证据。
+                val latencyPenalty = (latencyOf[m.id] ?: 0L) / 1000.0
+                m to (score - latencyPenalty)
+            }.sortedByDescending { it.second }
+            val hasHistory = scored.any { (history[it.first.id]?.samples ?: 0) > 0 }
+            onLog(
+                if (hasHistory) {
+                    "目标 ${bytes / 1024}KB，小于 1MB，按「历史校验通过率+平均速度」排序" +
+                        "（首选 ${scored.first().first.id}）"
+                } else {
+                    "目标 ${bytes / 1024}KB，小于 1MB，暂无可用的历史成绩，按 ping 延迟排序"
+                },
+            )
+            return scored.map { it.first }
         }
 
         onLog("测速挑选镜像…")
@@ -129,9 +151,16 @@ object GhMirrors {
             onLog("测速无结果，按 ping 延迟顺序尝试")
             return alive
         }
-        val best = usable.first()
+        // 大文件以本次测速为准（当场测的比历史更贴近此刻），
+        // 历史只做同档微调：两个源测速接近时，历史上校验通过过的优先。
+        val ranked = usable.map { r ->
+            val bonus = MirrorScoreboard.scoreOf(history[r.mirror.id]).coerceIn(-400.0, 400.0)
+            r to (r.score + bonus)
+        }.sortedByDescending { it.second }
+        val best = ranked.first().first
         onLog("选定 ${best.mirror.id}（${"%.1f MB/s".format(best.sustainedBps / 1024.0 / 1024.0)}）")
         // 测出速度的排前面，剩下的活源接在后面：前者优先，但一个都不丢。
-        return usable.map { it.mirror } + alive.filter { m -> usable.none { it.mirror.id == m.id } }
+        return ranked.map { it.first.mirror } +
+            alive.filter { m -> usable.none { it.mirror.id == m.id } }
     }
 }
