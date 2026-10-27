@@ -2,6 +2,7 @@ package com.coda.mobileui
 
 import android.content.Context
 import android.graphics.Color
+import android.os.Build
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -20,7 +21,23 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
  */
 private fun themeColor(context: Context, attr: Int, fallback: Int): Int {
     val tv = TypedValue()
-    return if (context.theme.resolveAttribute(attr, tv, true)) tv.data else fallback
+    if (!context.theme.resolveAttribute(attr, tv, true)) return fallback
+    // 关键：主题里的 colorPrimary 值是 @color/xxx 引用，此时 tv.data 是
+    // 资源 ID（形如 0x7f05xxxx），直接当颜色用会得到一个几乎全黑的 ARGB。
+    // 必须按 tv.type 分情况解析：引用要再查一次资源表。
+    return when {
+        tv.type >= TypedValue.TYPE_FIRST_COLOR_INT &&
+            tv.type <= TypedValue.TYPE_LAST_COLOR_INT -> tv.data
+        tv.resourceId != 0 -> runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                context.resources.getColor(tv.resourceId, context.theme)
+            } else {
+                @Suppress("DEPRECATION")
+                context.resources.getColor(tv.resourceId)
+            }
+        }.getOrDefault(fallback)
+        else -> tv.data
+    }
 }
 
 /**
@@ -72,17 +89,18 @@ class ProgressLogView(private val ctx: Context) {
      * 4dp 厚度配 2dp 圆角，与之前自绘的 3.5dp 视觉密度接近。
      */
     private val bar = LinearProgressIndicator(ctx).apply {
-        // 颜色先设、类型后设。CONTIGUOUS 在 Material 里有硬性约束：
-        // LinearProgressIndicatorSpec.validateSpec 要求 indicatorColors.size >= 3，
-        // 否则 setIndeterminateAnimationType 当场抛
-        // IllegalArgumentException（真机崩在 ProgressLogView 构造第 77 行）。
-        // 这里同一颜色传三次：动画内部是三条重叠色段各自长大缩小，
-        // 同色即视觉上仍是一条纯色游走，正是系统安装界面的样子。
-        setIndicatorColor(primary, primary, primary)
-        isIndeterminate = true
-        // 连续型：色块变长变短来回游走，与系统安装界面一致。
+        // 形态用 DISJOINT：一段色块在轨道里变长变短、来回游走，
+        // 就是「有条在走」的加载效果。
+        //
+        // 之前用的是 CONTIGUOUS，那是 MD3 的新形态：三条色段首尾拼接、
+        // 各自长大缩小。传同一颜色时三段视觉上连成整条，
+        // 参数又要求「圆角必须配 gap、至少 3 个颜色」，
+        // 结果在真机上就是一条几乎静止的满轨黑条——截图里的样子。
+        // 单色 + DISJOINT 没有这些约束，动画也明显。
+        setIndicatorColor(primary)
         indeterminateAnimationType =
-            LinearProgressIndicator.INDETERMINATE_ANIMATION_TYPE_CONTIGUOUS
+            LinearProgressIndicator.INDETERMINATE_ANIMATION_TYPE_DISJOINT
+        isIndeterminate = true
         trackThickness = dp(4f)
         trackCornerRadius = dp(2f)
         // MD3 默认在轨道末端画一个小停靠点，短轨道上显得多余。

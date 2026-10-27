@@ -214,7 +214,11 @@ class AsrClient(
             trySend(Chunk(text, isFinal, segment))
         }
         try {
-            live.start()
+            // 显式指定 IO：建连要从豆包首页拉游客身份，是同步网络请求。
+            // 只靠整个 Flow 末尾的 flowOn 不够保险——真机上报过
+            // NetworkOnMainThreadException（bootstrapGuest 的 execute() 落在主线程），
+            // 这里把边界写死，不依赖 collect 方的调度器。
+            withContext(Dispatchers.IO) { live.start() }
             AppLog.i(TAG, "流式会话已建立，耗时=${System.currentTimeMillis() - startedAt}ms")
         } catch (e: Throwable) {
             AppLog.i(TAG, "流式建连失败：${e.javaClass.simpleName}: ${e.message}")
@@ -226,7 +230,10 @@ class AsrClient(
         }
         activeLive = live
         val recorder = AsrTester.Recorder(ctx)
-        if (!recorder.start { pcm -> live.feed(pcm) }) {
+        val recorderStarted = withContext(Dispatchers.IO) {
+            recorder.start { pcm -> live.feed(pcm) }
+        }
+        if (!recorderStarted) {
             AppLog.i(TAG, "流式识别录音启动失败：麦克风不可用")
             live.cancel()
             activeLive = null
