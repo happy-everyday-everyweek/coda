@@ -40,8 +40,17 @@ class AsrClient(
     private val defaultLanguage: String = "zh",
 ) {
 
-    private companion object {
-        const val TAG = "AsrClient"
+    companion object {
+        private const val TAG = "AsrClient"
+
+        /**
+         * 一次性拿到「当前配置里第一个可用的 ASR 供应商」。
+         *
+         * 大部分调用方并不关心具体用哪个，只想「把这段音转成字」。
+         * 内置豆包永远存在且免配置，所以这里至少不会返回 null。
+         */
+        fun defaultProvider(ctx: Context): ProviderStore.Provider? =
+            ProviderStore.load(ctx).firstOrNull { it.kind == ProviderStore.ProviderKind.ASR }
     }
 
     /** 本 client 派生的任务都挂在这个 scope 下，close() 一锅端。 */
@@ -98,7 +107,7 @@ class AsrClient(
     suspend fun transcribe(
         provider: ProviderStore.Provider,
         model: String = provider.models.firstOrNull().orEmpty(),
-        maxMs: Long = AsrTester.MAX_RECORD_MS,
+        maxMs: Long = AsrTester.MAX_RECORD_MS.toLong(),
         onRecording: ((recorder: AsrTester.Recorder) -> Unit)? = null,
         stopSignal: kotlinx.coroutines.CompletableDeferred<Unit>,
     ): AsrTester.Result = withContext(Dispatchers.IO) {
@@ -184,7 +193,7 @@ class AsrClient(
      */
     fun transcribeStream(
         provider: ProviderStore.Provider,
-        maxMs: Long = AsrTester.MAX_RECORD_MS,
+        maxMs: Long = AsrTester.MAX_RECORD_MS.toLong(),
     ): Flow<Chunk> = callbackFlow {
         require(supportsStreaming(provider)) {
             "供应商 ${provider.name} 不支持流式识别，请用非流式"
@@ -276,7 +285,10 @@ class AsrClient(
         activeLive = null
         runCatching { activeRecorder?.stop() }
         activeRecorder = null
+        // LiveAsr.finish() 返回的是 AsrTester.Result（Ok/Fail），不是 String。
+        // 这里只关心全文，失败就返回 null，让调用方保留已显示的内容。
         val text = runCatching { live.finish() }.getOrNull()
+            ?.let { (it as? AsrTester.Result.Ok)?.text }
         release()
         text
     }
@@ -312,14 +324,6 @@ class AsrClient(
     /** 流式识别的业务异常，带上可读原因。 */
     class LiveError(message: String, cause: Throwable?) : Exception(message, cause)
 
-    companion object {
-        /**
-         * 一次性拿到「当前配置里第一个可用的 ASR 供应商」。
-         *
-         * 大部分调用方并不关心具体用哪个，只想「把这段音转成字」。
-         * 内置豆包永远存在且免配置，所以这里至少不会返回 null。
-         */
-        fun defaultProvider(ctx: Context): ProviderStore.Provider? =
-            ProviderStore.load(ctx).firstOrNull { it.kind == ProviderStore.ProviderKind.ASR }
-    }
+    // 「only one companion object」——同类里第二个 companion 是非法的，
+    // 所以这里并进文件顶部那个 private companion object。
 }
