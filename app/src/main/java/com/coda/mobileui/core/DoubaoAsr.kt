@@ -274,10 +274,6 @@ object DoubaoAsr {
             return event
         }
 
-        fun waitFor(expected: String) {
-            waitForReturning(expected)
-        }
-
         /** 等到指定事件并返回整帧，用来取 task_id 这类字段。 */
         fun waitForReturning(expected: String): JSONObject {
             val deadline = System.currentTimeMillis() + timeoutSec * 1000
@@ -290,6 +286,16 @@ object DoubaoAsr {
                 val o = raw as JSONObject
                 if (o.optString("event") == expected) return o
             }
+        }
+
+        /**
+         * 只等事件、不要返回值时的便捷写法。
+         *
+         * 必须定义在 [waitForReturning] 之后：这两个都是 transcribePcm 内部的
+         * 局部函数，顺序反过来会解析不到（CI 报过 278:13 Unresolved reference）。
+         */
+        fun waitFor(expected: String) {
+            waitForReturning(expected)
         }
 
         try {
