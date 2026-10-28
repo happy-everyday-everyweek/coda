@@ -91,7 +91,7 @@ object SettingsViewBuilder {
                 }
                 container.addView(gap)
             }
-            val view = buildRow(inflater, container, row, radioRows, listener, onCategoryClick)
+            val view = buildRow(inflater, container, row, radioRows, listener, onCategoryClick, insetH, horizontalInsetPx)
                 ?: return@forEachIndexed
             if (!isCustom) applyGroupShape(view, corner, isFirstInGroup, isLastInGroup)
             // 行内水平内边距在这里统一设置，而不是用 translationX 硬挪。
@@ -141,6 +141,11 @@ object SettingsViewBuilder {
         radioRows: MutableList<Pair<View, MaterialRadioButton>>,
         listener: SettingsActionListener?,
         onCategoryClick: ((String) -> Unit)?,
+        // 行内水平内边距与「是否需要清零卡片外距」由 render 算好后传进来。
+        // 不能在这里直接引用 render 的局部量——buildRow 是独立函数，
+        // 看不到那边的 insetH / horizontalInsetPx（CI 报过 Unresolved reference）。
+        insetH: Int = -1,
+        horizontalInsetPx: Int = -1,
     ): View? = when (row) {
         is SettingRow.Header -> null
 
