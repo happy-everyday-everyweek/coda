@@ -340,14 +340,14 @@ class OAuthSheet(
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             CookieManager.getInstance().setAcceptCookie(true)
-            // TRAE 的授权链接里写死了 x_device_type=windows（插件照抄原生客户端），
-            // 而 WebView 默认发移动端 UA。两者不一致时授权页可能按移动端渲染、
-            // 与它自己声明的设备类型打架，登录按钮/跳转行为都可能变。
-            // 这里只在 TRAE 这条链路上换成桌面 Chrome 的 UA，其余家保持默认，
-            // 免得把本来正常的移动端授权页做成桌面版。
-            if (OAuthProviders.usesBrowserLoginSubmit(provider.id)) {
-                settings.userAgentString = DESKTOP_UA
-            }
+            // 授权页一律用桌面端 UA。
+            //
+            // 这些 OAuth 授权页都是为桌面浏览器设计的：TRAE 的链接里甚至写死了
+            // x_device_type=windows、x_app_type=stable（照抄 Electron 客户端）。
+            // 用 WebView 默认的移动端 UA 时，页面会按移动端渲染，与服务端认定的
+            // 设备类型对不上，登录控件、跳转行为都可能跟着变。
+            // 统一成桌面 Chrome，所有供应商共用一套预期。
+            settings.userAgentString = DESKTOP_UA
             // 授权页里的跳转会带相对路径（Location: /v0/resource/...），
             // 默认 WebViewClient 同样会按 file:// 解析。这里统一补成网关绝对地址；
             // 指向外部站点的（https://accounts.google.com 等）原样放行。
@@ -372,6 +372,9 @@ class OAuthSheet(
                     val popup = WebView(main.context).apply {
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        // 与主 WebView 保持同一套 UA，否则同一流程里两段页面
+                        // 会被识别成不同设备，跳转行为可能对不上。
+                        settings.userAgentString = DESKTOP_UA
                         // 新窗口里的页面同样要能拿到登录态，Cookie 走全局同一份。
                         CookieManager.getInstance().setAcceptCookie(true)
                         webViewClient = object : WebViewClient() {
@@ -715,12 +718,12 @@ class OAuthSheet(
         const val SESSION_TIMEOUT_MS = 5 * 60_000L
 
         /**
-         * TRAE 授权页专用的桌面 UA。
+         * 授权页 WebView 统一使用的桌面端 UA。
          *
-         * 理由：插件生成的授权链接带着 x_device_type=windows 与
-         * x_app_type=stable，那是照原生 Electron 客户端抄来的。
-         * WebView 默认 UA 是移动端，页面按移动端渲染就容易和服务端认定的
-         * 设备类型不一致。这里给一个普通桌面 Chrome 的 UA 对齐预期。
+         * 这些 OAuth 授权页都是为桌面浏览器设计的；TRAE 的授权链接里甚至
+         * 写死了 x_device_type=windows、x_app_type=stable（照抄 Electron 客户端）。
+         * WebView 默认发移动端 UA，页面会按移动端渲染，与服务端认定的设备类型
+         * 对不上，登录控件与跳转行为都可能跟着变。
          */
         const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
