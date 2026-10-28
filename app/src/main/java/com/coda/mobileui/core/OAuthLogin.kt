@@ -15,6 +15,8 @@ import org.json.JSONObject
  */
 object OAuthLogin {
 
+    private const val TAG = "OAuthLogin"
+
     /** 一次登录的中间状态。插件按 [providerId] 区分，[state] 由插件发给我们。 */
     data class Session(
         val providerId: String,
@@ -135,6 +137,52 @@ object OAuthLogin {
             }
             return Session(provider.id, state, url, "")
         }
+        // TRAE SOLO 的登录链路与其余家不同，不能用通用的 `<pluginId>-auth-url`。
+        //
+        // 上游（luode0320/cpa-workbuddy-plugin 的 traework/browserlogin.go）说明：
+        // 它的授权页不是标准 OAuth 重定向，登录后浏览器会被带到
+        //   http://127.0.0.1:<port>/authorize?isRedirect=true&authCodeInfo={...}&...
+        // 授权码藏在 authCodeInfo 这个 JSON 查询参数里，不回传 ?code=&state=。
+        // 而且这个回调地址**没人监听**，上游的设计是让用户把地址栏里那串 URL
+        // 复制出来，粘回面板的「粘贴回调地址」框，由面板 POST /browser-login/submit
+        // 完成换 token。
+        //
+        // 在 App 内嵌 WebView 里用户看不到地址栏，这一步没法手动完成，
+        // 所以这里必须走它自己的两个接口：/browser-login/start 拿授权地址，
+        // 再由 WebView 拦截跳转、把回调 URL 交给 /browser-login/submit。
+        if (OAuthProviders.usesBrowserLoginSubmit(provider.id)) {
+            val path = "/v0/management/plugins/${provider.pluginId}/browser-login/start"
+            // redirect_origin 只允许 origin（不能带路径/query），插件会用它拼出
+            // http://127.0.0.1:<port>/authorize 这个必须精确匹配白名单的形状。
+            // 直接给网关地址即可：端口与网关一致，正好被 WebView 拦截。
+            val payload = org.json.JSONObject()
+                .put("redirect_origin", ProxyHost.baseUrl())
+                .toString()
+            val body = ProxyHost.managementJson(ctx, path, method = "POST", body = payload) ?: run {
+                val detail = ProxyHost.lastError
+                lastBeginError = if (detail.isNullOrEmpty()) {
+                    "宿主管理面 $path 无响应（TRAE 插件可能未就绪）"
+                } else {
+                    "宿主管理面 $path 失败：$detail"
+                }
+                return null
+            }
+            val data = body.optJSONObject("data") ?: body
+            val state = data.optString("state")
+            val url = data.optString("auth_url").ifEmpty { data.optString("url") }
+            if (url.isEmpty()) {
+                // 插件失败时会回 {"error": "..."}，原样带出来，别吞掉。
+                val err = data.optString("error").ifEmpty { body.optString("error") }
+                lastBeginError = if (err.isNotEmpty()) {
+                    "TRAE 授权地址获取失败：$err"
+                } else {
+                    "TRAE 授权响应缺少 auth_url：${body.toString().take(300)}"
+                }
+                return null
+            }
+            AppLog.i(TAG, "TRAE 浏览器授权已发起 state=${state.take(8)}…")
+            return Session(provider.id, state, url, "")
+        }
         val authUrlPath = "/v0/management/${provider.pluginId}-auth-url"
         val body = ProxyHost.managementJson(
             ctx,
@@ -194,12 +242,33 @@ object OAuthLogin {
             // 设备流通常要用户在浏览器里点确认，未完成时正常返回 pending。
             return Result.Pending
         }
+        // TRAE：它有自己的一套会话与结果接口，get-auth-status 对它无效。
+        // bridge 页结算后把结果写进 state 会话，这里读 /browser-login/result
+        // （read-once：读走即删）。
+        if (OAuthProviders.usesBrowserLoginSubmit(session.providerId)) {
+            val path = "/v0/management/plugins/traework-provider/browser-login/result"
+            val payload = org.json.JSONObject()
+                .put("state", session.state)
+                .toString()
+            val raw = ProxyHost.managementJson(ctx, path, method = "POST", body = payload)
+                ?: return Result.Failed(
+                    ProxyHost.lastError?.takeIf { it.isNotEmpty() }?.let { "无法连接网关：$it" }
+                        ?: "无法连接网关",
+                )
+            val data = raw.optJSONObject("data") ?: raw
+            // 未完成的会话返回 pending=true，这是正常状态，不是失败。
+            if (data.optBoolean("pending", false)) return Result.Pending
+            if (data.optBoolean("ok", false)) return Result.Ready
+            val err = data.optString("error")
+            if (err.isNotEmpty()) return Result.Failed(err)
+            val tail = data.optString("error").ifEmpty { raw.toString().take(200) }
+            return Result.Failed("TRAE 授权未完成：$tail")
+        }
         val body = ProxyHost.managementJson(
             ctx,
             "/v0/management/get-auth-status?state=${android.net.Uri.encode(session.state)}",
             method = "GET",
         ) ?: return Result.Failed("无法连接网关")
-
         val data = body.optJSONObject("data") ?: body
         return when (data.optString("status")) {
             "ok", "ready", "success" -> Result.Ready

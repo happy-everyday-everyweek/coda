@@ -151,6 +151,21 @@ object SettingsViewBuilder {
                 findViewById<TextView>(R.id.category_summary).text = row.summary
                 findViewById<ImageView>(R.id.category_icon).setImageResource(row.iconRes)
                 setOnClickListener { onCategoryClick?.invoke(row.page) }
+                // 水平内边距与卡片外距和 Value/Toggle 行用同一套规则。
+                // 之前这个布局把 paddingStart/End 写死成 16dp，而卡片外距又是
+                // settings_card_margin：放进 CodaSheet（内容区本就有 content_padding_h）
+                // 之后横向叠加三层，表现为「文字贴着卡片边缘（或反过来缩进过头）」，
+                // 并且和同一面板里的其他行对不齐。现在统一由 horizontalInsetPx 决定。
+                findViewById<View?>(R.id.category_inner)?.let { inner ->
+                    inner.setPadding(insetH, inner.paddingTop, insetH, inner.paddingBottom)
+                }
+                if (horizontalInsetPx == 0) {
+                    (layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
+                        lp.marginStart = 0
+                        lp.marginEnd = 0
+                        layoutParams = lp
+                    }
+                }
             }
 
         is SettingRow.Value -> inflater

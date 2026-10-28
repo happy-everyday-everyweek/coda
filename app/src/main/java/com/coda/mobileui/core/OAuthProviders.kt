@@ -161,6 +161,20 @@ object OAuthProviders {
      */
     fun usesWorkBuddyGateway(id: String): Boolean = id == "workbuddy" || id == "workbuddy-ai"
 
+    /**
+     * 这个供应商是否走「浏览器授权 + 粘贴回调地址」的自有链路。
+     *
+     * 目前只有 TRAE SOLO。它的授权页不是标准 OAuth 重定向：
+     *   · 回调必须是 loopback 主机且路径正好 /authorize（白名单硬要求）；
+     *   · 跳回来时不带 ?code=&state=，授权码藏在 authCodeInfo 这个 JSON 参数里；
+     *   · 那个 127.0.0.1 地址没人监听，上游的设计是让用户把地址栏里的 URL
+     *     复制出来贴回面板。
+     *
+     * 通用链路（`<pluginId>-auth-url` + get-auth-status 轮询）对它无效，
+     * 必须走插件自己的 /browser-login/start 与 bridge 页。
+     */
+    fun usesBrowserLoginSubmit(id: String): Boolean = id == "traework"
+
     /** 插件在磁盘上的文件名：宿主按 `.so` 扫描插件目录。 */
     fun pluginFile(provider: Provider): String = provider.pluginId + ".so"
 

@@ -348,6 +348,16 @@ class OAuthSheet(
                     request: WebResourceRequest?,
                 ): Boolean {
                     val next = request?.url?.toString() ?: return false
+                    // TRAE 的授权页不是标准 OAuth 重定向：登录完成后会把浏览器
+                    // 送到 http://127.0.0.1:<port>/authorize?isRedirect=true
+                    //   &authCodeInfo={...}&userInfo={...}，而这个地址没人监听，
+                    // 真机上就是「网页无法加载」。授权码其实就在这串 URL 里，
+                    // 所以这里截住它，改跳插件自己的 bridge 页把 URL 交回去——
+                    // 等同于用户手动「复制地址栏、粘回面板」，只是不用他动手。
+                    if (isTraeBounce(next)) {
+                        val handled = handoffTraeBounce(v, next)
+                        if (handled) return true
+                    }
                     val absolute = resolveAuthUrl(next)
                     if (absolute != next) {
                         AppLog.i("OAuthSheet", "相对跳转补全：$next -> $absolute")
@@ -381,6 +391,61 @@ class OAuthSheet(
         }
         webView = view
         column.addView(view)
+    }
+
+    /**
+     * 判断是不是 TRAE 登录完成后回跳的那个「死地址」。
+     *
+     * 上游（cpa-workbuddy-plugin 的 traework/browserlogin.go）确认过形状：
+     *   http://127.0.0.1:<port>/authorize?isRedirect=true&scope=solo
+     *     &authCodeInfo={"AuthCode":...}&loginTraceID=...&userInfo={...}
+     * 白名单只要求 loopback 主机 + 路径正好 /authorize，协议和端口随意，
+     * 所以这里的判定也只看这两点，加上「确实带了授权码相关参数」，
+     * 避免把普通页面误截。
+     */
+    private fun isTraeBounce(url: String): Boolean {
+        if (!OAuthProviders.usesBrowserLoginSubmit(provider.id)) return false
+        val uri = runCatching { android.net.Uri.parse(url) }.getOrNull() ?: return false
+        val host = uri.host?.lowercase() ?: return false
+        if (host != "127.0.0.1" && host != "localhost" && host != "::1") return false
+        if (uri.path != "/authorize") return false
+        // 只认真正带结果的跳转：有授权码、或明确标了 isRedirect。
+        val hasCode = uri.getQueryParameter("authCodeInfo")?.isNotEmpty() == true
+        val isRedirect = uri.getQueryParameter("isRedirect") == "true"
+        return hasCode || isRedirect
+    }
+
+    /**
+     * 把 TRAE 的回调 URL 交给插件的 bridge 页完成授权。
+     *
+     * 不自己解析 authCodeInfo、不自己换 token：bridge 页接受
+     * `?state=<state>&url=<整串回调地址>`，由服务端用与面板提交同一套逻辑
+     * 解析（extractAuthCode + userInfo）。这样只有一份解析实现，
+     * 也不会绕开插件的会话校验——state 仍是 /start 时拿到的那一个。
+     *
+     * @return true 表示已经接管这次导航，调用方不应再让 WebView 去访问原地址。
+     */
+    private fun handoffTraeBounce(view: WebView?, bounced: String): Boolean {
+        val state = session?.state.orEmpty()
+        if (state.isEmpty()) {
+            AppLog.w("OAuthSheet", "TRAE 回调到达但本地没有 state，无法交回 bridge")
+            return false
+        }
+        val encodedState = android.net.Uri.encode(state)
+        val encodedUrl = android.net.Uri.encode(bounced)
+        val bridge = ProxyHost.baseUrl().trimEnd('/') +
+            "/v0/resource/plugins/${provider.pluginId}/browser-login/bridge" +
+            "?state=$encodedState&url=$encodedUrl"
+        AppLog.i(
+            "OAuthSheet",
+            "TRAE 回调已截获，改交 bridge 页（state=${state.take(8)}…，回调长度=${bounced.length}）",
+        )
+        view?.loadUrl(bridge)
+        // bridge 页在服务端就把 code 换掉了，正常情况下下一轮轮询就能拿到 Ready。
+        // 这里只确保轮询已启动：TRAE 这条链路的入口与别家不同，
+        // 不能依赖「返回授权页时会自动开轮询」那个时机。
+        startPolling()
+        return true
     }
 
     /**

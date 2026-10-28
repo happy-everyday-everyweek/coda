@@ -14,13 +14,12 @@
     app:strokeWidth="0dp">
 
     <LinearLayout
+        android:id="@+id/category_inner"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
-        android:minHeight="72dp"
-        android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
+        android:minHeight="56dp"
+        android:orientation="horizontal">
 
         <ImageView
             android:id="@+id/category_icon"
@@ -35,8 +34,8 @@
             android:layout_marginStart="16dp"
             android:layout_weight="1"
             android:orientation="vertical"
-            android:paddingTop="12dp"
-            android:paddingBottom="12dp">
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
 
             <TextView
                 android:id="@+id/category_title"
