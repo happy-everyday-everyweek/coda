@@ -44,8 +44,10 @@ run_ktlint() {
     need_jar "$KTLINT_JAR" || return 1
     echo "=== ktlint（格式规范）==="
     local out="$REPORT_DIR/ktlint.txt"
+    # 传目录不传 glob：ktlint 自己会递归。
+    # 写成 'app/src/**/*.kt' 会被它当成字面文件名，扫不到东西、还会长时间空转。
     ( cd "$ROOT" && java -jar "$KTLINT_JAR" \
-        'app/src/**/*.kt' 'kernel/src/**/*.kt' \
+        app/src kernel/src \
         --reporter=plain "$@" ) > "$out" 2>&1
     local n
     n=$(grep -cE '\.kt:[0-9]+:[0-9]+:' "$out" || true)
