@@ -1,6 +1,7 @@
 package com.coda.mobileui
 
 import android.content.Context
+import android.os.Build
 import com.coda.mobileui.core.AgentAssets
 import com.coda.mobileui.core.AsrTester
 import com.coda.mobileui.core.BrowserControl
@@ -736,7 +737,16 @@ object SettingsData {
     }
 
     private fun appBuild(ctx: Context): String = try {
-        val code = ctx.packageManager.getPackageInfo(ctx.packageName, 0).longVersionCode
+        val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        // longVersionCode 是 API 28 才有的，minSdk 是 26。
+        // 直接调会在 Android 8.0/8.1 上抛 NoSuchMethodError；
+        // 这里退回旧字段，两条路都不会崩。
+        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            info.versionCode.toLong()
+        }
         code.toString()
     } catch (_: Throwable) {
         "—"

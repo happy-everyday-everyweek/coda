@@ -10,6 +10,10 @@
     <!-- ASR 测试：设置 → 模型设置 → ASR 模型 → 测试转写需要现场录音。
          只用于这个自测入口，聊天框没有语音输入。 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 网络环境判定：镜像站打分要按 Wi-Fi / 流量分桶，
+         查更新与下载也要区分网络。缺这条时 ConnectivityManager
+         会抛 SecurityException，打分降级成单一账号。 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".CodaApp"

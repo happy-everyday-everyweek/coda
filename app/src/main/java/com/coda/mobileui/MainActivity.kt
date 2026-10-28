@@ -413,7 +413,7 @@ class MainActivity : BaseActivity() {
         })
 
         findViewById<ImageButton>(R.id.btn_menu).setOnClickListener {
-            drawerLayout.openDrawer(Gravity.START)
+            drawerLayout.openDrawer(Gravity.LEFT)
         }
 
         findViewById<LinearLayout>(R.id.model_selector).setOnClickListener {
@@ -612,7 +612,7 @@ class MainActivity : BaseActivity() {
         actions.addView(
             createActionRow(inflater, actions, R.drawable.ic_new_chat, R.string.nav_new_chat) {
                 inputMessage.text?.clear()
-                drawerLayout.closeDrawer(Gravity.START)
+                drawerLayout.closeDrawer(Gravity.LEFT)
                 hideSettingsPage()
                 liveText.clear()
                 messageViews.clear()
@@ -670,7 +670,7 @@ class MainActivity : BaseActivity() {
         findViewById<TextView>(R.id.action_title).setText(titleRes)
         setOnClickListener {
             onClick()
-            drawerLayout.closeDrawer(Gravity.START)
+            drawerLayout.closeDrawer(Gravity.LEFT)
         }
     }
 
@@ -3443,7 +3443,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     private fun showFullDrawer() {
         val host = findViewById<View>(R.id.nav_view) as? ViewGroup ?: return
         val view = host.findViewWithTag<View>("drawer_full") ?: return
-        if (!drawerLayout.isDrawerOpen(Gravity.START)) drawerLayout.openDrawer(Gravity.START)
+        if (!drawerLayout.isDrawerOpen(Gravity.LEFT)) drawerLayout.openDrawer(Gravity.LEFT)
 
         val screenWidth = resources.displayMetrics.widthPixels
         view.visibility = View.VISIBLE
@@ -3589,13 +3589,13 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val host = findViewById<View>(R.id.nav_view) as? ViewGroup
         val full = host?.findViewWithTag<View>("drawer_full")
         if (host == null || full == null || full.visibility != View.VISIBLE) {
-            drawerLayout.closeDrawer(Gravity.START)
+            drawerLayout.closeDrawer(Gravity.LEFT)
             action()
             return
         }
         hideFullDrawer(COLLAPSE_DURATION)
         drawerLayout.postDelayed({
-            drawerLayout.closeDrawer(Gravity.START)
+            drawerLayout.closeDrawer(Gravity.LEFT)
             action()
         }, COLLAPSE_DURATION)
     }
@@ -3794,8 +3794,8 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 // 设置页：右滑打开抽屉（回到上一级），左滑不做任何事。
                 // 设置页没有自己的会话内容，绝不能复用主界面的"左滑进工作台"。
                 if (showingSettings) {
-                    if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.START)) {
-                        drawerLayout.openDrawer(Gravity.START)
+                    if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
+                        drawerLayout.openDrawer(Gravity.LEFT)
                         swipeConsumed = true
                     }
                     return super.dispatchTouchEvent(ev)
@@ -3809,19 +3809,19 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                     return super.dispatchTouchEvent(ev)
                 }
                 if (dx > dp(48) && dx > dy) {
-                    if (drawerLayout.isDrawerOpen(Gravity.START)) {
+                    if (drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                         // 半屏抽屉：再右滑进入全屏抽屉
                         showFullDrawer()
                     } else {
-                        drawerLayout.openDrawer(Gravity.START)
+                        drawerLayout.openDrawer(Gravity.LEFT)
                     }
                     swipeConsumed = true
-                } else if (dx < -dp(48) && -dx > dy && drawerLayout.isDrawerOpen(Gravity.START)) {
+                } else if (dx < -dp(48) && -dx > dy && drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                     // 半屏抽屉：左滑收起，回到正常页面。
                     // 这里必须标记已消费，否则抬手时会再判一次而误开工作区。
-                    drawerLayout.closeDrawer(Gravity.START)
+                    drawerLayout.closeDrawer(Gravity.LEFT)
                     swipeConsumed = true
-                } else if (dx < -dp(60) && -dx > dy && !drawerLayout.isDrawerOpen(Gravity.START)) {
+                } else if (dx < -dp(60) && -dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                     // 主界面左滑进入工作区：拖动过程中就实时显示展开进度，
                     // 松手后才真正跳转。之前是抬手才一次性打开，没有跟手感。
                     showWorkspaceDragPreview((-dx).toInt())
@@ -3839,8 +3839,8 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
                 // 设置页：抬手也不进入工作台，只允许右滑打开抽屉
                 if (showingSettings) {
-                    if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.START)) {
-                        drawerLayout.openDrawer(Gravity.START)
+                    if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
+                        drawerLayout.openDrawer(Gravity.LEFT)
                     }
                     return super.dispatchTouchEvent(ev)
                 }
@@ -3849,14 +3849,14 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                         hideFullDrawer()
                     }
                 } else if (dx > dp(48) && dx > dy) {
-                    if (drawerLayout.isDrawerOpen(Gravity.START)) {
+                    if (drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                         showFullDrawer()
                     } else {
-                        drawerLayout.openDrawer(Gravity.START)
+                        drawerLayout.openDrawer(Gravity.LEFT)
                     }
                 } else if (dx < -dp(48) && -dx > dy) {
-                    if (drawerLayout.isDrawerOpen(Gravity.START)) {
-                        drawerLayout.closeDrawer(Gravity.START)
+                    if (drawerLayout.isDrawerOpen(Gravity.LEFT)) {
+                        drawerLayout.closeDrawer(Gravity.LEFT)
                     } else if (!showingSettings && -dx > dp(60)) {
                         // 主界面左滑进入工作台：拖动过程中已经画了跟手预览，
                         // 这里提交或弹回，比例交给 WorkspaceActivity 接着展开。
@@ -3884,7 +3884,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         }
         if (pendingOpenDrawer) {
             pendingOpenDrawer = false
-            drawerLayout.openDrawer(Gravity.START)
+            drawerLayout.openDrawer(Gravity.LEFT)
         }
     }
 
@@ -3938,7 +3938,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     /** 打开设置：主区域换页 + 抽屉收起（与新对话同一层级，不新开页面）。 */
     private fun openSettingsPage() {
         showingSettings = true
-        drawerLayout.closeDrawer(Gravity.START)
+        drawerLayout.closeDrawer(Gravity.LEFT)
         emptyState.visibility = View.GONE
         chatView.visibility = View.GONE
         findViewById<View>(R.id.composer_container).visibility = View.GONE
@@ -3969,7 +3969,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     private fun renderSettingsPage() {
         val page = settingsPage()
         page.findViewById<View>(R.id.settings_page_back).setOnClickListener {
-            drawerLayout.openDrawer(Gravity.START)
+            drawerLayout.openDrawer(Gravity.LEFT)
         }
         val container = page.findViewById<LinearLayout>(R.id.settings_page_container)
         // 必须先清空：每次从抽屉点「设置」都会重新渲染一遍，
@@ -4447,10 +4447,16 @@ message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
     }
 
     /** 顶部避让高度：取系统状态栏高度与挖孔安全区的较大者（沉浸式下 WindowInsets 会返回 0）。 */
-    private fun topSafeInset(): Int = maxOf(
-        systemStatusBarHeight(),
-        window.decorView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0,
-    )
+    private fun topSafeInset(): Int {
+        // getDisplayCutout() 是 API 28 才有的，minSdk 是 26；
+        // 低版直接拿根 insets 会在 8.x 上抛 NoSuchMethodError。
+        val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.decorView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
+        } else {
+            0
+        }
+        return maxOf(systemStatusBarHeight(), cutout)
+    }
 
     /** 系统导航栏高度；取不到时用 24dp 兜底。 */
     private fun systemNavigationBarHeight(): Int {

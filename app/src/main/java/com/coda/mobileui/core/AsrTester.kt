@@ -65,6 +65,11 @@ object AsrTester {
          * [liveSink] 非空时进入实时模式：PCM 直接喂给回调，不写文件，
          * 适合边录边转写；为空时写 WAV，供一次性上传。
          */
+        // 前置条件：调用方必须先拿到 RECORD_AUDIO。
+        // 唯一调用点是 SettingsDetailActivity 的「测试转写」，那里在调本方法前
+        // 已 checkSelfPermission 并在未授权时走 requestPermissions 直接返回。
+        // 这里标注出来，既说明契约，也让 lint 不再把 AudioRecord 当成裸调用。
+        @android.annotation.SuppressLint("MissingPermission")
         fun start(liveSink: ((ByteArray) -> Unit)? = null): Boolean {
             stopQuietly()
             sink = liveSink

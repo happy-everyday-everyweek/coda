@@ -592,7 +592,14 @@ class CoreRuntime(private val ctx: Context) {
     /** 版本名与 versionCode。装错包时，这一行就能看出来，不必再比对行为猜版本。 */
     private fun appVersion(): String = try {
         val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
-        val code = runCatching { info.longVersionCode }.getOrElse { info.versionCode.toLong() }
+        // longVersionCode 是 API 28 才有的。runCatching 不构成 lint 认可的
+        // 版本保护（它看不出是 NoSuchMethodError），所以显式判版本。
+        val code = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            info.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            info.versionCode.toLong()
+        }
         "${info.versionName} ($code)"
     } catch (_: Throwable) {
         "未知"

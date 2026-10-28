@@ -778,7 +778,8 @@ class FilesPage(
      * 光标移动、点击落点、选区变化最后都会走到 onSelectionChanged，这里记下插入点所在行，
      * 交给外面重画左侧行号与当前行底，避免每处输入路径各自提示一次。
      */
-    private class EditorInput(context: android.content.Context) : EditText(context) {
+    private class EditorInput(context: android.content.Context) :
+        androidx.appcompat.widget.AppCompatEditText(context) {
         var onCaretLine: (() -> Unit)? = null
 
         override fun onSelectionChanged(selStart: Int, selEnd: Int) {
