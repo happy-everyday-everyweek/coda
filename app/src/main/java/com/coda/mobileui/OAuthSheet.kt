@@ -9,6 +9,7 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -339,9 +340,65 @@ class OAuthSheet(
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             CookieManager.getInstance().setAcceptCookie(true)
+            // TRAE 的授权链接里写死了 x_device_type=windows（插件照抄原生客户端），
+            // 而 WebView 默认发移动端 UA。两者不一致时授权页可能按移动端渲染、
+            // 与它自己声明的设备类型打架，登录按钮/跳转行为都可能变。
+            // 这里只在 TRAE 这条链路上换成桌面 Chrome 的 UA，其余家保持默认，
+            // 免得把本来正常的移动端授权页做成桌面版。
+            if (OAuthProviders.usesBrowserLoginSubmit(provider.id)) {
+                settings.userAgentString = DESKTOP_UA
+            }
             // 授权页里的跳转会带相对路径（Location: /v0/resource/...），
             // 默认 WebViewClient 同样会按 file:// 解析。这里统一补成网关绝对地址；
             // 指向外部站点的（https://accounts.google.com 等）原样放行。
+            webChromeClient = object : WebChromeClient() {
+                /**
+                 * TRAE 那一步有概率不是普通导航，而是 window.open 弹新窗口。
+                 * 那种情况不会走 shouldOverrideUrlLoading，等于拦不到回调，
+                 * 用户最终停在一个「网页无法加载」的空白页上。
+                 *
+                 * 这里真正接管新窗口：创建一个临时 WebView 并通过 WebViewTransport
+                 * 交给系统，让新窗口的内容落在它里面；再用 WebViewClient 把该
+                 * 临时 WebView 的每次导航转回主 WebView（主 WebView 有回调拦截）。
+                 */
+                override fun onCreateWindow(
+                    view: WebView?,
+                    isDialog: Boolean,
+                    isUserGesture: Boolean,
+                    resultMsg: android.os.Message?,
+                ): Boolean {
+                    val main = view ?: return false
+                    val transport = (resultMsg?.obj as? WebView.WebViewTransport) ?: return false
+                    val popup = WebView(main.context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        // 新窗口里的页面同样要能拿到登录态，Cookie 走全局同一份。
+                        CookieManager.getInstance().setAcceptCookie(true)
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(
+                                v: WebView?,
+                                request: WebResourceRequest?,
+                            ): Boolean {
+                                val target = request?.url?.toString() ?: return false
+                                AppLog.i("OAuthSheet", "新窗口导航转交主窗口：$target")
+                                // 主 WebView 的 shouldOverrideUrlLoading 会做回调识别，
+                                // 所以这里只要把地址交给它就够了，不在弹窗里自行处理。
+                                main.loadUrl(target)
+                                return true
+                            }
+                        }
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onCloseWindow(window: WebView?) {
+                                runCatching { window?.destroy() }
+                            }
+                        }
+                    }
+                    transport.webView = popup
+                    resultMsg?.sendToTarget()
+                    AppLog.i("OAuthSheet", "已接管新窗口，导航将转交主 WebView 处理")
+                    return true
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
                     v: WebView?,
@@ -656,5 +713,17 @@ class OAuthSheet(
 
         /** 插件侧登录会话 5 分钟过期，客户端按同一上限收口。 */
         const val SESSION_TIMEOUT_MS = 5 * 60_000L
+
+        /**
+         * TRAE 授权页专用的桌面 UA。
+         *
+         * 理由：插件生成的授权链接带着 x_device_type=windows 与
+         * x_app_type=stable，那是照原生 Electron 客户端抄来的。
+         * WebView 默认 UA 是移动端，页面按移动端渲染就容易和服务端认定的
+         * 设备类型不一致。这里给一个普通桌面 Chrome 的 UA 对齐预期。
+         */
+        const val DESKTOP_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
 }

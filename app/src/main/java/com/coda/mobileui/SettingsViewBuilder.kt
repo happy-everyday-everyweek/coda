@@ -53,12 +53,20 @@ object SettingsViewBuilder {
     ) {
         val inflater = LayoutInflater.from(context)
         val corner = context.resources.getDimension(R.dimen.settings_card_corner)
+        // 卡片自身的左右外距。传 0 时清零，其余情况沿用布局里的 settings_card_margin。
+        val cardMargin = context.resources.getDimensionPixelSize(R.dimen.settings_card_margin)
         val radioRows = mutableListOf<Pair<View, MaterialRadioButton>>()
-        // 未显式指定时用全局统一值，保证任何宿主都不会「忘了传」而回到旧外观。
+        // 行内水平内边距。
+        //
+        // 未显式指定时必须对齐**卡片外距**，而不是 content_padding_h：
+        // 设置主页面（page_container 自身没有左右 padding）里卡片靠 settings_card_margin
+        // 定位，若这里取 content_padding_h(20dp) 而卡片是 16dp，
+        // 分组标题就会比卡片多缩 4dp，两者对不齐。
+        // 在 CodaSheet 里调用方显式传 0，两侧一起归零，同样保持一致。
         val insetH = if (horizontalInsetPx >= 0) {
             horizontalInsetPx
         } else {
-            context.resources.getDimensionPixelSize(R.dimen.content_padding_h)
+            cardMargin
         }
 
         rows.forEachIndexed { index, row ->

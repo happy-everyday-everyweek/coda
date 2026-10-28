@@ -246,7 +246,7 @@ object OAuthLogin {
         // bridge 页结算后把结果写进 state 会话，这里读 /browser-login/result
         // （read-once：读走即删）。
         if (OAuthProviders.usesBrowserLoginSubmit(session.providerId)) {
-            val path = "/v0/management/plugins/traework-provider/browser-login/result"
+            val path = "/v0/management/plugins/${session.providerId}/browser-login/result"
             val payload = org.json.JSONObject()
                 .put("state", session.state)
                 .toString()
@@ -259,10 +259,15 @@ object OAuthLogin {
             // 未完成的会话返回 pending=true，这是正常状态，不是失败。
             if (data.optBoolean("pending", false)) return Result.Pending
             if (data.optBoolean("ok", false)) return Result.Ready
+            // 走到这里说明会话已结算但结果是失败。
+            //
+            // 注意 result 是 read-once：读一次就把会话删了，所以这里必须一次判死，
+            // 不能再返回 Pending 去等下一轮——那样第二轮只会拿到
+            // 「授权结果不存在或已被读取」，真正的原因反而丢了。
             val err = data.optString("error")
-            if (err.isNotEmpty()) return Result.Failed(err)
-            val tail = data.optString("error").ifEmpty { raw.toString().take(200) }
-            return Result.Failed("TRAE 授权未完成：$tail")
+            return Result.Failed(
+                if (err.isNotEmpty()) err else "TRAE 授权未完成：${raw.toString().take(200)}",
+            )
         }
         val body = ProxyHost.managementJson(
             ctx,

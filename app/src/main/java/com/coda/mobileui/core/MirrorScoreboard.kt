@@ -36,6 +36,9 @@ object MirrorScoreboard {
     private const val TAG = "MirrorScore"
     private const val FILE_NAME = "mirror_scores.json"
 
+    /** 账本文件的读改写互斥锁，见 [record]。 */
+    private val lock = Any()
+
     /** 网络分桶。键写进 JSON，改名等于清空历史，别随意改。 */
     enum class Net { WIFI, CELLULAR, OTHER }
 
@@ -131,7 +134,11 @@ object MirrorScoreboard {
         elapsedMs: Long = 0,
     ) {
         if (id.isBlank()) return
+        // 账本是「读-改-写」一个共享 JSON 文件。检查更新会并发拉 dev 与 release
+        // 两份清单，资产下载也可能与它并行，不加锁就会互相覆盖，
+        // 表现是「明明下载成功过，账本里却没几条」。
         runCatching {
+            synchronized(lock) {
             val f = fileOf(ctx)
             val root = if (f.isFile) runCatching { JSONObject(f.readText()) }.getOrNull()
                 ?: JSONObject() else JSONObject()
@@ -160,13 +167,14 @@ object MirrorScoreboard {
                 }
             }
             bucket.put(id, next)
-            f.writeText(root.toString())
-            AppLog.i(
-                TAG,
-                "记账 $key/$id $outcome bytes=$bytes ms=$elapsedMs " +
-                    "→ 校验通过=${next.optInt("verified")} 哈希失败=${next.optInt("hashFailed")} " +
-                    "硬失败=${next.optInt("failed")}",
-            )
+                f.writeText(root.toString())
+                AppLog.i(
+                    TAG,
+                    "记账 $key/$id $outcome bytes=$bytes ms=$elapsedMs " +
+                        "→ 校验通过=${next.optInt("verified")} 哈希失败=${next.optInt("hashFailed")} " +
+                        "硬失败=${next.optInt("failed")}",
+                )
+            }
         }.onFailure {
             AppLog.w(TAG, "写镜像账本失败：${it.javaClass.simpleName}: ${it.message}")
         }
