@@ -15,6 +15,16 @@
     <dimen name="settings_card_margin">16dp</dimen>
 
     <!--
+        卡片内文字离卡片边缘的距离。
+
+        与 settings_card_margin 是**两个不同层级**的量：
+        margin 决定卡片边缘落在页面哪里（是否与标题对齐），
+        这个值决定文字离卡片边缘多远（卡片内部排版）。
+        曾经把两者绑成同一个参数，结果传 0 时文字直接贴住卡片边缘。
+    -->
+    <dimen name="settings_card_text_inset">16dp</dimen>
+
+    <!--
         行/段落的水平内边距。
 
         这是「一层容器」的留白。之前这个值在四处各写了一遍：

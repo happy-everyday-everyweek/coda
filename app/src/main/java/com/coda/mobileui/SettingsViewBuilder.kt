@@ -56,9 +56,12 @@ object SettingsViewBuilder {
         // 卡片自身的左右外距。传 0 时清零，其余情况沿用布局里的 settings_card_margin。
         val cardMargin = context.resources.getDimensionPixelSize(R.dimen.settings_card_margin)
         val radioRows = mutableListOf<Pair<View, MaterialRadioButton>>()
-        // 行内水平内边距。
+        // 卡片内文字离卡片边缘的距离。这是卡片内部排版，与宿主留白无关，
+        // 所以固定取值，不跟着 horizontalInsetPx 走（否则传 0 时文字贴边）。
+        val cardTextInset = context.resources.getDimensionPixelSize(R.dimen.settings_card_text_inset)
+        // 行内水平内边距：
         //
-        // 未显式指定时必须对齐**卡片外距**，而不是 content_padding_h：
+        // 未显式指定时对齐**卡片外距**，而不是 content_padding_h：
         // 设置主页面（page_container 自身没有左右 padding）里卡片靠 settings_card_margin
         // 定位，若这里取 content_padding_h(20dp) 而卡片是 16dp，
         // 分组标题就会比卡片多缩 4dp，两者对不齐。
@@ -99,26 +102,25 @@ object SettingsViewBuilder {
                 }
                 container.addView(gap)
             }
-            val view = buildRow(inflater, container, row, radioRows, listener, onCategoryClick, insetH, horizontalInsetPx)
+            val view = buildRow(inflater, container, row, radioRows, listener, onCategoryClick, insetH, horizontalInsetPx, cardTextInset)
                 ?: return@forEachIndexed
             if (!isCustom) applyGroupShape(view, corner, isFirstInGroup, isLastInGroup)
-            // 行内水平内边距在这里统一设置，而不是用 translationX 硬挪。
-            // 硬挪会让行的背景与分隔线跟着偏移（圆角对不齐容器），
-            // 而且偏移量还得在每个调用点各自算准；设 padding 则是行的真实布局，
-            // 背景、圆角、分隔线都不动，只有文字往里收。
-            view.findViewById<View?>(R.id.row_inner)?.let { inner ->
-                inner.setPadding(insetH, inner.paddingTop, insetH, inner.paddingBottom)
-            }
-            // 卡片自身的左右外边距也必须归这个参数管。
-            // 之前只有行内 padding 跟 horizontalInsetPx 走，layout 里还写死一个
-            // settings_card_margin(16dp)：传 0 只把文字内缩清零，卡片边缘仍然
-            // 比宿主内容区多缩 16dp，于是「卡片的左缘 ≠ 标题的左缘」。
-            // 数值对得上：content_padding_h(20) + settings_card_margin(16) = 36dp，
-            // 而标题在 20dp，差的正好是那 16dp。
+            // 【两层缩进必须分开，这是本文件最容易搞错的地方】
             //
-            // 语义约定：只在调用方显式传了 0（表示「本列表已经在有留白的容器里」）
-            // 时才把卡片外距清零。默认情况保持 layout 里的 16dp，
-            // 否则设置主页面那几页会从 16 变成 20，白改一轮。
+            //   第 1 层：卡片自身的左右外距 —— 决定卡片边缘与页面标题是否对齐。
+            //            由 horizontalInsetPx 管：传 0 表示「宿主已有留白，卡片贴齐」。
+            //   第 2 层：卡片内文字的内距 —— 决定文字离卡片边缘多远。
+            //            这是卡片内部排版，与宿主留白无关，必须是固定的独立值。
+            //
+            // 之前把第 2 层也绑到了 insetH，于是传 0 时文字直接贴住卡片边缘，
+            // 看上去像「没有左间距」。原始实现则把 16dp 写死在 XML 里，
+            // 于是传 0 时卡片外距仍多缩 16dp、与标题对不齐——两头都不对。
+            // 现在各管一层：内距恒为 cardTextInset，外距随参数归零。
+            view.findViewById<View?>(R.id.row_inner)?.let { inner ->
+                inner.setPadding(cardTextInset, inner.paddingTop, cardTextInset, inner.paddingBottom)
+            }
+            // 卡片外距：只有调用方显式传 0 时才清零，其余保持布局里的
+            // settings_card_margin（设置主页面那几页本来就是这个值，不受影响）。
             if (horizontalInsetPx == 0) {
                 (view.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
                     lp.marginStart = 0
@@ -154,6 +156,8 @@ object SettingsViewBuilder {
         // 看不到那边的 insetH / horizontalInsetPx（CI 报过 Unresolved reference）。
         insetH: Int = -1,
         horizontalInsetPx: Int = -1,
+        /** 卡片内文字内距。独立于 horizontalInsetPx，见 render 里的说明。 */
+        cardTextInset: Int = 0,
     ): View? = when (row) {
         is SettingRow.Header -> null
 
@@ -164,13 +168,10 @@ object SettingsViewBuilder {
                 findViewById<TextView>(R.id.category_summary).text = row.summary
                 findViewById<ImageView>(R.id.category_icon).setImageResource(row.iconRes)
                 setOnClickListener { onCategoryClick?.invoke(row.page) }
-                // 水平内边距与卡片外距和 Value/Toggle 行用同一套规则。
-                // 之前这个布局把 paddingStart/End 写死成 16dp，而卡片外距又是
-                // settings_card_margin：放进 CodaSheet（内容区本就有 content_padding_h）
-                // 之后横向叠加三层，表现为「文字贴着卡片边缘（或反过来缩进过头）」，
-                // 并且和同一面板里的其他行对不齐。现在统一由 horizontalInsetPx 决定。
+                // 卡片内文字内距用固定值（不是 insetH），与 Value/Toggle 行完全同一套。
+                // insetH 只管卡片外距与分组标题的水平位置。
                 findViewById<View?>(R.id.category_inner)?.let { inner ->
-                    inner.setPadding(insetH, inner.paddingTop, insetH, inner.paddingBottom)
+                    inner.setPadding(cardTextInset, inner.paddingTop, cardTextInset, inner.paddingBottom)
                 }
                 if (horizontalInsetPx == 0) {
                     (layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
