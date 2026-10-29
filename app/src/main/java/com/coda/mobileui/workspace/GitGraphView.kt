@@ -17,8 +17,9 @@ import java.util.Locale
  *
  * 纵向拖动浏览，点击某一行回调该提交。行高与泳道宽按屏幕密度换算。
  */
-class GitGraphView(context: Context) : View(context) {
-
+class GitGraphView(
+    context: Context,
+) : View(context) {
     var commits: List<Git.Commit> = emptyList()
         set(value) {
             field = value
@@ -43,47 +44,55 @@ class GitGraphView(context: Context) : View(context) {
     private val lineWidth = dp(2f)
     private val slop = dp(6f)
 
-    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = lineWidth
-        strokeCap = Paint.Cap.ROUND
-    }
+    private val linePaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = lineWidth
+            strokeCap = Paint.Cap.ROUND
+        }
     private val nodePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = dp(1.6f)
-    }
-    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = sp(13.5f)
-        isSubpixelText = true
-    }
-    private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = sp(11f)
-        isSubpixelText = true
-    }
-    private val refPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = sp(11f)
-        isSubpixelText = true
-        typeface = android.graphics.Typeface.create(
-            android.graphics.Typeface.MONOSPACE,
-            android.graphics.Typeface.BOLD,
-        )
-    }
-    private val rowLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = dp(0.6f)
-    }
+    private val ringPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.6f)
+        }
+    private val titlePaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = sp(13.5f)
+            isSubpixelText = true
+        }
+    private val smallPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = sp(11f)
+            isSubpixelText = true
+        }
+    private val refPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = sp(11f)
+            isSubpixelText = true
+            typeface =
+                android.graphics.Typeface.create(
+                    android.graphics.Typeface.MONOSPACE,
+                    android.graphics.Typeface.BOLD,
+                )
+        }
+    private val rowLinePaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(0.6f)
+        }
     private val path = Path()
 
-    private val laneColors = intArrayOf(
-        colorOf(androidx.appcompat.R.attr.colorPrimary),
-        0xFF4C8DF6.toInt(),
-        0xFF35B37E.toInt(),
-        0xFFE08A2E.toInt(),
-        0xFF9B6BE0.toInt(),
-        0xFFE0574C.toInt(),
-        0xFF2AA8B8.toInt(),
-    )
+    private val laneColors =
+        intArrayOf(
+            colorOf(androidx.appcompat.R.attr.colorPrimary),
+            0xFF4C8DF6.toInt(),
+            0xFF35B37E.toInt(),
+            0xFFE08A2E.toInt(),
+            0xFF9B6BE0.toInt(),
+            0xFFE0574C.toInt(),
+            0xFF2AA8B8.toInt(),
+        )
 
     private var laneOf = IntArray(0)
     private var rowOf = HashMap<String, Int>()
@@ -149,18 +158,21 @@ class GitGraphView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- 绘制
 
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    override fun onMeasure(
+        widthMeasureSpec: Int,
+        heightMeasureSpec: Int,
+    ) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val contentHeight = (commits.size * rowHeight).toInt() + dp(16f).toInt()
-        val height = when (MeasureSpec.getMode(heightMeasureSpec)) {
-            MeasureSpec.EXACTLY, MeasureSpec.AT_MOST -> MeasureSpec.getSize(heightMeasureSpec)
-            else -> contentHeight
-        }
+        val height =
+            when (MeasureSpec.getMode(heightMeasureSpec)) {
+                MeasureSpec.EXACTLY, MeasureSpec.AT_MOST -> MeasureSpec.getSize(heightMeasureSpec)
+                else -> contentHeight
+            }
         setMeasuredDimension(width, height)
     }
 
-    private fun maxScroll(): Float =
-        (commits.size * rowHeight + dp(8f) - height).coerceAtLeast(0f)
+    private fun maxScroll(): Float = (commits.size * rowHeight + dp(8f) - height).coerceAtLeast(0f)
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -271,14 +283,21 @@ class GitGraphView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- 工具
 
-    private fun ellipsize(text: String, paint: Paint, maxWidth: Float): String {
+    private fun ellipsize(
+        text: String,
+        paint: Paint,
+        maxWidth: Float,
+    ): String {
         if (paint.measureText(text) <= maxWidth) return text
         var end = text.length
         while (end > 1 && paint.measureText(text.substring(0, end) + "…") > maxWidth) end--
         return text.substring(0, end) + "…"
     }
 
-    private fun withAlpha(color: Int, factor: Float): Int {
+    private fun withAlpha(
+        color: Int,
+        factor: Float,
+    ): Int {
         val alpha = ((color ushr 24 and 0xFF) * factor).toInt().coerceIn(0, 255)
         return (color and 0x00FFFFFF) or (alpha shl 24)
     }

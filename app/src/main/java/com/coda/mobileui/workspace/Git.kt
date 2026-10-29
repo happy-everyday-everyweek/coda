@@ -12,9 +12,11 @@ import java.io.File
  * 所有方法都是同步的，调用方负责放到后台线程。
  */
 object Git {
-
     /** 一次 Git 命令的结果。 */
-    data class Result(val ok: Boolean, val output: String) {
+    data class Result(
+        val ok: Boolean,
+        val output: String,
+    ) {
         /** 按行拆分并去掉空行。 */
         fun lines(): List<String> = output.split('\n').map { it.trimEnd('\r') }.filter { it.isNotEmpty() }
     }
@@ -47,11 +49,17 @@ object Git {
         val subject: String,
     )
 
-    private fun run(env: LinuxEnv, root: File, args: List<String>, timeoutMs: Long = 60_000L): Result {
-        val result = env.exec(
-            listOf("git") + SAFE_DIRECTORY + listOf("-C", env.guestPath(root.absolutePath)) + args,
-            timeoutMs = timeoutMs,
-        )
+    private fun run(
+        env: LinuxEnv,
+        root: File,
+        args: List<String>,
+        timeoutMs: Long = 60_000L,
+    ): Result {
+        val result =
+            env.exec(
+                listOf("git") + SAFE_DIRECTORY + listOf("-C", env.guestPath(root.absolutePath)) + args,
+                timeoutMs = timeoutMs,
+            )
         // 每次调用都落日志：git 的失败原因（认证、网络、冲突）只存在于输出里，
         // 不记下来，用户关掉结果卡片后就无从排查。
         val head = args.firstOrNull() ?: "?"
@@ -64,7 +72,10 @@ object Git {
     }
 
     /** 目录是否是 Git 仓库。 */
-    fun isRepo(env: LinuxEnv, root: File): Boolean = probe(env, root).first
+    fun isRepo(
+        env: LinuxEnv,
+        root: File,
+    ): Boolean = probe(env, root).first
 
     /**
      * 探测目录是否在仓库内，并带回原始输出。
@@ -73,29 +84,43 @@ object Git {
      * 会让判定永久为假。这里逐行找 true，同时要求命令本身成功。第二个返回值在不成立时给出
      * 原始输出，界面可以直接把它显示出来，不必再靠猜。
      */
-    fun probe(env: LinuxEnv, root: File): Pair<Boolean, String> {
+    fun probe(
+        env: LinuxEnv,
+        root: File,
+    ): Pair<Boolean, String> {
         val result = run(env, root, listOf("rev-parse", "--is-inside-work-tree"))
         val inside = result.output.lineSequence().any { it.trim() == "true" }
         return (result.ok && inside) to result.output.trim()
     }
 
     /** 初始化仓库。 */
-    fun init(env: LinuxEnv, root: File): Result =
-        run(env, root, listOf("init", "-b", "main")).let { if (it.ok) it else run(env, root, listOf("init")) }
+    fun init(
+        env: LinuxEnv,
+        root: File,
+    ): Result = run(env, root, listOf("init", "-b", "main")).let { if (it.ok) it else run(env, root, listOf("init")) }
 
     /** 当前分支名；游离头指针时给出短哈希。 */
-    fun branch(env: LinuxEnv, root: File): String {
+    fun branch(
+        env: LinuxEnv,
+        root: File,
+    ): String {
         val head = run(env, root, listOf("symbolic-ref", "--short", "-q", "HEAD")).output.trim()
         if (head.isNotEmpty()) return head
         return run(env, root, listOf("rev-parse", "--short", "HEAD")).output.trim()
     }
 
     /** 工作区变更的行数摘要。 */
-    fun changes(env: LinuxEnv, root: File): List<String> =
-        run(env, root, listOf("status", "--porcelain")).lines()
+    fun changes(
+        env: LinuxEnv,
+        root: File,
+    ): List<String> = run(env, root, listOf("status", "--porcelain")).lines()
 
     /** 提交图：跨全部分支按拓扑序取最近若干条。 */
-    fun graph(env: LinuxEnv, root: File, limit: Int = 300): List<Commit> {
+    fun graph(
+        env: LinuxEnv,
+        root: File,
+        limit: Int = 300,
+    ): List<Commit> {
         val format = "%H$FIELD%P$FIELD%an$FIELD%at$FIELD%d$FIELD%s$RECORD"
         val result = run(env, root, listOf("log", "--all", "--topo-order", "--pretty=format:$format", "-n", limit.toString()))
         if (result.output.isEmpty()) return emptyList()
@@ -118,52 +143,100 @@ object Git {
     }
 
     /** 本地分支名列表。 */
-    fun localBranches(env: LinuxEnv, root: File): List<String> =
-        run(env, root, listOf("branch", "--format=%(refname:short)")).lines()
+    fun localBranches(
+        env: LinuxEnv,
+        root: File,
+    ): List<String> = run(env, root, listOf("branch", "--format=%(refname:short)")).lines()
 
     /** 远端分支名列表。 */
-    fun remoteBranches(env: LinuxEnv, root: File): List<String> =
-        run(env, root, listOf("branch", "-r", "--format=%(refname:short)")).lines()
+    fun remoteBranches(
+        env: LinuxEnv,
+        root: File,
+    ): List<String> = run(env, root, listOf("branch", "-r", "--format=%(refname:short)")).lines()
 
     /** 单个提交的完整信息。 */
-    fun show(env: LinuxEnv, root: File, hash: String): Result =
-        run(env, root, listOf("show", "--stat", "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%h %ad%n%an%n%n%s%n%n%b", hash))
+    fun show(
+        env: LinuxEnv,
+        root: File,
+        hash: String,
+    ): Result = run(env, root, listOf("show", "--stat", "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%h %ad%n%an%n%n%s%n%n%b", hash))
 
     /** 提交全部变更。 */
-    fun commitAll(env: LinuxEnv, root: File, message: String): Result {
+    fun commitAll(
+        env: LinuxEnv,
+        root: File,
+        message: String,
+    ): Result {
         val staged = run(env, root, listOf("add", "-A"))
         if (!staged.ok) return staged
         return run(env, root, listOf("commit", "-m", message))
     }
 
-    fun checkout(env: LinuxEnv, root: File, name: String): Result =
-        run(env, root, listOf("checkout", name))
+    fun checkout(
+        env: LinuxEnv,
+        root: File,
+        name: String,
+    ): Result = run(env, root, listOf("checkout", name))
 
-    fun createBranch(env: LinuxEnv, root: File, name: String, startPoint: String?): Result =
-        if (startPoint.isNullOrEmpty()) run(env, root, listOf("checkout", "-b", name))
-        else run(env, root, listOf("checkout", "-b", name, startPoint))
+    fun createBranch(
+        env: LinuxEnv,
+        root: File,
+        name: String,
+        startPoint: String?,
+    ): Result =
+        if (startPoint.isNullOrEmpty()) {
+            run(env, root, listOf("checkout", "-b", name))
+        } else {
+            run(env, root, listOf("checkout", "-b", name, startPoint))
+        }
 
-    fun deleteBranch(env: LinuxEnv, root: File, name: String, force: Boolean): Result =
-        run(env, root, listOf("branch", if (force) "-D" else "-d", name))
+    fun deleteBranch(
+        env: LinuxEnv,
+        root: File,
+        name: String,
+        force: Boolean,
+    ): Result = run(env, root, listOf("branch", if (force) "-D" else "-d", name))
 
-    fun merge(env: LinuxEnv, root: File, name: String, noFastForward: Boolean): Result =
-        run(env, root, if (noFastForward) listOf("merge", "--no-ff", name) else listOf("merge", name))
+    fun merge(
+        env: LinuxEnv,
+        root: File,
+        name: String,
+        noFastForward: Boolean,
+    ): Result = run(env, root, if (noFastForward) listOf("merge", "--no-ff", name) else listOf("merge", name))
 
-    fun mergeAbort(env: LinuxEnv, root: File): Result = run(env, root, listOf("merge", "--abort"))
+    fun mergeAbort(
+        env: LinuxEnv,
+        root: File,
+    ): Result = run(env, root, listOf("merge", "--abort"))
 
-    fun pull(env: LinuxEnv, root: File): Result =
-        run(env, root, listOf("pull", "--ff-only"), timeoutMs = NETWORK_TIMEOUT_MS)
+    fun pull(
+        env: LinuxEnv,
+        root: File,
+    ): Result = run(env, root, listOf("pull", "--ff-only"), timeoutMs = NETWORK_TIMEOUT_MS)
 
-    fun push(env: LinuxEnv, root: File): Result =
-        run(env, root, listOf("push"), timeoutMs = NETWORK_TIMEOUT_MS)
+    fun push(
+        env: LinuxEnv,
+        root: File,
+    ): Result = run(env, root, listOf("push"), timeoutMs = NETWORK_TIMEOUT_MS)
 
     /** 克隆远程仓库到指定目录。网络操作，超时放宽到 10 分钟。 */
-    fun clone(env: LinuxEnv, url: String, targetDir: File): Result =
-        run(env, targetDir.parentFile ?: targetDir,
-            listOf("clone", url, targetDir.name), timeoutMs = CLONE_TIMEOUT_MS)
+    fun clone(
+        env: LinuxEnv,
+        url: String,
+        targetDir: File,
+    ): Result =
+        run(
+            env,
+            targetDir.parentFile ?: targetDir,
+            listOf("clone", url, targetDir.name),
+            timeoutMs = CLONE_TIMEOUT_MS,
+        )
 
     /** 组装展示用的状态摘要。 */
-    fun summarize(env: LinuxEnv, root: File): String {
+    fun summarize(
+        env: LinuxEnv,
+        root: File,
+    ): String {
         val changes = changes(env, root)
         return if (changes.isEmpty()) "无未提交变更" else "${changes.size} 个未提交变更"
     }
@@ -175,7 +248,10 @@ object Git {
     }
 
     /** 状态目录是否被忽略，用于提示用户把元数据目录排除在版本控制外。 */
-    fun ignoresState(env: LinuxEnv, root: File): Boolean {
+    fun ignoresState(
+        env: LinuxEnv,
+        root: File,
+    ): Boolean {
         val result = run(env, root, listOf("check-ignore", Workspaces.STATE_DIR))
         return result.ok && result.output.isNotEmpty()
     }

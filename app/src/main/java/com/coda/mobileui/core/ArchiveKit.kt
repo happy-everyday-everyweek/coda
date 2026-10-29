@@ -13,7 +13,6 @@ import java.util.zip.ZipFile
  * tar / tar.gz / tgz 走容器里的系统 tar（容器本身带 busybox tar），不额外引依赖。
  */
 object ArchiveKit {
-
     /** 一个可浏览的压缩包条目（目录或文件）。 */
     data class Entry(
         /** 包内完整路径，例如 `src/main/AndroidManifest.xml`。 */
@@ -26,7 +25,9 @@ object ArchiveKit {
     )
 
     /** 压缩包类型。决定用哪条读取路径。 */
-    enum class Kind(val label: String) {
+    enum class Kind(
+        val label: String,
+    ) {
         ZIP("zip"),
         TAR("tar"),
         TAR_GZ("tar.gz"),
@@ -44,15 +45,17 @@ object ArchiveKit {
                 n.endsWith(".xlsx") || n.endsWith(".pptx") -> Kind.ZIP
 
             n.endsWith(".tar.gz") || n.endsWith(".tgz") -> Kind.TAR_GZ
+
             n.endsWith(".tar") -> Kind.TAR
+
             n.endsWith(".gz") -> Kind.GZ
+
             else -> Kind.UNKNOWN
         }
     }
 
     /** 是否是可浏览的压缩包（用于列表里换图标与点击行为）。 */
-    fun isArchive(file: File): Boolean =
-        !file.isDirectory && kindOf(file) != Kind.UNKNOWN
+    fun isArchive(file: File): Boolean = !file.isDirectory && kindOf(file) != Kind.UNKNOWN
 
     /**
      * 按文件头判断是不是 zip 容器。
@@ -74,7 +77,7 @@ object ArchiveKit {
                             (head[2] == 0x03.toByte() && head[3] == 0x04.toByte()) ||
                                 (head[2] == 0x05.toByte() && head[3] == 0x06.toByte()) ||
                                 (head[2] == 0x07.toByte() && head[3] == 0x08.toByte())
-                            )
+                        )
                 }
             }
         }.getOrDefault(false)
@@ -110,7 +113,12 @@ object ArchiveKit {
      * [dirPath] 是包内路径，空串表示根。只返回这一层的直接子项：中间目录由调用方
      * 通过"存在性"补齐（zip 里常有 `a/b/c.txt` 而没有 `a/` 与 `a/b/` 条目）。
      */
-    fun list(file: File, dirPath: String, env: LinuxEnv?, kind: Kind? = null): List<Entry> =
+    fun list(
+        file: File,
+        dirPath: String,
+        env: LinuxEnv?,
+        kind: Kind? = null,
+    ): List<Entry> =
         when (kind ?: kindOf(file)) {
             Kind.ZIP -> listZip(file, dirPath)
             Kind.TAR, Kind.TAR_GZ -> if (env == null) emptyList() else listTar(file, dirPath, env)
@@ -129,15 +137,19 @@ object ArchiveKit {
         env: LinuxEnv?,
         maxBytes: Long = 2L * 1024 * 1024,
         kind: Kind? = null,
-    ): String? = when (kind ?: kindOf(file)) {
-        Kind.ZIP -> readZipText(file, path, maxBytes)
-        Kind.TAR, Kind.TAR_GZ -> if (env == null) null else readTarText(file, path, env, maxBytes)
-        else -> null
-    }
+    ): String? =
+        when (kind ?: kindOf(file)) {
+            Kind.ZIP -> readZipText(file, path, maxBytes)
+            Kind.TAR, Kind.TAR_GZ -> if (env == null) null else readTarText(file, path, env, maxBytes)
+            else -> null
+        }
 
     // ------------------------------------------------------------------ zip
 
-    private fun listZip(file: File, dirPath: String): List<Entry> {
+    private fun listZip(
+        file: File,
+        dirPath: String,
+    ): List<Entry> {
         val base = normalizeDir(dirPath)
         return runCatching {
             ZipFile(file).use { zf ->
@@ -156,36 +168,39 @@ object ArchiveKit {
                         val dirName = rest.substring(0, slash)
                         if (dirName.isEmpty()) continue
                         if (!seenDirs.containsKey(dirName)) {
-                            seenDirs[dirName] = Entry(
-                                path = base + dirName,
-                                name = dirName,
-                                isDir = true,
-                                size = 0,
-                                compressedSize = 0,
-                                modifiedAt = e.time,
-                            )
-                        }
-                    } else {
-                        if (e.isDirectory) {
-                            if (!seenDirs.containsKey(rest)) {
-                                seenDirs[rest] = Entry(
-                                    path = base + rest,
-                                    name = rest,
+                            seenDirs[dirName] =
+                                Entry(
+                                    path = base + dirName,
+                                    name = dirName,
                                     isDir = true,
                                     size = 0,
                                     compressedSize = 0,
                                     modifiedAt = e.time,
                                 )
+                        }
+                    } else {
+                        if (e.isDirectory) {
+                            if (!seenDirs.containsKey(rest)) {
+                                seenDirs[rest] =
+                                    Entry(
+                                        path = base + rest,
+                                        name = rest,
+                                        isDir = true,
+                                        size = 0,
+                                        compressedSize = 0,
+                                        modifiedAt = e.time,
+                                    )
                             }
                         } else {
-                            out += Entry(
-                                path = base + rest,
-                                name = rest,
-                                isDir = false,
-                                size = e.size,
-                                compressedSize = e.compressedSize,
-                                modifiedAt = e.time,
-                            )
+                            out +=
+                                Entry(
+                                    path = base + rest,
+                                    name = rest,
+                                    isDir = false,
+                                    size = e.size,
+                                    compressedSize = e.compressedSize,
+                                    modifiedAt = e.time,
+                                )
                         }
                     }
                 }
@@ -197,26 +212,31 @@ object ArchiveKit {
         }.getOrElse { emptyList() }
     }
 
-    private fun readZipText(file: File, path: String, maxBytes: Long): String? = runCatching {
-        ZipFile(file).use { zf ->
-            val e = zf.getEntry(path) ?: return null
-            if (e.size > maxBytes) return null
-            zf.getInputStream(e).bufferedReader(Charsets.UTF_8).use { reader ->
-                // 按字符读上限，避免 e.size 不可靠（流式 zip）时一次性读爆
-                val sb = StringBuilder()
-                val buf = CharArray(8192)
-                var total = 0L
-                while (true) {
-                    val n = reader.read(buf)
-                    if (n <= 0) break
-                    total += n
-                    if (total > maxBytes) return null
-                    sb.append(buf, 0, n)
+    private fun readZipText(
+        file: File,
+        path: String,
+        maxBytes: Long,
+    ): String? =
+        runCatching {
+            ZipFile(file).use { zf ->
+                val e = zf.getEntry(path) ?: return null
+                if (e.size > maxBytes) return null
+                zf.getInputStream(e).bufferedReader(Charsets.UTF_8).use { reader ->
+                    // 按字符读上限，避免 e.size 不可靠（流式 zip）时一次性读爆
+                    val sb = StringBuilder()
+                    val buf = CharArray(8192)
+                    var total = 0L
+                    while (true) {
+                        val n = reader.read(buf)
+                        if (n <= 0) break
+                        total += n
+                        if (total > maxBytes) return null
+                        sb.append(buf, 0, n)
+                    }
+                    sb.toString()
                 }
-                sb.toString()
             }
-        }
-    }.getOrNull()
+        }.getOrNull()
 
     // ------------------------------------------------------------------ tar
 
@@ -226,10 +246,15 @@ object ArchiveKit {
      * 容器自带 busybox tar，但它对 --exclude 之类的 GNU 参数支持不全，
      * 所以只用最朴素的 `tar -tf`，目录层级的裁剪在 Kotlin 侧做。
      */
-    private fun listTar(file: File, dirPath: String, env: LinuxEnv): List<Entry> {
-        val list = runCatching {
-            env.exec(listOf("tar", "-tf", file.absolutePath)).output.split('\n')
-        }.getOrElse { return emptyList() }
+    private fun listTar(
+        file: File,
+        dirPath: String,
+        env: LinuxEnv,
+    ): List<Entry> {
+        val list =
+            runCatching {
+                env.exec(listOf("tar", "-tf", file.absolutePath)).output.split('\n')
+            }.getOrElse { return emptyList() }
         val base = normalizeDir(dirPath)
         val dirs = LinkedHashMap<String, Entry>()
         val out = ArrayList<Entry>()
@@ -243,27 +268,29 @@ object ArchiveKit {
             if (slash >= 0) {
                 val dirName = rest.substring(0, slash)
                 if (dirName.isNotEmpty() && !dirs.containsKey(dirName)) {
-                    dirs[dirName] = Entry(
-                        path = base + dirName,
-                        name = dirName,
-                        isDir = true,
-                        size = 0,
-                        compressedSize = 0,
-                        modifiedAt = 0L,
-                    )
+                    dirs[dirName] =
+                        Entry(
+                            path = base + dirName,
+                            name = dirName,
+                            isDir = true,
+                            size = 0,
+                            compressedSize = 0,
+                            modifiedAt = 0L,
+                        )
                 }
             } else {
                 // tar -tf 不带尾部斜杠区分不了目录与空文件，按"尾部原样有斜杠"判断
                 val isDir = line.endsWith("/")
                 if (!isDir) {
-                    out += Entry(
-                        path = base + rest,
-                        name = rest,
-                        isDir = false,
-                        size = 0,
-                        compressedSize = 0,
-                        modifiedAt = 0L,
-                    )
+                    out +=
+                        Entry(
+                            path = base + rest,
+                            name = rest,
+                            isDir = false,
+                            size = 0,
+                            compressedSize = 0,
+                            modifiedAt = 0L,
+                        )
                 }
             }
         }
@@ -275,12 +302,13 @@ object ArchiveKit {
         path: String,
         env: LinuxEnv,
         maxBytes: Long,
-    ): String? = runCatching {
-        val result = env.exec(listOf("tar", "-xOf", file.absolutePath, path))
-        if (!result.ok) return null
-        if (result.output.length > maxBytes) return null
-        result.output
-    }.getOrNull()
+    ): String? =
+        runCatching {
+            val result = env.exec(listOf("tar", "-xOf", file.absolutePath, path))
+            if (!result.ok) return null
+            if (result.output.length > maxBytes) return null
+            result.output
+        }.getOrNull()
 
     private fun normalizeDir(path: String): String {
         if (path.isEmpty()) return ""

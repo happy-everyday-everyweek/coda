@@ -20,6 +20,7 @@ object GitHub {
     private const val PREFS = "github_bridge"
 
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
     private fun ui(block: () -> Unit) {
         main.post(block)
     }
@@ -38,8 +39,16 @@ object GitHub {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    private fun store(ctx: Context, token: String, login: String?) {
-        prefs(ctx).edit().putString("token", token).putString("login", login ?: "").apply()
+    private fun store(
+        ctx: Context,
+        token: String,
+        login: String?,
+    ) {
+        prefs(ctx)
+            .edit()
+            .putString("token", token)
+            .putString("login", login ?: "")
+            .apply()
         // 登录/换号成功即把凭据推进容器，不用等下次 App 重启：
         // 此前只有启动时同步一次，登录完成后容器里还是旧凭据（或没有凭据）。
         runCatching { LinuxEnv(ctx).syncGitHubCredentials() }
@@ -56,50 +65,57 @@ object GitHub {
 
     fun requestDeviceCode(cb: (Boolean, DeviceCode?, String?) -> Unit) {
         Bg.run {
-            val result = try {
-                val resp = postForm(
-                    "https://github.com/login/device/code",
-                    "client_id=" + enc(CLIENT_ID) + "&scope=" + enc(SCOPE),
-                    null,
-                )
-                val j = JSONObject(resp)
-                val dc = j.optString("device_code")
-                if (dc.isEmpty()) {
-                    Triple(false, null, j.optString("error_description").ifEmpty { "申请设备码失败" })
-                } else {
-                    Triple(
-                        true,
-                        DeviceCode(
-                            deviceCode = dc,
-                            userCode = j.optString("user_code"),
-                            verificationUri = j.optString("verification_uri", "https://github.com/login/device"),
-                            interval = j.optInt("interval", 5),
-                            expiresIn = j.optInt("expires_in", 900),
-                        ),
-                        null,
-                    )
+            val result =
+                try {
+                    val resp =
+                        postForm(
+                            "https://github.com/login/device/code",
+                            "client_id=" + enc(CLIENT_ID) + "&scope=" + enc(SCOPE),
+                            null,
+                        )
+                    val j = JSONObject(resp)
+                    val dc = j.optString("device_code")
+                    if (dc.isEmpty()) {
+                        Triple(false, null, j.optString("error_description").ifEmpty { "申请设备码失败" })
+                    } else {
+                        Triple(
+                            true,
+                            DeviceCode(
+                                deviceCode = dc,
+                                userCode = j.optString("user_code"),
+                                verificationUri = j.optString("verification_uri", "https://github.com/login/device"),
+                                interval = j.optInt("interval", 5),
+                                expiresIn = j.optInt("expires_in", 900),
+                            ),
+                            null,
+                        )
+                    }
+                } catch (e: Throwable) {
+                    Triple(false, null, e.message ?: "网络错误")
                 }
-            } catch (e: Throwable) {
-                Triple(false, null, e.message ?: "网络错误")
-            }
             ui { cb(result.first, result.second, result.third) }
         }
     }
 
     /** 单次轮询。status：ok / pending / slow_down / expired / denied / error。 */
-    fun pollAccessToken(ctx: Context, deviceCode: String, cb: (String, String?, String?) -> Unit) {
+    fun pollAccessToken(
+        ctx: Context,
+        deviceCode: String,
+        cb: (String, String?, String?) -> Unit,
+    ) {
         Bg.run {
             var status = "error"
             var token: String? = null
             var message: String? = null
             try {
-                val resp = postForm(
-                    "https://github.com/login/oauth/access_token",
-                    "client_id=" + enc(CLIENT_ID) +
-                        "&device_code=" + enc(deviceCode) +
-                        "&grant_type=" + enc("urn:ietf:params:oauth:grant-type:device_code"),
-                    null,
-                )
+                val resp =
+                    postForm(
+                        "https://github.com/login/oauth/access_token",
+                        "client_id=" + enc(CLIENT_ID) +
+                            "&device_code=" + enc(deviceCode) +
+                            "&grant_type=" + enc("urn:ietf:params:oauth:grant-type:device_code"),
+                        null,
+                    )
                 val j = JSONObject(resp)
                 val t = j.optString("access_token")
                 if (t.isNotEmpty()) {
@@ -107,16 +123,24 @@ object GitHub {
                     status = "ok"
                 } else {
                     when (val err = j.optString("error")) {
-                        "authorization_pending" -> status = "pending"
-                        "slow_down" -> status = "slow_down"
+                        "authorization_pending" -> {
+                            status = "pending"
+                        }
+
+                        "slow_down" -> {
+                            status = "slow_down"
+                        }
+
                         "expired_token" -> {
                             status = "expired"
                             message = "设备码已过期，请重新登录"
                         }
+
                         "access_denied" -> {
                             status = "denied"
                             message = "授权被拒绝"
                         }
+
                         else -> {
                             status = "error"
                             message = j.optString("error_description").ifEmpty { err }
@@ -137,18 +161,26 @@ object GitHub {
     }
 
     // ---------------------------------------------------------------- 用户
-    data class GhUser(val login: String, val name: String?, val avatarUrl: String?)
+    data class GhUser(
+        val login: String,
+        val name: String?,
+        val avatarUrl: String?,
+    )
 
-    fun fetchUser(ctx: Context, cb: (Boolean, GhUser?, String?) -> Unit) {
+    fun fetchUser(
+        ctx: Context,
+        cb: (Boolean, GhUser?, String?) -> Unit,
+    ) {
         val token = token(ctx) ?: return ui { cb(false, null, "未登录") }
         Bg.run {
             try {
                 val j = JSONObject(get("https://api.github.com/user", token))
-                val u = GhUser(
-                    login = j.optString("login"),
-                    name = j.optString("name").takeIf { it.isNotEmpty() },
-                    avatarUrl = j.optString("avatar_url").takeIf { it.isNotEmpty() },
-                )
+                val u =
+                    GhUser(
+                        login = j.optString("login"),
+                        name = j.optString("name").takeIf { it.isNotEmpty() },
+                        avatarUrl = j.optString("avatar_url").takeIf { it.isNotEmpty() },
+                    )
                 store(ctx, token, u.login)
                 ui { cb(true, u, null) }
             } catch (e: Throwable) {
@@ -168,7 +200,10 @@ object GitHub {
         val pushedAt: String?,
     )
 
-    data class Branch(val name: String, val sha: String?)
+    data class Branch(
+        val name: String,
+        val sha: String?,
+    )
 
     data class Pull(
         val number: Int,
@@ -182,7 +217,10 @@ object GitHub {
         val updatedAt: String?,
     )
 
-    fun fetchRepos(ctx: Context, cb: (Boolean, List<Repo>?, String?) -> Unit) {
+    fun fetchRepos(
+        ctx: Context,
+        cb: (Boolean, List<Repo>?, String?) -> Unit,
+    ) {
         val token = token(ctx) ?: return ui { cb(false, null, "未登录") }
         Bg.run {
             try {
@@ -190,15 +228,16 @@ object GitHub {
                 val out = mutableListOf<Repo>()
                 for (i in 0 until arr.length()) {
                     val r = arr.optJSONObject(i) ?: continue
-                    out += Repo(
-                        fullName = r.optString("full_name"),
-                        name = r.optString("name"),
-                        owner = r.optJSONObject("owner")?.optString("login").orEmpty(),
-                        description = r.optString("description").takeIf { it.isNotEmpty() },
-                        privateRepo = r.optBoolean("private", false),
-                        defaultBranch = r.optString("default_branch").takeIf { it.isNotEmpty() },
-                        pushedAt = r.optString("pushed_at").takeIf { it.isNotEmpty() },
-                    )
+                    out +=
+                        Repo(
+                            fullName = r.optString("full_name"),
+                            name = r.optString("name"),
+                            owner = r.optJSONObject("owner")?.optString("login").orEmpty(),
+                            description = r.optString("description").takeIf { it.isNotEmpty() },
+                            privateRepo = r.optBoolean("private", false),
+                            defaultBranch = r.optString("default_branch").takeIf { it.isNotEmpty() },
+                            pushedAt = r.optString("pushed_at").takeIf { it.isNotEmpty() },
+                        )
                 }
                 ui { cb(true, out, null) }
             } catch (e: Throwable) {
@@ -207,7 +246,12 @@ object GitHub {
         }
     }
 
-    fun fetchBranches(ctx: Context, owner: String, repo: String, cb: (Boolean, List<Branch>?, String?) -> Unit) {
+    fun fetchBranches(
+        ctx: Context,
+        owner: String,
+        repo: String,
+        cb: (Boolean, List<Branch>?, String?) -> Unit,
+    ) {
         val token = token(ctx) ?: return ui { cb(false, null, "未登录") }
         Bg.run {
             try {
@@ -224,27 +268,34 @@ object GitHub {
         }
     }
 
-    fun fetchPulls(ctx: Context, owner: String, repo: String, cb: (Boolean, List<Pull>?, String?) -> Unit) {
+    fun fetchPulls(
+        ctx: Context,
+        owner: String,
+        repo: String,
+        cb: (Boolean, List<Pull>?, String?) -> Unit,
+    ) {
         val token = token(ctx) ?: return ui { cb(false, null, "未登录") }
         Bg.run {
             try {
-                val arr = JSONArray(
-                    get("https://api.github.com/repos/$owner/$repo/pulls?state=all&sort=updated&per_page=30", token),
-                )
+                val arr =
+                    JSONArray(
+                        get("https://api.github.com/repos/$owner/$repo/pulls?state=all&sort=updated&per_page=30", token),
+                    )
                 val out = mutableListOf<Pull>()
                 for (i in 0 until arr.length()) {
                     val p = arr.optJSONObject(i) ?: continue
-                    out += Pull(
-                        number = p.optInt("number"),
-                        title = p.optString("title"),
-                        state = p.optString("state"),
-                        merged = p.optBoolean("merged", false) || p.optString("merged_at").isNotEmpty(),
-                        draft = p.optBoolean("draft", false),
-                        user = p.optJSONObject("user")?.optString("login").orEmpty(),
-                        headRef = p.optJSONObject("head")?.optString("ref").orEmpty(),
-                        baseRef = p.optJSONObject("base")?.optString("ref").orEmpty(),
-                        updatedAt = p.optString("updated_at").takeIf { it.isNotEmpty() },
-                    )
+                    out +=
+                        Pull(
+                            number = p.optInt("number"),
+                            title = p.optString("title"),
+                            state = p.optString("state"),
+                            merged = p.optBoolean("merged", false) || p.optString("merged_at").isNotEmpty(),
+                            draft = p.optBoolean("draft", false),
+                            user = p.optJSONObject("user")?.optString("login").orEmpty(),
+                            headRef = p.optJSONObject("head")?.optString("ref").orEmpty(),
+                            baseRef = p.optJSONObject("base")?.optString("ref").orEmpty(),
+                            updatedAt = p.optString("updated_at").takeIf { it.isNotEmpty() },
+                        )
                 }
                 ui { cb(true, out, null) }
             } catch (e: Throwable) {
@@ -260,7 +311,13 @@ object GitHub {
     private const val PULL_TTL_MS = 60_000L
 
     /** 按 head 分支查关联 PR（含已关闭与已合并）；没有关联 PR 时回调 null，结果同样进缓存。 */
-    fun fetchPullForBranch(ctx: Context, owner: String, repo: String, branch: String, cb: (Pull?) -> Unit) {
+    fun fetchPullForBranch(
+        ctx: Context,
+        owner: String,
+        repo: String,
+        branch: String,
+        cb: (Pull?) -> Unit,
+    ) {
         if (owner.isEmpty() || repo.isEmpty() || branch.isEmpty()) return ui { cb(null) }
         val token = token(ctx) ?: return ui { cb(null) }
         val key = "$owner/$repo#$branch"
@@ -273,23 +330,25 @@ object GitHub {
         Bg.run {
             var found: Pull? = null
             try {
-                val url = "https://api.github.com/repos/$owner/$repo/pulls" +
-                    "?state=all&head=${enc("$owner:$branch")}&per_page=10"
+                val url =
+                    "https://api.github.com/repos/$owner/$repo/pulls" +
+                        "?state=all&head=${enc("$owner:$branch")}&per_page=10"
                 val arr = JSONArray(get(url, token))
                 for (i in 0 until arr.length()) {
                     val p = arr.optJSONObject(i) ?: continue
                     if (p.optJSONObject("head")?.optString("ref") != branch) continue
-                    found = Pull(
-                        number = p.optInt("number"),
-                        title = p.optString("title"),
-                        state = p.optString("state"),
-                        merged = p.optBoolean("merged", false) || p.optString("merged_at").isNotEmpty(),
-                        draft = p.optBoolean("draft", false),
-                        user = p.optJSONObject("user")?.optString("login").orEmpty(),
-                        headRef = branch,
-                        baseRef = p.optJSONObject("base")?.optString("ref").orEmpty(),
-                        updatedAt = p.optString("updated_at").takeIf { it.isNotEmpty() },
-                    )
+                    found =
+                        Pull(
+                            number = p.optInt("number"),
+                            title = p.optString("title"),
+                            state = p.optString("state"),
+                            merged = p.optBoolean("merged", false) || p.optString("merged_at").isNotEmpty(),
+                            draft = p.optBoolean("draft", false),
+                            user = p.optJSONObject("user")?.optString("login").orEmpty(),
+                            headRef = branch,
+                            baseRef = p.optJSONObject("base")?.optString("ref").orEmpty(),
+                            updatedAt = p.optString("updated_at").takeIf { it.isNotEmpty() },
+                        )
                     break
                 }
             } catch (_: Throwable) {
@@ -305,7 +364,11 @@ object GitHub {
     }
 
     // ---------------------------------------------------------------- HTTP
-    private fun postForm(url: String, body: String, token: String?): String {
+    private fun postForm(
+        url: String,
+        body: String,
+        token: String?,
+    ): String {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
@@ -323,7 +386,10 @@ object GitHub {
         }
     }
 
-    private fun get(url: String, token: String?): String {
+    private fun get(
+        url: String,
+        token: String?,
+    ): String {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "GET"
@@ -343,12 +409,13 @@ object GitHub {
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
         if (code !in 200..299) {
-            val message = try {
-                JSONObject(text).optString("message").takeIf { it.isNotEmpty() }
-            } catch (e: Throwable) {
-                null
-            }
-            throw RuntimeException(message ?: "HTTP $code")
+            val message =
+                try {
+                    JSONObject(text).optString("message").takeIf { it.isNotEmpty() }
+                } catch (_: Throwable) {
+                    null
+                }
+            throw java.io.IOException(message ?: "HTTP $code")
         }
         return text
     }

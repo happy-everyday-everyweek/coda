@@ -32,7 +32,6 @@ import java.util.concurrent.TimeUnit
  * 本类不做重采样，调用方负责把录音转成该格式。
  */
 object DoubaoAsr {
-
     private const val TAG = "DoubaoAsr"
 
     private const val HOMEPAGE = "https://www.doubao.com/chat/"
@@ -54,13 +53,20 @@ object DoubaoAsr {
     /** 喂音频与 16kHz 单声道 PCM16 的换算：字节 / 32000 = 秒。 */
     private const val BYTES_PER_SECOND = 32000
 
-    class AsrError(message: String) : Exception(message)
+    class AsrError(
+        message: String,
+    ) : Exception(message)
 
     /** 转写结果。 */
-    data class Transcription(val text: String, val durationSec: Double, val elapsedMs: Long)
+    data class Transcription(
+        val text: String,
+        val durationSec: Double,
+        val elapsedMs: Long,
+    )
 
     private val http: OkHttpClient by lazy {
-        OkHttpClient.Builder()
+        OkHttpClient
+            .Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .build()
@@ -73,47 +79,55 @@ object DoubaoAsr {
      * 首页返回的 Cookie 与 ttwid 不转发给语音连接（与参考实现一致）。
      */
     fun bootstrapGuest(timeoutSec: Long = 15): JSONObject {
-        val req = Request.Builder()
-            .url(HOMEPAGE)
-            .header("User-Agent", USER_AGENT)
-            .header("Accept-Language", "zh-CN,zh;q=0.9")
-            .build()
-        val html = try {
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    throw AsrError("访问豆包首页失败：HTTP ${resp.code}")
+        val req =
+            Request
+                .Builder()
+                .url(HOMEPAGE)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept-Language", "zh-CN,zh;q=0.9")
+                .build()
+        val html =
+            try {
+                http.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        throw AsrError("访问豆包首页失败：HTTP ${resp.code}")
+                    }
+                    resp.body?.string() ?: ""
                 }
-                resp.body?.string() ?: ""
+            } catch (e: AsrError) {
+                throw e
+            } catch (e: Throwable) {
+                throw AsrError("访问豆包首页失败（${e.javaClass.simpleName}: ${e.message}）")
             }
-        } catch (e: AsrError) {
-            throw e
-        } catch (e: Throwable) {
-            throw AsrError("访问豆包首页失败（${e.javaClass.simpleName}: ${e.message}）")
-        }
         if (html.isBlank()) throw AsrError("豆包首页返回空内容")
 
-        val marker = Regex("window\\._ROUTER_DATA\\s*=\\s*").find(html)
-            ?: throw AsrError("首页缺少游客初始化数据，网页结构可能已改变")
-        val json = try {
-            // 从赋值处开始解析一个完整 JSON 对象，后面还有 <script> 收尾内容，
-            // 不能用 JSONObject 直接吃整段。
-            val start = marker.range.last + 1
-            JSONObject(html.substring(start).trim())
-        } catch (e: Throwable) {
-            throw AsrError("无法解析游客初始化数据（${e.message}）")
-        }
-        val layout = try {
-            json.getJSONObject("loaderData")
-                .getJSONObject("chat_layout")
-                .getJSONObject("chat_layout")
-        } catch (e: Throwable) {
-            throw AsrError("无法解析游客初始化数据，网页结构可能已改变")
-        }
-        val webId = try {
-            layout.getJSONObject("launchCore").get("web_id").toString()
-        } catch (e: Throwable) {
-            throw AsrError("首页未返回游客设备标识")
-        }
+        val marker =
+            Regex("window\\._ROUTER_DATA\\s*=\\s*").find(html)
+                ?: throw AsrError("首页缺少游客初始化数据，网页结构可能已改变")
+        val json =
+            try {
+                // 从赋值处开始解析一个完整 JSON 对象，后面还有 <script> 收尾内容，
+                // 不能用 JSONObject 直接吃整段。
+                val start = marker.range.last + 1
+                JSONObject(html.substring(start).trim())
+            } catch (e: Throwable) {
+                throw AsrError("无法解析游客初始化数据（${e.message}）")
+            }
+        val layout =
+            try {
+                json
+                    .getJSONObject("loaderData")
+                    .getJSONObject("chat_layout")
+                    .getJSONObject("chat_layout")
+            } catch (_: Throwable) {
+                throw AsrError("无法解析游客初始化数据，网页结构可能已改变")
+            }
+        val webId =
+            try {
+                layout.getJSONObject("launchCore").get("web_id").toString()
+            } catch (_: Throwable) {
+                throw AsrError("首页未返回游客设备标识")
+            }
         if (webId.isBlank() || !webId.all { it.isDigit() } || webId.toLongOrNull()?.let { it > 0 } != true) {
             throw AsrError("首页未返回有效的游客设备标识")
         }
@@ -160,22 +174,25 @@ object DoubaoAsr {
         val started = System.currentTimeMillis()
         val context = bootstrapGuest()
 
-        val query = buildString {
-            val it = context.keys()
-            val names = mutableListOf<String>()
-            while (it.hasNext()) names += it.next()
-            names.sorted().forEachIndexed { index, key ->
-                if (index > 0) append('&')
-                append(java.net.URLEncoder.encode(key, "UTF-8"))
-                append('=')
-                append(java.net.URLEncoder.encode(context.optString(key), "UTF-8"))
+        val query =
+            buildString {
+                val it = context.keys()
+                val names = mutableListOf<String>()
+                while (it.hasNext()) names += it.next()
+                names.sorted().forEachIndexed { index, key ->
+                    if (index > 0) append('&')
+                    append(java.net.URLEncoder.encode(key, "UTF-8"))
+                    append('=')
+                    append(java.net.URLEncoder.encode(context.optString(key), "UTF-8"))
+                }
             }
-        }
-        val req = Request.Builder()
-            .url("$GATEWAY?$query")
-            .header("User-Agent", USER_AGENT)
-            .header("Origin", "https://www.doubao.com")
-            .build()
+        val req =
+            Request
+                .Builder()
+                .url("$GATEWAY?$query")
+                .header("User-Agent", USER_AGENT)
+                .header("Origin", "https://www.doubao.com")
+                .build()
 
         val incoming = LinkedBlockingQueue<Any>()
         val closed = CountDownLatch(1)
@@ -185,59 +202,84 @@ object DoubaoAsr {
         var sessionStarted = false
         var sessionFinished = false
 
-        val listener = object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                holder[0] = webSocket
-            }
+        val listener =
+            object : WebSocketListener() {
+                override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response,
+                ) {
+                    holder[0] = webSocket
+                }
 
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                incoming.put(decodeSafely(bytes.toByteArray(), isText = false))
-            }
+                override fun onMessage(
+                    webSocket: WebSocket,
+                    bytes: ByteString,
+                ) {
+                    incoming.put(decodeSafely(bytes.toByteArray(), isText = false))
+                }
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                incoming.put(decodeSafely(text.toByteArray(), isText = true))
-            }
+                override fun onMessage(
+                    webSocket: WebSocket,
+                    text: String,
+                ) {
+                    incoming.put(decodeSafely(text.toByteArray(), isText = true))
+                }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                incoming.put(AsrError("语音连接失败（${t.javaClass.simpleName}: ${t.message}）"))
-                closed.countDown()
-            }
+                override fun onFailure(
+                    webSocket: WebSocket,
+                    t: Throwable,
+                    response: Response?,
+                ) {
+                    incoming.put(AsrError("语音连接失败（${t.javaClass.simpleName}: ${t.message}）"))
+                    closed.countDown()
+                }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                incoming.put(AsrError("语音连接在会话结束前关闭（$code $reason）"))
-                closed.countDown()
+                override fun onClosed(
+                    webSocket: WebSocket,
+                    code: Int,
+                    reason: String,
+                ) {
+                    incoming.put(AsrError("语音连接在会话结束前关闭（$code $reason）"))
+                    closed.countDown()
+                }
             }
-        }
 
         val ws = http.newWebSocket(req, listener)
         val opened = CountDownLatch(1)
         // 等 onOpen：拿不到就把后续 send 全部当失败，避免静默卡住。
-        val waitOpen = Thread {
-            try {
-                // 简单轮询，最长等 timeoutSec。
-                val deadline = System.currentTimeMillis() + timeoutSec * 1000
-                while (holder[0] == null && System.currentTimeMillis() < deadline) {
-                    Thread.sleep(20)
+        val waitOpen =
+            Thread {
+                try {
+                    // 简单轮询，最长等 timeoutSec。
+                    val deadline = System.currentTimeMillis() + timeoutSec * 1000
+                    while (holder[0] == null && System.currentTimeMillis() < deadline) {
+                        Thread.sleep(20)
+                    }
+                    if (holder[0] != null) opened.countDown()
+                } catch (_: InterruptedException) {
                 }
-                if (holder[0] != null) opened.countDown()
-            } catch (_: InterruptedException) {
             }
-        }
         waitOpen.start()
         if (!opened.await(timeoutSec, TimeUnit.SECONDS)) {
             runCatching { ws.cancel() }
             throw AsrError("语音连接超时")
         }
 
-        fun send(event: String, payload: String = "{}", audio: ByteArray? = null, seq: Long? = null) {
-            val frame = VoiceGenieProtocol.encodeRequest(
-                event = event,
-                appKey = APP_KEY,
-                taskId = taskId,
-                payload = payload,
-                audio = audio,
-                sequence = seq,
-            )
+        fun send(
+            event: String,
+            payload: String = "{}",
+            audio: ByteArray? = null,
+            seq: Long? = null,
+        ) {
+            val frame =
+                VoiceGenieProtocol.encodeRequest(
+                    event = event,
+                    appKey = APP_KEY,
+                    taskId = taskId,
+                    payload = payload,
+                    audio = audio,
+                    sequence = seq,
+                )
             if (!ws.send(frame.toByteString())) {
                 throw AsrError("发送 $event 失败（连接已关闭）")
             }
@@ -280,8 +322,9 @@ object DoubaoAsr {
             while (true) {
                 val remain = deadline - System.currentTimeMillis()
                 if (remain <= 0) throw AsrError("等待 $expected 超时")
-                val raw = incoming.poll(remain, TimeUnit.MILLISECONDS)
-                    ?: throw AsrError("等待 $expected 超时")
+                val raw =
+                    incoming.poll(remain, TimeUnit.MILLISECONDS)
+                        ?: throw AsrError("等待 $expected 超时")
                 process(raw)
                 val o = raw as JSONObject
                 if (o.optString("event") == expected) return o
@@ -308,17 +351,25 @@ object DoubaoAsr {
 
             send(
                 "StartSession",
-                payload = JSONObject().apply {
-                    put("business", 1)
-                    put("request_type", 3)
-                    put("asr", JSONObject().apply {
-                        put("audio_info", JSONObject().apply {
-                            put("channel", 1)
-                            put("format", "pcm")
-                            put("sample_rate", 16000)
-                        })
-                    })
-                }.toString(),
+                payload =
+                    JSONObject()
+                        .apply {
+                            put("business", 1)
+                            put("request_type", 3)
+                            put(
+                                "asr",
+                                JSONObject().apply {
+                                    put(
+                                        "audio_info",
+                                        JSONObject().apply {
+                                            put("channel", 1)
+                                            put("format", "pcm")
+                                            put("sample_rate", 16000)
+                                        },
+                                    )
+                                },
+                            )
+                        }.toString(),
             )
             waitFor("SessionStarted")
             sessionStarted = true
@@ -352,11 +403,12 @@ object DoubaoAsr {
                 // 失败时尽力取消，避免服务端留一个开着的话务。
                 runCatching {
                     ws.send(
-                        VoiceGenieProtocol.encodeRequest(
-                            event = "CancelSession",
-                            appKey = APP_KEY,
-                            taskId = taskId,
-                        ).toByteString(),
+                        VoiceGenieProtocol
+                            .encodeRequest(
+                                event = "CancelSession",
+                                appKey = APP_KEY,
+                                taskId = taskId,
+                            ).toByteString(),
                     )
                 }
             }
@@ -364,11 +416,15 @@ object DoubaoAsr {
         }
     }
 
-    private fun decodeSafely(bytes: ByteArray, isText: Boolean): Any = try {
-        VoiceGenieProtocol.decodeResponse(bytes, isText)
-    } catch (e: Throwable) {
-        AsrError("解析语音响应失败（${e.message}）")
-    }
+    private fun decodeSafely(
+        bytes: ByteArray,
+        isText: Boolean,
+    ): Any =
+        try {
+            VoiceGenieProtocol.decodeResponse(bytes, isText)
+        } catch (e: Throwable) {
+            AsrError("解析语音响应失败（${e.message}）")
+        }
 
     // ------------------------------------------------------------ 实时会话
 
@@ -406,45 +462,66 @@ object DoubaoAsr {
         fun start() {
             startedAt = System.currentTimeMillis()
             val context = bootstrapGuest()
-            val query = buildString {
-                val it = context.keys()
-                val names = mutableListOf<String>()
-                while (it.hasNext()) names += it.next()
-                names.sorted().forEachIndexed { index, key ->
-                    if (index > 0) append('&')
-                    append(java.net.URLEncoder.encode(key, "UTF-8"))
-                    append('=')
-                    append(java.net.URLEncoder.encode(context.optString(key), "UTF-8"))
+            val query =
+                buildString {
+                    val it = context.keys()
+                    val names = mutableListOf<String>()
+                    while (it.hasNext()) names += it.next()
+                    names.sorted().forEachIndexed { index, key ->
+                        if (index > 0) append('&')
+                        append(java.net.URLEncoder.encode(key, "UTF-8"))
+                        append('=')
+                        append(java.net.URLEncoder.encode(context.optString(key), "UTF-8"))
+                    }
                 }
-            }
-            val req = Request.Builder()
-                .url("$GATEWAY?$query")
-                .header("User-Agent", USER_AGENT)
-                .header("Origin", "https://www.doubao.com")
-                .build()
+            val req =
+                Request
+                    .Builder()
+                    .url("$GATEWAY?$query")
+                    .header("User-Agent", USER_AGENT)
+                    .header("Origin", "https://www.doubao.com")
+                    .build()
             val opened = CountDownLatch(1)
-            val listener = object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    ws = webSocket
-                    opened.countDown()
-                }
+            val listener =
+                object : WebSocketListener() {
+                    override fun onOpen(
+                        webSocket: WebSocket,
+                        response: Response,
+                    ) {
+                        ws = webSocket
+                        opened.countDown()
+                    }
 
-                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                    incoming.put(decodeSafely(bytes.toByteArray(), isText = false))
-                }
+                    override fun onMessage(
+                        webSocket: WebSocket,
+                        bytes: ByteString,
+                    ) {
+                        incoming.put(decodeSafely(bytes.toByteArray(), isText = false))
+                    }
 
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    incoming.put(decodeSafely(text.toByteArray(), isText = true))
-                }
+                    override fun onMessage(
+                        webSocket: WebSocket,
+                        text: String,
+                    ) {
+                        incoming.put(decodeSafely(text.toByteArray(), isText = true))
+                    }
 
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    incoming.put(AsrError("语音连接失败（${t.javaClass.simpleName}: ${t.message}）"))
-                }
+                    override fun onFailure(
+                        webSocket: WebSocket,
+                        t: Throwable,
+                        response: Response?,
+                    ) {
+                        incoming.put(AsrError("语音连接失败（${t.javaClass.simpleName}: ${t.message}）"))
+                    }
 
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    incoming.put(AsrError("语音连接已关闭（$code $reason）"))
+                    override fun onClosed(
+                        webSocket: WebSocket,
+                        code: Int,
+                        reason: String,
+                    ) {
+                        incoming.put(AsrError("语音连接已关闭（$code $reason）"))
+                    }
                 }
-            }
             http.newWebSocket(req, listener)
             if (!opened.await(timeoutSec, TimeUnit.SECONDS)) {
                 runCatching { ws?.cancel() }
@@ -457,17 +534,25 @@ object DoubaoAsr {
             if (taskId.isEmpty()) throw AsrError("创建语音任务后未收到 task_id")
             send(
                 "StartSession",
-                payload = JSONObject().apply {
-                    put("business", 1)
-                    put("request_type", 3)
-                    put("asr", JSONObject().apply {
-                        put("audio_info", JSONObject().apply {
-                            put("channel", 1)
-                            put("format", "pcm")
-                            put("sample_rate", 16000)
-                        })
-                    })
-                }.toString(),
+                payload =
+                    JSONObject()
+                        .apply {
+                            put("business", 1)
+                            put("request_type", 3)
+                            put(
+                                "asr",
+                                JSONObject().apply {
+                                    put(
+                                        "audio_info",
+                                        JSONObject().apply {
+                                            put("channel", 1)
+                                            put("format", "pcm")
+                                            put("sample_rate", 16000)
+                                        },
+                                    )
+                                },
+                            )
+                        }.toString(),
             )
             waitFor("SessionStarted")
             sessionStarted = true
@@ -516,11 +601,12 @@ object DoubaoAsr {
             if (sessionStarted && !sessionFinished) {
                 runCatching {
                     ws?.send(
-                        VoiceGenieProtocol.encodeRequest(
-                            event = "CancelSession",
-                            appKey = APP_KEY,
-                            taskId = taskId,
-                        ).toByteString(),
+                        VoiceGenieProtocol
+                            .encodeRequest(
+                                event = "CancelSession",
+                                appKey = APP_KEY,
+                                taskId = taskId,
+                            ).toByteString(),
                     )
                 }
             }
@@ -534,15 +620,21 @@ object DoubaoAsr {
             }
         }
 
-        private fun send(event: String, payload: String = "{}", audio: ByteArray? = null, sequence: Long? = null) {
-            val frame = VoiceGenieProtocol.encodeRequest(
-                event = event,
-                appKey = APP_KEY,
-                taskId = taskId,
-                payload = payload,
-                audio = audio,
-                sequence = sequence,
-            )
+        private fun send(
+            event: String,
+            payload: String = "{}",
+            audio: ByteArray? = null,
+            sequence: Long? = null,
+        ) {
+            val frame =
+                VoiceGenieProtocol.encodeRequest(
+                    event = event,
+                    appKey = APP_KEY,
+                    taskId = taskId,
+                    payload = payload,
+                    audio = audio,
+                    sequence = sequence,
+                )
             val socket = ws ?: throw AsrError("语音连接尚未建立")
             if (!socket.send(frame.toByteString())) throw AsrError("发送 $event 失败（连接已关闭）")
         }
@@ -558,8 +650,9 @@ object DoubaoAsr {
             if (event == "ASRResponse") {
                 val payloadText = o.optString("payload", "{}")
                 if (!payloadText.startsWith("{")) return
-                val results = runCatching { JSONObject(payloadText).optJSONArray("results") }.getOrNull()
-                    ?: return
+                val results =
+                    runCatching { JSONObject(payloadText).optJSONArray("results") }.getOrNull()
+                        ?: return
                 for (i in 0 until results.length()) {
                     val item = results.optJSONObject(i) ?: continue
                     val text = item.optString("text")
@@ -589,8 +682,9 @@ object DoubaoAsr {
             while (true) {
                 val remain = deadline - System.currentTimeMillis()
                 if (remain <= 0) throw AsrError("等待 $expected 超时")
-                val raw = incoming.poll(remain, TimeUnit.MILLISECONDS)
-                    ?: throw AsrError("等待 $expected 超时")
+                val raw =
+                    incoming.poll(remain, TimeUnit.MILLISECONDS)
+                        ?: throw AsrError("等待 $expected 超时")
                 process(raw)
                 val o = raw as JSONObject
                 if (o.optString("event") == expected) return o

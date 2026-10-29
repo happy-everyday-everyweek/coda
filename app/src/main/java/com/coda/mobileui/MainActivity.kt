@@ -1,56 +1,56 @@
 package com.coda.mobileui
 
+import android.animation.ValueAnimator
 import android.content.Context
-import com.coda.mobileui.core.AppLog
-import com.coda.mobileui.core.Bg
-import com.coda.mobileui.core.UpdateChecker
-import com.coda.mobileui.core.UpdateInstaller
-import com.coda.mobileui.core.SilentUpdater
-import com.coda.mobileui.core.WebUiHost
 import android.content.Intent
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.text.SpannableString
 import android.text.Spanned
-import android.text.style.ForegroundColorSpan
 import android.text.TextUtils
-import android.animation.ValueAnimator
-import android.graphics.Color
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
-import android.widget.FrameLayout
-import android.widget.ScrollView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.animation.PathInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
-import android.view.animation.PathInterpolator
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.transition.AutoTransition
 import androidx.transition.TransitionManager
-import com.google.android.material.snackbar.Snackbar
-import com.coda.mobileui.core.SendModes
+import com.coda.mobileui.core.AppLog
+import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.BrowserControl
-import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.GitHub
 import com.coda.mobileui.core.GitWorkspace
+import com.coda.mobileui.core.SendModes
+import com.coda.mobileui.core.SilentUpdater
+import com.coda.mobileui.core.UpdateChecker
+import com.coda.mobileui.core.UpdateInstaller
+import com.coda.mobileui.core.WebUiHost
+import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.ZModelLevel
 import com.coda.mobileui.core.ZParse
 import com.coda.mobileui.core.ZSessionInfo
 import com.coda.mobileui.core.ZWorkflowActor
 import com.coda.mobileui.core.ZWorkflowKit
-import com.coda.mobileui.core.ZWorkflowPhase
 import com.coda.mobileui.core.ZWorkflowLive
+import com.coda.mobileui.core.ZWorkflowPhase
 import com.coda.mobileui.workspace.DirectoryPicker
 import com.coda.mobileui.workspace.WorkspaceActivity
+import com.google.android.material.snackbar.Snackbar
 import java.io.File
 
 /** 会话状态：Working 用灰、待您操作（含错误）用黄、已完成未读用绿、已读则整行不显示。 */
@@ -74,10 +74,17 @@ private data class ToolCall(
 )
 
 /** 变更摘要里的一个文件。 */
-private data class ChangedFile(val name: String, val added: Int, val removed: Int)
+private data class ChangedFile(
+    val name: String,
+    val added: Int,
+    val removed: Int,
+)
 
 /** 一段改动结束后给出的变更摘要卡片（参考 T3 Code 桌面端）。 */
-private data class ChangeSummary(val title: String, val files: List<ChangedFile>)
+private data class ChangeSummary(
+    val title: String,
+    val files: List<ChangedFile>,
+)
 
 /** 会话里的一条消息（可以携带工具调用记录与变更摘要）。 */
 private data class ChatMessage(
@@ -107,7 +114,6 @@ private data class DrawerConversation(
  * 会话、消息、模型与工具调用均来自本地 zcode app-server（stdio 子进程）。
  */
 class MainActivity : BaseActivity() {
-
     companion object {
         /** 从设置页返回主界面时，需要在主界面展开抽屉。 */
         @JvmStatic
@@ -115,9 +121,6 @@ class MainActivity : BaseActivity() {
 
         private const val KEY_SHOWING_SETTINGS = "showing_settings"
         private const val KEY_CONVERSATION_ID = "conversation_id"
-
-        /** 默认发送模式：Build。 */
-        private const val DEFAULT_SEND_MODE = 1
 
         /** 全屏抽屉点会话或新对话时：先快速收回半屏（这一段时长），再收起抽屉。 */
         private const val COLLAPSE_DURATION = 130L
@@ -130,31 +133,40 @@ class MainActivity : BaseActivity() {
 
     /** 真实运行时控制器（核心进程 + 协议）。 */
     private val zc by lazy { ZController.get(this) }
+
     /** 会话状态监听器（随 Activity 生命周期注册/移除）。 */
     private var zListener: ZController.Listener? = null
 
     /** 流式文本缓冲：assistantMessageId → 累计文本。 */
     private val liveText = HashMap<String, StringBuilder>()
+
     /** 流式思考缓冲：assistantMessageId → 累计思考文本。 */
     private val liveReasoning = HashMap<String, StringBuilder>()
 
     /** 当前渲染中的消息正文：messageId → TextView。 */
     private val messageViews = HashMap<String, TextView>()
+
     /** 当前渲染中的思考块正文：messageId → TextView。 */
     private val reasoningViews = HashMap<String, TextView>()
+
     /** 思考块折叠状态：messageId → 是否收起（缺省收起）。 */
     private val reasoningCollapsed = HashMap<String, Boolean>()
+
     /** 思考开始时间：messageId → 首个思考增量到达的毫秒时间戳。 */
     private val reasoningStart = HashMap<String, Long>()
+
     /** 思考结束时间：messageId → 完成态首次渲染的毫秒时间戳。 */
     private val reasoningDone = HashMap<String, Long>()
+
     /** 当前回合开始时间，用于“正在生成”指示的连续相位与计时。 */
     private var runningSince: Long? = null
+
     /** 最近一次发送消息的时刻（思考/生成计时从这一刻起算）。 */
     private var lastSendAt = 0L
 
     /** 待办条目上次状态（按内容记录），用于列表重建时正确播放状态切换动画。 */
     private val todoStatusCache = HashMap<String, String>()
+
     /** 待发送附件（选择后复制到缓存目录，发送时随消息携带）。 */
     private data class PendingAttach(
         val path: String,
@@ -162,12 +174,17 @@ class MainActivity : BaseActivity() {
         val mime: String,
         val sizeBytes: Long,
     )
+
     private val pendingAttachments = mutableListOf<PendingAttach>()
     private var attachScroll: View? = null
     private var attachChips: LinearLayout? = null
+
     /** 附件选择器（SAF 多选，任意类型）。 */
     private val attachPicker =
-        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts
+                .OpenMultipleDocuments(),
+        ) { uris ->
             uris?.forEach { uri -> importAttachment(uri) }
         }
 
@@ -185,10 +202,13 @@ class MainActivity : BaseActivity() {
      * 所以不需要额外的轮询。
      */
     private var petBar: PetBar? = null
+
     /** 上一次喂给宠物的动作标签，用来避免同一句话反复触发重播。 */
     private var petActivity: String = ""
+
     /** 上一回合是否在跑，用来判断"刚结束"这一刻。 */
     private var petWasRunning = false
+
     /** 运行期的宠物对表拍子（只在 zc.running 时循环）。 */
     private val petTick = Runnable { syncPet() }
 
@@ -204,161 +224,176 @@ class MainActivity : BaseActivity() {
     private var strengthLevel = 0
 
     /** 历史会话（静态演示）：覆盖 Working、待您操作、已完成未读、已读完成四种状态与三种 PR 状态。 */
-    private val conversations = listOf(
-        DrawerConversation(
-            id = "conv-1",
-            title = "修复深色模式下的对比度问题",
-            status = ConvStatus.WORKING,
-            branch = "fix/dark-contrast",
-            model = "GLM-4.6",
-            strength = 3,
-            messages = listOf(
-                ChatMessage(true, "深色模式下设置页的次级文字对比度偏低，帮我查一下。"),
-                ChatMessage(
-                    false,
-                    "我先定位一下颜色定义。",
-                    tools = listOf(ToolCall("Grep", "colorOnSurfaceVariant · res/values-night")),
-                ),
-                ChatMessage(
-                    false,
-                    "找到了，在 values-night 里，现在核对对比度数值。",
-                    tools = listOf(ToolCall("Read", "res/values-night/colors.xml · 37 行")),
-                ),
-                ChatMessage(
-                    false,
-                    "按结果需要提高一档，改完跑一次构建。",
-                    tools = listOf(ToolCall("Bash", "./gradlew assembleDebug", ToolState.RUNNING)),
-                    changes = ChangeSummary(
-                        title = "1 个文件变更",
-                        files = listOf(ChangedFile("res/values-night/colors.xml", 2, 2)),
-                    ),
-                ),
-            ),
-        ),
-        DrawerConversation(
-            id = "conv-2",
-            title = "重构会话存储模块",
-            status = ConvStatus.WAITING,
-            branch = "refactor/session-store",
-            model = "GLM-4.6-Air",
-            strength = 2,
-            messages = listOf(
-                ChatMessage(true, "把会话存储抽成独立模块，先给出改动范围。"),
-                ChatMessage(
-                    false,
-                    "依赖已梳理完，等你确认后开始改。",
-                    tools = listOf(
-                        ToolCall("Glob", "src/main/java/**/session/*.kt"),
-                        ToolCall("Agent", "分析会话读写路径", ToolState.DONE, "3 处调用、2 个测试"),
-                    ),
-                ),
-            ),
-        ),
-        DrawerConversation(
-            id = "conv-3",
-            title = "设计移动端布局方案",
-            status = ConvStatus.DONE_UNREAD,
-            branch = "design/mobile-layout",
-            addedChars = 123_000,
-            removedChars = 100_000,
-            prNumber = 15,
-            prState = PrState.OPEN,
-            model = "GLM-4.6",
-            strength = 4,
-            messages = listOf(
-                ChatMessage(true, "按参考图把设置页的分组卡片形状做出来。"),
-                ChatMessage(
-                    false,
-                    "先看它的实现。",
-                    tools = listOf(ToolCall("WebFetch", "lawnchair 16-dev · PreferenceGroup.kt")),
-                ),
-                ChatMessage(
-                    false,
-                    "照它的做法改形状。",
-                    tools = listOf(ToolCall("Edit", "SettingsViewBuilder.kt")),
-                ),
-                ChatMessage(
-                    false,
-                    "改完跑构建验证。",
-                    tools = listOf(
-                        ToolCall("Bash", "./gradlew assembleDebug", ToolState.DONE, "BUILD SUCCESSFUL"),
-                    ),
-                    changes = ChangeSummary(
-                        title = "3 个文件变更",
-                        files = listOf(
-                            ChangedFile("res/layout/view_strength_card.xml", 118, 152),
-                            ChangedFile("StrengthSliderView.kt", 246, 0),
-                            ChangedFile("MainActivity.kt", 92, 31),
+    private val conversations =
+        listOf(
+            DrawerConversation(
+                id = "conv-1",
+                title = "修复深色模式下的对比度问题",
+                status = ConvStatus.WORKING,
+                branch = "fix/dark-contrast",
+                model = "GLM-4.6",
+                strength = 3,
+                messages =
+                    listOf(
+                        ChatMessage(true, "深色模式下设置页的次级文字对比度偏低，帮我查一下。"),
+                        ChatMessage(
+                            false,
+                            "我先定位一下颜色定义。",
+                            tools = listOf(ToolCall("Grep", "colorOnSurfaceVariant · res/values-night")),
+                        ),
+                        ChatMessage(
+                            false,
+                            "找到了，在 values-night 里，现在核对对比度数值。",
+                            tools = listOf(ToolCall("Read", "res/values-night/colors.xml · 37 行")),
+                        ),
+                        ChatMessage(
+                            false,
+                            "按结果需要提高一档，改完跑一次构建。",
+                            tools = listOf(ToolCall("Bash", "./gradlew assembleDebug", ToolState.RUNNING)),
+                            changes =
+                                ChangeSummary(
+                                    title = "1 个文件变更",
+                                    files = listOf(ChangedFile("res/values-night/colors.xml", 2, 2)),
+                                ),
                         ),
                     ),
-                ),
             ),
-        ),
-        DrawerConversation(
-            id = "conv-4",
-            title = "编写 MCP 工具接入文档",
-            status = ConvStatus.NONE,
-            branch = "docs/mcp-tools",
-            model = "GLM-4.6",
-            strength = 2,
-            messages = listOf(
-                ChatMessage(true, "把工具调用的接入方式写成文档。"),
-                ChatMessage(
-                    false,
-                    "初稿已生成，含清单与调用示例。",
-                    tools = listOf(
-                        ToolCall("Write", "docs/mcp-tools.md"),
-                        ToolCall("WebSearch", "zcode 工具清单 · 官方文档"),
-                        ToolCall("TodoWrite", "4 项任务"),
-                        ToolCall("Skill", "tools-md · 生成文档骨架"),
+            DrawerConversation(
+                id = "conv-2",
+                title = "重构会话存储模块",
+                status = ConvStatus.WAITING,
+                branch = "refactor/session-store",
+                model = "GLM-4.6-Air",
+                strength = 2,
+                messages =
+                    listOf(
+                        ChatMessage(true, "把会话存储抽成独立模块，先给出改动范围。"),
+                        ChatMessage(
+                            false,
+                            "依赖已梳理完，等你确认后开始改。",
+                            tools =
+                                listOf(
+                                    ToolCall("Glob", "src/main/java/**/session/*.kt"),
+                                    ToolCall("Agent", "分析会话读写路径", ToolState.DONE, "3 处调用、2 个测试"),
+                                ),
+                        ),
                     ),
-                ),
             ),
-        ),
-        DrawerConversation(
-            id = "conv-5",
-            title = "优化启动速度的性能分析",
-            status = ConvStatus.WAITING,
-            branch = "perf/startup",
-            prNumber = 42,
-            prState = PrState.MERGED,
-            model = "GLM-4.6-Air",
-            strength = 1,
-            messages = listOf(
-                ChatMessage(true, "启动慢，帮我定位耗时点。"),
-                ChatMessage(
-                    false,
-                    "主线程里有两处重活，需要你决定优先级。",
-                    tools = listOf(
-                        ToolCall("Bash", "perfetto 抓取启动 trace", ToolState.DONE, "trace-01.pb"),
-                        ToolCall("Grep", "SharedPreferences · 主线程"),
-                        ToolCall("AskUserQuestion", "先修哪一处？", ToolState.RUNNING),
+            DrawerConversation(
+                id = "conv-3",
+                title = "设计移动端布局方案",
+                status = ConvStatus.DONE_UNREAD,
+                branch = "design/mobile-layout",
+                addedChars = 123_000,
+                removedChars = 100_000,
+                prNumber = 15,
+                prState = PrState.OPEN,
+                model = "GLM-4.6",
+                strength = 4,
+                messages =
+                    listOf(
+                        ChatMessage(true, "按参考图把设置页的分组卡片形状做出来。"),
+                        ChatMessage(
+                            false,
+                            "先看它的实现。",
+                            tools = listOf(ToolCall("WebFetch", "lawnchair 16-dev · PreferenceGroup.kt")),
+                        ),
+                        ChatMessage(
+                            false,
+                            "照它的做法改形状。",
+                            tools = listOf(ToolCall("Edit", "SettingsViewBuilder.kt")),
+                        ),
+                        ChatMessage(
+                            false,
+                            "改完跑构建验证。",
+                            tools =
+                                listOf(
+                                    ToolCall("Bash", "./gradlew assembleDebug", ToolState.DONE, "BUILD SUCCESSFUL"),
+                                ),
+                            changes =
+                                ChangeSummary(
+                                    title = "3 个文件变更",
+                                    files =
+                                        listOf(
+                                            ChangedFile("res/layout/view_strength_card.xml", 118, 152),
+                                            ChangedFile("StrengthSliderView.kt", 246, 0),
+                                            ChangedFile("MainActivity.kt", 92, 31),
+                                        ),
+                                ),
+                        ),
                     ),
-                ),
             ),
-        ),
-        DrawerConversation(
-            id = "conv-6",
-            title = "排查构建失败的原因",
-            status = ConvStatus.NONE,
-            branch = "chore/deps",
-            prNumber = 7,
-            prState = PrState.CLOSED,
-            model = "GLM-4.6",
-            strength = 2,
-            messages = listOf(
-                ChatMessage(true, "构建挂了，看下是什么原因。"),
-                ChatMessage(
-                    false,
-                    "依赖版本冲突，锁到统一版本即可。",
-                    tools = listOf(
-                        ToolCall("Bash", "./gradlew assembleDebug", ToolState.FAILED, "Unresolved reference"),
-                        ToolCall("Edit", "gradle/libs.versions.toml"),
+            DrawerConversation(
+                id = "conv-4",
+                title = "编写 MCP 工具接入文档",
+                status = ConvStatus.NONE,
+                branch = "docs/mcp-tools",
+                model = "GLM-4.6",
+                strength = 2,
+                messages =
+                    listOf(
+                        ChatMessage(true, "把工具调用的接入方式写成文档。"),
+                        ChatMessage(
+                            false,
+                            "初稿已生成，含清单与调用示例。",
+                            tools =
+                                listOf(
+                                    ToolCall("Write", "docs/mcp-tools.md"),
+                                    ToolCall("WebSearch", "zcode 工具清单 · 官方文档"),
+                                    ToolCall("TodoWrite", "4 项任务"),
+                                    ToolCall("Skill", "tools-md · 生成文档骨架"),
+                                ),
+                        ),
                     ),
-                ),
             ),
-        ),
-    )
+            DrawerConversation(
+                id = "conv-5",
+                title = "优化启动速度的性能分析",
+                status = ConvStatus.WAITING,
+                branch = "perf/startup",
+                prNumber = 42,
+                prState = PrState.MERGED,
+                model = "GLM-4.6-Air",
+                strength = 1,
+                messages =
+                    listOf(
+                        ChatMessage(true, "启动慢，帮我定位耗时点。"),
+                        ChatMessage(
+                            false,
+                            "主线程里有两处重活，需要你决定优先级。",
+                            tools =
+                                listOf(
+                                    ToolCall("Bash", "perfetto 抓取启动 trace", ToolState.DONE, "trace-01.pb"),
+                                    ToolCall("Grep", "SharedPreferences · 主线程"),
+                                    ToolCall("AskUserQuestion", "先修哪一处？", ToolState.RUNNING),
+                                ),
+                        ),
+                    ),
+            ),
+            DrawerConversation(
+                id = "conv-6",
+                title = "排查构建失败的原因",
+                status = ConvStatus.NONE,
+                branch = "chore/deps",
+                prNumber = 7,
+                prState = PrState.CLOSED,
+                model = "GLM-4.6",
+                strength = 2,
+                messages =
+                    listOf(
+                        ChatMessage(true, "构建挂了，看下是什么原因。"),
+                        ChatMessage(
+                            false,
+                            "依赖版本冲突，锁到统一版本即可。",
+                            tools =
+                                listOf(
+                                    ToolCall("Bash", "./gradlew assembleDebug", ToolState.FAILED, "Unresolved reference"),
+                                    ToolCall("Edit", "gradle/libs.versions.toml"),
+                                ),
+                        ),
+                    ),
+            ),
+        )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -370,14 +405,28 @@ class MainActivity : BaseActivity() {
         inputMessage.renderEnabled = SettingsStore.get(this).inputMarkdownPreview
         // 焦点或文本变化时同步手势拦截状态（失焦/清空后立即恢复手势）
         inputMessage.setOnFocusChangeListener { _, _ -> updateSwipeIntercept() }
-        inputMessage.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: android.text.Editable?) {
-                updateSwipeIntercept()
-                updateSlashPanel()
-            }
-        })
+        inputMessage.addTextChangedListener(
+            object : android.text.TextWatcher {
+                override fun beforeTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    count: Int,
+                    after: Int,
+                ) = Unit
+
+                override fun onTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    before: Int,
+                    count: Int,
+                ) = Unit
+
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    updateSwipeIntercept()
+                    updateSlashPanel()
+                }
+            },
+        )
         emptyState = findViewById(R.id.empty_state)
         chatView = findViewById(R.id.chat_view)
         setupSendMode()
@@ -391,7 +440,11 @@ class MainActivity : BaseActivity() {
         findViewById<View>(R.id.drawer_scroll).applyDrawerInset(8)
         // 跟踪输入法可见性：收起即视为失焦，右滑手势立刻恢复
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
-            val visible = insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())
+            val visible =
+                insets.isVisible(
+                    androidx.core.view.WindowInsetsCompat.Type
+                        .ime(),
+                )
             if (visible != imeVisible) {
                 imeVisible = visible
                 updateSwipeIntercept()
@@ -406,11 +459,13 @@ class MainActivity : BaseActivity() {
         }
 
         // 抽屉被直接收起（返回键、点空白、手势）时把全屏状态复位，保证下次打开仍是半屏
-        drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
-            override fun onDrawerClosed(drawerView: View) {
-                resetDrawerToCompact()
-            }
-        })
+        drawerLayout.addDrawerListener(
+            object : DrawerLayout.SimpleDrawerListener() {
+                override fun onDrawerClosed(drawerView: View) {
+                    resetDrawerToCompact()
+                }
+            },
+        )
 
         findViewById<ImageButton>(R.id.btn_menu).setOnClickListener {
             drawerLayout.openDrawer(Gravity.LEFT)
@@ -494,9 +549,10 @@ class MainActivity : BaseActivity() {
     private fun showUpdatePrompt(r: UpdateChecker.Result) {
         val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
         val ready = SilentUpdater.readyFile?.takeIf { it.isFile && it.length() > 0 }
-        val sheet = CodaSheet(this)
-            .title(if (ready != null) "新版本已就绪" else "发现新版本")
-            .subtitle("${r.versionName} · $sizeMb")
+        val sheet =
+            CodaSheet(this)
+                .title(if (ready != null) "新版本已就绪" else "发现新版本")
+                .subtitle("${r.versionName} · $sizeMb")
 
         // 先设按钮再 refresh：CodaSheet 的页脚只在 show/refresh 时构建。
         if (ready != null) {
@@ -506,9 +562,12 @@ class MainActivity : BaseActivity() {
                 s.refreshContent { col ->
                     col.addView(
                         updateBodyText(
-                            if (ok) "已交给系统安装器，按提示完成安装。"
-                            else "无法拉起安装器：请允许本应用「安装未知应用」。"
-                        )
+                            if (ok) {
+                                "已交给系统安装器，按提示完成安装。"
+                            } else {
+                                "无法拉起安装器：请允许本应用「安装未知应用」。"
+                            },
+                        ),
                     )
                 }
             }
@@ -524,8 +583,8 @@ class MainActivity : BaseActivity() {
                 col.addView(
                     updateBodyText(
                         "这是${r.candidateChannelLabel}，当前安装的是${UpdateChecker.channelLabel}。" +
-                            "两个渠道可以互相覆盖，装完不会丢数据。"
-                    )
+                            "两个渠道可以互相覆盖，装完不会丢数据。",
+                    ),
                 )
             }
             if (r.notes.isNotBlank()) {
@@ -535,23 +594,27 @@ class MainActivity : BaseActivity() {
         sheet.show()
     }
 
-    private fun updateBodyText(text: String): TextView = TextView(this).apply {
-        this.text = text
-        textSize = 13f
-        // 用 TypedValue.resolveAttribute 读 colorOnSurfaceVariant：
-        // 避免 MaterialColors 的泛型重载在纯 View 上下文里推不出类型（上一轮踩过）。
-        val tv = android.util.TypedValue()
-        if (theme.resolveAttribute(com.google.android.material.R.attr.colorOnSurfaceVariant, tv, true)) {
-            setTextColor(tv.data)
-        } else {
-            setTextColor(0xFF888888.toInt())
+    private fun updateBodyText(text: String): TextView =
+        TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            // 用 TypedValue.resolveAttribute 读 colorOnSurfaceVariant：
+            // 避免 MaterialColors 的泛型重载在纯 View 上下文里推不出类型（上一轮踩过）。
+            val tv = android.util.TypedValue()
+            if (theme.resolveAttribute(com.google.android.material.R.attr.colorOnSurfaceVariant, tv, true)) {
+                setTextColor(tv.data)
+            } else {
+                setTextColor(0xFF888888.toInt())
+            }
+            // 行距按密度换算；无上下文工具函数，直接用 density 折算。
+            setLineSpacing(4f * resources.displayMetrics.density, 1f)
         }
-        // 行距按密度换算；无上下文工具函数，直接用 density 折算。
-        setLineSpacing(4f * resources.displayMetrics.density, 1f)
-    }
 
     /** 下载并安装更新。下载走 AssetFetcher，带镜像测速与哈希校验。 */
-    private fun startUpdate(r: UpdateChecker.Result, sheet: CodaSheet) {
+    private fun startUpdate(
+        r: UpdateChecker.Result,
+        sheet: CodaSheet,
+    ) {
         val activity = this
         var panel: ProgressLogView? = null
         // 进度行原地更新：下载回调几百次，每次追加会把前面步骤挤掉。
@@ -563,29 +626,31 @@ class MainActivity : BaseActivity() {
             panel.append("开始下载 ${r.versionName}", emphasis = true)
         }
         Bg.run {
-            val file = UpdateInstaller.download(
-                activity,
-                r,
-                onProgress = { done, total ->
-                    val pct = if (total > 0) (done * 100 / total).toInt() else 0
-                    val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
-                    runOnUiThread {
-                        val text = "下载中 $pct%（$mb）"
-                        val line = progressLine
-                        if (line != null && line.parent != null) line.text = text
-                        else {
-                            panel?.append(text)
-                            progressLine = panel?.lastLine()
+            val file =
+                UpdateInstaller.download(
+                    activity,
+                    r,
+                    onProgress = { done, total ->
+                        val pct = if (total > 0) (done * 100 / total).toInt() else 0
+                        val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
+                        runOnUiThread {
+                            val text = "下载中 $pct%（$mb）"
+                            val line = progressLine
+                            if (line != null && line.parent != null) {
+                                line.text = text
+                            } else {
+                                panel?.append(text)
+                                progressLine = panel?.lastLine()
+                            }
                         }
-                    }
-                },
-                onLog = { msg ->
-                    runOnUiThread {
-                        progressLine = null
-                        panel?.append(msg)
-                    }
-                },
-            )
+                    },
+                    onLog = { msg ->
+                        runOnUiThread {
+                            progressLine = null
+                            panel?.append(msg)
+                        }
+                    },
+                )
             runOnUiThread {
                 panel?.finish()
                 if (file == null) {
@@ -605,10 +670,11 @@ class MainActivity : BaseActivity() {
         val inflater = LayoutInflater.from(this)
         container.removeAllViews()
 
-        val actions = LinearLayout(this).apply {
-            tag = "drawer_actions"
-            orientation = LinearLayout.VERTICAL
-        }
+        val actions =
+            LinearLayout(this).apply {
+                tag = "drawer_actions"
+                orientation = LinearLayout.VERTICAL
+            }
         actions.addView(
             createActionRow(inflater, actions, R.drawable.ic_new_chat, R.string.nav_new_chat) {
                 inputMessage.text?.clear()
@@ -637,10 +703,11 @@ class MainActivity : BaseActivity() {
             createActionRow(inflater, actions, R.drawable.ic_settings, R.string.nav_settings) {
                 openSettingsPage()
             },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(2) },
+            LinearLayout
+                .LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(2) },
         )
         container.addView(
             actions,
@@ -665,90 +732,19 @@ class MainActivity : BaseActivity() {
         iconRes: Int,
         titleRes: Int,
         onClick: () -> Unit,
-    ): View = inflater.inflate(R.layout.view_drawer_action, container, false).apply {
-        findViewById<ImageView>(R.id.action_icon).setImageResource(iconRes)
-        findViewById<TextView>(R.id.action_title).setText(titleRes)
-        setOnClickListener {
-            onClick()
-            drawerLayout.closeDrawer(Gravity.LEFT)
-        }
-    }
-
-    /**
-     * 历史会话行：第一行状态、第二行标题、第三行简述。
-     * 第三行在「已完成但未读」时显示变更摘要，否则显示当前 Git 分支；右侧附带 PR 图标与编号。
-     */
-    private fun createConversationRow(
-        inflater: LayoutInflater,
-        container: LinearLayout,
-        conversation: DrawerConversation,
-    ): View {
-        val row = inflater.inflate(R.layout.view_drawer_conversation, container, false)
-
-        row.findViewById<TextView>(R.id.conv_status).apply {
-            val label = when (conversation.status) {
-                ConvStatus.WORKING -> getString(R.string.conv_status_working)
-                ConvStatus.WAITING -> getString(R.string.conv_status_waiting)
-                ConvStatus.DONE_UNREAD -> getString(R.string.conv_status_done)
-                ConvStatus.NONE -> null
-            }
-            if (label == null) {
-                visibility = View.GONE
-            } else {
-                visibility = View.VISIBLE
-                text = label
-                setTextColor(
-                    ContextCompat.getColor(
-                        context,
-                        when (conversation.status) {
-                            ConvStatus.WORKING -> R.color.status_working
-                            ConvStatus.WAITING -> R.color.status_waiting
-                            else -> R.color.status_done
-                        },
-                    ),
-                )
+    ): View =
+        inflater.inflate(R.layout.view_drawer_action, container, false).apply {
+            findViewById<ImageView>(R.id.action_icon).setImageResource(iconRes)
+            findViewById<TextView>(R.id.action_title).setText(titleRes)
+            setOnClickListener {
+                onClick()
+                drawerLayout.closeDrawer(Gravity.LEFT)
             }
         }
 
-        row.findViewById<TextView>(R.id.conv_title).text = conversation.title
+    // 展开／收起模型选择面板（不使用弹窗）。
 
-        row.findViewById<TextView>(R.id.conv_summary).text =
-            if (conversation.status == ConvStatus.DONE_UNREAD &&
-                (conversation.addedChars > 0 || conversation.removedChars > 0)
-            ) {
-                buildChangeSummary(conversation.addedChars, conversation.removedChars)
-            } else {
-                conversation.branch
-            }
-
-        conversation.prNumber?.let { number ->
-            val color = ContextCompat.getColor(
-                this,
-                when (conversation.prState) {
-                    PrState.CLOSED -> R.color.md3_error
-                    PrState.MERGED -> R.color.pr_merged
-                    else -> R.color.status_done
-                },
-            )
-            row.findViewById<ImageView>(R.id.conv_pr_icon).apply {
-                visibility = View.VISIBLE
-                setColorFilter(color)
-            }
-            row.findViewById<TextView>(R.id.conv_pr_number).apply {
-                visibility = View.VISIBLE
-                text = number.toString()
-                setTextColor(color)
-            }
-        }
-
-        row.setOnClickListener {
-collapseFullDrawerThen { showConversation(conversation) }
-        }
-        return row
-    }
-
-    /** 展开／收起模型选择面板（不使用弹窗）。 */
-    /** 当前是否停留在设置页（配置变更后需要恢复）。 */
+    // 当前是否停留在设置页（配置变更后需要恢复）。
     private var showingSettings = false
 
     /** 当前选中的会话 id（同样在配置变更后恢复）。 */
@@ -774,6 +770,7 @@ collapseFullDrawerThen { showConversation(conversation) }
 
     /** 长按发送按钮浮出的模式条，以及当前选中的发送模式。 */
     private var sendModeView: SendModeView? = null
+
     /** 当前选中的发送模式（默认 Build）。 */
     private var sendModeIndex = 1
     private var pendingLongPress: Runnable? = null
@@ -809,11 +806,12 @@ collapseFullDrawerThen { showConversation(conversation) }
                     sendModeIndex = defaultSendModeIndex()
                     mode.setSelected(sendModeIndex)
                     mode.beginDrag(event.x, event.y)
-                    val runnable = Runnable {
-                        pendingLongPress = null
-                        setBackdropBlur(true)
-                        showModeStrip(mode)
-                    }
+                    val runnable =
+                        Runnable {
+                            pendingLongPress = null
+                            setBackdropBlur(true)
+                            showModeStrip(mode)
+                        }
                     pendingLongPress = runnable
                     view.postDelayed(runnable, 360)
                     true
@@ -838,7 +836,9 @@ collapseFullDrawerThen { showConversation(conversation) }
                     true
                 }
 
-                else -> false
+                else -> {
+                    false
+                }
             }
         }
     }
@@ -855,32 +855,36 @@ collapseFullDrawerThen { showConversation(conversation) }
         val w = content.width
         val h = content.height
         if (w <= 0 || h <= 0) return
-        val full = runCatching {
-            android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-                .also { content.draw(android.graphics.Canvas(it)) }
-        }.getOrNull() ?: return
+        val full =
+            runCatching {
+                android.graphics.Bitmap
+                    .createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                    .also { content.draw(android.graphics.Canvas(it)) }
+            }.getOrNull() ?: return
         // 降采样到 1/4 再模糊：速度快，模糊半径按比例取，视觉等价
-        val small = android.graphics.Bitmap.createScaledBitmap(
-            full,
-            (w / 4).coerceAtLeast(1),
-            (h / 4).coerceAtLeast(1),
-            true,
-        )
-        val overlay = blurOverlay ?: ImageView(this).apply {
-            scaleType = ImageView.ScaleType.FIT_XY
-            isClickable = false
-            isFocusable = false
-            visibility = View.GONE
-            // 挂在内容区内部最上层：精确覆盖内容区，且位于其他内容之上
-            (content as? ViewGroup)?.addView(
-                this,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                ),
+        val small =
+            android.graphics.Bitmap.createScaledBitmap(
+                full,
+                (w / 4).coerceAtLeast(1),
+                (h / 4).coerceAtLeast(1),
+                true,
             )
-            blurOverlay = this
-        }
+        val overlay =
+            blurOverlay ?: ImageView(this).apply {
+                scaleType = ImageView.ScaleType.FIT_XY
+                isClickable = false
+                isFocusable = false
+                visibility = View.GONE
+                // 挂在内容区内部最上层：精确覆盖内容区，且位于其他内容之上
+                (content as? ViewGroup)?.addView(
+                    this,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+                blurOverlay = this
+            }
         overlay.setImageBitmap(blurBitmap(small, 6))
         overlay.visibility = View.VISIBLE
     }
@@ -888,7 +892,10 @@ collapseFullDrawerThen { showConversation(conversation) }
     private var blurOverlay: ImageView? = null
 
     /** 三次盒式模糊近似高斯，不依赖任何图形库。 */
-    private fun blurBitmap(source: android.graphics.Bitmap, radius: Int): android.graphics.Bitmap {
+    private fun blurBitmap(
+        source: android.graphics.Bitmap,
+        radius: Int,
+    ): android.graphics.Bitmap {
         if (radius < 1) return source
         val width = source.width
         val height = source.height
@@ -914,8 +921,9 @@ collapseFullDrawerThen { showConversation(conversation) }
                     sumB += p and 0xFF
                 }
                 for (i in 0 until limit) {
-                    val value = ((sumA / span) shl 24) or ((sumR / span) shl 16) or
-                        ((sumG / span) shl 8) or (sumB / span)
+                    val value =
+                        ((sumA / span) shl 24) or ((sumR / span) shl 16) or
+                            ((sumG / span) shl 8) or (sumB / span)
                     if (horizontal) pixels[line * width + i] = value else pixels[i * width + line] = value
 
                     val addIdx = (i + radius + 1).coerceAtMost(limit - 1)
@@ -959,10 +967,19 @@ collapseFullDrawerThen { showConversation(conversation) }
                 val child = group.getChildAt(i)
                 if (child is ImageView) {
                     sendIconView = child
-                    child.animate().scaleX(0.6f).scaleY(0.6f).setDuration(90)
+                    child
+                        .animate()
+                        .scaleX(0.6f)
+                        .scaleY(0.6f)
+                        .setDuration(90)
                         .withEndAction {
                             child.setImageResource(R.drawable.ic_close_lucide)
-                            child.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+                            child
+                                .animate()
+                                .scaleX(1f)
+                                .scaleY(1f)
+                                .setDuration(120)
+                                .start()
                         }.start()
                 }
             }
@@ -988,17 +1005,31 @@ collapseFullDrawerThen { showConversation(conversation) }
     /** 松手后把发送按钮的图标还原成箭头（同样带过渡）。 */
     private fun restoreSendIcon() {
         sendIconView?.let { view ->
-            view.animate().scaleX(0.6f).scaleY(0.6f).setDuration(90).withEndAction {
-                view.setImageResource(R.drawable.ic_arrow_up)
-                view.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
-            }.start()
+            view
+                .animate()
+                .scaleX(0.6f)
+                .scaleY(0.6f)
+                .setDuration(90)
+                .withEndAction {
+                    view.setImageResource(R.drawable.ic_arrow_up)
+                    view
+                        .animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setDuration(120)
+                        .start()
+                }.start()
         }
         sendIconView = null
     }
 
     /** 发送输入框内容：交给运行时；空输入时若正在运行则变成“停止”。 */
     private fun sendMessage(mode: String) {
-        val text = inputMessage.text?.toString()?.trim().orEmpty()
+        val text =
+            inputMessage.text
+                ?.toString()
+                ?.trim()
+                .orEmpty()
         if (text.isEmpty() && pendingAttachments.isEmpty()) {
             if (zc.running) {
                 zc.stop { ok, msg ->
@@ -1012,6 +1043,7 @@ collapseFullDrawerThen { showConversation(conversation) }
         inputMessage.text?.clear()
         hideSettingsPage()
         val atts = buildAttachmentsJson()
+
         fun doSend() {
             // 思考计时从发送那一刻开始
             lastSendAt = System.currentTimeMillis()
@@ -1037,6 +1069,7 @@ collapseFullDrawerThen { showConversation(conversation) }
             }
         }
     }
+
     /** 附件导入：复制到应用缓存目录（内核进程可直接读取 localPath），加入待发送列表。 */
     private fun importAttachment(uri: android.net.Uri) {
         Bg.run {
@@ -1070,17 +1103,18 @@ collapseFullDrawerThen { showConversation(conversation) }
     }
 
     /** 附件 MIME 兜底（按扩展名）。 */
-    private fun guessMime(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-        "jpg", "jpeg" -> "image/jpeg"
-        "png" -> "image/png"
-        "gif" -> "image/gif"
-        "webp" -> "image/webp"
-        "mp4" -> "video/mp4"
-        "pdf" -> "application/pdf"
-        "txt" -> "text/plain"
-        "md" -> "text/markdown"
-        else -> "application/octet-stream"
-    }
+    private fun guessMime(name: String): String =
+        when (name.substringAfterLast('.', "").lowercase()) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "mp4" -> "video/mp4"
+            "pdf" -> "application/pdf"
+            "txt" -> "text/plain"
+            "md" -> "text/markdown"
+            else -> "application/octet-stream"
+        }
 
     /** 组装待发送附件（协议格式：kind / filename / localPath / mimeType / sizeBytes）。 */
     private fun buildAttachmentsJson(): org.json.JSONArray? {
@@ -1088,7 +1122,8 @@ collapseFullDrawerThen { showConversation(conversation) }
         val arr = org.json.JSONArray()
         pendingAttachments.forEach { a ->
             arr.put(
-                org.json.JSONObject()
+                org.json
+                    .JSONObject()
                     .put("kind", kindOf(a.mime))
                     .put("filename", a.name)
                     .put("localPath", a.path)
@@ -1099,13 +1134,14 @@ collapseFullDrawerThen { showConversation(conversation) }
         return arr
     }
 
-    private fun kindOf(mime: String): String = when {
-        mime.startsWith("image/") -> "image"
-        mime.startsWith("video/") -> "video"
-        mime.startsWith("audio/") -> "audio"
-        mime == "application/pdf" -> "pdf"
-        else -> "file"
-    }
+    private fun kindOf(mime: String): String =
+        when {
+            mime.startsWith("image/") -> "image"
+            mime.startsWith("video/") -> "video"
+            mime.startsWith("audio/") -> "audio"
+            mime == "application/pdf" -> "pdf"
+            else -> "file"
+        }
 
     /** 待发送附件 chips：名称 + 大小 + 移除按钮。 */
     private fun renderAttachChips() {
@@ -1117,18 +1153,20 @@ collapseFullDrawerThen { showConversation(conversation) }
             return
         }
         scroll.visibility = View.VISIBLE
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
         pendingAttachments.toList().forEach { att ->
-            val chip = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setBackgroundResource(R.drawable.bg_tool_card)
-                setPadding(dp(10), dp(6), dp(6), dp(6))
-            }
+            val chip =
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setBackgroundResource(R.drawable.bg_tool_card)
+                    setPadding(dp(10), dp(6), dp(6), dp(6))
+                }
             chip.addView(
                 ImageView(this).apply {
                     setImageResource(R.drawable.ic_file)
@@ -1165,54 +1203,62 @@ collapseFullDrawerThen { showConversation(conversation) }
                     }
                 },
             )
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            )
+            val lp =
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
             lp.marginEnd = dp(6)
             chips.addView(chip, lp)
         }
     }
 
     /** 人类可读的文件大小。 */
-    private fun fmtSize(bytes: Long): String = when {
-        bytes >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1048576.0)
-        bytes >= 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
-        else -> "$bytes B"
-    }
+    private fun fmtSize(bytes: Long): String =
+        when {
+            bytes >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1048576.0)
+            bytes >= 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
+            else -> "$bytes B"
+        }
 
     /** 用户消息里的附件行：缩略图/图标 + 文件名 + 大小；图片点击全屏预览。 */
     private fun buildAttachmentRow(f: com.coda.mobileui.core.ZPart.FilePart): View {
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
         val isImage = f.mime.startsWith("image/")
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundResource(R.drawable.bg_tool_card)
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                gravity = Gravity.END
-                topMargin = dp(2)
+        val row =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setBackgroundResource(R.drawable.bg_tool_card)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                layoutParams =
+                    LinearLayout
+                        .LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply {
+                            gravity = Gravity.END
+                            topMargin = dp(2)
+                        }
             }
-        }
-        val thumb = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            setImageResource(R.drawable.ic_file)
-            setColorFilter(neutral)
-        }
+        val thumb =
+            ImageView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setImageResource(R.drawable.ic_file)
+                setColorFilter(neutral)
+            }
         row.addView(thumb)
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), 0, 0, 0)
-        }
+        val col =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(8), 0, 0, 0)
+            }
         col.addView(
             TextView(this).apply {
                 text = f.filename
@@ -1238,7 +1284,10 @@ collapseFullDrawerThen { showConversation(conversation) }
     }
 
     /** 附件缩略图：本地文件直读；zcode-artifact 引用走 v4/attachment/read 读回。 */
-    private fun loadAttachmentThumb(f: com.coda.mobileui.core.ZPart.FilePart, into: ImageView) {
+    private fun loadAttachmentThumb(
+        f: com.coda.mobileui.core.ZPart.FilePart,
+        into: ImageView,
+    ) {
         val url = f.url
         if (url.isEmpty()) return
         if (!url.startsWith("zcode-artifact://")) {
@@ -1273,21 +1322,23 @@ collapseFullDrawerThen { showConversation(conversation) }
                 snack("图片不可用，可能已过期或未妥善保存")
                 return
             }
-            val bmp = try {
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            } catch (e: Throwable) {
-                null
-            }
+            val bmp =
+                try {
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                } catch (_: Throwable) {
+                    null
+                }
             if (bmp == null) {
                 snack("图片解码失败")
                 return
             }
             val dlg = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar)
-            val iv = ImageView(this).apply {
-                scaleType = ImageView.ScaleType.FIT_CENTER
-                setImageBitmap(bmp)
-                setOnClickListener { dlg.dismiss() }
-            }
+            val iv =
+                ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    setImageBitmap(bmp)
+                    setOnClickListener { dlg.dismiss() }
+                }
             dlg.setContentView(iv)
             dlg.show()
         }
@@ -1297,11 +1348,12 @@ collapseFullDrawerThen { showConversation(conversation) }
             zc.readAttachment(url) { ok, bytes -> show(if (ok) bytes else null) }
         } else if (java.io.File(url).exists()) {
             Bg.run {
-                val bytes = try {
-                    java.io.File(url).readBytes()
-                } catch (e: Throwable) {
-                    null
-                }
+                val bytes =
+                    try {
+                        java.io.File(url).readBytes()
+                    } catch (_: Throwable) {
+                        null
+                    }
                 runOnUiThread { show(bytes) }
             }
         } else {
@@ -1310,38 +1362,56 @@ collapseFullDrawerThen { showConversation(conversation) }
     }
 
     /** 按目标像素采样解码本地文件（防大图 OOM）。 */
-    private fun decodeSampledFile(path: String, targetPx: Int): android.graphics.Bitmap? = try {
-        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        android.graphics.BitmapFactory.decodeFile(path, bounds)
-        var sample = 1
-        while (bounds.outWidth / sample > targetPx * 2 && bounds.outHeight / sample > targetPx * 2) {
-            sample *= 2
+    private fun decodeSampledFile(
+        path: String,
+        targetPx: Int,
+    ): android.graphics.Bitmap? =
+        try {
+            val bounds =
+                android.graphics.BitmapFactory
+                    .Options()
+                    .apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(path, bounds)
+            var sample = 1
+            while (bounds.outWidth / sample > targetPx * 2 && bounds.outHeight / sample > targetPx * 2) {
+                sample *= 2
+            }
+            android.graphics.BitmapFactory.decodeFile(
+                path,
+                android.graphics.BitmapFactory
+                    .Options()
+                    .apply { inSampleSize = sample },
+            )
+        } catch (_: Throwable) {
+            null
         }
-        android.graphics.BitmapFactory.decodeFile(
-            path,
-            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
-        )
-    } catch (e: Throwable) {
-        null
-    }
 
     /** 按目标像素采样解码字节数组（防大图 OOM）。 */
-    private fun decodeSampledBytes(bytes: ByteArray, targetPx: Int): android.graphics.Bitmap? = try {
-        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        var sample = 1
-        while (bounds.outWidth / sample > targetPx * 2 && bounds.outHeight / sample > targetPx * 2) {
-            sample *= 2
+    private fun decodeSampledBytes(
+        bytes: ByteArray,
+        targetPx: Int,
+    ): android.graphics.Bitmap? =
+        try {
+            val bounds =
+                android.graphics.BitmapFactory
+                    .Options()
+                    .apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            var sample = 1
+            while (bounds.outWidth / sample > targetPx * 2 && bounds.outHeight / sample > targetPx * 2) {
+                sample *= 2
+            }
+            android.graphics.BitmapFactory.decodeByteArray(
+                bytes,
+                0,
+                bytes.size,
+                android.graphics.BitmapFactory
+                    .Options()
+                    .apply { inSampleSize = sample },
+            )
+        } catch (_: Throwable) {
+            null
         }
-        android.graphics.BitmapFactory.decodeByteArray(
-            bytes,
-            0,
-            bytes.size,
-            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
-        )
-    } catch (e: Throwable) {
-        null
-    }
     // ------------------------------------------------------------ 运行时对接
 
     override fun onDestroy() {
@@ -1359,72 +1429,87 @@ collapseFullDrawerThen { showConversation(conversation) }
         Snackbar.make(root, text, Snackbar.LENGTH_LONG).show()
     }
 
-    private val streamFlush = Runnable {
-        for ((mid, buf) in liveText) {
-            val tv = messageViews[mid] ?: continue
-            markwon.setMarkdown(tv, buf.toString())
+    private val streamFlush =
+        Runnable {
+            for ((mid, buf) in liveText) {
+                val tv = messageViews[mid] ?: continue
+                markwon.setMarkdown(tv, buf.toString())
+            }
+            for ((mid, buf) in liveReasoning) {
+                val tv = reasoningViews[mid] ?: continue
+                tv.text = buf.toString()
+            }
         }
-        for ((mid, buf) in liveReasoning) {
-            val tv = reasoningViews[mid] ?: continue
-            tv.text = buf.toString()
-        }
-    }
 
     private fun attachZController() {
         if (zListener != null) return
-        val listener = object : ZController.Listener {
-            override fun onStateChanged() {
-                renderFromController()
-                refreshSlashPanelIfTyping()
-            }
+        val listener =
+            object : ZController.Listener {
+                override fun onStateChanged() {
+                    renderFromController()
+                    refreshSlashPanelIfTyping()
+                }
 
-            override fun onDelta(assistantMessageId: String, text: String) {
-                val buf = liveText.getOrPut(assistantMessageId) { StringBuilder() }
-                buf.append(text)
-                ui.removeCallbacks(streamFlush)
-                ui.postDelayed(streamFlush, 120)
-            }
-            override fun onReasoningDelta(assistantMessageId: String, text: String) {
-                val buf = liveReasoning.getOrPut(assistantMessageId) { StringBuilder() }
-                buf.append(text)
-                reasoningStart.getOrPut(assistantMessageId) { reasoningStartFallback() }
-                if (reasoningViews[assistantMessageId] == null) {
-                    // 思考块尚未建出：消息已在列表中时重建让其出现，否则等常规刷新
-                    if (zc.messages.any { it.id == assistantMessageId }) renderChat()
-                } else {
+                override fun onDelta(
+                    assistantMessageId: String,
+                    text: String,
+                ) {
+                    val buf = liveText.getOrPut(assistantMessageId) { StringBuilder() }
+                    buf.append(text)
                     ui.removeCallbacks(streamFlush)
                     ui.postDelayed(streamFlush, 120)
                 }
-            }
 
-            override fun onNotice(text: String) {
-                snack(text)
-            }
+                override fun onReasoningDelta(
+                    assistantMessageId: String,
+                    text: String,
+                ) {
+                    val buf = liveReasoning.getOrPut(assistantMessageId) { StringBuilder() }
+                    buf.append(text)
+                    reasoningStart.getOrPut(assistantMessageId) { reasoningStartFallback() }
+                    if (reasoningViews[assistantMessageId] == null) {
+                        // 思考块尚未建出：消息已在列表中时重建让其出现，否则等常规刷新
+                        if (zc.messages.any { it.id == assistantMessageId }) renderChat()
+                    } else {
+                        ui.removeCallbacks(streamFlush)
+                        ui.postDelayed(streamFlush, 120)
+                    }
+                }
 
-override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
-                // 记下这一次等待，宠物条据此立刻切到"等你确认"
-                pendingPermissionName = params.optString("toolName").ifEmpty { "权限" }
-                syncPet(force = true)
-                showPermissionDialog(requestId, params)
-            }
+                override fun onNotice(text: String) {
+                    snack(text)
+                }
 
-            override fun onUserInputRequest(requestId: Any, params: org.json.JSONObject) {
-                pendingPermissionName = "询问"
-                syncPet(force = true)
-                showUserInputDialog(requestId, params)
-            }
+                override fun onPermissionRequest(
+                    requestId: Any,
+                    params: org.json.JSONObject,
+                ) {
+                    // 记下这一次等待，宠物条据此立刻切到"等你确认"
+                    pendingPermissionName = params.optString("toolName").ifEmpty { "权限" }
+                    syncPet(force = true)
+                    showPermissionDialog(requestId, params)
+                }
 
-            override fun onSessionOpened(sessionId: String) {
-                todoStatusCache.clear()
-                // 换会话等于换上下文：上一回合的"在跑/刚结束"不能带过来，
-                // 否则会一出场就误报"做完了"。
-                petWasRunning = false
-                petActivity = ""
-                pendingPermissionName = null
-                petBar?.hideNow()
-                renderFromController()
+                override fun onUserInputRequest(
+                    requestId: Any,
+                    params: org.json.JSONObject,
+                ) {
+                    pendingPermissionName = "询问"
+                    syncPet(force = true)
+                    showUserInputDialog(requestId, params)
+                }
+
+                override fun onSessionOpened(sessionId: String) {
+                    todoStatusCache.clear()
+                    // 换会话等于换上下文：上一回合的"在跑/刚结束"不能带过来，
+                    // 否则会一出场就误报"做完了"。
+                    petWasRunning = false
+                    petActivity = ""
+                    pendingPermissionName = null
+                    petBar?.hideNow()
+                    renderFromController()
+                }
             }
-        }
         zListener = listener
         zc.addListener(listener)
         if (!java.io.File(filesDir, "core/.ready").exists()) {
@@ -1573,8 +1658,9 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     private fun activityVariant(): String {
         val last = zc.messages.lastOrNull() ?: return "think"
         val tools = last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
-        val active = tools.lastOrNull({ it.status == "running" }) ?: tools.lastOrNull()
-            ?: return "think"
+        val active =
+            tools.lastOrNull({ it.status == "running" }) ?: tools.lastOrNull()
+                ?: return "think"
         return when (active.tool) {
             "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch" -> "read"
             "Bash", "BashOutput", "KillShell", "KillBash" -> "bash"
@@ -1588,8 +1674,9 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     private fun runningLabel(): String {
         val last = zc.messages.lastOrNull() ?: return "正在思考"
         val tools = last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
-        val active = tools.lastOrNull { it.status == "running" || it.status == "scheduled" }
-            ?: tools.lastOrNull()
+        val active =
+            tools.lastOrNull { it.status == "running" || it.status == "scheduled" }
+                ?: tools.lastOrNull()
         if (active == null) {
             return if (last.parts.any { it is com.coda.mobileui.core.ZPart.Reasoning }) {
                 "正在思考"
@@ -1627,35 +1714,51 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     private fun waitingTool(): String? {
         pendingPermissionName?.let { return it }
         val last = zc.messages.lastOrNull() ?: return null
-        val asking = last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
-            .lastOrNull {
-                (it.status == "scheduled" || it.status == "pending" || it.status == "running") &&
-                    (it.tool == "AskUserQuestion" || it.tool == "ExitPlanMode")
-            }
+        val asking =
+            last.parts
+                .filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
+                .lastOrNull {
+                    (it.status == "scheduled" || it.status == "pending" || it.status == "running") &&
+                        (it.tool == "AskUserQuestion" || it.tool == "ExitPlanMode")
+                }
         return asking?.tool
     }
 
     /** 这一回合是否有工具失败，返回最先失败的那个工具名。 */
     private fun lastTurnFailed(): String? {
         val last = zc.messages.lastOrNull() ?: return null
-        val bad = last.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
-            .firstOrNull { it.status == "error" || it.status == "denied" } ?: return null
+        val bad =
+            last.parts
+                .filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
+                .firstOrNull { it.status == "error" || it.status == "denied" } ?: return null
         return toolLabel(bad.tool)
     }
 
     /** 最后一条回复的首句，控制在 40 字以内。 */
     private fun lastReplyBrief(): String {
-        val text = zc.messages.lastOrNull { it.role != "user" }?.text()?.trim().orEmpty()
+        val text =
+            zc.messages
+                .lastOrNull { it.role != "user" }
+                ?.text()
+                ?.trim()
+                .orEmpty()
         if (text.isEmpty()) return ""
-        val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
-        val sentence = firstLine.split('。', '.', '！', '!', '\n').firstOrNull { it.isNotBlank() }
-            ?.trim()
-            .orEmpty()
+        val firstLine =
+            text
+                .lineSequence()
+                .firstOrNull { it.isNotBlank() }
+                ?.trim()
+                .orEmpty()
+        val sentence =
+            firstLine
+                .split('。', '.', '！', '!', '\n')
+                .firstOrNull { it.isNotBlank() }
+                ?.trim()
+                .orEmpty()
         return shorten(if (sentence.isEmpty()) firstLine else sentence)
     }
 
-    private fun shorten(text: String): String =
-        if (text.length <= 40) text else text.take(39) + "…"
+    private fun shorten(text: String): String = if (text.length <= 40) text else text.take(39) + "…"
 
     /** 依据控制器状态刷新界面。 */
     private fun renderFromController() {
@@ -1667,8 +1770,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         }
         renderDrawerSessions()
         zc.currentModel?.let { pair ->
-            val label = zc.modelOptions
-                .firstOrNull { it.providerId == pair.first && it.modelId == pair.second }?.label
+            val label =
+                zc.modelOptions
+                    .firstOrNull { it.providerId == pair.first && it.modelId == pair.second }
+                    ?.label
             findViewById<TextView>(R.id.tv_model).text = label ?: pair.second
         }
         strengthLevel = controllerStrengthIndex()
@@ -1685,11 +1790,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         host.removeAllViews()
         messageViews.clear()
         reasoningViews.clear()
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
         renderMessagesInto(host, zc.messages)
         val todos = effectiveTodos()
         if (todos.isNotEmpty()) {
@@ -1712,20 +1818,23 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         trackViews: Boolean = true,
     ) {
         val inflater = LayoutInflater.from(this)
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
         messages.forEach { message ->
             val fullText = message.text()
             val tools = message.parts.filterIsInstance<com.coda.mobileui.core.ZPart.ToolPart>()
-            val partReasoning = message.parts
-                .filterIsInstance<com.coda.mobileui.core.ZPart.Reasoning>()
-                .joinToString("") { it.text }
+            val partReasoning =
+                message.parts
+                    .filterIsInstance<com.coda.mobileui.core.ZPart.Reasoning>()
+                    .joinToString("") { it.text }
             val liveRs = liveReasoning[message.id]?.toString()
-            val files = message.parts
-                .filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>()
+            val files =
+                message.parts
+                    .filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>()
             if (fullText.isEmpty() && tools.isEmpty() && partReasoning.isEmpty() && liveRs == null && files.isEmpty()) {
                 return@forEach
             }
@@ -1769,11 +1878,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                     row.findViewById<ImageView>(R.id.tool_icon).setColorFilter(neutral)
                     row.findViewById<TextView>(R.id.tool_summary).text =
                         (tool.output ?: tool.input ?: "").take(160)
-                    row.findViewById<TextView>(R.id.tool_detail).text = when (tool.status) {
-                        "running", "scheduled" -> getString(R.string.tool_state_running)
-                        "error", "denied" -> getString(R.string.tool_state_failed)
-                        else -> ""
-                    }
+                    row.findViewById<TextView>(R.id.tool_detail).text =
+                        when (tool.status) {
+                            "running", "scheduled" -> getString(R.string.tool_state_running)
+                            "error", "denied" -> getString(R.string.tool_state_failed)
+                            else -> ""
+                        }
                     row.setOnClickListener {
                         if (ZWorkflowKit.isAgentTool(tool.tool)) {
                             showSubagentSheet(tool)
@@ -1786,8 +1896,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             }
         }
     }
+
     /** 用户消息气泡（右对齐）。主界面与子代理半屏共用：AI 发给子代理的任务即以气泡呈现。 */
-    private fun addUserBubble(host: LinearLayout, text: String) {
+    private fun addUserBubble(
+        host: LinearLayout,
+        text: String,
+    ) {
         host.addView(
             LayoutInflater.from(this).inflate(R.layout.view_chat_message, host, false).apply {
                 (this as? LinearLayout)?.gravity = Gravity.END
@@ -1802,8 +1916,8 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** 默认发送模式（设置页可改；0=Yolo，1=Build，2=Chat）。 */
-    private fun defaultSendModeIndex(): Int =
-        SettingsStore.get(this).defaultSendMode.coerceIn(0, SendModeView.MODES.size - 1)
+    private fun defaultSendModeIndex(): Int = SettingsStore.get(this).defaultSendMode.coerceIn(0, SendModeView.MODES.size - 1)
+
     /** 自动滚动到底部（发送与生成时跟随；可在设置中关闭）。 */
     private fun maybeAutoScrollToBottom(force: Boolean) {
         if (!SettingsStore.get(this).chatAutoScroll) return
@@ -1816,71 +1930,90 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             }
         }
     }
+
     /** 思考/生成计时起点：优先取最近一次发送消息的时刻（含等待与思考），否则用当前时间。 */
     private fun reasoningStartFallback(): Long {
         val t = lastSendAt
         return if (t > 0 && System.currentTimeMillis() - t < 10 * 60 * 1000L) t else System.currentTimeMillis()
     }
+
     /** 思考块：参考样式「一行标题 + 用时 + 折叠箭头」；无底色，点阵/标题/正文左对齐（12dp）。 */
-    private fun buildReasoningBlock(messageId: String, text: String, streaming: Boolean): View {
-        val onSurface = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurface,
-            Color.BLACK,
-        )
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
+    private fun buildReasoningBlock(
+        messageId: String,
+        text: String,
+        streaming: Boolean,
+    ): View {
+        val onSurface =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurface,
+                Color.BLACK,
+            )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
         // 默认收起：只显示一行标题，点击展开/收起
         val collapsed = reasoningCollapsed[messageId] ?: true
-        val medium = android.graphics.Typeface.create(
-            "sans-serif-medium",
-            android.graphics.Typeface.NORMAL,
-        )
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(2), dp(12), dp(2))
-            layoutParams = LinearLayout.LayoutParams(
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = dp(4) }
-        }
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(2), 0, dp(2))
-        }
-        val title = TextView(this).apply {
-            this.text = if (streaming) "Thinking" else "Thought for"
-            textSize = 15f
-            typeface = medium
-            setTextColor(onSurface)
-        }
-        val tick = TextView(this).apply {
-            textSize = 15f
-            typeface = medium
-            setTextColor(neutral)
-            fontFeatureSettings = "tnum"
-            visibility = View.GONE
-        }
-        val chevron = ImageView(this).apply {
-            setImageResource(R.drawable.ic_expand_more)
-            setColorFilter(neutral)
-            layoutParams = LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(2) }
-            rotation = if (collapsed) 0f else 180f
-        }
+        val medium =
+            android.graphics.Typeface.create(
+                "sans-serif-medium",
+                android.graphics.Typeface.NORMAL,
+            )
+        val wrap =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(2), dp(12), dp(2))
+                layoutParams =
+                    LinearLayout
+                        .LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { bottomMargin = dp(4) }
+            }
+        val header =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(2), 0, dp(2))
+            }
+        val title =
+            TextView(this).apply {
+                this.text = if (streaming) "Thinking" else "Thought for"
+                textSize = 15f
+                typeface = medium
+                setTextColor(onSurface)
+            }
+        val tick =
+            TextView(this).apply {
+                textSize = 15f
+                typeface = medium
+                setTextColor(neutral)
+                fontFeatureSettings = "tnum"
+                visibility = View.GONE
+            }
+        val chevron =
+            ImageView(this).apply {
+                setImageResource(R.drawable.ic_expand_more)
+                setColorFilter(neutral)
+                layoutParams = LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(2) }
+                rotation = if (collapsed) 0f else 180f
+            }
         if (streaming) {
             // 思考计时从发送那一刻开始（含等待首 token 的时间）
             val start = reasoningStart.getOrPut(messageId) { reasoningStartFallback() }
-            val loader = LatticeLoaderView(this).apply {
-                setIndicatorColor(neutral)
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { rightMargin = dp(10) }
-            }
+            val loader =
+                LatticeLoaderView(this).apply {
+                    setIndicatorColor(neutral)
+                    layoutParams =
+                        LinearLayout
+                            .LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ).apply { rightMargin = dp(10) }
+                }
             val showTick = { ms: Long ->
                 tick.visibility = View.VISIBLE
                 tick.text = fmtDur(ms)
@@ -1902,19 +2035,21 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         header.addView(title)
         header.addView(
             tick,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { leftMargin = dp(8) },
+            LinearLayout
+                .LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { leftMargin = dp(8) },
         )
         header.addView(chevron)
-        val body = TextView(this).apply {
-            this.text = text
-            textSize = 13f
-            setTextColor(neutral)
-            setPadding(0, dp(4), 0, 0)
-            visibility = if (collapsed) View.GONE else View.VISIBLE
-        }
+        val body =
+            TextView(this).apply {
+                this.text = text
+                textSize = 13f
+                setTextColor(neutral)
+                setPadding(0, dp(4), 0, 0)
+                visibility = if (collapsed) View.GONE else View.VISIBLE
+            }
         header.setOnClickListener {
             val nowCollapsed = reasoningCollapsed[messageId] ?: true
             reasoningCollapsed[messageId] = !nowCollapsed
@@ -1929,18 +2064,22 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
 
     /** “正在生成…”指示行：最左侧点阵脉冲 + 文字。 */
     private fun buildRunningIndicator(neutral: Int): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(4), 0, dp(8))
-        }
-        val loader = LatticeLoaderView(this).apply {
-            setIndicatorColor(neutral)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { rightMargin = dp(8) }
-        }
+        val row =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(4), 0, dp(8))
+            }
+        val loader =
+            LatticeLoaderView(this).apply {
+                setIndicatorColor(neutral)
+                layoutParams =
+                    LinearLayout
+                        .LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { rightMargin = dp(8) }
+            }
         val since = runningSince ?: reasoningStartFallback().also { runningSince = it }
         loader.start(System.currentTimeMillis() - since)
         row.addView(loader)
@@ -1976,11 +2115,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
 
     /**工具调用详情：半屏卡片展示完整输入/输出。 */
     private fun showToolDetail(tool: com.coda.mobileui.core.ZPart.ToolPart) {
-        val status = when (tool.status) {
-            "running", "scheduled" -> getString(R.string.tool_state_running)
-            "error", "denied" -> getString(R.string.tool_state_failed)
-            else -> "完成"
-        }
+        val status =
+            when (tool.status) {
+                "running", "scheduled" -> getString(R.string.tool_state_running)
+                "error", "denied" -> getString(R.string.tool_state_failed)
+                else -> "完成"
+            }
         val bits = mutableListOf(status)
         tool.durationMs?.let { bits += fmtDur(it) }
         tool.title?.takeIf { it.isNotEmpty() }?.let { bits += it }
@@ -2001,50 +2141,63 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 if (input.isNullOrBlank() && output.isNullOrBlank()) {
                     col.addView(sheetSectionLabel("暂无可展示的输入/输出"))
                 }
-            }
-            .show()
+            }.show()
     }
 
     // ------------------------------------------------------- 子代理 / 工作流专用展示
 
+    private fun codaNeutral(): Int =
+        com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
 
-    private fun codaNeutral(): Int = com.google.android.material.color.MaterialColors.getColor(
-        this,
-        com.google.android.material.R.attr.colorOnSurfaceVariant,
-        Color.GRAY,
-    )
+    private fun codaOnSurface(): Int =
+        com.google.android.material.color.MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurface,
+            Color.BLACK,
+        )
 
-    private fun codaOnSurface(): Int = com.google.android.material.color.MaterialColors.getColor(
-        this,
-        com.google.android.material.R.attr.colorOnSurface,
-        Color.BLACK,
-    )
+    private fun codaPrimary(): Int =
+        com.google.android.material.color.MaterialColors.getColor(
+            this,
+            androidx.appcompat.R.attr.colorPrimary,
+            codaNeutral(),
+        )
 
-    private fun codaPrimary(): Int = com.google.android.material.color.MaterialColors.getColor(
-        this,
-        androidx.appcompat.R.attr.colorPrimary,
-        codaNeutral(),
-    )
-
-    private fun tintAlpha(color: Int, alpha: Float): Int = Color.argb(
-        (alpha.coerceIn(0f, 1f) * 255).toInt(),
-        Color.red(color),
-        Color.green(color),
-        Color.blue(color),
-    )
+    private fun tintAlpha(
+        color: Int,
+        alpha: Float,
+    ): Int =
+        Color.argb(
+            (alpha.coerceIn(0f, 1f) * 255).toInt(),
+            Color.red(color),
+            Color.green(color),
+            Color.blue(color),
+        )
 
     /** 卡片容器：与其它工具卡同一底色、内边距与下间距。 */
-    private fun codaCard(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(12), dp(10), dp(12), dp(10))
-        setBackgroundResource(R.drawable.bg_tool_card)
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { bottomMargin = dp(8) }
-    }
+    private fun codaCard(): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setBackgroundResource(R.drawable.bg_tool_card)
+            layoutParams =
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { bottomMargin = dp(8) }
+        }
 
-    private fun codaLine(text: String, size: Float, color: Int, topPad: Int = 0): TextView =
+    private fun codaLine(
+        text: String,
+        size: Float,
+        color: Int,
+        topPad: Int = 0,
+    ): TextView =
         TextView(this).apply {
             this.text = text
             textSize = size
@@ -2069,14 +2222,16 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     private fun showSubagentSheet(tool: com.coda.mobileui.core.ZPart.ToolPart) {
         val sub = zc.subagentForToolCall(tool.callId)
         val input = codaJsonObject(tool.input)
-        val type = sub?.subagentType?.takeIf { it.isNotEmpty() }
-            ?: input?.optString("subagent_type")?.takeIf { it.isNotEmpty() }
-            ?: "子代理"
+        val type =
+            sub?.subagentType?.takeIf { it.isNotEmpty() }
+                ?: input?.optString("subagent_type")?.takeIf { it.isNotEmpty() }
+                ?: "子代理"
         val prompt = subagentTask(tool)
         // 子会话定位：先按本次工具调用，再退回它所属的父 Agent 调用（parentToolUseId 关联）。
-        val anchor = tool.callId.takeIf { zc.childSessionIdForToolCall(it) != null }
-            ?: tool.parentToolUseId?.takeIf { zc.childSessionIdForToolCall(it) != null }
-            ?: zc.parentCallOfToolCall(tool.callId)?.takeIf { zc.childSessionIdForToolCall(it) != null }
+        val anchor =
+            tool.callId.takeIf { zc.childSessionIdForToolCall(it) != null }
+                ?: tool.parentToolUseId?.takeIf { zc.childSessionIdForToolCall(it) != null }
+                ?: zc.parentCallOfToolCall(tool.callId)?.takeIf { zc.childSessionIdForToolCall(it) != null }
         val childSessionId = anchor?.let { zc.childSessionIdForToolCall(it) }
         val bits = mutableListOf(type)
         if (sub != null) bits += ZWorkflowKit.subagentStatusLabel(sub.status)
@@ -2084,24 +2239,26 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             bits += fmtDur(sub.endedAt - sub.startedAt)
         }
         val host = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val sheet = CodaSheet(this)
-            .title(sub?.title?.takeIf { it.isNotEmpty() } ?: type)
-            .subtitle(bits.joinToString(" · "))
-            .content { col ->
-                col.addView(host)
-                fillSubagentConversation(host, prompt, childSessionId)
-            }
+        val sheet =
+            CodaSheet(this)
+                .title(sub?.title?.takeIf { it.isNotEmpty() } ?: type)
+                .subtitle(bits.joinToString(" · "))
+                .content { col ->
+                    col.addView(host)
+                    fillSubagentConversation(host, prompt, childSessionId)
+                }
         // 子代理仍在运行时跟随刷新：3 秒一轮，关闭半屏立即停止。只更新内容，不动容器。
         var ticker: Runnable? = null
         if (sub?.isActive == true && !childSessionId.isNullOrEmpty()) {
-            ticker = object : Runnable {
-                override fun run() {
-                    zc.loadChildMessages(childSessionId) {
-                        fillSubagentConversation(host, prompt, childSessionId)
+            ticker =
+                object : Runnable {
+                    override fun run() {
+                        zc.loadChildMessages(childSessionId) {
+                            fillSubagentConversation(host, prompt, childSessionId)
+                        }
+                        ui.postDelayed(this, 3000)
                     }
-                    ui.postDelayed(this, 3000)
                 }
-            }
             ui.postDelayed(ticker, 3000)
         }
         val stopTicker = ticker
@@ -2156,7 +2313,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** 子会话里首条用户消息是否就是父代理下发的任务（避免同一条任务展示两次）。 */
-    private fun childHasTask(messages: List<com.coda.mobileui.core.ZMessage>, prompt: String): Boolean {
+    private fun childHasTask(
+        messages: List<com.coda.mobileui.core.ZMessage>,
+        prompt: String,
+    ): Boolean {
         val first = messages.firstOrNull { it.role == "user" }?.text()?.trim() ?: return false
         if (first.isEmpty()) return false
         return first.startsWith(prompt.trim().take(60))
@@ -2172,12 +2332,14 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val phases = ZWorkflowKit.parsePhases(snapshot)
         val current = ZWorkflowKit.currentPhase(phases)
         val card = codaCard()
-        val running = run?.status == "running" || run?.status == "pending" ||
-            tool.status == "running" || tool.status == "scheduled"
-        val head = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val running =
+            run?.status == "running" || run?.status == "pending" ||
+                tool.status == "running" || tool.status == "scheduled"
+        val head =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
         head.addView(
             StatusMarkView(this).apply {
                 inkColor = if (running) codaPrimary() else codaNeutral()
@@ -2206,10 +2368,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         } else {
             card.addView(
                 buildWorkflowTimeline(phases, current),
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(8) },
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(8) },
             )
             card.addView(codaLine(currentStepText(phases, current, snapshot), 12f, codaPrimary(), 6))
         }
@@ -2235,11 +2398,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         if (current == null) return "当前步骤：等待阶段上报"
         val actors = ZWorkflowKit.parseActors(text)
         val active = ZWorkflowKit.activeActorCount(actors, current)
-        val bits = mutableListOf(
-            "当前步骤 ${current.index}/${phases.size}",
-            current.name,
-            ZWorkflowKit.phaseStateLabel(current.state),
-        )
+        val bits =
+            mutableListOf(
+                "当前步骤 ${current.index}/${phases.size}",
+                current.name,
+                ZWorkflowKit.phaseStateLabel(current.state),
+            )
         val progress = ZWorkflowKit.stepProgressLabel(current)
         if (progress.isNotEmpty()) bits += progress
         if (active > 0) bits += "$active 个子智能体在跑"
@@ -2270,16 +2434,18 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                     inkColor = if (ph.isCurrent) codaPrimary() else codaNeutral()
                     setStatus(ZWorkflowKit.phaseMarkState(ph.state), false)
                 },
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { gravity = Gravity.CENTER },
+                FrameLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { gravity = Gravity.CENTER },
             )
             row.addView(rail, LinearLayout.LayoutParams(dp(22), rowH))
-            val texts = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
+            val texts =
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
             texts.addView(
                 codaLine(
                     "${ph.index}. ${ph.name}",
@@ -2324,22 +2490,29 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         return best ?: own
     }
 
-    private fun workflowStatusWord(runStatus: String?, toolStatus: String): String =
+    private fun workflowStatusWord(
+        runStatus: String?,
+        toolStatus: String,
+    ): String =
         if (runStatus != null) {
             ZWorkflowKit.runStatusLabel(runStatus)
         } else {
             ZWorkflowKit.toolStatusLabel(toolStatus)
         }
 
-    private fun workflowMarkState(runStatus: String?, toolStatus: String): String = when {
-        runStatus == "running" || runStatus == "pending" -> "running"
-        runStatus == "completed" -> "done"
-        runStatus == "errored" -> "failed"
-        runStatus == "stopped" -> "cancelled"
-        toolStatus == "running" || toolStatus == "scheduled" -> "running"
-        toolStatus == "error" || toolStatus == "denied" -> "failed"
-        else -> "done"
-    }
+    private fun workflowMarkState(
+        runStatus: String?,
+        toolStatus: String,
+    ): String =
+        when {
+            runStatus == "running" || runStatus == "pending" -> "running"
+            runStatus == "completed" -> "done"
+            runStatus == "errored" -> "failed"
+            runStatus == "stopped" -> "cancelled"
+            toolStatus == "running" || toolStatus == "scheduled" -> "running"
+            toolStatus == "error" || toolStatus == "denied" -> "failed"
+            else -> "done"
+        }
 
     /** 工作流半屏（展开态）：保留时间轴与当前步骤，追加运行控制与子智能体输出入口。 */
     private fun showWorkflowSheet(tool: com.coda.mobileui.core.ZPart.ToolPart) {
@@ -2349,13 +2522,15 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         run?.let { if (it.spentTokens > 0) bits += "${formatCharCount(it.spentTokens.toInt())} tokens" }
         // 内容区随进度重画，用可变容器持有；控制条只建一次，避免按钮在刷新时被替换掉。
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val sheet = CodaSheet(this)
-            .title(run?.name ?: tool.title?.takeIf { it.isNotEmpty() } ?: "工作流")
-            .subtitle(bits.joinToString(" · "))
-            .content { col ->
-                col.addView(buildWorkflowControls(run, zc.liveOfWorkflow(run?.runId), body))
-                col.addView(body)
-            }
+        val sheet =
+            CodaSheet(this)
+                .title(run?.name ?: tool.title?.takeIf { it.isNotEmpty() } ?: "工作流")
+                .subtitle(bits.joinToString(" · "))
+                .content { col ->
+                    col.addView(buildWorkflowControls(run, zc.liveOfWorkflow(run?.runId), body))
+                    col.addView(body)
+                }
+
         fun fill() {
             // 每次都重新取：进度事件到来时阶段与子智能体都可能在变，
             // 沿用创建时的快照会让面板看起来"卡住不动"。
@@ -2403,13 +2578,14 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         // 结算事件之后 run 已经不会再变，但仍然留着监听（很轻），关面板即摘除。
         val runId = run?.runId
         if (runId != null) {
-            val watcher = ZController.WorkflowWatcher { changed ->
-                if (changed == runId) {
-                    // 阶段/子智能体是快照数据，需要重新取一次花名册；取回来由主流程重画卡片。
-                    zc.refreshWorkflowRuns()
-                    fill()
+            val watcher =
+                ZController.WorkflowWatcher { changed ->
+                    if (changed == runId) {
+                        // 阶段/子智能体是快照数据，需要重新取一次花名册；取回来由主流程重画卡片。
+                        zc.refreshWorkflowRuns()
+                        fill()
+                    }
                 }
-            }
             zc.addWorkflowWatcher(watcher)
             sheet.onDismiss { zc.removeWorkflowWatcher(watcher) }
         }
@@ -2426,10 +2602,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         live: ZWorkflowLive?,
         body: LinearLayout,
     ): View {
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(2), 0, dp(6))
-        }
+        val wrap =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(2), 0, dp(6))
+            }
         if (run == null) {
             wrap.addView(codaLine("运行尚未登记，控制按钮暂不可用", 12f, codaNeutral()))
             return wrap
@@ -2438,12 +2615,14 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val running = run.status == "running" || run.status == "pending"
         // 可继续：内核只允许 cancelled / Interrupted 的 run 恢复。
         // 摘要里的状态词是 stopped（cancel 结算后的值），两套词都要认。
-        val canResume = live?.resumable == true ||
-            run.isTerminal && (run.status == "stopped" || run.status == "cancelled")
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(4), 0, 0)
-        }
+        val canResume =
+            live?.resumable == true ||
+                (run.isTerminal && (run.status == "stopped" || run.status == "cancelled"))
+        val row =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(4), 0, 0)
+            }
         if (running) {
             row.addView(
                 workflowControlButton("停止", filled = false) {
@@ -2453,7 +2632,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                                 snack("已请求停止工作流")
                                 // 停止是异步结算，先给按钮一个即时状态，结算事件回来后卡片会自动刷新
                                 body.alpha = 0.5f
-                                body.animate().alpha(1f).setDuration(220).start()
+                                body
+                                    .animate()
+                                    .alpha(1f)
+                                    .setDuration(220)
+                                    .start()
                             } else {
                                 snack(controlFailText(msg, "停止失败"))
                             }
@@ -2491,7 +2674,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** 控制失败的提示：优先用 reason 对应的中文，其次用内核 original message，最后用兜底文案。 */
-    private fun controlFailText(reasonOrMsg: String, fallback: String): String {
+    private fun controlFailText(
+        reasonOrMsg: String,
+        fallback: String,
+    ): String {
         val byReason = ZWorkflowKit.rejectReasonLabel(reasonOrMsg)
         if (byReason.isNotEmpty()) return byReason
         return if (reasonOrMsg.isNotBlank() && reasonOrMsg != "ok") reasonOrMsg else fallback
@@ -2503,11 +2689,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         filled: Boolean,
         click: () -> Unit,
     ): TextView {
-        val onPrimary = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnPrimary,
-            Color.WHITE,
-        )
+        val onPrimary =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnPrimary,
+                Color.WHITE,
+            )
         return TextView(this).apply {
             text = label
             textSize = 13f
@@ -2515,33 +2702,49 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             setPadding(dp(22), dp(9), dp(22), dp(9))
             if (filled) {
                 setTextColor(onPrimary)
-                background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = dp(20).toFloat()
-                    setColor(codaPrimary())
-                }
+                background =
+                    android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(20).toFloat()
+                        setColor(codaPrimary())
+                    }
             } else {
                 setTextColor(codaOnSurface())
-                background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = dp(20).toFloat()
-                    setStroke(dp(1), tintAlpha(codaOnSurface(), 0.22f))
-                }
+                background =
+                    android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(20).toFloat()
+                        setStroke(dp(1), tintAlpha(codaOnSurface(), 0.22f))
+                    }
             }
             isClickable = true
             setOnClickListener { click() }
             setOnTouchListener { v, ev ->
                 when (ev.actionMasked) {
-                    android.view.MotionEvent.ACTION_DOWN ->
-                        v.animate().alpha(0.6f).setDuration(90).start()
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        v
+                            .animate()
+                            .alpha(0.6f)
+                            .setDuration(90)
+                            .start()
+                    }
+
                     android.view.MotionEvent.ACTION_UP,
                     android.view.MotionEvent.ACTION_CANCEL,
-                    -> v.animate().alpha(1f).setDuration(140).start()
+                    -> {
+                        v
+                            .animate()
+                            .alpha(1f)
+                            .setDuration(140)
+                            .start()
+                    }
                 }
                 false
             }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { rightMargin = dp(8) }
+            layoutParams =
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { rightMargin = dp(8) }
         }
     }
 
@@ -2551,16 +2754,21 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
      * 有子会话的 actor 整行可点：点开就是它自己的输出（复用子代理那套整页会话视图），
      * 这正是"在工作流里查看子智能体在跑什么"的入口。
      */
-    private fun buildActorRow(actor: ZWorkflowActor, runId: String?): View {
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(6), 0, dp(6))
-        }
+    private fun buildActorRow(
+        actor: ZWorkflowActor,
+        runId: String?,
+    ): View {
+        val wrap =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(6), 0, dp(6))
+            }
         val sessionId = zc.actorSessionOf(runId, actor.address)
-        val head = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val head =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
         head.addView(
             StatusMarkView(this).apply {
                 inkColor = if (actor.isActive) codaPrimary() else codaNeutral()
@@ -2600,11 +2808,23 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             // 可点行给一次按下反馈：这里没有现成的 ripple，用透明度最直接。
             wrap.setOnTouchListener { v, ev ->
                 when (ev.actionMasked) {
-                    android.view.MotionEvent.ACTION_DOWN ->
-                        v.animate().alpha(0.6f).setDuration(90).start()
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        v
+                            .animate()
+                            .alpha(0.6f)
+                            .setDuration(90)
+                            .start()
+                    }
+
                     android.view.MotionEvent.ACTION_UP,
                     android.view.MotionEvent.ACTION_CANCEL,
-                    -> v.animate().alpha(1f).setDuration(140).start()
+                    -> {
+                        v
+                            .animate()
+                            .alpha(1f)
+                            .setDuration(140)
+                            .start()
+                    }
                 }
                 false
             }
@@ -2618,7 +2838,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
      * 与 [showSubagentSheet] 同一套渲染（子会话消息按真实消息画），区别只在于它从
      * 工作流卡进来、并跟随 run 的进度自动刷新，同时还能看到它属于哪个阶段。
      */
-    private fun showWorkflowActorOutput(actor: ZWorkflowActor, runId: String?, childSessionId: String) {
+    private fun showWorkflowActorOutput(
+        actor: ZWorkflowActor,
+        runId: String?,
+        childSessionId: String,
+    ) {
         val title = actor.name.ifEmpty { actor.address.ifEmpty { "子智能体" } }
         val bits = mutableListOf<String>()
         if (actor.address.isNotEmpty()) bits += actor.address
@@ -2626,11 +2850,13 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         bits += ZWorkflowKit.actorStateLabel(actor.state)
         if (actor.tokens.isNotEmpty()) bits += actor.tokens
         val host = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val sheet = CodaSheet(this)
-            .title(title)
-            .subtitle(bits.joinToString(" · "))
-            .content { col -> col.addView(host) }
+        val sheet =
+            CodaSheet(this)
+                .title(title)
+                .subtitle(bits.joinToString(" · "))
+                .content { col -> col.addView(host) }
         var ticker: Runnable? = null
+
         fun render() {
             fillSubagentConversation(host, actor.task, childSessionId)
         }
@@ -2639,12 +2865,13 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         // 这里只重渲染、不主动发请求：fillSubagentConversation 在自己判断"缓存为空且未失败"
         // 时才去 loadChildMessages，避免两条请求同时打同一个子会话。
         if (actor.isActive) {
-            ticker = object : Runnable {
-                override fun run() {
-                    render()
-                    ui.postDelayed(this, 3000)
+            ticker =
+                object : Runnable {
+                    override fun run() {
+                        render()
+                        ui.postDelayed(this, 3000)
+                    }
                 }
-            }
             ui.postDelayed(ticker, 3000)
         }
         val stop = ticker
@@ -2653,29 +2880,32 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     private fun sheetSectionLabel(text: String): TextView {
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
         return TextView(this).apply {
             this.text = text
             textSize = 13f
             setTextColor(neutral)
-            typeface = android.graphics.Typeface.create(
-                "sans-serif-medium",
-                android.graphics.Typeface.NORMAL,
-            )
+            typeface =
+                android.graphics.Typeface.create(
+                    "sans-serif-medium",
+                    android.graphics.Typeface.NORMAL,
+                )
             setPadding(0, dp(14), 0, dp(6))
         }
     }
 
     private fun sheetCodeBlock(text: String): TextView {
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
         return TextView(this).apply {
             this.text = text
             textSize = 12f
@@ -2703,36 +2933,42 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
 
     /** 待办卡片：展示当前会话待办，最多 12 项。 */
     private fun buildTodoCard(todos: List<com.coda.mobileui.core.ZParse.ZTodo>): View {
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
-        val onSurface = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurface,
-            Color.BLACK,
-        )
-        val primary = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            androidx.appcompat.R.attr.colorPrimary,
-            neutral,
-        )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
+        val onSurface =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurface,
+                Color.BLACK,
+            )
+        val primary =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                androidx.appcompat.R.attr.colorPrimary,
+                neutral,
+            )
         val done = todos.count { it.status == "completed" }
-        val wrap = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundResource(R.drawable.bg_todo_card)
-            // 宽度与左右位置对齐输入框（composer_container 左右各 12dp），圆角同为 28dp。
-            layoutParams = LinearLayout.LayoutParams(
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                leftMargin = dp(12)
-                rightMargin = dp(12)
-                bottomMargin = dp(8)
+        val wrap =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                setBackgroundResource(R.drawable.bg_todo_card)
+                // 宽度与左右位置对齐输入框（composer_container 左右各 12dp），圆角同为 28dp。
+                layoutParams =
+                    LinearLayout
+                        .LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply {
+                            leftMargin = dp(12)
+                            rightMargin = dp(12)
+                            bottomMargin = dp(8)
+                        }
             }
-        }
         wrap.addView(
             TextView(this).apply {
                 text = "待办 · $done/${todos.size} 已完成"
@@ -2743,19 +2979,21 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         )
         todos.take(12).forEach { t ->
             // 生命周期映射（参考 React Bits Status Mark）：pending 虚线环 / running 旋转弧 / done 勾 / cancelled 叉
-            val st = when (t.status) {
-                "completed" -> "done"
-                "in_progress" -> "running"
-                "cancelled" -> "cancelled"
-                "failed" -> "failed"
-                else -> "pending"
-            }
+            val st =
+                when (t.status) {
+                    "completed" -> "done"
+                    "in_progress" -> "running"
+                    "cancelled" -> "cancelled"
+                    "failed" -> "failed"
+                    else -> "pending"
+                }
             val prevSt = todoStatusCache[t.content]
             todoStatusCache[t.content] = st
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, dp(3), 0, dp(3))
-            }
+            val row =
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, dp(3), 0, dp(3))
+                }
             row.addView(
                 StatusMarkView(this).apply {
                     inkColor = if (st == "running") primary else neutral
@@ -2766,10 +3004,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                     } else {
                         setStatus(st, animate = false)
                     }
-                    layoutParams = LinearLayout.LayoutParams(dp(17), dp(17)).apply {
-                        topMargin = dp(2)
-                        rightMargin = dp(9)
-                    }
+                    layoutParams =
+                        LinearLayout.LayoutParams(dp(17), dp(17)).apply {
+                            topMargin = dp(2)
+                            rightMargin = dp(9)
+                        }
                 },
             )
             row.addView(
@@ -2826,11 +3065,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                         val o = arr.optJSONObject(i) ?: continue
                         val c = o.optString("content")
                         if (c.isEmpty()) continue
-                        out += com.coda.mobileui.core.ZParse.ZTodo(
-                            c,
-                            o.optString("status", "pending"),
-                            o.optString("priority", "medium"),
-                        )
+                        out +=
+                            com.coda.mobileui.core.ZParse.ZTodo(
+                                c,
+                                o.optString("status", "pending"),
+                                o.optString("priority", "medium"),
+                            )
                     }
                     if (out.isNotEmpty()) return out
                 } catch (_: Throwable) {
@@ -2845,17 +3085,19 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val container = findViewById<LinearLayout>(R.id.drawer_content) ?: return
         (container.findViewWithTag<View>("sessions_host") as? View)?.let { container.removeView(it) }
         val inflater = LayoutInflater.from(this)
-        val list = LinearLayout(this).apply {
-            tag = "sessions_host"
-            orientation = LinearLayout.VERTICAL
-        }
+        val list =
+            LinearLayout(this).apply {
+                tag = "sessions_host"
+                orientation = LinearLayout.VERTICAL
+            }
         zc.sessions.forEachIndexed { index, s ->
             list.addView(
                 createSessionRow(inflater, list, s),
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { if (index == 0) topMargin = dp(4) },
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { if (index == 0) topMargin = dp(4) },
             )
         }
         container.addView(
@@ -2876,12 +3118,13 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         if (session.id == zc.currentSessionId) SettingsStore.get(this).markSessionSeen(session.id)
         val status = sessionConvStatus(session)
         row.findViewById<TextView>(R.id.conv_status).apply {
-            val label = when (status) {
-                ConvStatus.WORKING -> getString(R.string.conv_status_working)
-                ConvStatus.WAITING -> getString(R.string.conv_status_waiting)
-                ConvStatus.DONE_UNREAD -> getString(R.string.conv_status_done)
-                ConvStatus.NONE -> null
-            }
+            val label =
+                when (status) {
+                    ConvStatus.WORKING -> getString(R.string.conv_status_working)
+                    ConvStatus.WAITING -> getString(R.string.conv_status_waiting)
+                    ConvStatus.DONE_UNREAD -> getString(R.string.conv_status_done)
+                    ConvStatus.NONE -> null
+                }
             if (label == null) {
                 visibility = View.GONE
             } else {
@@ -2938,15 +3181,17 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         if (isFinishing || isDestroyed) return
         val current = zc.workspacePath()
         val bound = session.workspacePath?.takeIf { it.isNotEmpty() }
-        val sheet = CodaSheet(this)
-            .compact()
-            .title(session.title.ifEmpty { "未命名会话" })
-            .subtitle("所属工作区：${bound ?: current}")
-        val onSurface = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurface,
-            Color.BLACK,
-        )
+        val sheet =
+            CodaSheet(this)
+                .compact()
+                .title(session.title.ifEmpty { "未命名会话" })
+                .subtitle("所属工作区：${bound ?: current}")
+        val onSurface =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurface,
+                Color.BLACK,
+            )
         sheet.content { col ->
             if (bound != null && bound != current) {
                 col.addView(
@@ -2969,7 +3214,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** 弹层里的一行操作：主标题 + 可选灰字说明。 */
-    private fun sheetAction(text: String, hint: String?, color: Int, click: () -> Unit): View =
+    private fun sheetAction(
+        text: String,
+        hint: String?,
+        color: Int,
+        click: () -> Unit,
+    ): View =
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(2), dp(14), dp(2), dp(14))
@@ -2996,7 +3246,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         }
 
     /** 把会话改绑到目标工作区；成功后内核侧会重建归属，客户端刷新列表。 */
-    private fun applySessionWorkspace(session: ZSessionInfo, targetPath: String) {
+    private fun applySessionWorkspace(
+        session: ZSessionInfo,
+        targetPath: String,
+    ) {
         if (targetPath == session.workspacePath) {
             snack("该会话已在此工作区")
             return
@@ -3015,20 +3268,34 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** 真实会话状态 → 抽屉状态：运行中、待您操作、已完成未读，其余不显示。 */
-    private fun sessionConvStatus(session: ZSessionInfo): ConvStatus = when (session.status) {
-        "running" -> ConvStatus.WORKING
-        "waiting", "paused" -> ConvStatus.WAITING
-        "completed", "error" ->
-            if (session.updatedAt > SettingsStore.get(this).sessionSeenAt(session.id)) {
-                ConvStatus.DONE_UNREAD
-            } else {
+    private fun sessionConvStatus(session: ZSessionInfo): ConvStatus =
+        when (session.status) {
+            "running" -> {
+                ConvStatus.WORKING
+            }
+
+            "waiting", "paused" -> {
+                ConvStatus.WAITING
+            }
+
+            "completed", "error" -> {
+                if (session.updatedAt > SettingsStore.get(this).sessionSeenAt(session.id)) {
+                    ConvStatus.DONE_UNREAD
+                } else {
+                    ConvStatus.NONE
+                }
+            }
+
+            else -> {
                 ConvStatus.NONE
             }
-        else -> ConvStatus.NONE
-    }
+        }
 
     /** 右侧 PR 标记：工作区有远端仓库且已登录 GitHub 时，按当前分支查关联 PR。 */
-    private fun bindSessionPull(row: View, git: GitWorkspace.Info?) {
+    private fun bindSessionPull(
+        row: View,
+        git: GitWorkspace.Info?,
+    ) {
         val owner = git?.owner
         val repo = git?.repo
         val branch = git?.branch
@@ -3037,14 +3304,15 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val sessionId = row.tag as? String
         GitHub.fetchPullForBranch(this, owner, repo, branch) { pull ->
             if (pull == null || row.tag != sessionId) return@fetchPullForBranch
-            val color = ContextCompat.getColor(
-                this,
-                when {
-                    pull.merged -> R.color.pr_merged
-                    pull.state == "closed" -> R.color.md3_error
-                    else -> R.color.status_done
-                },
-            )
+            val color =
+                ContextCompat.getColor(
+                    this,
+                    when {
+                        pull.merged -> R.color.pr_merged
+                        pull.state == "closed" -> R.color.md3_error
+                        else -> R.color.status_done
+                    },
+                )
             row.findViewById<ImageView>(R.id.conv_pr_icon).apply {
                 visibility = View.VISIBLE
                 setColorFilter(color)
@@ -3058,7 +3326,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** 权限请求对话框：选项直接来自协议（options[].response 用于应答）。 */
-    private fun showPermissionDialog(requestId: Any, params: org.json.JSONObject) {
+    private fun showPermissionDialog(
+        requestId: Any,
+        params: org.json.JSONObject,
+    ) {
         if (isFinishing || isDestroyed) return
         val toolName = params.optString("toolName")
         val reason = params.optString("reason")
@@ -3071,10 +3342,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         }
         if (labels.isEmpty()) labels += "拒绝"
         var responded = false
-        val sheet = CodaSheet(this)
-            .compact()
-            .title("权限请求：$toolName")
-            .subtitle(reason.ifEmpty { "该操作需要你的确认。" })
+        val sheet =
+            CodaSheet(this)
+                .compact()
+                .title("权限请求：$toolName")
+                .subtitle(reason.ifEmpty { "该操作需要你的确认。" })
         sheet.onDismiss {
             if (!responded) {
                 zc.runtime.respond(requestId, org.json.JSONObject().put("decision", "deny"))
@@ -3082,11 +3354,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             }
         }
         sheet.content { col ->
-            val onSurface = com.google.android.material.color.MaterialColors.getColor(
-                this,
-                com.google.android.material.R.attr.colorOnSurface,
-                Color.BLACK,
-            )
+            val onSurface =
+                com.google.android.material.color.MaterialColors.getColor(
+                    this,
+                    com.google.android.material.R.attr.colorOnSurface,
+                    Color.BLACK,
+                )
             labels.forEachIndexed { index, label ->
                 col.addView(
                     TextView(this).apply {
@@ -3096,8 +3369,9 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                         setPadding(dp(2), dp(14), dp(2), dp(14))
                         setOnClickListener {
                             responded = true
-                            val resp = options?.optJSONObject(index)?.optJSONObject("response")
-                                ?: org.json.JSONObject().put("decision", "deny")
+                            val resp =
+                                options?.optJSONObject(index)?.optJSONObject("response")
+                                    ?: org.json.JSONObject().put("decision", "deny")
                             zc.runtime.respond(requestId, resp)
                             clearPendingPermission()
                             sheet.dismiss()
@@ -3110,7 +3384,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** 用户提问对话框（AskUserQuestion）。 */
-    private fun showUserInputDialog(requestId: Any, params: org.json.JSONObject) {
+    private fun showUserInputDialog(
+        requestId: Any,
+        params: org.json.JSONObject,
+    ) {
         if (isFinishing || isDestroyed) return
         val prompt = params.optString("prompt")
         val questions = params.optJSONArray("questions")
@@ -3127,9 +3404,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             }
         }
         var responded = false
-        val sheet = CodaSheet(this)
-            .compact()
-            .title(questionText)
+        val sheet =
+            CodaSheet(this)
+                .compact()
+                .title(questionText)
         sheet.onDismiss {
             if (!responded) {
                 zc.runtime.respond(requestId, org.json.JSONObject().put("action", "decline"))
@@ -3138,11 +3416,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         }
         if (labels.isNotEmpty()) {
             sheet.content { col ->
-                val onSurface = com.google.android.material.color.MaterialColors.getColor(
-                    this,
-                    com.google.android.material.R.attr.colorOnSurface,
-                    Color.BLACK,
-                )
+                val onSurface =
+                    com.google.android.material.color.MaterialColors.getColor(
+                        this,
+                        com.google.android.material.R.attr.colorOnSurface,
+                        Color.BLACK,
+                    )
                 labels.forEachIndexed { index, label ->
                     col.addView(
                         TextView(this).apply {
@@ -3169,10 +3448,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             sheet.content { col ->
                 col.addView(
                     input,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = dp(10) },
+                    LinearLayout
+                        .LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { topMargin = dp(10) },
                 )
             }
             sheet.secondaryAction("拒绝") { s ->
@@ -3190,14 +3470,22 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         }
     }
 
-    private fun respondUserInput(requestId: Any, question: String, answer: String) {
-        val content = org.json.JSONObject().put(
-            "answers",
-            org.json.JSONObject().put(question, answer),
-        )
+    private fun respondUserInput(
+        requestId: Any,
+        question: String,
+        answer: String,
+    ) {
+        val content =
+            org.json.JSONObject().put(
+                "answers",
+                org.json.JSONObject().put(question, answer),
+            )
         zc.runtime.respond(
             requestId,
-            org.json.JSONObject().put("action", "accept").put("content", content),
+            org.json
+                .JSONObject()
+                .put("action", "accept")
+                .put("content", content),
         )
         clearPendingPermission()
     }
@@ -3248,6 +3536,7 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     // ------------------------------------------------------------ 斜杠命令
+
     /** 数据源变化时（如核心启动完成填充命令表），如果用户正在输入“/”，自动刷新建议条。 */
     private fun refreshSlashPanelIfTyping() {
         val t = inputMessage.text?.toString().orEmpty()
@@ -3259,11 +3548,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     /** 输入以“/”开头且还没打空格时，浮出命令建议条。 */
     private fun updateSlashPanel() {
         val text = inputMessage.text?.toString().orEmpty()
-        val query = when {
-            !text.startsWith("/") -> null
-            text.contains(' ') || text.contains('\n') -> null
-            else -> text.substring(1)
-        }
+        val query =
+            when {
+                !text.startsWith("/") -> null
+                text.contains(' ') || text.contains('\n') -> null
+                else -> text.substring(1)
+            }
         if (query == null || zc.slashCommands.isEmpty()) {
             hideSlashPanel()
             return
@@ -3280,34 +3570,41 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         hideSlashPanel()
         val overlay = findViewById<View>(android.R.id.content) as? ViewGroup ?: return
         val store = SettingsStore.get(this)
-        val onSurface = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurface,
-            Color.BLACK,
-        )
-        val secondary = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
-        val surfaceBg = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorSurfaceContainerHigh,
-            0xFFEFEFEF.toInt(),
-        )
-        val recent = store.slashRecent
-            .mapNotNull { n -> commands.find { it.name == n } }
-            .take(2)
+        val onSurface =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurface,
+                Color.BLACK,
+            )
+        val secondary =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
+        val surfaceBg =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorSurfaceContainerHigh,
+                0xFFEFEFEF.toInt(),
+            )
+        val recent =
+            store.slashRecent
+                .mapNotNull { n -> commands.find { it.name == n } }
+                .take(2)
         val others = commands.filter { c -> recent.none { it.name == c.name } }.take(6)
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(4), 0, dp(4))
-            background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = dp(18).toFloat()
-                setColor(surfaceBg)
+        val panel =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
+                background =
+                    android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(18).toFloat()
+                        setColor(surfaceBg)
+                    }
+                elevation = dp(8).toFloat()
             }
-            elevation = dp(8).toFloat()
-        }
+
         fun addGroup(title: String) {
             panel.addView(
                 TextView(this).apply {
@@ -3318,16 +3615,21 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                 },
             )
         }
-        fun addCommandRow(cmd: com.coda.mobileui.core.ZSlashCommand, iconRes: Int) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(16), dp(9), dp(16), dp(9))
-                val tv = android.util.TypedValue()
-                if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
-                    setBackgroundResource(tv.resourceId)
+
+        fun addCommandRow(
+            cmd: com.coda.mobileui.core.ZSlashCommand,
+            iconRes: Int,
+        ) {
+            val row =
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(16), dp(9), dp(16), dp(9))
+                    val tv = android.util.TypedValue()
+                    if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
+                        setBackgroundResource(tv.resourceId)
+                    }
                 }
-            }
             row.addView(
                 ImageView(this).apply {
                     setImageResource(iconRes)
@@ -3378,7 +3680,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         // 底部分割线 + "输入搜索…" 提示（过滤随输入框实时进行）
         panel.addView(
             View(this).apply {
-                setBackgroundColor(androidx.core.graphics.ColorUtils.setAlphaComponent(secondary, 28))
+                setBackgroundColor(
+                    androidx.core.graphics.ColorUtils
+                        .setAlphaComponent(secondary, 28),
+                )
             },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1),
         )
@@ -3404,10 +3709,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
         )
-        val lp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-        )
+        val lp =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            )
         lp.gravity = Gravity.BOTTOM or Gravity.START
         lp.marginStart = dp(8)
         lp.marginEnd = dp(8)
@@ -3463,11 +3769,17 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             search.visibility = View.VISIBLE
             search.alpha = 0f
             search.translationY = dp(28).toFloat()
-            search.animate().alpha(1f).translationY(0f).setDuration(260).start()
+            search
+                .animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(260)
+                .start()
         }
         // 新对话与设置从左侧移动到右上角
         shiftHeaderButtons(view, fromLeft = true)
     }
+
     /** 抽屉底色：半屏带右缘圆角，全屏时换成同底色的方角版本，避免露出下层内容。 */
     private fun setDrawerRounded(rounded: Boolean) {
         val host = findViewById<View>(R.id.nav_view) ?: return
@@ -3477,7 +3789,11 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** 面板宽度动画：抽屉展开成整屏，或收回到抽屉宽度。 */
-    private fun animateDrawerWidth(from: Int, to: Int, duration: Long) {
+    private fun animateDrawerWidth(
+        from: Int,
+        to: Int,
+        duration: Long,
+    ) {
         val host = findViewById<View>(R.id.nav_view) ?: return
         ValueAnimator.ofInt(from, to).apply {
             this.duration = duration
@@ -3490,9 +3806,14 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             start()
         }
     }
+
     /** 抽屉动作行（新对话/设置）收起或展开：高度动画，避免下方列表突跳。 */
     private var drawerActionsFullHeight = 0
-    private fun collapseDrawerActions(actions: View, show: Boolean) {
+
+    private fun collapseDrawerActions(
+        actions: View,
+        show: Boolean,
+    ) {
         actions.animate().cancel()
         if (drawerActionsFullHeight <= 0) {
             drawerActionsFullHeight = actions.height.takeIf { it > 0 } ?: dp(96)
@@ -3502,46 +3823,61 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val from = if (show) 0 else (actions.height.takeIf { it > 0 } ?: full)
         val to = if (show) full else 0
         actions.alpha = if (show) 0f else 1f
-        val anim = ValueAnimator.ofInt(from, to).apply {
-            duration = 200
-            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
-            addUpdateListener { a ->
-                val h = a.animatedValue as Int
-                actions.layoutParams = actions.layoutParams.apply { height = h }
-                actions.requestLayout()
-            }
-        }
-        anim.addListener(object : android.animation.AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: android.animation.Animator) {
-                if (show) {
-                    actions.layoutParams = actions.layoutParams.apply { height = ViewGroup.LayoutParams.WRAP_CONTENT }
+        val anim =
+            ValueAnimator.ofInt(from, to).apply {
+                duration = 200
+                interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+                addUpdateListener { a ->
+                    val h = a.animatedValue as Int
+                    actions.layoutParams = actions.layoutParams.apply { height = h }
                     actions.requestLayout()
-                    actions.animate().alpha(1f).setDuration(120).start()
-                } else {
-                    actions.visibility = View.GONE
-                    actions.layoutParams = actions.layoutParams.apply { height = ViewGroup.LayoutParams.WRAP_CONTENT }
-                    actions.requestLayout()
-                    actions.alpha = 1f
                 }
             }
-        })
+        anim.addListener(
+            object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (show) {
+                        actions.layoutParams = actions.layoutParams.apply { height = ViewGroup.LayoutParams.WRAP_CONTENT }
+                        actions.requestLayout()
+                        actions
+                            .animate()
+                            .alpha(1f)
+                            .setDuration(120)
+                            .start()
+                    } else {
+                        actions.visibility = View.GONE
+                        actions.layoutParams = actions.layoutParams.apply { height = ViewGroup.LayoutParams.WRAP_CONTENT }
+                        actions.requestLayout()
+                        actions.alpha = 1f
+                    }
+                }
+            },
+        )
         anim.start()
     }
+
     /** 抽屉列表底部留白动画（半屏 ↔ 全屏为搜索框让位）。 */
-    private fun animateDrawerContentPadding(host: ViewGroup, targetBottom: Int) {
+    private fun animateDrawerContentPadding(
+        host: ViewGroup,
+        targetBottom: Int,
+    ) {
         val content = host.findViewById<View>(R.id.drawer_content) ?: return
-        val anim = ValueAnimator.ofInt(content.paddingBottom, targetBottom).apply {
-            duration = 200
-            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
-            addUpdateListener { a ->
-                content.setPaddingRelative(content.paddingStart, content.paddingTop, content.paddingEnd, a.animatedValue as Int)
+        val anim =
+            ValueAnimator.ofInt(content.paddingBottom, targetBottom).apply {
+                duration = 200
+                interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+                addUpdateListener { a ->
+                    content.setPaddingRelative(content.paddingStart, content.paddingTop, content.paddingEnd, a.animatedValue as Int)
+                }
             }
-        }
         anim.start()
     }
 
     /** 全屏抽屉顶部两个按钮：展开时从左侧滑到右上角，收起时反向滑回。 */
-    private fun shiftHeaderButtons(view: View, fromLeft: Boolean) {
+    private fun shiftHeaderButtons(
+        view: View,
+        fromLeft: Boolean,
+    ) {
         val row = view.findViewWithTag<View>("full_header") as? ViewGroup ?: return
         val offset = -(resources.displayMetrics.widthPixels - dp(304)).toFloat()
         for (i in 0 until row.childCount) {
@@ -3549,9 +3885,19 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             if (fromLeft) {
                 child.translationX = offset
                 child.alpha = 0.4f
-                child.animate().translationX(0f).alpha(1f).setDuration(260).start()
+                child
+                    .animate()
+                    .translationX(0f)
+                    .alpha(1f)
+                    .setDuration(260)
+                    .start()
             } else {
-                child.animate().translationX(offset).alpha(0.4f).setDuration(180).start()
+                child
+                    .animate()
+                    .translationX(offset)
+                    .alpha(0.4f)
+                    .setDuration(180)
+                    .start()
             }
         }
     }
@@ -3563,8 +3909,13 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val screenWidth = resources.displayMetrics.widthPixels
 
         // 搜索框下沉淡出
-        view.findViewWithTag<View>("full_search")?.animate()
-            ?.alpha(0f)?.translationY(dp(24).toFloat())?.setDuration(160)?.start()
+        view
+            .findViewWithTag<View>("full_search")
+            ?.animate()
+            ?.alpha(0f)
+            ?.translationY(dp(24).toFloat())
+            ?.setDuration(160)
+            ?.start()
         // 两个按钮滑回左侧
         shiftHeaderButtons(view, fromLeft = false)
         view.postDelayed({
@@ -3621,57 +3972,64 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     private fun buildFullDrawer(): View {
-        val surface = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorSurface,
-            Color.WHITE,
-        )
-        val onSurface = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurface,
-            Color.BLACK,
-        )
-        val root = FrameLayout(this).apply {
-            tag = "drawer_full"
-            visibility = View.GONE
-            // 只覆盖按钮与搜索框，中间保持透明：会话列表沿用抽屉里那一份，展开时直接移动
-            isClickable = true
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
+        val surface =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorSurface,
+                Color.WHITE,
             )
-        }
+        val onSurface =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurface,
+                Color.BLACK,
+            )
+        val root =
+            FrameLayout(this).apply {
+                tag = "drawer_full"
+                visibility = View.GONE
+                // 只覆盖按钮与搜索框，中间保持透明：会话列表沿用抽屉里那一份，展开时直接移动
+                isClickable = true
+                layoutParams =
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+            }
 
         // 顶部：右上角两个按钮（新对话 / 设置）
-        val header = LinearLayout(this).apply {
-            tag = "full_header"
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            // 与主页顶栏对齐：同样的按钮尺寸与纵向中心线；左右留出一点间距
-            setPadding(dp(8), topSafeInset() + dp(4), dp(8), 0)
-        }
-        val newChat = ImageButton(this).apply {
-            setImageResource(R.drawable.ic_new_chat)
-            setBackgroundResource(R.drawable.bg_circle_button)
-            contentDescription = getString(R.string.nav_new_chat)
-            setColorFilter(onSurface)
-            setOnClickListener {
-                collapseFullDrawerThen {
-                    inputMessage.text?.clear()
-                    hideSettingsPage()
-                    showEmptyState()
+        val header =
+            LinearLayout(this).apply {
+                tag = "full_header"
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                // 与主页顶栏对齐：同样的按钮尺寸与纵向中心线；左右留出一点间距
+                setPadding(dp(8), topSafeInset() + dp(4), dp(8), 0)
+            }
+        val newChat =
+            ImageButton(this).apply {
+                setImageResource(R.drawable.ic_new_chat)
+                setBackgroundResource(R.drawable.bg_circle_button)
+                contentDescription = getString(R.string.nav_new_chat)
+                setColorFilter(onSurface)
+                setOnClickListener {
+                    collapseFullDrawerThen {
+                        inputMessage.text?.clear()
+                        hideSettingsPage()
+                        showEmptyState()
+                    }
                 }
             }
-        }
-        val settings = ImageButton(this).apply {
-            setImageResource(R.drawable.ic_settings)
-            setBackgroundResource(R.drawable.bg_circle_button)
-            contentDescription = getString(R.string.nav_settings)
-            setColorFilter(onSurface)
-            setOnClickListener {
-                collapseFullDrawerThen { openSettingsPage() }
+        val settings =
+            ImageButton(this).apply {
+                setImageResource(R.drawable.ic_settings)
+                setBackgroundResource(R.drawable.bg_circle_button)
+                contentDescription = getString(R.string.nav_settings)
+                setColorFilter(onSurface)
+                setOnClickListener {
+                    collapseFullDrawerThen { openSettingsPage() }
+                }
             }
-        }
         header.addView(newChat, LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(
             settings,
@@ -3687,33 +4045,37 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         )
 
         // 底部：搜索栏
-        val searchCard = com.google.android.material.card.MaterialCardView(this).apply {
-            tag = "full_search"
-            visibility = View.GONE
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM,
-            ).apply {
-                leftMargin = dp(16)
-                rightMargin = dp(16)
-                bottomMargin = dp(16) + systemNavigationBarHeight()
+        val searchCard =
+            com.google.android.material.card.MaterialCardView(this).apply {
+                tag = "full_search"
+                visibility = View.GONE
+                layoutParams =
+                    FrameLayout
+                        .LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM,
+                        ).apply {
+                            leftMargin = dp(16)
+                            rightMargin = dp(16)
+                            bottomMargin = dp(16) + systemNavigationBarHeight()
+                        }
+                setCardBackgroundColor(
+                    com.google.android.material.color.MaterialColors.getColor(
+                        this@MainActivity,
+                        com.google.android.material.R.attr.colorSurfaceContainer,
+                        surface,
+                    ),
+                )
+                radius = dp(28).toFloat()
+                cardElevation = 0f
             }
-            setCardBackgroundColor(
-                com.google.android.material.color.MaterialColors.getColor(
-                    this@MainActivity,
-                    com.google.android.material.R.attr.colorSurfaceContainer,
-                    surface,
-                ),
-            )
-            radius = dp(28).toFloat()
-            cardElevation = 0f
-        }
-        val searchRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(4), dp(14), dp(4))
-        }
+        val searchRow =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), dp(4), dp(14), dp(4))
+            }
         searchRow.addView(
             ImageView(this).apply {
                 setImageResource(R.drawable.ic_search)
@@ -3906,14 +4268,16 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val host = findViewById<android.view.ViewGroup>(android.R.id.content) ?: return
         var preview = host.findViewWithTag<android.view.View>("workspace_drag_preview")
         if (preview == null) {
-            preview = android.view.View(this).apply {
-                tag = "workspace_drag_preview"
-                setBackgroundColor(attrColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
-                layoutParams = android.widget.FrameLayout.LayoutParams(
-                    0,
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                )
-            }
+            preview =
+                android.view.View(this).apply {
+                    tag = "workspace_drag_preview"
+                    setBackgroundColor(attrColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
+                    layoutParams =
+                        android.widget.FrameLayout.LayoutParams(
+                            0,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                }
             host.addView(preview)
         }
         workspaceDragFraction = (distance.toFloat() / screen).coerceIn(0f, 1f)
@@ -3926,7 +4290,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val host = findViewById<android.view.ViewGroup>(android.R.id.content)
         val preview = host?.findViewWithTag<android.view.View>("workspace_drag_preview")
         val fraction = workspaceDragFraction
-        preview?.animate()?.alpha(0f)?.setDuration(120)?.withEndAction { host?.removeView(preview) }?.start()
+        preview
+            ?.animate()
+            ?.alpha(0f)
+            ?.setDuration(120)
+            ?.withEndAction { host?.removeView(preview) }
+            ?.start()
         workspaceDragFraction = 0f
         if (fraction >= workspaceDragCommit) {
             // 把已经拖出的比例交给工作区，让它从这个宽度接着展开
@@ -4001,40 +4370,46 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             return it
         }
 
-        val surface = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorSurface,
-            Color.WHITE,
-        )
-        val onSurface = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurface,
-            Color.BLACK,
-        )
-
-        val page = LinearLayout(this).apply {
-            tag = "settings_page"
-            orientation = LinearLayout.VERTICAL
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
+        val surface =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorSurface,
+                Color.WHITE,
             )
-            setBackgroundColor(surface)
-        }
+        val onSurface =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurface,
+                Color.BLACK,
+            )
 
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            // 与会话页顶栏对齐：左右内边距、按钮尺寸与纵向中心线都一致
-            setPadding(dp(4), topSafeInset() + dp(4), dp(4), 0)
-        }
-        val menu = ImageButton(this).apply {
-            id = R.id.settings_page_back
-            setImageResource(R.drawable.ic_menu)
-            setBackgroundResource(android.R.color.transparent)
-            contentDescription = getString(R.string.settings_open_drawer)
-            setColorFilter(onSurface)
-        }
+        val page =
+            LinearLayout(this).apply {
+                tag = "settings_page"
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                setBackgroundColor(surface)
+            }
+
+        val header =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                // 与会话页顶栏对齐：左右内边距、按钮尺寸与纵向中心线都一致
+                setPadding(dp(4), topSafeInset() + dp(4), dp(4), 0)
+            }
+        val menu =
+            ImageButton(this).apply {
+                id = R.id.settings_page_back
+                setImageResource(R.drawable.ic_menu)
+                setBackgroundResource(android.R.color.transparent)
+                contentDescription = getString(R.string.settings_open_drawer)
+                setColorFilter(onSurface)
+            }
         header.addView(menu, LinearLayout.LayoutParams(dp(48), dp(48)))
         header.addView(
             TextView(this).apply {
@@ -4047,18 +4422,21 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
             },
         )
 
-        val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f,
-            )
-            isFillViewport = true
-        }
-        val inner = LinearLayout(this).apply {
-            id = R.id.settings_page_container
-            orientation = LinearLayout.VERTICAL
-        }
+        val scroll =
+            ScrollView(this).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f,
+                    )
+                isFillViewport = true
+            }
+        val inner =
+            LinearLayout(this).apply {
+                id = R.id.settings_page_container
+                orientation = LinearLayout.VERTICAL
+            }
         inner.setPadding(0, 0, 0, dp(24))
         scroll.addView(inner)
 
@@ -4072,21 +4450,35 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val scrim = findViewById<View>(R.id.model_panel_scrim)
         val card = scrim.findViewById<View>(R.id.model_panel_card)
         if (scrim.visibility == View.VISIBLE) {
-            card.animate().translationY(-dp(8).toFloat()).alpha(0.6f).setDuration(140).start()
-            scrim.animate().alpha(0f).setDuration(140).withEndAction {
-                scrim.visibility = View.GONE
-                scrim.alpha = 1f
-                card.alpha = 1f
-                // 面板已收起，解除手势拦截
-                updateSwipeIntercept()
-            }.start()
+            card
+                .animate()
+                .translationY(-dp(8).toFloat())
+                .alpha(0.6f)
+                .setDuration(140)
+                .start()
+            scrim
+                .animate()
+                .alpha(0f)
+                .setDuration(140)
+                .withEndAction {
+                    scrim.visibility = View.GONE
+                    scrim.alpha = 1f
+                    card.alpha = 1f
+                    // 面板已收起，解除手势拦截
+                    updateSwipeIntercept()
+                }.start()
         } else {
             buildModelPanel()
             scrim.alpha = 0f
             scrim.visibility = View.VISIBLE
             card.translationY = -dp(14).toFloat()
-            scrim.animate().alpha(1f).setDuration(180).start()
-            card.animate()
+            scrim
+                .animate()
+                .alpha(1f)
+                .setDuration(180)
+                .start()
+            card
+                .animate()
                 .translationY(0f)
                 .setDuration(240)
                 .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
@@ -4128,17 +4520,21 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val rowView = card.findViewById<View>(R.id.strength_row)
 
         // Max 档：整行隐去，卡片上只出现“更快消耗使用额度”，短暂显示后自动回到常规布局。
-        fun sync(index: Int, showHint: Boolean = false) {
+        fun sync(
+            index: Int,
+            showHint: Boolean = false,
+        ) {
             val isMax = index == StrengthSliderView.LEVELS.size - 1
             val hideRow = isMax && showHint
             TransitionManager.beginDelayedTransition(card as ViewGroup, AutoTransition().setDuration(220))
             rowView.visibility = if (hideRow) View.GONE else View.VISIBLE
             hintView.visibility = if (hideRow) View.VISIBLE else View.GONE
             labelView.text = StrengthSliderView.LEVELS[index]
-            modelView.text = getString(
-                R.string.model_panel_current_model,
-                findViewById<TextView>(R.id.tv_model).text,
-            )
+            modelView.text =
+                getString(
+                    R.string.model_panel_current_model,
+                    findViewById<TextView>(R.id.tv_model).text,
+                )
         }
 
         /** 进入 Max 档先显示那句提示，2.5 秒后自动回到常规布局。 */
@@ -4270,14 +4666,16 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         val group = view as? ViewGroup ?: return LinearLayout(this)
         var host = group.findViewWithTag<LinearLayout>("chat_messages")
         if (host == null) {
-            host = LinearLayout(this).apply {
-                tag = "chat_messages"
-                orientation = LinearLayout.VERTICAL
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                )
-            }
+            host =
+                LinearLayout(this).apply {
+                    tag = "chat_messages"
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams =
+                        ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        )
+                }
             group.removeAllViews()
             group.addView(host)
         }
@@ -4285,7 +4683,10 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
     }
 
     /** Markdown 渲染器：AI 回复里的加粗、列表、代码块等按 Markdown 显示。 */
-    private val markwon by lazy { io.noties.markwon.Markwon.create(this) }
+    private val markwon by lazy {
+        io.noties.markwon.Markwon
+            .create(this)
+    }
 
     /** 按会话渲染消息与工具调用记录：每条会话只显示自己的内容。 */
     private fun showConversation(conversation: DrawerConversation) {
@@ -4302,11 +4703,12 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
         host.removeAllViews()
 
         val inflater = LayoutInflater.from(this)
-        val neutral = com.google.android.material.color.MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorOnSurfaceVariant,
-            Color.GRAY,
-        )
+        val neutral =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
 
         conversation.messages.forEach { message ->
             host.addView(
@@ -4335,23 +4737,17 @@ override fun onPermissionRequest(requestId: Any, params: org.json.JSONObject) {
                         )
                         findViewById<ImageView>(R.id.tool_icon).setColorFilter(neutral)
                         findViewById<TextView>(R.id.tool_summary).text = tool.summary
-                        findViewById<TextView>(R.id.tool_detail).text = when (tool.state) {
-                            ToolState.RUNNING -> getString(R.string.tool_state_running)
-                            ToolState.FAILED -> getString(R.string.tool_state_failed)
-                            ToolState.DONE -> ""
-                        }
+                        findViewById<TextView>(R.id.tool_detail).text =
+                            when (tool.state) {
+                                ToolState.RUNNING -> getString(R.string.tool_state_running)
+                                ToolState.FAILED -> getString(R.string.tool_state_failed)
+                                ToolState.DONE -> ""
+                            }
                     },
                 )
-message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
+                message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
             }
         }
-    }
-
-    /** 入场动画：淡入并轻微上移，避免元素突兀出现。 */
-    private fun animateIn(view: View) {
-        view.alpha = 0f
-        view.translationY = dp(6).toFloat()
-        view.animate().alpha(1f).translationY(0f).setDuration(180).start()
     }
 
     /** 变更摘要卡片：标题 + 每个文件的增减 + 合计（参考 T3 Code 桌面端）。 */
@@ -4375,58 +4771,61 @@ message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
                         },
                     )
                 }
-                findViewById<TextView>(R.id.change_total).text = buildChangeSummary(
-                    changes.files.sumOf { it.added },
-                    changes.files.sumOf { it.removed },
-                )
+                findViewById<TextView>(R.id.change_total).text =
+                    buildChangeSummary(
+                        changes.files.sumOf { it.added },
+                        changes.files.sumOf { it.removed },
+                    )
             },
         )
     }
 
     /** 每个工具一个独立图标（来自 lucide，描边风格）。 */
-    private fun toolIcon(name: String): Int = when (name) {
-        "Bash" -> R.drawable.ic_tool_bash
-        "Read" -> R.drawable.ic_tool_read
-        "Write" -> R.drawable.ic_tool_write
-        "Edit" -> R.drawable.ic_tool_edit
-        "Glob" -> R.drawable.ic_tool_glob
-        "Grep" -> R.drawable.ic_tool_grep
-        "Agent" -> R.drawable.ic_tool_agent
-        "TodoWrite" -> R.drawable.ic_tool_todo_write
-        "TodoRead" -> R.drawable.ic_tool_todo_read
-        "WebFetch" -> R.drawable.ic_tool_web_fetch
-        "WebSearch" -> R.drawable.ic_tool_web_search
-        "Skill" -> R.drawable.ic_tool_skill
-        "AskUserQuestion" -> R.drawable.ic_tool_ask
-        "TaskOutput" -> R.drawable.ic_tool_task_output
-        "ApplyPatch" -> R.drawable.ic_tool_patch
-        else -> R.drawable.ic_tool_other
-    }
+    private fun toolIcon(name: String): Int =
+        when (name) {
+            "Bash" -> R.drawable.ic_tool_bash
+            "Read" -> R.drawable.ic_tool_read
+            "Write" -> R.drawable.ic_tool_write
+            "Edit" -> R.drawable.ic_tool_edit
+            "Glob" -> R.drawable.ic_tool_glob
+            "Grep" -> R.drawable.ic_tool_grep
+            "Agent" -> R.drawable.ic_tool_agent
+            "TodoWrite" -> R.drawable.ic_tool_todo_write
+            "TodoRead" -> R.drawable.ic_tool_todo_read
+            "WebFetch" -> R.drawable.ic_tool_web_fetch
+            "WebSearch" -> R.drawable.ic_tool_web_search
+            "Skill" -> R.drawable.ic_tool_skill
+            "AskUserQuestion" -> R.drawable.ic_tool_ask
+            "TaskOutput" -> R.drawable.ic_tool_task_output
+            "ApplyPatch" -> R.drawable.ic_tool_patch
+            else -> R.drawable.ic_tool_other
+        }
 
     /** 工具名用可读的中文短名（内核里是英文标识）。 */
-    private fun toolLabel(name: String): String = when (name) {
-        "Bash" -> "运行命令"
-        "Read" -> "读取文件"
-        "Write" -> "写入文件"
-        "Edit" -> "编辑文件"
-        "Glob" -> "查找文件"
-        "Grep" -> "搜索内容"
-        "Agent" -> "子代理"
-        "TodoWrite" -> "更新任务"
-        "TodoRead" -> "查看任务"
-        "WebFetch" -> "抓取网页"
-        "WebSearch" -> "联网搜索"
-        "Skill" -> "调用技能"
-        "AskUserQuestion" -> "询问"
-        "ApplyPatch" -> "应用补丁"
-        "TaskOutput" -> "任务输出"
-        "TaskStop" -> "停止任务"
-        "SubmitResult" -> "提交结果"
-        "CreateWorkflow" -> "创建工作流"
-        "ReadSessionContext" -> "读取会话"
-        "SendMessage" -> "发送消息"
-        else -> name
-    }
+    private fun toolLabel(name: String): String =
+        when (name) {
+            "Bash" -> "运行命令"
+            "Read" -> "读取文件"
+            "Write" -> "写入文件"
+            "Edit" -> "编辑文件"
+            "Glob" -> "查找文件"
+            "Grep" -> "搜索内容"
+            "Agent" -> "子代理"
+            "TodoWrite" -> "更新任务"
+            "TodoRead" -> "查看任务"
+            "WebFetch" -> "抓取网页"
+            "WebSearch" -> "联网搜索"
+            "Skill" -> "调用技能"
+            "AskUserQuestion" -> "询问"
+            "ApplyPatch" -> "应用补丁"
+            "TaskOutput" -> "任务输出"
+            "TaskStop" -> "停止任务"
+            "SubmitResult" -> "提交结果"
+            "CreateWorkflow" -> "创建工作流"
+            "ReadSessionContext" -> "读取会话"
+            "SendMessage" -> "发送消息"
+            else -> name
+        }
 
     private fun showEmptyState() {
         chatView.visibility = View.GONE
@@ -4436,7 +4835,10 @@ message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     /** 从主题属性取色；MaterialColors 的泛型重载在这里推不出类型，改用 TypedValue。 */
-    private fun attrColor(attr: Int, fallback: Int): Int {
+    private fun attrColor(
+        attr: Int,
+        fallback: Int,
+    ): Int {
         val tv = android.util.TypedValue()
         val ta = obtainStyledAttributes(tv.data, intArrayOf(attr))
         return try {
@@ -4450,11 +4852,14 @@ message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
     private fun topSafeInset(): Int {
         // getDisplayCutout() 是 API 28 才有的，minSdk 是 26；
         // 低版直接拿根 insets 会在 8.x 上抛 NoSuchMethodError。
-        val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            window.decorView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
-        } else {
-            0
-        }
+        val cutout =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                window.decorView.rootWindowInsets
+                    ?.displayCutout
+                    ?.safeInsetTop ?: 0
+            } else {
+                0
+            }
         return maxOf(systemStatusBarHeight(), cutout)
     }
 
@@ -4475,7 +4880,10 @@ message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
      * 例如新增 123000 字符、删除 100000 字符显示为 “+123K -100K”；
      * 其中增加的部分用绿色、减少的部分用红色。
      */
-    private fun buildChangeSummary(added: Int, removed: Int): CharSequence {
+    private fun buildChangeSummary(
+        added: Int,
+        removed: Int,
+    ): CharSequence {
         val addedText = "+${formatCharCount(added)}"
         val removedText = "-${formatCharCount(removed)}"
         val text = "$addedText $removedText"
@@ -4497,7 +4905,10 @@ message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
 
     private fun formatCharCount(value: Int): String =
         when {
-            value < 1_000 -> value.toString()
+            value < 1_000 -> {
+                value.toString()
+            }
+
             value < 1_000_000 -> {
                 val k = value / 1000.0
                 (if (k < 10) trimCount(k) else Math.round(k).toString()) + "k"

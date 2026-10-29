@@ -18,7 +18,6 @@ import org.json.JSONObject
  * 其余家只能列出凭据文件。所以能力要按插件探测，界面据此决定显示哪些按钮。
  */
 object OAuthAccounts {
-
     /** 一个已登录账号。字段取自插件 dashboard，缺失的一律给默认值。 */
     data class Account(
         /** 宿主侧账号索引，所有账号操作都用它。 */
@@ -67,16 +66,23 @@ object OAuthAccounts {
     ) {
         /** 账号健康度，界面直接用它上色。 */
         val health: Health
-            get() = when {
-                disabled -> Health.DISABLED
-                exhausted -> Health.EXHAUSTED
-                // 插件说在冷却但没给截止时间时也要按冷却显示，否则会误报成正常。
-                cooling && (coolUntil <= 0 || coolUntil * 1000 > System.currentTimeMillis()) -> Health.COOLING
-                testFailed -> Health.SUSPECT
-                lowCredits -> Health.LOW
-                error.isNotEmpty() -> Health.UNKNOWN
-                else -> Health.GOOD
-            }
+            get() =
+                when {
+                    disabled -> Health.DISABLED
+
+                    exhausted -> Health.EXHAUSTED
+
+                    // 插件说在冷却但没给截止时间时也要按冷却显示，否则会误报成正常。
+                    cooling && (coolUntil <= 0 || coolUntil * 1000 > System.currentTimeMillis()) -> Health.COOLING
+
+                    testFailed -> Health.SUSPECT
+
+                    lowCredits -> Health.LOW
+
+                    error.isNotEmpty() -> Health.UNKNOWN
+
+                    else -> Health.GOOD
+                }
 
         /** 展示名：昵称优先，其次账号标签，最后退回索引。 */
         val title: String
@@ -130,6 +136,7 @@ object OAuthAccounts {
         /** 从面板读到的全部路由，界面上可以用来判断"这个平台还有什么"。 */
         val routes: Set<String> = emptySet(),
     )
+
 /**
      * 从插件面板 HTML 里读出它实现了哪些路由。
      *
@@ -152,11 +159,13 @@ object OAuthAccounts {
     }
 
     /** 一次操作的结果，界面直接拿去提示。 */
-    data class Outcome(val ok: Boolean, val message: String)
+    data class Outcome(
+        val ok: Boolean,
+        val message: String,
+    )
 
     /** 管理接口前缀。插件把路由挂在 `plugins/<pluginId>` 下。 */
-    private fun base(provider: OAuthProviders.Provider): String =
-        "/v0/management/plugins/${provider.pluginId}"
+    private fun base(provider: OAuthProviders.Provider): String = "/v0/management/plugins/${provider.pluginId}"
 
     /**
      * 探测插件支持哪些账号操作。
@@ -171,7 +180,10 @@ object OAuthAccounts {
      * 绝不能用 POST 空 body 去试：不少插件把"auth_index 为空"定义为对全部账号执行，
      * 探一条 /disable 就会真的把整平台的账号停掉。
      */
-    fun capabilities(ctx: Context, provider: OAuthProviders.Provider): Capabilities {
+    fun capabilities(
+        ctx: Context,
+        provider: OAuthProviders.Provider,
+    ): Capabilities {
         val html = ProxyHost.resourceText(ctx, "/v0/resource/plugins/${provider.pluginId}/panel")
         val panelRoutes = if (html == null) emptySet() else parseRoutes(html)
 
@@ -180,9 +192,15 @@ object OAuthAccounts {
             panelRoutes.contains(path) ||
                 ProxyHost.managementStatus(ctx, base(provider) + path, "GET", null)?.let { it != 404 } == true
 
-        if (panelRoutes.isEmpty() && !exists("/accounts")) return Capabilities(
-            panel = false, checkin = false, growth = false, refresh = false, keepalive = false,
-        )
+        if (panelRoutes.isEmpty() && !exists("/accounts")) {
+            return Capabilities(
+                panel = false,
+                checkin = false,
+                growth = false,
+                refresh = false,
+                keepalive = false,
+            )
+        }
 
         val routes = mutableSetOf<String>()
         routes += panelRoutes
@@ -203,15 +221,15 @@ object OAuthAccounts {
             enableDisable = routes.contains("/enable") && routes.contains("/disable"),
             checkinConfig = routes.contains("/checkin/config"),
             trial = routes.contains("/trial"),
-            growthRoutes = buildSet {
-                if (routes.contains("/growth")) add("growth")
-                if (routes.contains("/claim")) add("claim")
-            },
+            growthRoutes =
+                buildSet {
+                    if (routes.contains("/growth")) add("growth")
+                    if (routes.contains("/claim")) add("claim")
+                },
             unfreeze = routes.contains("/unfreeze"),
             routes = routes,
         )
     }
-
 
     /**
      * 列出该平台上已登录的账号。
@@ -219,7 +237,10 @@ object OAuthAccounts {
      * 优先用插件的 `/accounts`，它带健康度、额度与签到状态。插件没这个面板时，退回宿主的
      * `/v0/management/auth-files`——那里能列出凭据文件，但没有签到信息。
      */
-    fun list(ctx: Context, provider: OAuthProviders.Provider): List<Account> {
+    fun list(
+        ctx: Context,
+        provider: OAuthProviders.Provider,
+    ): List<Account> {
         ProxyHost.managementJson(ctx, base(provider) + "/accounts")?.let { body ->
             val payload = body.optJSONObject("data") ?: body
             val array = payload.optJSONArray("accounts")
@@ -240,7 +261,10 @@ object OAuthAccounts {
      * 宿主把 provider 字段写成插件的 provider 名，和 pluginId 相比少了 `-provider` 后缀，
      * 两种形态都兜一下，避免换插件版本后认不出来。
      */
-    private fun listFromHost(ctx: Context, provider: OAuthProviders.Provider): List<Account> {
+    private fun listFromHost(
+        ctx: Context,
+        provider: OAuthProviders.Provider,
+    ): List<Account> {
         val body = ProxyHost.managementJson(ctx, "/v0/management/auth-files") ?: return emptyList()
         val array: JSONArray = (body.optJSONObject("data") ?: body).optJSONArray("files") ?: return emptyList()
         val wanted = mutableSetOf(provider.pluginId, provider.pluginId.removeSuffix("-provider"), provider.id)
@@ -252,33 +276,34 @@ object OAuthAccounts {
             // provider 字段匹配不上时，再看文件名是否以插件名开头（workbuddy-<uid>.json）。
             val matches = type in wanted || wanted.any { w -> w.isNotEmpty() && name.startsWith(w) }
             if (!matches) continue
-            out += Account(
-                authIndex = item.optString("auth_index"),
-                authId = item.optString("id"),
-                name = name,
-                nickname = item.optString("label").ifEmpty { name },
-                region = "",
-                plan = "",
-                status = item.optString("status"),
-                disabled = item.optBoolean("disabled"),
-                exhausted = false,
-                lowCredits = false,
-                selected = false,
-                testFailed = false,
-                creditsRemain = 0,
-                creditsUsed = 0,
-                creditsSize = 0,
-                todayCheckedIn = false,
-                streakDays = 0,
-                todayCredit = 0,
-                totalCheckinCredit = 0,
-                weekCheckinDays = 0,
-                cooling = item.optBoolean("unavailable"),
-                coolUntil = 0,
-                success = item.optLong("success"),
-                failed = item.optLong("failed"),
-                error = "",
-            )
+            out +=
+                Account(
+                    authIndex = item.optString("auth_index"),
+                    authId = item.optString("id"),
+                    name = name,
+                    nickname = item.optString("label").ifEmpty { name },
+                    region = "",
+                    plan = "",
+                    status = item.optString("status"),
+                    disabled = item.optBoolean("disabled"),
+                    exhausted = false,
+                    lowCredits = false,
+                    selected = false,
+                    testFailed = false,
+                    creditsRemain = 0,
+                    creditsUsed = 0,
+                    creditsSize = 0,
+                    todayCheckedIn = false,
+                    streakDays = 0,
+                    todayCredit = 0,
+                    totalCheckinCredit = 0,
+                    weekCheckinDays = 0,
+                    cooling = item.optBoolean("unavailable"),
+                    coolUntil = 0,
+                    success = item.optLong("success"),
+                    failed = item.optLong("failed"),
+                    error = "",
+                )
         }
         return out
     }
@@ -322,14 +347,19 @@ object OAuthAccounts {
      * 传 [authIndex] 只签这一个；传空字符串签全部账号（插件按批量模式扇出，并发上限 4）。
      * 这是幂等的：当天已签过的账号会直接被上游拒掉，不会重复发放。
      */
-    fun checkin(ctx: Context, provider: OAuthProviders.Provider, authIndex: String): Outcome {
+    fun checkin(
+        ctx: Context,
+        provider: OAuthProviders.Provider,
+        authIndex: String,
+    ): Outcome {
         val body = JSONObject().put("auth_index", authIndex).toString()
-        val res = ProxyHost.managementJson(
-            ctx,
-            base(provider) + "/checkin",
-            method = "POST",
-            body = body,
-        ) ?: return Outcome(false, "无法连接网关")
+        val res =
+            ProxyHost.managementJson(
+                ctx,
+                base(provider) + "/checkin",
+                method = "POST",
+                body = body,
+            ) ?: return Outcome(false, "无法连接网关")
 
         return readCheckinOutcome(res)
     }
@@ -357,9 +387,15 @@ object OAuthAccounts {
             val message = item.optString("message")
             return when (reason) {
                 // 今天签过了，不算失败。
-                "already" -> Outcome(true, "今天已经签过了")
+                "already" -> {
+                    Outcome(true, "今天已经签过了")
+                }
+
                 // 国际版账号走加油包，没有签到这回事。
-                "global" -> Outcome(false, message.ifEmpty { "国际版账号不支持签到" })
+                "global" -> {
+                    Outcome(false, message.ifEmpty { "国际版账号不支持签到" })
+                }
+
                 else -> {
                     if (item.optBoolean("success")) {
                         val credit = item.optLong("credit").let { if (it == 0L) item.optLong("today_credit") else it }
@@ -391,17 +427,22 @@ object OAuthAccounts {
         var failed = 0
         for (i in 0 until results.length()) {
             val item = results.optJSONObject(i) ?: continue
-            if (item.optString("error").isNotEmpty()) failed++
-            else if (item.optBoolean("success")) ok++ else failed++
+            if (item.optString("error").isNotEmpty()) {
+                failed++
+            } else if (item.optBoolean("success")) {
+                ok++
+            } else {
+                failed++
+            }
         }
         return Outcome(failed == 0, "$ok 个成功，$failed 个失败")
     }
 
     /** 把插件返回的英文错误压成一句能看懂的话，认不出就原样带出。 */
-    private fun describeError(raw: String): String = when {
-        raw.contains("no matching account") -> "没有找到该账号，可能已失效"
-        raw.contains("already checked") || raw.contains("already_checkin") -> "今天已经签过了"
-        else -> raw
-    }
-
+    private fun describeError(raw: String): String =
+        when {
+            raw.contains("no matching account") -> "没有找到该账号，可能已失效"
+            raw.contains("already checked") || raw.contains("already_checkin") -> "今天已经签过了"
+            else -> raw
+        }
 }

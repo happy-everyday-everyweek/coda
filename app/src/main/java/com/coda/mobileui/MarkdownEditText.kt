@@ -32,93 +32,112 @@ import androidx.appcompat.widget.AppCompatEditText
  *
  * 支持粗体、斜体、行内代码、删除线、标题、引用、列表、分隔线、链接、围栏代码块。
  */
-class MarkdownEditText @JvmOverloads constructor(
-    context: Context,
-    attrs: AttributeSet? = null,
-    defStyleAttr: Int = androidx.appcompat.R.attr.editTextStyle,
-) : AppCompatEditText(context, attrs, defStyleAttr) {
-
-    /** 关掉就退化成普通输入框。 */
-    var renderEnabled: Boolean = true
-        set(value) {
-            if (field == value) return
-            field = value
-            rerender()
-        }
-
-    /** 语法标记的相对字号。 */
-    private var markScale = 0.62f
-
-    /** 语法标记透明度（0-255）。 */
-    private var markAlpha = 96
-
-    /** 组词期间跳过渲染，组词结束后补一次。 */
-    private var skippedWhileComposing = false
-
-    private val watcher = object : TextWatcher {
-        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-        override fun afterTextChanged(s: Editable?) = rerender()
-    }
-
-    init {
-        addTextChangedListener(watcher)
-    }
-
-    /** 重算整段样式。文本内容不变，只换 span。 */
-    fun rerender() {
-        val text = text ?: return
-        clearSpans(text)
-        if (!renderEnabled) return
-        if (isComposing(text)) {
-            skippedWhileComposing = true
-            return
-        }
-        MarkdownSpans.apply(text, markScale, markAlpha)
-    }
-
-    /**
-     * 是否处于输入法组词中。
-     *
-     * 用 Editable 上的 composing span 判断，而不是问 InputMethodManager 要
-     * getComposingText()——后者在部分输入法上与控件不同步，会误判。
-     */
-    private fun isComposing(text: Editable): Boolean {
-        val start = BaseInputConnection.getComposingSpanStart(text)
-        val end = BaseInputConnection.getComposingSpanEnd(text)
-        return start >= 0 && end > start
-    }
-
-    private fun clearSpans(text: Editable) {
-        if (text.isEmpty()) return
-        text.getSpans(0, text.length, MarkdownSpans.Ours::class.java).forEach {
-            text.removeSpan(it)
-        }
-    }
-
-    override fun onSelectionChanged(selStart: Int, selEnd: Int) {
-        super.onSelectionChanged(selStart, selEnd)
-        // 组词结束后系统会重置选区，借这个时机补上被跳过的那次渲染。
-        if (skippedWhileComposing) {
-            val t = text
-            if (t == null || !isComposing(t)) {
-                skippedWhileComposing = false
+class MarkdownEditText
+    @JvmOverloads
+    constructor(
+        context: Context,
+        attrs: AttributeSet? = null,
+        defStyleAttr: Int = androidx.appcompat.R.attr.editTextStyle,
+    ) : AppCompatEditText(context, attrs, defStyleAttr) {
+        /** 关掉就退化成普通输入框。 */
+        var renderEnabled: Boolean = true
+            set(value) {
+                if (field == value) return
+                field = value
                 rerender()
+            }
+
+        /** 语法标记的相对字号。 */
+        private var markScale = 0.62f
+
+        /** 语法标记透明度（0-255）。 */
+        private var markAlpha = 96
+
+        /** 组词期间跳过渲染，组词结束后补一次。 */
+        private var skippedWhileComposing = false
+
+        private val watcher =
+            object : TextWatcher {
+                override fun beforeTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    count: Int,
+                    after: Int,
+                ) = Unit
+
+                override fun onTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    before: Int,
+                    count: Int,
+                ) = Unit
+
+                override fun afterTextChanged(s: Editable?) = rerender()
+            }
+
+        init {
+            addTextChangedListener(watcher)
+        }
+
+        /** 重算整段样式。文本内容不变，只换 span。 */
+        fun rerender() {
+            val text = text ?: return
+            clearSpans(text)
+            if (!renderEnabled) return
+            if (isComposing(text)) {
+                skippedWhileComposing = true
+                return
+            }
+            MarkdownSpans.apply(text, markScale, markAlpha)
+        }
+
+        /**
+         * 是否处于输入法组词中。
+         *
+         * 用 Editable 上的 composing span 判断，而不是问 InputMethodManager 要
+         * getComposingText()——后者在部分输入法上与控件不同步，会误判。
+         */
+        private fun isComposing(text: Editable): Boolean {
+            val start = BaseInputConnection.getComposingSpanStart(text)
+            val end = BaseInputConnection.getComposingSpanEnd(text)
+            return start >= 0 && end > start
+        }
+
+        private fun clearSpans(text: Editable) {
+            if (text.isEmpty()) return
+            text.getSpans(0, text.length, MarkdownSpans.Ours::class.java).forEach {
+                text.removeSpan(it)
+            }
+        }
+
+        override fun onSelectionChanged(
+            selStart: Int,
+            selEnd: Int,
+        ) {
+            super.onSelectionChanged(selStart, selEnd)
+            // 组词结束后系统会重置选区，借这个时机补上被跳过的那次渲染。
+            if (skippedWhileComposing) {
+                val t = text
+                if (t == null || !isComposing(t)) {
+                    skippedWhileComposing = false
+                    rerender()
+                }
             }
         }
     }
-}
 
 /**
  * Markdown 到 Spannable 的映射。不持有 View，便于单独验证。
  */
 internal object MarkdownSpans {
-
     /** 自己加的 span 的基类，清理时据此精确识别。 */
     abstract class Ours : CharacterStyle()
 
     /** 语法标记：缩小 + 降透明度，字符保留。 */
-    private class MarkStyle(private val scale: Float, private val alpha: Int) : Ours() {
+    private class MarkStyle(
+        private val scale: Float,
+        private val alpha: Int,
+    ) : Ours() {
         private val size = RelativeSizeSpan(scale)
 
         override fun updateDrawState(tp: TextPaint) {
@@ -128,7 +147,9 @@ internal object MarkdownSpans {
     }
 
     /** 等宽 + 淡底色，用于行内代码与围栏代码。 */
-    private class MonoSpan(private val bg: Int) : Ours() {
+    private class MonoSpan(
+        private val bg: Int,
+    ) : Ours() {
         override fun updateDrawState(tp: TextPaint) {
             tp.typeface = Typeface.MONOSPACE
             tp.bgColor = bg
@@ -151,7 +172,11 @@ internal object MarkdownSpans {
     private const val QUOTE_FG = 0xFF8A8A8A.toInt()
     private const val SPAN_FLAGS = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
 
-    fun apply(text: Editable, markScale: Float, markAlpha: Int) {
+    fun apply(
+        text: Editable,
+        markScale: Float,
+        markAlpha: Int,
+    ) {
         val src = text.toString()
         if (src.isEmpty()) return
 
@@ -163,7 +188,10 @@ internal object MarkdownSpans {
         val codeRanges = fencedCodeRanges(src)
         applyBlocks(text, src, codeRanges, markScale, markAlpha)
 
-        fun inCode(s: Int, e: Int) = codeRanges.any { s >= it.first && e <= it.last }
+        fun inCode(
+            s: Int,
+            e: Int,
+        ) = codeRanges.any { s >= it.first && e <= it.last }
 
         // 行内代码优先：后面的规则跳过这些区间，否则代码里的 ** 会被当成粗体。
         val inline = mutableListOf<IntRange>()
@@ -178,7 +206,10 @@ internal object MarkdownSpans {
             inline.add(m.range)
         }
 
-        fun blocked(s: Int, e: Int) = inCode(s, e) || inline.any { s >= it.first && e <= it.last }
+        fun blocked(
+            s: Int,
+            e: Int,
+        ) = inCode(s, e) || inline.any { s >= it.first && e <= it.last }
 
         for (m in STRIKE.findAll(src)) {
             if (blocked(m.range.first, m.range.last)) continue
@@ -284,12 +315,13 @@ internal object MarkdownSpans {
         }
     }
 
-    private fun headingScale(level: Int): Float = when (level) {
-        1 -> 1.42f
-        2 -> 1.28f
-        3 -> 1.16f
-        else -> 1.08f
-    }
+    private fun headingScale(level: Int): Float =
+        when (level) {
+            1 -> 1.42f
+            2 -> 1.28f
+            3 -> 1.16f
+            else -> 1.08f
+        }
 
     /**
      * 是否含有任何 Markdown 语法字符。

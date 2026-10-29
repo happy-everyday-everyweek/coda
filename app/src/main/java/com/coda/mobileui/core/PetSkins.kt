@@ -13,7 +13,6 @@ import java.io.File
  * 这里不再自造任何像素：要改形象就改 manifest，代码不认识具体部件名。
  */
 object PetSkins {
-
     /** assets 下的五个内置形象，顺序与原项目设置页一致。 */
     private val BUILTIN = listOf("clawd", "sprig", "mochi", "peep", "bristle")
 
@@ -42,11 +41,15 @@ object PetSkins {
         return mergeCustom(ctx, loaded)
     }
 
-    private fun mergeCustom(ctx: Context, base: List<PetSkin>): List<PetSkin> {
+    private fun mergeCustom(
+        ctx: Context,
+        base: List<PetSkin>,
+    ): List<PetSkin> {
         val dir = File(ctx.filesDir, "pet")
         if (!dir.isDirectory) return base
         val custom = ArrayList<PetSkin>()
-        dir.listFiles { f -> f.isFile && f.name.endsWith(".json", true) }
+        dir
+            .listFiles { f -> f.isFile && f.name.endsWith(".json", true) }
             ?.sortedBy { it.name }
             ?.forEach { file ->
                 runCatching { PetSkin.fromJson(file.readText()) }
@@ -62,7 +65,10 @@ object PetSkins {
     }
 
     /** 按 id 取皮肤；找不到退回默认（Clawd），再找不到退回第一份。 */
-    fun resolve(ctx: Context, id: String): PetSkin {
+    fun resolve(
+        ctx: Context,
+        id: String,
+    ): PetSkin {
         val list = all(ctx)
         return list.firstOrNull { it.id == id }
             ?: list.firstOrNull { it.id == defaultId }
@@ -71,18 +77,36 @@ object PetSkins {
     }
 
     /** 读一份内置 manifest。读不到是真错误（assets 应该随包提供），抛出来便于定位。 */
-    private fun loadAsset(ctx: Context, name: String): PetSkin {
-        val raw = ctx.assets.open("pet/$name.json").bufferedReader().use { it.readText() }
+    private fun loadAsset(
+        ctx: Context,
+        name: String,
+    ): PetSkin {
+        val raw =
+            ctx.assets
+                .open("pet/$name.json")
+                .bufferedReader()
+                .use { it.readText() }
         val skin = PetSkin.fromJson(raw)
         val title = TITLE_OVERRIDE[name]
         return if (title != null && skin.title == skin.id) {
             // 原项目 clawd 只有 name 没有 title，标题会退回 name；这里补成 Clawd
             PetSkin(
-                schema = skin.schema, id = skin.id, title = title, tickMs = skin.tickMs,
-                cols = skin.cols, rows = skin.rows, palette = skin.palette, parts = skin.parts,
-                poses = skin.poses, glyphs = skin.glyphs, clips = skin.clips,
-                effects = skin.effects, accessories = skin.accessories, states = skin.states,
-                interactions = skin.interactions, props = skin.props,
+                schema = skin.schema,
+                id = skin.id,
+                title = title,
+                tickMs = skin.tickMs,
+                cols = skin.cols,
+                rows = skin.rows,
+                palette = skin.palette,
+                parts = skin.parts,
+                poses = skin.poses,
+                glyphs = skin.glyphs,
+                clips = skin.clips,
+                effects = skin.effects,
+                accessories = skin.accessories,
+                states = skin.states,
+                interactions = skin.interactions,
+                props = skin.props,
             )
         } else {
             skin

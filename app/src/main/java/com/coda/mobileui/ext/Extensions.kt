@@ -9,7 +9,6 @@ import android.content.Context
  * 避免各处重复注册分类导致行为不一致。以后开放工作区分类时，只需在 [categories] 里加一项。
  */
 object Extensions {
-
     /** 当前开放的分类。顺序即装载与展示顺序。 */
     private val categories: List<ExtensionCategory> = listOf(TerminalCategory)
 

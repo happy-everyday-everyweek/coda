@@ -46,7 +46,6 @@ class LanguageRules(
  * 循环，比维护逐行 token 缓存更不容易出错；超过上限直接不上色，只保留纯文本编辑。
  */
 object CodeHighlighter {
-
     /** 超过这个长度不再上色，避免大文件拖动时逐帧重扫。 */
     const val MAX_HIGHLIGHT_CHARS = 200_000
 
@@ -83,7 +82,11 @@ object CodeHighlighter {
      * 对整段文本重新上色。会先清掉上一次自己加的全部 span，再按扫描结果加新的。
      * 不修改文本内容，因此不会触发输入法或文本监听的回环。
      */
-    fun apply(editable: Editable, rules: LanguageRules, palette: CodePalette) {
+    fun apply(
+        editable: Editable,
+        rules: LanguageRules,
+        palette: CodePalette,
+    ) {
         clear(editable)
         val n = editable.length
         if (n == 0 || n > MAX_HIGHLIGHT_CHARS) return
@@ -140,12 +143,13 @@ object CodeHighlighter {
                 val word = editable.subSequence(i, j).toString()
                 val lookup = if (rules.caseInsensitive) word.lowercase() else word
                 val isKeyword = rules.keywords.contains(lookup)
-                val color = when {
-                    isKeyword -> palette.keyword
-                    rules.types.contains(lookup) -> palette.type
-                    nextNonSpace(editable, j) == '(' -> palette.function
-                    else -> NONE
-                }
+                val color =
+                    when {
+                        isKeyword -> palette.keyword
+                        rules.types.contains(lookup) -> palette.type
+                        nextNonSpace(editable, j) == '(' -> palette.function
+                        else -> NONE
+                    }
                 if (color != NONE) {
                     spans.add(Span(i, j, color, bold = isKeyword))
                 }
@@ -183,24 +187,45 @@ object CodeHighlighter {
         }
     }
 
-    private class Span(val start: Int, val end: Int, val color: Int, val bold: Boolean = false, val italic: Boolean = false)
+    private class Span(
+        val start: Int,
+        val end: Int,
+        val color: Int,
+        val bold: Boolean = false,
+        val italic: Boolean = false,
+    )
 
     /** 标记接口：只用来把自己加的 span 与其它样式区分开。 */
     interface TokenMarker
 
-    private class TokenForeground(val color: Int) : ForegroundColorSpan(color), TokenMarker
+    private class TokenForeground(
+        val color: Int,
+    ) : ForegroundColorSpan(color),
+        TokenMarker
 
-    private class TokenBold : StyleSpan(Typeface.BOLD), TokenMarker
+    private class TokenBold :
+        StyleSpan(Typeface.BOLD),
+        TokenMarker
 
-    private class TokenItalic : StyleSpan(Typeface.ITALIC), TokenMarker
+    private class TokenItalic :
+        StyleSpan(Typeface.ITALIC),
+        TokenMarker
 
-    private fun startsWith(text: CharSequence, prefix: String, at: Int): Boolean {
+    private fun startsWith(
+        text: CharSequence,
+        prefix: String,
+        at: Int,
+    ): Boolean {
         if (at + prefix.length > text.length) return false
         for (k in prefix.indices) if (text[at + k] != prefix[k]) return false
         return true
     }
 
-    private fun indexOf(text: CharSequence, needle: String, from: Int): Int {
+    private fun indexOf(
+        text: CharSequence,
+        needle: String,
+        from: Int,
+    ): Int {
         if (needle.isEmpty()) return -1
         var i = from
         while (i + needle.length <= text.length) {
@@ -210,14 +235,21 @@ object CodeHighlighter {
         return -1
     }
 
-    private fun lineEnd(text: CharSequence, from: Int): Int {
+    private fun lineEnd(
+        text: CharSequence,
+        from: Int,
+    ): Int {
         var i = from
         while (i < text.length && text[i] != '\n') i++
         return i
     }
 
     /** 字符串到闭合引号为止；支持反斜杠转义，走到行尾就停下（不跨行）。 */
-    private fun stringEnd(text: CharSequence, from: Int, quote: Char): Int {
+    private fun stringEnd(
+        text: CharSequence,
+        from: Int,
+        quote: Char,
+    ): Int {
         var i = from + 1
         while (i < text.length) {
             val c = text[i]
@@ -232,7 +264,10 @@ object CodeHighlighter {
         return text.length
     }
 
-    private fun nextNonSpace(text: CharSequence, from: Int): Char? {
+    private fun nextNonSpace(
+        text: CharSequence,
+        from: Int,
+    ): Char? {
         var i = from
         while (i < text.length && (text[i] == ' ' || text[i] == '\t')) i++
         return if (i < text.length) text[i] else null
@@ -244,105 +279,463 @@ object CodeHighlighter {
 
     // ------------------------------------------------------------ 语言表
 
-    private fun kotlin() = LanguageRules(
-        "Kotlin", "//", "/*", "*/",
-        setOf(
-            "package", "import", "class", "interface", "object", "fun", "val", "var", "typealias",
-            "if", "else", "when", "for", "while", "do", "return", "break", "continue", "throw", "try",
-            "catch", "finally", "in", "is", "as", "by", "where", "init", "constructor", "super", "this",
-            "null", "true", "false", "override", "open", "abstract", "sealed", "data", "enum", "annotation",
-            "private", "protected", "internal", "public", "companion", "inline", "suspend", "operator",
-            "infix", "lateinit", "const", "reified", "vararg", "out", "crossinline", "noinline", "tailrec",
-            "external", "expect", "actual", "delegate", "get", "set", "field",
-        ),
-        setOf(
-            "String", "Int", "Long", "Short", "Byte", "Double", "Float", "Boolean", "Char", "Any", "Unit",
-            "Nothing", "List", "MutableList", "Map", "MutableMap", "Set", "MutableSet", "Array", "Pair",
-            "Triple", "Sequence", "Flow", "Result", "Number", "Comparable", "Iterable", "Collection",
-        ),
-    )
+    private fun kotlin() =
+        LanguageRules(
+            "Kotlin",
+            "//",
+            "/*",
+            "*/",
+            setOf(
+                "package",
+                "import",
+                "class",
+                "interface",
+                "object",
+                "fun",
+                "val",
+                "var",
+                "typealias",
+                "if",
+                "else",
+                "when",
+                "for",
+                "while",
+                "do",
+                "return",
+                "break",
+                "continue",
+                "throw",
+                "try",
+                "catch",
+                "finally",
+                "in",
+                "is",
+                "as",
+                "by",
+                "where",
+                "init",
+                "constructor",
+                "super",
+                "this",
+                "null",
+                "true",
+                "false",
+                "override",
+                "open",
+                "abstract",
+                "sealed",
+                "data",
+                "enum",
+                "annotation",
+                "private",
+                "protected",
+                "internal",
+                "public",
+                "companion",
+                "inline",
+                "suspend",
+                "operator",
+                "infix",
+                "lateinit",
+                "const",
+                "reified",
+                "vararg",
+                "out",
+                "crossinline",
+                "noinline",
+                "tailrec",
+                "external",
+                "expect",
+                "actual",
+                "delegate",
+                "get",
+                "set",
+                "field",
+            ),
+            setOf(
+                "String",
+                "Int",
+                "Long",
+                "Short",
+                "Byte",
+                "Double",
+                "Float",
+                "Boolean",
+                "Char",
+                "Any",
+                "Unit",
+                "Nothing",
+                "List",
+                "MutableList",
+                "Map",
+                "MutableMap",
+                "Set",
+                "MutableSet",
+                "Array",
+                "Pair",
+                "Triple",
+                "Sequence",
+                "Flow",
+                "Result",
+                "Number",
+                "Comparable",
+                "Iterable",
+                "Collection",
+            ),
+        )
 
-    private fun java() = LanguageRules(
-        "Java", "//", "/*", "*/",
-        setOf(
-            "package", "import", "class", "interface", "enum", "extends", "implements", "public", "protected",
-            "private", "static", "final", "abstract", "synchronized", "volatile", "transient", "native",
-            "if", "else", "switch", "case", "default", "for", "while", "do", "return", "break", "continue",
-            "throw", "throws", "try", "catch", "finally", "new", "this", "super", "null", "true", "false",
-            "instanceof", "var", "record", "sealed", "permits", "yield", "assert",
-        ),
-        setOf(
-            "String", "Integer", "Long", "Short", "Byte", "Double", "Float", "Boolean", "Character", "Object",
-            "List", "ArrayList", "Map", "HashMap", "Set", "HashSet", "Optional", "Stream", "Long", "Thread",
-        ),
-    )
+    private fun java() =
+        LanguageRules(
+            "Java",
+            "//",
+            "/*",
+            "*/",
+            setOf(
+                "package",
+                "import",
+                "class",
+                "interface",
+                "enum",
+                "extends",
+                "implements",
+                "public",
+                "protected",
+                "private",
+                "static",
+                "final",
+                "abstract",
+                "synchronized",
+                "volatile",
+                "transient",
+                "native",
+                "if",
+                "else",
+                "switch",
+                "case",
+                "default",
+                "for",
+                "while",
+                "do",
+                "return",
+                "break",
+                "continue",
+                "throw",
+                "throws",
+                "try",
+                "catch",
+                "finally",
+                "new",
+                "this",
+                "super",
+                "null",
+                "true",
+                "false",
+                "instanceof",
+                "var",
+                "record",
+                "sealed",
+                "permits",
+                "yield",
+                "assert",
+            ),
+            setOf(
+                "String",
+                "Integer",
+                "Long",
+                "Short",
+                "Byte",
+                "Double",
+                "Float",
+                "Boolean",
+                "Character",
+                "Object",
+                "List",
+                "ArrayList",
+                "Map",
+                "HashMap",
+                "Set",
+                "HashSet",
+                "Optional",
+                "Stream",
+                "Long",
+                "Thread",
+            ),
+        )
 
-    private fun javascript() = LanguageRules(
-        "JavaScript", "//", "/*", "*/",
-        setOf(
-            "var", "let", "const", "function", "class", "extends", "super", "new", "this", "return", "if",
-            "else", "switch", "case", "default", "for", "while", "do", "break", "continue", "throw", "try",
-            "catch", "finally", "typeof", "instanceof", "in", "of", "delete", "void", "yield", "await",
-            "async", "import", "export", "from", "as", "default", "null", "undefined", "true", "false",
-        ),
-        setOf(
-            "Array", "Object", "String", "Number", "Boolean", "Promise", "Map", "Set", "Date", "RegExp",
-            "Error", "JSON", "Math", "Symbol", "BigInt", "Proxy", "WeakMap", "Uint8Array", "console",
-        ),
-    )
+    private fun javascript() =
+        LanguageRules(
+            "JavaScript",
+            "//",
+            "/*",
+            "*/",
+            setOf(
+                "var",
+                "let",
+                "const",
+                "function",
+                "class",
+                "extends",
+                "super",
+                "new",
+                "this",
+                "return",
+                "if",
+                "else",
+                "switch",
+                "case",
+                "default",
+                "for",
+                "while",
+                "do",
+                "break",
+                "continue",
+                "throw",
+                "try",
+                "catch",
+                "finally",
+                "typeof",
+                "instanceof",
+                "in",
+                "of",
+                "delete",
+                "void",
+                "yield",
+                "await",
+                "async",
+                "import",
+                "export",
+                "from",
+                "as",
+                "default",
+                "null",
+                "undefined",
+                "true",
+                "false",
+            ),
+            setOf(
+                "Array",
+                "Object",
+                "String",
+                "Number",
+                "Boolean",
+                "Promise",
+                "Map",
+                "Set",
+                "Date",
+                "RegExp",
+                "Error",
+                "JSON",
+                "Math",
+                "Symbol",
+                "BigInt",
+                "Proxy",
+                "WeakMap",
+                "Uint8Array",
+                "console",
+            ),
+        )
 
-    private fun typescript() = LanguageRules(
-        "TypeScript", "//", "/*", "*/",
-        javascript().keywords + setOf(
-            "interface", "type", "enum", "namespace", "declare", "abstract", "implements", "readonly",
-            "private", "public", "protected", "keyof", "infer", "is", "satisfies", "override",
-        ),
-        javascript().types + setOf("any", "unknown", "never", "void", "string", "number", "boolean", "object"),
-    )
+    private fun typescript() =
+        LanguageRules(
+            "TypeScript",
+            "//",
+            "/*",
+            "*/",
+            javascript().keywords +
+                setOf(
+                    "interface",
+                    "type",
+                    "enum",
+                    "namespace",
+                    "declare",
+                    "abstract",
+                    "implements",
+                    "readonly",
+                    "private",
+                    "public",
+                    "protected",
+                    "keyof",
+                    "infer",
+                    "is",
+                    "satisfies",
+                    "override",
+                ),
+            javascript().types + setOf("any", "unknown", "never", "void", "string", "number", "boolean", "object"),
+        )
 
-    private fun python() = LanguageRules(
-        "Python", "#", null, null,
-        setOf(
-            "def", "class", "import", "from", "as", "if", "elif", "else", "for", "while", "break",
-            "continue", "return", "yield", "pass", "raise", "try", "except", "finally", "with", "lambda",
-            "global", "nonlocal", "assert", "del", "in", "is", "not", "and", "or", "None", "True", "False",
-            "async", "await", "match", "case",
-        ),
-        setOf(
-            "int", "float", "str", "bool", "list", "dict", "set", "tuple", "bytes", "object", "type",
-            "Exception", "ValueError", "TypeError", "KeyError", "IndexError", "BaseException", "len",
-            "range", "print", "enumerate", "zip", "open", "super", "self", "isinstance", "sorted", "sum",
-        ),
-    )
+    private fun python() =
+        LanguageRules(
+            "Python",
+            "#",
+            null,
+            null,
+            setOf(
+                "def",
+                "class",
+                "import",
+                "from",
+                "as",
+                "if",
+                "elif",
+                "else",
+                "for",
+                "while",
+                "break",
+                "continue",
+                "return",
+                "yield",
+                "pass",
+                "raise",
+                "try",
+                "except",
+                "finally",
+                "with",
+                "lambda",
+                "global",
+                "nonlocal",
+                "assert",
+                "del",
+                "in",
+                "is",
+                "not",
+                "and",
+                "or",
+                "None",
+                "True",
+                "False",
+                "async",
+                "await",
+                "match",
+                "case",
+            ),
+            setOf(
+                "int",
+                "float",
+                "str",
+                "bool",
+                "list",
+                "dict",
+                "set",
+                "tuple",
+                "bytes",
+                "object",
+                "type",
+                "Exception",
+                "ValueError",
+                "TypeError",
+                "KeyError",
+                "IndexError",
+                "BaseException",
+                "len",
+                "range",
+                "print",
+                "enumerate",
+                "zip",
+                "open",
+                "super",
+                "self",
+                "isinstance",
+                "sorted",
+                "sum",
+            ),
+        )
 
-    private fun json() = LanguageRules(
-        "JSON", "//", "/*", "*/",
-        setOf("true", "false", "null"),
-        emptySet(),
-    )
+    private fun json() =
+        LanguageRules(
+            "JSON",
+            "//",
+            "/*",
+            "*/",
+            setOf("true", "false", "null"),
+            emptySet(),
+        )
 
-    private fun markup() = LanguageRules(
-        "Markup", null, "<!--", "-->",
-        emptySet(),
-        emptySet(),
-    )
+    private fun markup() =
+        LanguageRules(
+            "Markup",
+            null,
+            "<!--",
+            "-->",
+            emptySet(),
+            emptySet(),
+        )
 
-    private fun css() = LanguageRules(
-        "CSS", null, "/*", "*/",
-        setOf("important", "media", "import", "keyframes", "supports", "inherit", "initial", "unset", "var"),
-        emptySet(),
-    )
+    private fun css() =
+        LanguageRules(
+            "CSS",
+            null,
+            "/*",
+            "*/",
+            setOf("important", "media", "import", "keyframes", "supports", "inherit", "initial", "unset", "var"),
+            emptySet(),
+        )
 
-    private fun shell() = LanguageRules(
-        "Shell", "#", null, null,
-        setOf(
-            "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac",
-            "function", "in", "return", "exit", "local", "export", "readonly", "declare", "source",
-            "set", "unset", "shift", "trap", "break", "continue", "eval", "exec",
-        ),
-        setOf("echo", "printf", "cd", "pwd", "ls", "cp", "mv", "rm", "mkdir", "rmdir", "cat", "sed", "awk",
-            "grep", "find", "sort", "uniq", "head", "tail", "wc", "cut", "tr", "test", "git", "chmod", "chown"),
-    )
+    private fun shell() =
+        LanguageRules(
+            "Shell",
+            "#",
+            null,
+            null,
+            setOf(
+                "if",
+                "then",
+                "else",
+                "elif",
+                "fi",
+                "for",
+                "while",
+                "until",
+                "do",
+                "done",
+                "case",
+                "esac",
+                "function",
+                "in",
+                "return",
+                "exit",
+                "local",
+                "export",
+                "readonly",
+                "declare",
+                "source",
+                "set",
+                "unset",
+                "shift",
+                "trap",
+                "break",
+                "continue",
+                "eval",
+                "exec",
+            ),
+            setOf(
+                "echo",
+                "printf",
+                "cd",
+                "pwd",
+                "ls",
+                "cp",
+                "mv",
+                "rm",
+                "mkdir",
+                "rmdir",
+                "cat",
+                "sed",
+                "awk",
+                "grep",
+                "find",
+                "sort",
+                "uniq",
+                "head",
+                "tail",
+                "wc",
+                "cut",
+                "tr",
+                "test",
+                "git",
+                "chmod",
+                "chown",
+            ),
+        )
 
     private fun yaml() = LanguageRules("YAML", "#", null, null, setOf("true", "false", "null", "yes", "no"), emptySet())
 
@@ -350,63 +743,311 @@ object CodeHighlighter {
 
     private fun ini() = LanguageRules("INI", "#", null, null, setOf("true", "false"), emptySet())
 
-    private fun cpp() = LanguageRules(
-        "C/C++", "//", "/*", "*/",
-        setOf(
-            "if", "else", "switch", "case", "default", "for", "while", "do", "return", "break", "continue",
-            "goto", "throw", "try", "catch", "new", "delete", "this", "nullptr", "true", "false", "sizeof",
-            "typedef", "struct", "union", "enum", "class", "namespace", "using", "template", "typename",
-            "public", "private", "protected", "virtual", "override", "const", "static", "extern", "inline",
-            "constexpr", "auto", "void", "include", "define", "ifdef", "ifndef", "endif", "pragma",
-        ),
-        setOf(
-            "int", "long", "short", "char", "float", "double", "bool", "unsigned", "signed", "size_t",
-            "string", "vector", "map", "set", "unique_ptr", "shared_ptr", "uint8_t", "int32_t", "int64_t",
-        ),
-    )
+    private fun cpp() =
+        LanguageRules(
+            "C/C++",
+            "//",
+            "/*",
+            "*/",
+            setOf(
+                "if",
+                "else",
+                "switch",
+                "case",
+                "default",
+                "for",
+                "while",
+                "do",
+                "return",
+                "break",
+                "continue",
+                "goto",
+                "throw",
+                "try",
+                "catch",
+                "new",
+                "delete",
+                "this",
+                "nullptr",
+                "true",
+                "false",
+                "sizeof",
+                "typedef",
+                "struct",
+                "union",
+                "enum",
+                "class",
+                "namespace",
+                "using",
+                "template",
+                "typename",
+                "public",
+                "private",
+                "protected",
+                "virtual",
+                "override",
+                "const",
+                "static",
+                "extern",
+                "inline",
+                "constexpr",
+                "auto",
+                "void",
+                "include",
+                "define",
+                "ifdef",
+                "ifndef",
+                "endif",
+                "pragma",
+            ),
+            setOf(
+                "int",
+                "long",
+                "short",
+                "char",
+                "float",
+                "double",
+                "bool",
+                "unsigned",
+                "signed",
+                "size_t",
+                "string",
+                "vector",
+                "map",
+                "set",
+                "unique_ptr",
+                "shared_ptr",
+                "uint8_t",
+                "int32_t",
+                "int64_t",
+            ),
+        )
 
-    private fun go() = LanguageRules(
-        "Go", "//", "/*", "*/",
-        setOf(
-            "package", "import", "func", "var", "const", "type", "struct", "interface", "map", "chan",
-            "if", "else", "switch", "case", "default", "for", "range", "return", "break", "continue",
-            "go", "defer", "select", "goto", "fallthrough", "nil", "true", "false", "iota",
-        ),
-        setOf(
-            "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint32", "uint64", "float32",
-            "float64", "complex64", "complex128", "byte", "rune", "string", "bool", "error", "any",
-        ),
-    )
+    private fun go() =
+        LanguageRules(
+            "Go",
+            "//",
+            "/*",
+            "*/",
+            setOf(
+                "package",
+                "import",
+                "func",
+                "var",
+                "const",
+                "type",
+                "struct",
+                "interface",
+                "map",
+                "chan",
+                "if",
+                "else",
+                "switch",
+                "case",
+                "default",
+                "for",
+                "range",
+                "return",
+                "break",
+                "continue",
+                "go",
+                "defer",
+                "select",
+                "goto",
+                "fallthrough",
+                "nil",
+                "true",
+                "false",
+                "iota",
+            ),
+            setOf(
+                "int",
+                "int8",
+                "int16",
+                "int32",
+                "int64",
+                "uint",
+                "uint8",
+                "uint32",
+                "uint64",
+                "float32",
+                "float64",
+                "complex64",
+                "complex128",
+                "byte",
+                "rune",
+                "string",
+                "bool",
+                "error",
+                "any",
+            ),
+        )
 
-    private fun rust() = LanguageRules(
-        "Rust", "//", "/*", "*/",
-        setOf(
-            "fn", "let", "mut", "const", "static", "struct", "enum", "trait", "impl", "for", "while",
-            "loop", "if", "else", "match", "return", "break", "continue", "use", "mod", "pub", "crate",
-            "super", "self", "Self", "where", "as", "in", "ref", "move", "async", "await", "dyn", "unsafe",
-            "extern", "type", "true", "false", "None", "Some", "Ok", "Err",
-        ),
-        setOf(
-            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
-            "f32", "f64", "bool", "char", "str", "String", "Vec", "Option", "Result", "Box", "Rc", "Arc",
-            "HashMap", "HashSet", "BTreeMap",
-        ),
-    )
+    private fun rust() =
+        LanguageRules(
+            "Rust",
+            "//",
+            "/*",
+            "*/",
+            setOf(
+                "fn",
+                "let",
+                "mut",
+                "const",
+                "static",
+                "struct",
+                "enum",
+                "trait",
+                "impl",
+                "for",
+                "while",
+                "loop",
+                "if",
+                "else",
+                "match",
+                "return",
+                "break",
+                "continue",
+                "use",
+                "mod",
+                "pub",
+                "crate",
+                "super",
+                "self",
+                "Self",
+                "where",
+                "as",
+                "in",
+                "ref",
+                "move",
+                "async",
+                "await",
+                "dyn",
+                "unsafe",
+                "extern",
+                "type",
+                "true",
+                "false",
+                "None",
+                "Some",
+                "Ok",
+                "Err",
+            ),
+            setOf(
+                "i8",
+                "i16",
+                "i32",
+                "i64",
+                "i128",
+                "isize",
+                "u8",
+                "u16",
+                "u32",
+                "u64",
+                "u128",
+                "usize",
+                "f32",
+                "f64",
+                "bool",
+                "char",
+                "str",
+                "String",
+                "Vec",
+                "Option",
+                "Result",
+                "Box",
+                "Rc",
+                "Arc",
+                "HashMap",
+                "HashSet",
+                "BTreeMap",
+            ),
+        )
 
-    private fun sql() = LanguageRules(
-        "SQL", "--", "/*", "*/",
-        setOf(
-            "select", "from", "where", "insert", "into", "values", "update", "set", "delete", "create",
-            "table", "index", "view", "drop", "alter", "add", "column", "primary", "key", "foreign",
-            "references", "join", "inner", "left", "right", "outer", "on", "group", "by", "order", "having",
-            "limit", "offset", "union", "all", "distinct", "as", "and", "or", "not", "null", "is", "in",
-            "between", "like", "exists", "case", "when", "then", "else", "end", "begin", "commit",
-            "rollback", "transaction",
-        ),
-        setOf(
-            "int", "integer", "bigint", "smallint", "decimal", "numeric", "float", "real", "double",
-            "char", "varchar", "text", "date", "time", "timestamp", "boolean", "blob", "uuid", "json",
-        ),
-        caseInsensitive = true,
-    )
+    private fun sql() =
+        LanguageRules(
+            "SQL",
+            "--",
+            "/*",
+            "*/",
+            setOf(
+                "select",
+                "from",
+                "where",
+                "insert",
+                "into",
+                "values",
+                "update",
+                "set",
+                "delete",
+                "create",
+                "table",
+                "index",
+                "view",
+                "drop",
+                "alter",
+                "add",
+                "column",
+                "primary",
+                "key",
+                "foreign",
+                "references",
+                "join",
+                "inner",
+                "left",
+                "right",
+                "outer",
+                "on",
+                "group",
+                "by",
+                "order",
+                "having",
+                "limit",
+                "offset",
+                "union",
+                "all",
+                "distinct",
+                "as",
+                "and",
+                "or",
+                "not",
+                "null",
+                "is",
+                "in",
+                "between",
+                "like",
+                "exists",
+                "case",
+                "when",
+                "then",
+                "else",
+                "end",
+                "begin",
+                "commit",
+                "rollback",
+                "transaction",
+            ),
+            setOf(
+                "int",
+                "integer",
+                "bigint",
+                "smallint",
+                "decimal",
+                "numeric",
+                "float",
+                "real",
+                "double",
+                "char",
+                "varchar",
+                "text",
+                "date",
+                "time",
+                "timestamp",
+                "boolean",
+                "blob",
+                "uuid",
+                "json",
+            ),
+            caseInsensitive = true,
+        )
 }

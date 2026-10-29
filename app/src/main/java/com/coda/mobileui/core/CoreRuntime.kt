@@ -22,11 +22,15 @@ import java.util.concurrent.atomic.AtomicInteger
  * 核心进程运行环境：载荷解包、app-server 启动（NDJSON over stdio）、
  * 请求/响应关联、反向请求默认应答、日志落盘。
  */
-class CoreRuntime(private val ctx: Context) {
-
+class CoreRuntime(
+    private val ctx: Context,
+) {
     interface Events {
         /** 服务端通知（无 id）。 */
-        fun onNotification(method: String, params: JSONObject) {}
+        fun onNotification(
+            method: String,
+            params: JSONObject,
+        ) {}
 
         /** 进程退出。 */
         fun onExit(code: Int) {}
@@ -35,7 +39,11 @@ class CoreRuntime(private val ctx: Context) {
          * 需要 UI 决策的反向请求（权限/用户输入）。
          * 返回 true 表示上层会稍后调用 respond()，默认应答被跳过。
          */
-        fun onInteractiveReverse(requestId: Any, method: String, params: JSONObject): Boolean = false
+        fun onInteractiveReverse(
+            requestId: Any,
+            method: String,
+            params: JSONObject,
+        ): Boolean = false
     }
 
     @Volatile
@@ -116,9 +124,10 @@ class CoreRuntime(private val ctx: Context) {
         val manifest = payloadManifest
         val stamp = payloadStamp(manifest)
         val declared = manifest["zcode"]
-        val reuse = runCatching { marker.readText().trim() }.getOrNull() == stamp &&
-            bin.isFile && bin.length() > 10_000_000L && builtin.isFile &&
-            (declared == null || declared.first == bin.length())
+        val reuse =
+            runCatching { marker.readText().trim() }.getOrNull() == stamp &&
+                bin.isFile && bin.length() > 10_000_000L && builtin.isFile &&
+                (declared == null || declared.first == bin.length())
         if (reuse) {
             log(
                 "载荷解包结果复用：戳记=$stamp，内核二进制=${bin.length()}B" +
@@ -158,25 +167,34 @@ class CoreRuntime(private val ctx: Context) {
      */
     private val payloadManifest: Map<String, Pair<Long, String>> by lazy { readPayloadManifest() }
 
-    private fun readPayloadManifest(): Map<String, Pair<Long, String>> = try {
-        ctx.assets.open(PAYLOAD_MANIFEST).use { input ->
-            String(input.readBytes(), Charsets.UTF_8)
-        }.lineSequence().mapNotNull { line ->
-            val parts = line.trim().split(' ').filter { it.isNotEmpty() }
-            val size = parts.getOrNull(1)?.toLongOrNull()
-            if (parts.size >= 3 && size != null) parts[0] to (size to parts[2].lowercase()) else null
-        }.toMap()
-    } catch (_: Throwable) {
-        emptyMap()
-    }
+    private fun readPayloadManifest(): Map<String, Pair<Long, String>> =
+        try {
+            ctx.assets
+                .open(PAYLOAD_MANIFEST)
+                .use { input ->
+                    String(input.readBytes(), Charsets.UTF_8)
+                }.lineSequence()
+                .mapNotNull { line ->
+                    val parts = line.trim().split(' ').filter { it.isNotEmpty() }
+                    val size = parts.getOrNull(1)?.toLongOrNull()
+                    if (parts.size >= 3 && size != null) parts[0] to (size to parts[2].lowercase()) else null
+                }.toMap()
+        } catch (_: Throwable) {
+            emptyMap()
+        }
 
     /** 解包标记：清单内容一变，标记跟着变，上一版的解包结果自然失效。 */
     private fun payloadStamp(manifest: Map<String, Pair<Long, String>>): String {
         if (manifest.isEmpty()) return MARKER
-        val text = manifest.entries.sortedBy { it.key }
-            .joinToString("\n") { "${it.key} ${it.value.first} ${it.value.second}" }
-        val hex = MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
-            .joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+        val text =
+            manifest.entries
+                .sortedBy { it.key }
+                .joinToString("\n") { "${it.key} ${it.value.first} ${it.value.second}" }
+        val hex =
+            MessageDigest
+                .getInstance("SHA-256")
+                .digest(text.toByteArray(Charsets.UTF_8))
+                .joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
         return "$MARKER-${hex.take(16)}"
     }
 
@@ -197,14 +215,19 @@ class CoreRuntime(private val ctx: Context) {
                     digest.update(buffer, 0, read)
                 }
             }
-            val actual = digest.digest()
-                .joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+            val actual =
+                digest
+                    .digest()
+                    .joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
             if (actual != expected.second) return "$name 内容摘要不符"
         }
         return null
     }
 
-    private fun copyAssetDir(assetPath: String, dest: File) {
+    private fun copyAssetDir(
+        assetPath: String,
+        dest: File,
+    ) {
         val am = ctx.assets
         val children = am.list(assetPath)
         if (children == null || children.isEmpty()) {
@@ -262,9 +285,10 @@ class CoreRuntime(private val ctx: Context) {
             var msg = "启动失败"
             try {
                 log(
-                    "[core] start #$seq 来源: " + Throwable().stackTrace.take(7).joinToString(" < ") {
-                        "${it.className.substringAfterLast('.')}.${it.methodName}"
-                    },
+                    "[core] start #$seq 来源: " +
+                        Throwable().stackTrace.take(7).joinToString(" < ") {
+                            "${it.className.substringAfterLast('.')}.${it.methodName}"
+                        },
                 )
                 initDirs()
                 // 日志文件在解包之前就建好：解包要释放并校验两百多 MB，耗时以分钟计，
@@ -279,7 +303,7 @@ class CoreRuntime(private val ctx: Context) {
                             runCatching { File(coreDir, ".ready").readText().trim() }.getOrNull() +
                             " 清单=" + (
                                 declaredZcode?.let { "${it.first}B/${it.second.take(12)}" } ?: "无"
-                                ),
+                            ),
                     )
                     // 每次进程运行只自检一次。用内存标志而不是磁盘标记：磁盘标记会跨安装保留，
                     // 覆盖安装后就不自检了，正好把最需要的那条结论省掉。
@@ -306,21 +330,23 @@ class CoreRuntime(private val ctx: Context) {
                     // 首次装配完成后，每次开终端只是 execve(proot)。
                     // 装配或自检失败时退回拓展声明的终端，保证终端面板不会因为环境问题整体不可用。
                     val linux = LinuxEnv(ctx)
-                    val linuxReady = try {
-                        linux.ensureReady { log("[linux] $it") }
-                    } catch (t: Throwable) {
-                        log("!! Linux 环境装配异常: $t")
-                        false
-                    }
+                    val linuxReady =
+                        try {
+                            linux.ensureReady { log("[linux] $it") }
+                        } catch (t: Throwable) {
+                            log("!! Linux 环境装配异常: $t")
+                            false
+                        }
                     if (linuxReady) {
                         linux.syncGitHubCredentials()
                         for ((key, value) in linux.env()) env[key] = value
                     } else {
-                        val terminal = try {
-                            Extensions.terminal(ctx)
-                        } catch (_: Throwable) {
-                            null
-                        }
+                        val terminal =
+                            try {
+                                Extensions.terminal(ctx)
+                            } catch (_: Throwable) {
+                                null
+                            }
                         if (terminal != null) {
                             for ((key, value) in terminal.env()) env[key] = value
                             val entries = terminal.pathEntries
@@ -335,11 +361,12 @@ class CoreRuntime(private val ctx: Context) {
                     Thread({ readLoop(p) }, "zcore-out").start()
                     Thread({ errLoop(p) }, "zcore-err").start()
                     Thread({
-                        val code = try {
-                            p.waitFor()
-                        } catch (_: Throwable) {
-                            -1
-                        }
+                        val code =
+                            try {
+                                p.waitFor()
+                            } catch (_: Throwable) {
+                                -1
+                            }
                         val isCurrent = process === p
                         if (isCurrent) {
                             process = null
@@ -418,7 +445,11 @@ class CoreRuntime(private val ctx: Context) {
             env["TMPDIR"] = tmpDir.absolutePath
             env["PATH"] = "/system/bin:/system/xbin:/vendor/bin:/product/bin"
             val process = pb.start()
-            val output = process.inputStream.bufferedReader().readText().trim()
+            val output =
+                process.inputStream
+                    .bufferedReader()
+                    .readText()
+                    .trim()
             val code = process.waitFor()
             log(
                 "[core] 自检 --version：" + describeExit(code) + "，耗时 " +
@@ -439,12 +470,13 @@ class CoreRuntime(private val ctx: Context) {
                 while (true) {
                     val line = br.readLine() ?: break
                     if (line.isBlank()) continue
-                    val obj = try {
-                        JSONObject(line)
-                    } catch (_: Throwable) {
-                        log("[proto] 非法帧: ${line.take(200)}")
-                        continue
-                    }
+                    val obj =
+                        try {
+                            JSONObject(line)
+                        } catch (_: Throwable) {
+                            log("[proto] 非法帧: ${line.take(200)}")
+                            continue
+                        }
                     try {
                         handleFrame(obj)
                     } catch (t: Throwable) {
@@ -472,11 +504,15 @@ class CoreRuntime(private val ctx: Context) {
         val hasId = obj.has("id")
         val method = obj.optString("method", "")
         when {
-            method.isNotEmpty() && hasId -> handleReverse(obj)
+            method.isNotEmpty() && hasId -> {
+                handleReverse(obj)
+            }
+
             method.isNotEmpty() -> {
                 val params = obj.optJSONObject("params") ?: JSONObject()
                 mainHandler.post { events?.onNotification(method, params) }
             }
+
             hasId -> {
                 val idNum = obj.optInt("id", Int.MIN_VALUE)
                 val cb = if (idNum != Int.MIN_VALUE) pending.remove(idNum) else null
@@ -514,31 +550,50 @@ class CoreRuntime(private val ctx: Context) {
     }
 
     /** 已知反向请求的默认应答（与桌面端一致）。 */
-    fun defaultReverseResult(method: String): JSONObject? = when (method) {
-        "session/requestRuntimePreferences" -> JSONObject()
-            .put("nativeSearchEnhancementsEnabled", true)
-            .put("memoryEnabled", false)
-            .put("askUserQuestionAutoResolutionEnabled", true)
-            .put("modelContextBudgetStrategy", "preflight-v1")
+    fun defaultReverseResult(method: String): JSONObject? =
+        when (method) {
+            "session/requestRuntimePreferences" -> {
+                JSONObject()
+                    .put("nativeSearchEnhancementsEnabled", true)
+                    .put("memoryEnabled", false)
+                    .put("askUserQuestionAutoResolutionEnabled", true)
+                    .put("modelContextBudgetStrategy", "preflight-v1")
+            }
 
-        "interaction/requestProviderRuntimeHeaders" -> JSONObject()
-            .put("headersApplied", false)
-            .put("errorMessage", "Provider request auth is unavailable")
+            "interaction/requestProviderRuntimeHeaders" -> {
+                JSONObject()
+                    .put("headersApplied", false)
+                    .put("errorMessage", "Provider request auth is unavailable")
+            }
 
-        "interaction/requestOfficialMcpAuthHeaders" -> JSONObject()
-            .put("ok", false).put("reason", "official_auth_unavailable")
+            "interaction/requestOfficialMcpAuthHeaders" -> {
+                JSONObject()
+                    .put("ok", false)
+                    .put("reason", "official_auth_unavailable")
+            }
 
-        "interaction/browserList" -> JSONObject().put("browsers", org.json.JSONArray())
+            "interaction/browserList" -> {
+                JSONObject().put("browsers", org.json.JSONArray())
+            }
 
-        else -> null
-    }
+            else -> {
+                null
+            }
+        }
 
-    fun respond(id: Any, result: JSONObject) {
+    fun respond(
+        id: Any,
+        result: JSONObject,
+    ) {
         writeFrame(JSONObject().put("id", id).put("result", result))
     }
 
     /** 错误应答（JSON-RPC 风格 error 对象）。 */
-    fun respondError(id: Any, code: Int, message: String) {
+    fun respondError(
+        id: Any,
+        code: Int,
+        message: String,
+    ) {
         writeFrame(
             JSONObject().put("id", id).put(
                 "error",
@@ -547,7 +602,11 @@ class CoreRuntime(private val ctx: Context) {
         )
     }
 
-    fun call(method: String, params: JSONObject, cb: ((Boolean, JSONObject) -> Unit)? = null) {
+    fun call(
+        method: String,
+        params: JSONObject,
+        cb: ((Boolean, JSONObject) -> Unit)? = null,
+    ) {
         val id = nextId.getAndIncrement()
         if (cb != null) pending[id] = cb
         writeFrame(JSONObject().put("id", id).put("method", method).put("params", params))
@@ -571,11 +630,12 @@ class CoreRuntime(private val ctx: Context) {
     private fun openLogFile() {
         if (logFile != null) return
         val name = "core-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".log"
-        val f = try {
-            extLogDir?.let { File(it, name) }
-        } catch (_: Throwable) {
-            null
-        } ?: File(localLogDir, "core-latest.log")
+        val f =
+            try {
+                extLogDir?.let { File(it, name) }
+            } catch (_: Throwable) {
+                null
+            } ?: File(localLogDir, "core-latest.log")
         f.parentFile?.mkdirs()
         logFile = f
         // 建文件之前写过的行只在内存里，这里先补写进文件。启动来源、解包结论都发生在建文件之前，
@@ -590,20 +650,22 @@ class CoreRuntime(private val ctx: Context) {
     }
 
     /** 版本名与 versionCode。装错包时，这一行就能看出来，不必再比对行为猜版本。 */
-    private fun appVersion(): String = try {
-        val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
-        // longVersionCode 是 API 28 才有的。runCatching 不构成 lint 认可的
-        // 版本保护（它看不出是 NoSuchMethodError），所以显式判版本。
-        val code = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            info.longVersionCode
-        } else {
-            @Suppress("DEPRECATION")
-            info.versionCode.toLong()
+    private fun appVersion(): String =
+        try {
+            val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+            // longVersionCode 是 API 28 才有的。runCatching 不构成 lint 认可的
+            // 版本保护（它看不出是 NoSuchMethodError），所以显式判版本。
+            val code =
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    info.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.versionCode.toLong()
+                }
+            "${info.versionName} ($code)"
+        } catch (_: Throwable) {
+            "未知"
         }
-        "${info.versionName} ($code)"
-    } catch (_: Throwable) {
-        "未知"
-    }
 
     fun log(line: String) {
         val ts = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
@@ -644,19 +706,20 @@ class CoreRuntime(private val ctx: Context) {
          */
         fun describeExit(code: Int): String {
             val signal = if (code > 128) code - 128 else 0
-            val name = when (signal) {
-                4 -> "SIGILL"
-                5 -> "SIGTRAP"
-                6 -> "SIGABRT"
-                7 -> "SIGBUS"
-                8 -> "SIGFPE"
-                9 -> "SIGKILL"
-                11 -> "SIGSEGV"
-                13 -> "SIGPIPE"
-                15 -> "SIGTERM"
-                31 -> "SIGSYS"
-                else -> ""
-            }
+            val name =
+                when (signal) {
+                    4 -> "SIGILL"
+                    5 -> "SIGTRAP"
+                    6 -> "SIGABRT"
+                    7 -> "SIGBUS"
+                    8 -> "SIGFPE"
+                    9 -> "SIGKILL"
+                    11 -> "SIGSEGV"
+                    13 -> "SIGPIPE"
+                    15 -> "SIGTERM"
+                    31 -> "SIGSYS"
+                    else -> ""
+                }
             return if (name.isEmpty()) "退出码=$code" else "退出码=$code，被 $name 终止"
         }
     }

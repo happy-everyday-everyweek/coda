@@ -24,7 +24,6 @@ import java.util.concurrent.TimeUnit
  * 在 workbuddy2api 里已经是成熟实现，插件版那套是「粘性单账号」，补起来不如直接用。
  */
 object WorkBuddyGateway {
-
     /** 随包资产的版本号；换二进制时改这里。 */
     const val VERSION = "1.0"
 
@@ -71,8 +70,7 @@ object WorkBuddyGateway {
      * 放在 `<rootfs>/root/.coda/workbuddy` 而不是 App 私有目录，是因为进程要在
      * proot 里跑，它看到的路径必须是容器内路径；写到外面反而要额外做绑定。
      */
-    private fun guestRoot(ctx: Context): File =
-        File(File(LinuxEnv(ctx).rootfs, "root"), ".coda/workbuddy").apply { mkdirs() }
+    private fun guestRoot(ctx: Context): File = File(File(LinuxEnv(ctx).rootfs, "root"), ".coda/workbuddy").apply { mkdirs() }
 
     fun dirFor(ctx: Context): File = guestRoot(ctx)
 
@@ -80,12 +78,13 @@ object WorkBuddyGateway {
 
     fun configFor(ctx: Context): File = File(guestRoot(ctx), "config.json")
 
-    private fun authDirFor(ctx: Context): File =
-        File(guestRoot(ctx), "auths").apply { mkdirs() }
+    private fun authDirFor(ctx: Context): File = File(guestRoot(ctx), "auths").apply { mkdirs() }
 
     /** 容器内路径：proot 里 rootfs 挂在 `/`，所以去掉 rootfs 前缀即可。 */
-    private fun guestPath(ctx: Context, f: File): String =
-        f.absolutePath.removePrefix(LinuxEnv(ctx).rootfs.absolutePath)
+    private fun guestPath(
+        ctx: Context,
+        f: File,
+    ): String = f.absolutePath.removePrefix(LinuxEnv(ctx).rootfs.absolutePath)
 
     fun logFor(ctx: Context): File = File(guestRoot(ctx), "gateway.log")
 
@@ -97,20 +96,25 @@ object WorkBuddyGateway {
      * 与 ProxyHost 不同，这里不需要 chmod 之外的任何准备：静态二进制没有解释器
      * 依赖，也就没有「文件存在但 execve 报 ENOENT」那类问题。
      */
-    fun ensureInstalled(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
+    fun ensureInstalled(
+        ctx: Context,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
         val target = binaryFor(ctx)
-        val spec = AssetFetcher.Spec(
-            assetPath = ASSET,
-            remoteUrl = REMOTE_URL,
-            sha256 = SHA256,
-            size = SIZE,
-        )
+        val spec =
+            AssetFetcher.Spec(
+                assetPath = ASSET,
+                remoteUrl = REMOTE_URL,
+                sha256 = SHA256,
+                size = SIZE,
+            )
         // 本地已有且校验通过时，AssetFetcher 会直接返回，不会重复搬字节。
         AppLog.i("WorkBuddyGateway", "校验/释放网关程序 → ${target.absolutePath}")
         if (AssetFetcher.ensure(ctx, target, spec, onLog = { AppLog.i("WorkBuddyGateway", it) })) {
             // 静态二进制也需要执行位：Android 用包内 assets 落盘后默认是 0644。
             if (!target.canExecute()) {
-                runCatching { android.system.Os.chmod(target.absolutePath, 493 /* 0755 */) }
+                // 493 是八进制的 0755。Kotlin 没有八进制字面量，只能写十进制。
+                runCatching { android.system.Os.chmod(target.absolutePath, 493) }
             }
             if (target.canExecute()) return true
             lastError = "网关程序无法执行：${target.absolutePath}"
@@ -133,7 +137,10 @@ object WorkBuddyGateway {
      * 首次启动时让程序自己生成一份，再改这三项；已有配置则就地更新，
      * 这样用户/上游改过的其它字段不会被覆盖掉。
      */
-    private fun ensureConfig(ctx: Context, port: Int): Boolean {
+    private fun ensureConfig(
+        ctx: Context,
+        port: Int,
+    ): Boolean {
         val file = configFor(ctx)
         if (!file.isFile || file.length() == 0L) {
             // 先让程序生成推荐配置：它会写 api_key 并记录在文件里。
@@ -163,17 +170,21 @@ object WorkBuddyGateway {
      * 先打印 api_key 再尝试监听。这里换一个不会被占用的临时端口，让它把文件写出来
      * 后立刻停掉，避免和真正的启动打架。
      */
-    private fun generateDefaultConfig(ctx: Context, port: Int): Boolean {
+    private fun generateDefaultConfig(
+        ctx: Context,
+        port: Int,
+    ): Boolean {
         val file = configFor(ctx)
         file.parentFile?.mkdirs()
         val tmp = File(guestRoot(ctx), "config.bootstrap.json")
         runCatching { if (tmp.exists()) tmp.delete() }
         val env = LinuxEnv(ctx)
-        val argv = listOf(
-            guestPath(ctx, binaryFor(ctx)),
-            "-config",
-            guestPath(ctx, tmp),
-        )
+        val argv =
+            listOf(
+                guestPath(ctx, binaryFor(ctx)),
+                "-config",
+                guestPath(ctx, tmp),
+            )
         return try {
             val proc = env.builder(argv, mapOf("HOME" to "/root")).start()
             // 它生成配置后会立刻尝试监听；给它一点时间拿到文件即可。
@@ -209,18 +220,22 @@ object WorkBuddyGateway {
      * （它把「池里没号」也算作不健康），而 `/v1/models` 会正常返回空列表。
      * 用 503 那个会让「刚装好还没授权」这个合法状态被误判成启动失败。
      */
-    fun start(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
+    fun start(
+        ctx: Context,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
         lastError = null
         if (isRunning) return true
         if (booting) return false
 
         if (!ensureInstalled(ctx, onProgress)) return false
 
-        val port = pickPort() ?: run {
-            lastError = "端口被占用（$DEFAULT_PORT）"
-            onProgress(lastError!!)
-            return false
-        }
+        val port =
+            pickPort() ?: run {
+                lastError = "端口被占用（$DEFAULT_PORT）"
+                onProgress(lastError!!)
+                return false
+            }
         if (!ensureConfig(ctx, port)) {
             lastError?.let(onProgress)
             return false
@@ -229,11 +244,12 @@ object WorkBuddyGateway {
 
         onProgress("启动 WorkBuddy 网关…")
         val env = LinuxEnv(ctx)
-        val argv = listOf(
-            guestPath(ctx, binaryFor(ctx)),
-            "-config",
-            guestPath(ctx, configFor(ctx)),
-        )
+        val argv =
+            listOf(
+                guestPath(ctx, binaryFor(ctx)),
+                "-config",
+                guestPath(ctx, configFor(ctx)),
+            )
         // 启动前的完整现场：路径、端口、配置内容都记下来。之前这条链路几乎
         // 没有日志，出问题时只能看到界面上「启动网关…」停住，无从判断是
         // 二进制没落盘、proot 起不来、还是进程起了但没监听。
@@ -318,15 +334,16 @@ object WorkBuddyGateway {
         return null
     }
 
-    private fun isPortFree(port: Int): Boolean = try {
-        java.net.ServerSocket().use { s ->
-            s.reuseAddress = true
-            s.bind(java.net.InetSocketAddress("127.0.0.1", port))
-            true
+    private fun isPortFree(port: Int): Boolean =
+        try {
+            java.net.ServerSocket().use { s ->
+                s.reuseAddress = true
+                s.bind(java.net.InetSocketAddress("127.0.0.1", port))
+                true
+            }
+        } catch (_: Throwable) {
+            false
         }
-    } catch (_: Throwable) {
-        false
-    }
 
     private fun awaitReady(port: Int): Boolean {
         val deadline = System.currentTimeMillis() + READY_TIMEOUT_MS
@@ -350,42 +367,62 @@ object WorkBuddyGateway {
     }
 
     /** 返回 HTTP 状态码；连不上返回 -1。 */
-    private fun probeCode(port: Int): Int = try {
-        val conn = (URL("http://127.0.0.1:$port/v1/models")
-            .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = PROBE_TIMEOUT_MS
-            readTimeout = PROBE_TIMEOUT_MS
-            setRequestProperty("Authorization", "Bearer $API_KEY")
+    private fun probeCode(port: Int): Int =
+        try {
+            val conn =
+                (
+                    URL("http://127.0.0.1:$port/v1/models")
+                        .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
+                ).apply {
+                    requestMethod = "GET"
+                    connectTimeout = PROBE_TIMEOUT_MS
+                    readTimeout = PROBE_TIMEOUT_MS
+                    setRequestProperty("Authorization", "Bearer $API_KEY")
+                }
+            val code = conn.responseCode
+            if (code in 200..299) {
+                conn.inputStream?.close()
+            } else {
+                conn.errorStream?.close()
+            }
+            code
+        } catch (_: Throwable) {
+            -1
         }
-        val code = conn.responseCode
-        if (code in 200..299) {
-            conn.inputStream?.close()
-        } else {
-            conn.errorStream?.close()
-        }
-        code
-    } catch (_: Throwable) {
-        -1
-    }
 
-    private fun pump(proc: Process, log: File) {
-        fun drain(name: String, run: () -> java.io.InputStream) {
+    private fun pump(
+        proc: Process,
+        log: File,
+    ) {
+        fun drain(
+            name: String,
+            run: () -> java.io.InputStream,
+        ) {
             Thread {
                 runCatching {
                     run().bufferedReader().useLines { lines ->
                         log.appendText(lines.joinToString("\n", postfix = "\n"))
                     }
                 }
-            }.apply { isDaemon = true; this.name = name }.start()
+            }.apply {
+                isDaemon = true
+                this.name = name
+            }.start()
         }
         drain("wb-gw-out") { proc.inputStream }
         drain("wb-gw-err") { proc.errorStream }
     }
 
-    private fun logTail(log: File, lines: Int = 25): String = runCatching {
-        val text = log.readLines()
-        if (text.isEmpty()) "（网关没有任何输出）"
-        else "：\n" + text.takeLast(lines).joinToString("\n").take(2500)
-    }.getOrDefault("")
+    private fun logTail(
+        log: File,
+        lines: Int = 25,
+    ): String =
+        runCatching {
+            val text = log.readLines()
+            if (text.isEmpty()) {
+                "（网关没有任何输出）"
+            } else {
+                "：\n" + text.takeLast(lines).joinToString("\n").take(2500)
+            }
+        }.getOrDefault("")
 }

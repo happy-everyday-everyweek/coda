@@ -11,13 +11,13 @@ import com.google.android.material.color.DynamicColors
  * 界面字号、自定义主色、自动取色、深浅主题。
  */
 open class BaseActivity : androidx.appcompat.app.AppCompatActivity() {
-
     override fun attachBaseContext(newBase: Context) {
         val store = SettingsStore.get(newBase)
         val config = Configuration(newBase.resources.configuration)
-        config.fontScale = SettingsStore.FONT_SCALES[
-            store.fontScaleIndex.coerceIn(SettingsStore.FONT_SCALES.indices)
-        ]
+        config.fontScale =
+            SettingsStore.FONT_SCALES[
+                store.fontScaleIndex.coerceIn(SettingsStore.FONT_SCALES.indices),
+            ]
         super.attachBaseContext(newBase.createConfigurationContext(config))
     }
 

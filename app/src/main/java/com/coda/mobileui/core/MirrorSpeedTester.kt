@@ -26,7 +26,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 改用固定线程池；以及不对外播报平均速度（调用方只需要结果）。
  */
 object MirrorSpeedTester {
-
     /** 探测最多拉这么多字节就停。 */
     private const val PROBE_BYTES = 12L shl 20
 
@@ -50,7 +49,10 @@ object MirrorSpeedTester {
     /** 达到这个持续速度就停止测速并选它。 */
     private const val FAST_BPS = 2L * 1024 * 1024
 
-    private data class Sample(val timeMs: Long, val bytes: Long)
+    private data class Sample(
+        val timeMs: Long,
+        val bytes: Long,
+    )
 
     /**
      * 一条镜像的测速结论。
@@ -87,7 +89,11 @@ object MirrorSpeedTester {
 
     /** 从 prefix 里取出主机名（`https://host/path` → `host`）。 */
     private fun hostOf(prefix: String): String? =
-        Regex("^https?://([^/]+)").find(prefix)?.groupValues?.get(1)?.substringBefore(':')
+        Regex("^https?://([^/]+)")
+            .find(prefix)
+            ?.groupValues
+            ?.get(1)
+            ?.substringBefore(':')
 
     /**
      * 第一道筛：只做 TCP 连通性与延迟。
@@ -99,7 +105,10 @@ object MirrorSpeedTester {
      * 用 TCP 连接 443 而不是 ICMP：Android 上发 ICMP 需要 root；而且对 HTTP 镜像来说，
      * TCP 握手成功才是真的可用，ping 通不代表 443 通。
      */
-    fun pingAll(mirrors: List<GhMirror>, timeoutMs: Int = 1_500): List<PingResult> {
+    fun pingAll(
+        mirrors: List<GhMirror>,
+        timeoutMs: Int = 1_500,
+    ): List<PingResult> {
         val pool = Executors.newFixedThreadPool(PING_CONCURRENCY)
         return try {
             val futures = mirrors.map { m -> pool.submit(Callable { ping(m, timeoutMs) }) }
@@ -114,9 +123,13 @@ object MirrorSpeedTester {
         }
     }
 
-    private fun ping(mirror: GhMirror, timeoutMs: Int): PingResult {
-        val host = hostOf(mirror.prefix)
-            ?: return PingResult(mirror, false, error = "无法解析主机")
+    private fun ping(
+        mirror: GhMirror,
+        timeoutMs: Int,
+    ): PingResult {
+        val host =
+            hostOf(mirror.prefix)
+                ?: return PingResult(mirror, false, error = "无法解析主机")
         val t0 = System.currentTimeMillis()
         return try {
             java.net.Socket().use { s ->
@@ -146,15 +159,18 @@ object MirrorSpeedTester {
         val pool = Executors.newFixedThreadPool(CONCURRENCY)
 
         try {
-            val futures = shuffled.map { m ->
-                pool.submit(Callable {
-                    // 已经选出够快的源，剩下的直接放弃，不再浪费流量。
-                    if (picked.get()) return@Callable null
-                    val r = probe(m, url)
-                    if (r.ok && r.sustainedBps >= firstPick) picked.set(true)
-                    r
-                })
-            }
+            val futures =
+                shuffled.map { m ->
+                    pool.submit(
+                        Callable {
+                            // 已经选出够快的源，剩下的直接放弃，不再浪费流量。
+                            if (picked.get()) return@Callable null
+                            val r = probe(m, url)
+                            if (r.ok && r.sustainedBps >= firstPick) picked.set(true)
+                            r
+                        },
+                    )
+                }
             for (f in futures) {
                 val r = runCatching { f.get(WINDOW_MS + 8_000L, TimeUnit.MILLISECONDS) }.getOrNull()
                 if (r != null) done.add(r)
@@ -167,7 +183,10 @@ object MirrorSpeedTester {
     }
 
     /** 探一条镜像：拉前 12MB 或跑满 6 秒，取稳定段速度。 */
-    private fun probe(mirror: GhMirror, url: String): Result {
+    private fun probe(
+        mirror: GhMirror,
+        url: String,
+    ): Result {
         val full = GhMirrors.wrap(mirror.prefix, url)
         val start = System.currentTimeMillis()
         val samples = ArrayList<Sample>()
@@ -175,13 +194,14 @@ object MirrorSpeedTester {
         var firstByteMs = -1L
 
         try {
-            val conn = (URL(full).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = true
-                connectTimeout = 5_000
-                readTimeout = 8_000
-                setRequestProperty("Range", "bytes=0-${PROBE_BYTES - 1}")
-                setRequestProperty("User-Agent", "Coda-Android")
-            }
+            val conn =
+                (URL(full).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = true
+                    connectTimeout = 5_000
+                    readTimeout = 8_000
+                    setRequestProperty("Range", "bytes=0-${PROBE_BYTES - 1}")
+                    setRequestProperty("User-Agent", "Coda-Android")
+                }
             try {
                 val code = conn.responseCode
                 // 403/404/429/5xx 直接判死，不浪费时间读流。

@@ -31,7 +31,6 @@ import java.util.zip.GZIPInputStream
  * 经常失败，用户只会看到一句"网关启动失败"，而真实原因被埋在网络层。
  */
 object ProxyHost {
-
     /** 宿主发布版本；升级只需改这里，随包资产与目录名跟着变。 */
     const val VERSION = "8.0.32"
 
@@ -47,6 +46,7 @@ object ProxyHost {
     private const val PROBE_TIMEOUT_MS = 1_500
 
     private const val PROBE_INTERVAL_MS = 500L
+
     /**
      * 管理接口密钥。
      *
@@ -72,6 +72,7 @@ object ProxyHost {
     private var process: Process? = null
     private var booting = false
     private var activePort = DEFAULT_PORT
+
     /**
      * 当前运行中的进程实际启用了哪些插件（写进 config.yaml 的那些）。
      *
@@ -101,7 +102,9 @@ object ProxyHost {
      * 探测失败可能来自明文策略拒绝、连接被拒、端口未监听，三者对外都只表现为
      * "45 秒超时"。留下第一条异常的类名与消息，超时提示里直接带出来。
      */
-    private val probeFailure = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private val probeFailure =
+        java.util.concurrent.atomic
+            .AtomicReference<String?>(null)
 
     /** 宿主进程是否存活。 */
     val isRunning: Boolean
@@ -125,8 +128,7 @@ object ProxyHost {
      * `/root/.coda/proxy-host/cli-proxy-api`，路径由我们自己完全决定，不经过任何绑定推导。
      * 数据单独放 `data/`，升级宿主时只换二进制、不动账号与配置。
      */
-    private fun guestRoot(ctx: Context): File =
-        File(File(LinuxEnv(ctx).rootfs, "root"), ".coda/proxy-host").apply { mkdirs() }
+    private fun guestRoot(ctx: Context): File = File(File(LinuxEnv(ctx).rootfs, "root"), ".coda/proxy-host").apply { mkdirs() }
 
     /** 宿主侧的存放目录（rootfs 内），保留这个入口给日志与配置。 */
     fun dirFor(ctx: Context): File = guestRoot(ctx)
@@ -176,12 +178,13 @@ object ProxyHost {
         val expected = runCatching { assetSize(ctx, "proxy-host/management.html") }.getOrNull() ?: return
         if (target.isFile && target.length() == expected) return
         runCatching { target.delete() }
-        val ok = runCatching {
-            ctx.assets.open("proxy-host/management.html").use { input ->
-                FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
-            }
-            true
-        }.getOrDefault(false)
+        val ok =
+            runCatching {
+                ctx.assets.open("proxy-host/management.html").use { input ->
+                    FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+                }
+                true
+            }.getOrDefault(false)
         if (ok) {
             AppLog.i("ProxyHost", "管理面板资产就位：${target.absolutePath}")
         } else {
@@ -197,7 +200,10 @@ object ProxyHost {
      * 因为上面所有文件都在 rootfs 内，容器路径就是把 rootfs 的宿主前缀换成根 `/`。
      * 不再走 `guestPath()` 的绑定推导，避免依赖"沙箱同名绑定"这个不可靠假设。
      */
-    private fun guestPathOf(ctx: Context, file: File): String {
+    private fun guestPathOf(
+        ctx: Context,
+        file: File,
+    ): String {
         val root = LinuxEnv(ctx).rootfs.absolutePath.trimEnd('/')
         val abs = file.absolutePath
         val rel = if (abs.startsWith("$root/")) abs.removePrefix("$root") else "/$abs"
@@ -217,7 +223,10 @@ object ProxyHost {
      * `/lib/ld-linux-aarch64.so.1` 不存在而报 ENOENT。这里用随包的 glibc loader
      * 显式加载二进制，库查找也限定在 `glibc/` 目录，与 musl 的库完全隔离。
      */
-    private fun launchCommand(ctx: Context, args: List<String>): List<String> {
+    private fun launchCommand(
+        ctx: Context,
+        args: List<String>,
+    ): List<String> {
         val loader = guestPathOf(ctx, File(glibcDirFor(ctx), "ld-linux-aarch64.so.1"))
         val libDir = guestPathOf(ctx, glibcDirFor(ctx))
         val binary = guestBinary(ctx)
@@ -225,15 +234,16 @@ object ProxyHost {
     }
 
     /** 随包 glibc 运行时的文件清单；释放与安装校验共用一份，避免两处漂移。 */
-    private val GLIBC_LIBS = listOf(
-        "ld-linux-aarch64.so.1",
-        "libc.so.6",
-        "libm.so.6",
-        "libpthread.so.0",
-        "libdl.so.2",
-        "libresolv.so.2",
-        "libgcc_s.so.1",
-    )
+    private val GLIBC_LIBS =
+        listOf(
+            "ld-linux-aarch64.so.1",
+            "libc.so.6",
+            "libm.so.6",
+            "libpthread.so.0",
+            "libdl.so.2",
+            "libresolv.so.2",
+            "libgcc_s.so.1",
+        )
 
     /**
      * 宿主二进制是否已就位。
@@ -247,8 +257,9 @@ object ProxyHost {
         // 直接 execve 的，缺执行位时报 Permission denied（上一版释放时漏了 chmod，
         // 存量设备靠这个校验触发补装修复）。
         val glibcDir = glibcDirFor(ctx)
-        val libsReady = GLIBC_LIBS.all { File(glibcDir, it).isFile } &&
-            File(glibcDir, "ld-linux-aarch64.so.1").canExecute()
+        val libsReady =
+            GLIBC_LIBS.all { File(glibcDir, it).isFile } &&
+                File(glibcDir, "ld-linux-aarch64.so.1").canExecute()
         val ok = bin.isFile && bin.length() > 10_000_000L && looksExecutable(bin) && libsReady
         if (!ok) {
             AppLog.i(
@@ -268,7 +279,10 @@ object ProxyHost {
      * 二十多兆的下载在移动网络下经常失败，用户看到的就是一句"网关启动失败"，而真正原因
      * 被埋在网络层。构建期就该把二进制放进包里，运行时不该依赖任何外部服务。
      */
-    fun ensureInstalled(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
+    fun ensureInstalled(
+        ctx: Context,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
         val target = binaryFor(ctx)
         AppLog.i("ProxyHost", "ensureInstalled: target=${target.absolutePath} isFile=${target.isFile}")
         if (isInstalled(ctx)) return true
@@ -287,11 +301,15 @@ object ProxyHost {
     }
 
     /** 从随包资产释放宿主二进制。资产缺失或写出不完整时返回 false。 */
-    private fun installFromAsset(ctx: Context, target: File): Boolean {
-        val names = listOf(
-            "proxy-host/cli-proxy-api-$VERSION",
-            "proxy-host/cli-proxy-api",
-        )
+    private fun installFromAsset(
+        ctx: Context,
+        target: File,
+    ): Boolean {
+        val names =
+            listOf(
+                "proxy-host/cli-proxy-api-$VERSION",
+                "proxy-host/cli-proxy-api",
+            )
         target.parentFile?.mkdirs()
         for (name in names) {
             // 先量出资产真实长度：只靠"写出后超过 10MB"判断会放过被截断的半截文件——
@@ -306,12 +324,13 @@ object ProxyHost {
             if (expected <= 10_000_000L) continue
             // 写之前先删掉可能残留的半截文件，避免追加到旧内容后面。
             runCatching { target.delete() }
-            val ok = runCatching {
-                ctx.assets.open(name).use { input ->
-                    FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
-                }
-                true
-            }.getOrDefault(false)
+            val ok =
+                runCatching {
+                    ctx.assets.open(name).use { input ->
+                        FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+                    }
+                    true
+                }.getOrDefault(false)
             if (!ok) {
                 runCatching { target.delete() }
                 continue
@@ -347,12 +366,13 @@ object ProxyHost {
                 continue
             }
             runCatching { target.delete() }
-            val ok = runCatching {
-                ctx.assets.open("proxy-host/glibc/$name").use { input ->
-                    FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
-                }
-                true
-            }.getOrDefault(false)
+            val ok =
+                runCatching {
+                    ctx.assets.open("proxy-host/glibc/$name").use { input ->
+                        FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+                    }
+                    true
+                }.getOrDefault(false)
             if (!ok || target.length() != expected) {
                 AppLog.e("ProxyHost", "释放 glibc 库失败：$name")
                 return false
@@ -365,31 +385,36 @@ object ProxyHost {
     }
 
     /** 文件头是否是 ELF 可执行。 */
-    private fun looksExecutable(file: File): Boolean = runCatching {
-        java.io.FileInputStream(file).use { input ->
-            val head = ByteArray(4)
-            if (input.read(head) != 4) return false
-            head[0] == 0x7F.toByte() && head[1] == 'E'.code.toByte() &&
-                head[2] == 'L'.code.toByte() && head[3] == 'F'.code.toByte()
-        }
-    }.getOrDefault(false)
+    private fun looksExecutable(file: File): Boolean =
+        runCatching {
+            java.io.FileInputStream(file).use { input ->
+                val head = ByteArray(4)
+                if (input.read(head) != 4) return false
+                head[0] == 0x7F.toByte() && head[1] == 'E'.code.toByte() &&
+                    head[2] == 'L'.code.toByte() && head[3] == 'F'.code.toByte()
+            }
+        }.getOrDefault(false)
 
     /** 读资产声明的长度；拿不到返回 null。 */
-    private fun assetSize(ctx: Context, name: String): Long? = runCatching {
-        ctx.assets.openFd(name).use { it.length }
-    }.getOrNull() ?: runCatching {
-        // 压缩存储的资产没有 openFd，只能实际读一遍统计字节数（首次安装一次性开销）。
-        ctx.assets.open(name).use { input ->
-            val buf = ByteArray(256 * 1024)
-            var total = 0L
-            while (true) {
-                val n = input.read(buf)
-                if (n <= 0) break
-                total += n
+    private fun assetSize(
+        ctx: Context,
+        name: String,
+    ): Long? =
+        runCatching {
+            ctx.assets.openFd(name).use { it.length }
+        }.getOrNull() ?: runCatching {
+            // 压缩存储的资产没有 openFd，只能实际读一遍统计字节数（首次安装一次性开销）。
+            ctx.assets.open(name).use { input ->
+                val buf = ByteArray(256 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    total += n
+                }
+                total
             }
-            total
-        }
-    }.getOrNull()
+        }.getOrNull()
 
     /**
      * 写配置文件。每次启动前重写，保证端口、插件目录、数据目录与实际路径一致。
@@ -397,47 +422,52 @@ object ProxyHost {
      * 配置里必须写**容器内**路径：宿主进程跑在容器里，它只认 `/root/.coda/...` 这种形式，
      * 不认 Android 的 `/data/user/0/...`。
      */
-    private fun writeConfig(ctx: Context, port: Int) {
+    private fun writeConfig(
+        ctx: Context,
+        port: Int,
+    ) {
         val plugins = guestPathOf(ctx, pluginsDirFor(ctx))
         val data = guestPathOf(ctx, dataDirFor(ctx))
-        val text = buildString {
-            appendLine("config-version: 8")
-            appendLine("server:")
-            appendLine("  host: \"127.0.0.1\"")
-            appendLine("  port: $port")
-            appendLine("oauth:")
-            // v8 起认证目录从顶层挪到了 oauth 段下，写在顶层会被忽略。
-            appendLine("  auth-dir: \"$data/auth\"")
-            appendLine("management:")
-            // 管理接口即使在回环地址上也要密钥，写操作（登录、签到、删账号）全部经过它。
-            appendLine("  allow-remote: false")
-            appendLine("  secret-key: \"$MANAGEMENT_KEY\"")
-            // 管理面板资产随包发布并释放到 static/，禁掉启动期与运行期的面板自动更新：
-            // 否则网关会先查 GitHub API 比对哈希，直连挂起时整个启动被网络拖死
-            //（真机实测 45 秒就绪窗口被下载耗尽，健康探测永远等不到应答）。
-            appendLine("  disable-auto-update-panel: true")
-            appendLine("access:")
-            // 下游（内核）用这把密钥调 /v1，权限只到发请求，不能碰管理面。
-            appendLine("  api-keys:")
-            appendLine("    - \"$CLIENT_KEY\"")
-            appendLine("plugins:")
-            appendLine("  enabled: true")
-            appendLine("  dir: \"$plugins\"")
-            // 只为目录里真实存在的插件写启用项，避免宿主报缺插件。
-            val present = OAuthProviders.all.filter {
-                File(pluginsDirFor(ctx), OAuthProviders.pluginFile(it)).isFile
-            }
-            if (present.isNotEmpty()) {
-                appendLine("  configs:")
-                for (p in present) {
-                    appendLine("    ${p.pluginId}:")
-                    appendLine("      enabled: true")
+        val text =
+            buildString {
+                appendLine("config-version: 8")
+                appendLine("server:")
+                appendLine("  host: \"127.0.0.1\"")
+                appendLine("  port: $port")
+                appendLine("oauth:")
+                // v8 起认证目录从顶层挪到了 oauth 段下，写在顶层会被忽略。
+                appendLine("  auth-dir: \"$data/auth\"")
+                appendLine("management:")
+                // 管理接口即使在回环地址上也要密钥，写操作（登录、签到、删账号）全部经过它。
+                appendLine("  allow-remote: false")
+                appendLine("  secret-key: \"$MANAGEMENT_KEY\"")
+                // 管理面板资产随包发布并释放到 static/，禁掉启动期与运行期的面板自动更新：
+                // 否则网关会先查 GitHub API 比对哈希，直连挂起时整个启动被网络拖死
+                // （真机实测 45 秒就绪窗口被下载耗尽，健康探测永远等不到应答）。
+                appendLine("  disable-auto-update-panel: true")
+                appendLine("access:")
+                // 下游（内核）用这把密钥调 /v1，权限只到发请求，不能碰管理面。
+                appendLine("  api-keys:")
+                appendLine("    - \"$CLIENT_KEY\"")
+                appendLine("plugins:")
+                appendLine("  enabled: true")
+                appendLine("  dir: \"$plugins\"")
+                // 只为目录里真实存在的插件写启用项，避免宿主报缺插件。
+                val present =
+                    OAuthProviders.all.filter {
+                        File(pluginsDirFor(ctx), OAuthProviders.pluginFile(it)).isFile
+                    }
+                if (present.isNotEmpty()) {
+                    appendLine("  configs:")
+                    for (p in present) {
+                        appendLine("    ${p.pluginId}:")
+                        appendLine("      enabled: true")
+                    }
                 }
+                // 记下这一份配置实际启用了哪些插件：进程起来后就是它们在生效。
+                // start() 用它判断目录里的插件是否已经超出运行中进程的加载范围。
+                loadedPlugins = present.map { it.pluginId }.toSet()
             }
-            // 记下这一份配置实际启用了哪些插件：进程起来后就是它们在生效。
-            // start() 用它判断目录里的插件是否已经超出运行中进程的加载范围。
-            loadedPlugins = present.map { it.pluginId }.toSet()
-        }
         configFor(ctx).writeText(text)
     }
 
@@ -447,10 +477,12 @@ object ProxyHost {
      * 判据与 [ensurePlugin] 一致：文件存在且大小过槛，半截文件不算装好。
      */
     private fun installedPluginIds(ctx: Context): Set<String> =
-        OAuthProviders.all.filter { p ->
-            val f = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(p))
-            f.isFile && f.length() > 500_000L
-        }.map { it.pluginId }.toSet()
+        OAuthProviders.all
+            .filter { p ->
+                val f = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(p))
+                f.isFile && f.length() > 500_000L
+            }.map { it.pluginId }
+            .toSet()
 
     /**
      * 备好运行前提，但不启动进程：装配 Linux 环境 + 释放宿主二进制。
@@ -459,7 +491,10 @@ object ProxyHost {
      * 宿主进程拉起之前放到位，宿主启动时才扫描得到。所以调用方的顺序应当是
      * `ensureRuntime` → `ensurePlugin` → `start`。
      */
-    fun ensureRuntime(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
+    fun ensureRuntime(
+        ctx: Context,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
         lastError = null
         val env = LinuxEnv(ctx)
         if (!env.isReady()) {
@@ -481,7 +516,10 @@ object ProxyHost {
      * 调用方必须在后台线程调用：整个过程含解包、进程拉起与最多 [READY_TIMEOUT_MS] 的等待。
      * 端口从候选里挑第一个能用的，挑不到就返回失败，而不是让宿主带着冲突端口起一个假活的进程。
      */
-    fun start(ctx: Context, onProgress: (String) -> Unit = {}): Boolean {
+    fun start(
+        ctx: Context,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
         lastError = null
         // 已经在跑，但插件集合可能已经变了（用户又授权了别的渠道）：网关只在启动时
         // 扫描插件目录，进程活着时新丢进去的 .so 不会被加载，表现为"渠道装好了却不可用"。
@@ -547,8 +585,11 @@ object ProxyHost {
                 val probeNote = probeFailure.get()?.let { "\n探测异常：$it" } ?: ""
                 stop()
                 return fail(
-                    if (proc.isAlive) "网关启动超时（45 秒内未应答$port）$probeNote" + tail
-                    else "网关进程退出$probeNote" + tail
+                    if (proc.isAlive) {
+                        "网关启动超时（45 秒内未应答$port）$probeNote" + tail
+                    } else {
+                        "网关进程退出$probeNote" + tail
+                    },
                 )
             }
             true
@@ -566,14 +607,18 @@ object ProxyHost {
      * 宿主起不来时真正的原因（缺动态库、配置语法错、端口绑定失败）都写在它自己的输出里，
      * 不把这几行带出来，界面永远只会显示一句笼统的失败。
      */
-    private fun logTail(log: File, lines: Int = 30): String = runCatching {
-        val text = log.readLines()
-        if (text.isEmpty()) {
-            "（网关没有任何输出）"
-        } else {
-            "：\n" + text.takeLast(lines).joinToString("\n").take(3000)
-        }
-    }.getOrDefault("")
+    private fun logTail(
+        log: File,
+        lines: Int = 30,
+    ): String =
+        runCatching {
+            val text = log.readLines()
+            if (text.isEmpty()) {
+                "（网关没有任何输出）"
+            } else {
+                "：\n" + text.takeLast(lines).joinToString("\n").take(3000)
+            }
+        }.getOrDefault("")
 
     /**
      * 把宿主的输出持续写进日志文件，方便排查。
@@ -582,8 +627,12 @@ object ProxyHost {
      * 用 appendText 会互相覆盖偏移，日志会变成残缺的碎片。这里只加锁，不合并流——
      * 合并会丢掉"这条是错误还是普通输出"的区分。
      */
-    private fun pump(proc: Process, log: File) {
+    private fun pump(
+        proc: Process,
+        log: File,
+    ) {
         val lock = Any()
+
         fun drain(stream: java.io.InputStream) {
             Thread {
                 runCatching {
@@ -618,23 +667,27 @@ object ProxyHost {
         return false
     }
 
-    private fun probe(port: Int): Boolean = try {
-        // 必须显式绕过代理：HttpURLConnection 默认吃系统全局代理，代理或 VPN 类应用
-        // 在场时把回环请求也一并接管的设备并不罕见，绕过它没有副作用。
-        val conn = (URL("http://127.0.0.1:$port/healthz")
-            .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
-            connectTimeout = PROBE_TIMEOUT_MS
-            readTimeout = PROBE_TIMEOUT_MS
+    private fun probe(port: Int): Boolean =
+        try {
+            // 必须显式绕过代理：HttpURLConnection 默认吃系统全局代理，代理或 VPN 类应用
+            // 在场时把回环请求也一并接管的设备并不罕见，绕过它没有副作用。
+            val conn =
+                (
+                    URL("http://127.0.0.1:$port/healthz")
+                        .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
+                ).apply {
+                    connectTimeout = PROBE_TIMEOUT_MS
+                    readTimeout = PROBE_TIMEOUT_MS
+                }
+            val code = conn.responseCode
+            conn.disconnect()
+            code in 200..299
+        } catch (t: Throwable) {
+            // 不能静默返回 false：明文策略拒绝、连接被拒、端口未监听在界面上长得一模一样，
+            // 全都表现为"45 秒超时"。把首次失败的真实异常记下来，下次排查直接看日志。
+            probeFailure.compareAndSet(null, t.javaClass.simpleName + ": " + (t.message ?: ""))
+            false
         }
-        val code = conn.responseCode
-        conn.disconnect()
-        code in 200..299
-    } catch (t: Throwable) {
-        // 不能静默返回 false：明文策略拒绝、连接被拒、端口未监听在界面上长得一模一样，
-        // 全都表现为"45 秒超时"。把首次失败的真实异常记下来，下次排查直接看日志。
-        probeFailure.compareAndSet(null, t.javaClass.simpleName + ": " + (t.message ?: ""))
-        false
-    }
 
     /** 挑一个可用端口；全部被占用时返回 null。 */
     private fun pickPort(): Int? {
@@ -644,21 +697,22 @@ object ProxyHost {
         return null
     }
 
-    private fun portFree(port: Int): Boolean = try {
-        java.net.ServerSocket().use { socket ->
-            socket.reuseAddress = true
-            socket.bind(java.net.InetSocketAddress("127.0.0.1", port))
-            true
+    private fun portFree(port: Int): Boolean =
+        try {
+            java.net.ServerSocket().use { socket ->
+                socket.reuseAddress = true
+                socket.bind(java.net.InetSocketAddress("127.0.0.1", port))
+                true
+            }
+        } catch (_: Throwable) {
+            false
         }
-    } catch (_: Throwable) {
-        false
-    }
 
     /** 当前宿主正在监听的端口；未启动时是默认端口。 */
     fun port(): Int = activePort
 
     /** 管理接口基址。 */
-    fun baseUrl(): String = "http://127.0.0.1:${activePort}"
+    fun baseUrl(): String = "http://127.0.0.1:$activePort"
 
     /** 停掉宿主。销毁即走，不等待优雅退出——它的状态都落在磁盘上，重启会重新加载。 */
     fun stop() {
@@ -682,51 +736,56 @@ object ProxyHost {
         method: String = "GET",
         body: String? = null,
         timeoutMs: Int = 30_000,
-    ): String? = try {
-        // 与 probe 同理：回环请求必须绕过系统代理，代理软件在场时不能让它截走
-        // 管理面调用（发起授权、轮询状态、拉模型列表全在这条路上）。
-        val url = baseUrl() + path
-        AppLog.i(TAG, "管理面 $method $url（宿主运行中=${isRunning}）")
-        val conn = (URL(url)
-            .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 10_000
-            readTimeout = timeoutMs
-            // 宿主要求所有管理请求都带密钥，回环地址也不例外。
-            setRequestProperty("Authorization", "Bearer $MANAGEMENT_KEY")
+    ): String? =
+        try {
+            // 与 probe 同理：回环请求必须绕过系统代理，代理软件在场时不能让它截走
+            // 管理面调用（发起授权、轮询状态、拉模型列表全在这条路上）。
+            val url = baseUrl() + path
+            AppLog.i(TAG, "管理面 $method $url（宿主运行中=$isRunning）")
+            val conn =
+                (
+                    URL(url)
+                        .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
+                ).apply {
+                    requestMethod = method
+                    connectTimeout = 10_000
+                    readTimeout = timeoutMs
+                    // 宿主要求所有管理请求都带密钥，回环地址也不例外。
+                    setRequestProperty("Authorization", "Bearer $MANAGEMENT_KEY")
+                    if (body != null) {
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json")
+                    }
+                }
             if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
-        }
-        if (body != null) {
-            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        }
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val text = stream?.bufferedReader()?.use { it.readText() }
-        conn.disconnect()
-        if (code in 200..299) {
-            text
-        } else {
-            // 以前这里只返回 null，状态码丢了。管理面失败的常见形态：
-            // 404 = 插件没注册这条路由；401 = 密钥不对；
-            // 502 = 插件内部报错（登录流程本身失败）。
-            AppLog.w(TAG, "管理面失败 $path → HTTP $code：${text?.take(300)}")
-            lastError = "管理面 HTTP $code（$path）：${text?.take(200).orEmpty()}"
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }
+            conn.disconnect()
+            if (code in 200..299) {
+                text
+            } else {
+                // 以前这里只返回 null，状态码丢了。管理面失败的常见形态：
+                // 404 = 插件没注册这条路由；401 = 密钥不对；
+                // 502 = 插件内部报错（登录流程本身失败）。
+                AppLog.w(TAG, "管理面失败 $path → HTTP $code：${text?.take(300)}")
+                lastError = "管理面 HTTP $code（$path）：${text?.take(200).orEmpty()}"
+                null
+            }
+        } catch (t: Throwable) {
+            // 同样以前是 catch(_)，异常被吞掉，连「连不上」和「超时」都分不出。
+            val kind =
+                when (t) {
+                    is java.net.ConnectException -> "无法连接（宿主未监听该端口）"
+                    is java.net.SocketTimeoutException -> "读取超时（${timeoutMs}ms 无响应）"
+                    else -> "${t.javaClass.simpleName}: ${t.message}"
+                }
+            AppLog.w(TAG, "管理面异常 $path：$kind")
+            lastError = "管理面请求失败：$kind（$path）"
             null
         }
-    } catch (t: Throwable) {
-        // 同样以前是 catch(_)，异常被吞掉，连「连不上」和「超时」都分不出。
-        val kind = when (t) {
-            is java.net.ConnectException -> "无法连接（宿主未监听该端口）"
-            is java.net.SocketTimeoutException -> "读取超时（${timeoutMs}ms 无响应）"
-            else -> "${t.javaClass.simpleName}: ${t.message}"
-        }
-        AppLog.w(TAG, "管理面异常 $path：$kind")
-        lastError = "管理面请求失败：$kind（$path）"
-        null
-    }
 
     /**
      * 取插件自带管理面板的 HTML 原文。
@@ -738,24 +797,31 @@ object ProxyHost {
      *
      * 拿不到就返回 null，调用方退回"什么都不显示"而不是瞎猜。
      */
-    fun resourceText(ctx: Context, path: String, timeoutMs: Int = 10_000): String? = try {
-        val conn = (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 8_000
-            readTimeout = timeoutMs
-        }
-        val code = conn.responseCode
-        val text = if (code in 200..299) {
-            conn.inputStream?.bufferedReader()?.use { it.readText() }
-        } else {
-            runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }
+    fun resourceText(
+        ctx: Context,
+        path: String,
+        timeoutMs: Int = 10_000,
+    ): String? =
+        try {
+            val conn =
+                (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 8_000
+                    readTimeout = timeoutMs
+                }
+            val code = conn.responseCode
+            val text =
+                if (code in 200..299) {
+                    conn.inputStream?.bufferedReader()?.use { it.readText() }
+                } else {
+                    runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() } }
+                    null
+                }
+            conn.disconnect()
+            text
+        } catch (_: Throwable) {
             null
         }
-        conn.disconnect()
-        text
-    } catch (_: Throwable) {
-        null
-    }
 
     /**
      * 发一条管理请求，只回状态码。
@@ -769,31 +835,33 @@ object ProxyHost {
         path: String,
         method: String = "POST",
         body: String? = null,
-    ): Int? = try {
-        val conn = (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 8_000
-            readTimeout = 15_000
-            setRequestProperty("Authorization", "Bearer $MANAGEMENT_KEY")
+    ): Int? =
+        try {
+            val conn =
+                (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+                    requestMethod = method
+                    connectTimeout = 8_000
+                    readTimeout = 15_000
+                    setRequestProperty("Authorization", "Bearer $MANAGEMENT_KEY")
+                    if (body != null) {
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json")
+                    }
+                }
             if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
+            val code = conn.responseCode
+            // 必须读掉响应体，否则连接不会被回收，反复探测会把连接池占满。
+            runCatching {
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                stream?.bufferedReader()?.use { it.readText() }
+            }
+            conn.disconnect()
+            code
+        } catch (_: Throwable) {
+            null
         }
-        if (body != null) {
-            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        }
-        val code = conn.responseCode
-        // 必须读掉响应体，否则连接不会被回收，反复探测会把连接池占满。
-        runCatching {
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            stream?.bufferedReader()?.use { it.readText() }
-        }
-        conn.disconnect()
-        code
-    } catch (_: Throwable) {
-        null
-    }
 
     /** 解析管理接口返回的 JSON；失败返回 null，由界面决定怎么提示。 */
     fun managementJson(
@@ -801,30 +869,38 @@ object ProxyHost {
         path: String,
         method: String = "GET",
         body: String? = null,
-    ): JSONObject? = runCatching {
-        ProxyHost.management(ctx, path, method, body)?.let { JSONObject(it) }
-    }.getOrNull()
+    ): JSONObject? =
+        runCatching {
+            ProxyHost.management(ctx, path, method, body)?.let { JSONObject(it) }
+        }.getOrNull()
 
     /**
      * 用下游调用密钥请求数据面接口（`/v1` 下）。
      *
      * 与管理面分开：这里只带 `clientKey`，只能读模型、发对话，动不了账号与配置。
      */
-    fun clientJson(ctx: Context, path: String): JSONObject? = runCatching {
-        // 与 probe 同理：数据面请求也走回环，同样绕过系统代理。
-        val conn = (URL(baseUrl() + path)
-            .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 10_000
-            readTimeout = 15_000
-            setRequestProperty("Authorization", "Bearer $CLIENT_KEY")
-        }
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val text = stream?.bufferedReader()?.use { it.readText() }
-        conn.disconnect()
-        if (code in 200..299 && text != null) JSONObject(text) else null
-    }.getOrNull()
+    fun clientJson(
+        ctx: Context,
+        path: String,
+    ): JSONObject? =
+        runCatching {
+            // 与 probe 同理：数据面请求也走回环，同样绕过系统代理。
+            val conn =
+                (
+                    URL(baseUrl() + path)
+                        .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
+                ).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 10_000
+                    readTimeout = 15_000
+                    setRequestProperty("Authorization", "Bearer $CLIENT_KEY")
+                }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }
+            conn.disconnect()
+            if (code in 200..299 && text != null) JSONObject(text) else null
+        }.getOrNull()
 
     // ---------------------------------------------------------------- 插件
 
@@ -834,20 +910,25 @@ object ProxyHost {
      * 只下这一个插件的 arm64 包（约 3MB），解出 `.so` 放进宿主扫描的插件目录。
      * 已经装过就跳过，避免每次启动都重新下载。
      */
-    fun ensurePlugin(ctx: Context, provider: OAuthProviders.Provider, onProgress: (String) -> Unit = {}): Boolean {
+    fun ensurePlugin(
+        ctx: Context,
+        provider: OAuthProviders.Provider,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
         val target = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(provider))
         if (target.isFile && target.length() > 500_000L) return true
 
         // 先看包内有没有。八家的 arm64 插件都已随包发布，正常情况下这一步就够了，不联网。
         onProgress("安装 ${provider.name} 插件…")
         val assetName = "proxy-plugins/" + OAuthProviders.pluginFile(provider)
-        val fromAsset = runCatching {
-            ctx.assets.open(assetName).use { input ->
-                target.parentFile?.mkdirs()
-                FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
-            }
-            true
-        }.getOrDefault(false)
+        val fromAsset =
+            runCatching {
+                ctx.assets.open(assetName).use { input ->
+                    target.parentFile?.mkdirs()
+                    FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+                }
+                true
+            }.getOrDefault(false)
         if (fromAsset && target.length() > 500_000L) {
             Os.chmod(target.absolutePath, 493) // 0755
             return true
@@ -896,35 +977,48 @@ object ProxyHost {
      * raw.githubusercontent.com 在部分网络下会被重置，所以失败时退回 GitHub API 的
      * `contents` 原始通道（带鉴权），两条路都不通才算失败。
      */
-    private fun download(ctx: Context, url: String, target: File): Boolean {
+    private fun download(
+        ctx: Context,
+        url: String,
+        target: File,
+    ): Boolean {
         if (downloadOnce(ctx, url, target, raw = false)) return true
-        val apiUrl = url.replace("https://raw.githubusercontent.com/", "https://api.github.com/repos/")
-            .replace("/main/release-assets/", "/contents/release-assets/") + "?ref=main"
+        val apiUrl =
+            url
+                .replace("https://raw.githubusercontent.com/", "https://api.github.com/repos/")
+                .replace("/main/release-assets/", "/contents/release-assets/") + "?ref=main"
         return downloadOnce(ctx, apiUrl, target, raw = true)
     }
 
-    private fun downloadOnce(ctx: Context, url: String, target: File, raw: Boolean): Boolean = try {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 20_000
-            readTimeout = 180_000
-            instanceFollowRedirects = true
-            if (raw) {
-                // API 通道需要鉴权才不会被限流；用户没配令牌时也照常尝试匿名访问。
-                setRequestProperty("Accept", "application/vnd.github.raw")
-                GitHub.token(ctx)?.let { setRequestProperty("Authorization", "Bearer $it") }
+    private fun downloadOnce(
+        ctx: Context,
+        url: String,
+        target: File,
+        raw: Boolean,
+    ): Boolean =
+        try {
+            val conn =
+                (URL(url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 20_000
+                    readTimeout = 180_000
+                    instanceFollowRedirects = true
+                    if (raw) {
+                        // API 通道需要鉴权才不会被限流；用户没配令牌时也照常尝试匿名访问。
+                        setRequestProperty("Accept", "application/vnd.github.raw")
+                        GitHub.token(ctx)?.let { setRequestProperty("Authorization", "Bearer $it") }
+                    }
+                }
+            if (conn.responseCode !in 200..299) {
+                false
+            } else {
+                target.parentFile?.mkdirs()
+                conn.inputStream.use { input ->
+                    FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
+                }
+                conn.disconnect()
+                target.length() > 500_000L
             }
-        }
-        if (conn.responseCode !in 200..299) {
+        } catch (_: Throwable) {
             false
-        } else {
-            target.parentFile?.mkdirs()
-            conn.inputStream.use { input ->
-                FileOutputStream(target).use { out -> input.copyTo(out, 256 * 1024) }
-            }
-            conn.disconnect()
-            target.length() > 500_000L
         }
-    } catch (_: Throwable) {
-        false
-    }
 }

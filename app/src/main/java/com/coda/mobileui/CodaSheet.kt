@@ -30,8 +30,9 @@ import com.google.android.material.color.MaterialColors
  * - 顶部中央为滑动把手（无关闭按钮；关闭靠下拉、点遮罩或返回键）；
  * - 内容由调用方填充；确认类用「副按钮 + 主按钮」页脚，选择/表单类用 content 区域。
  */
-class CodaSheet(private val activity: Activity) {
-
+class CodaSheet(
+    private val activity: Activity,
+) {
     companion object {
         /** 半屏卡片高度占屏高比例。 */
         private const val HALF_RATIO = 0.61f
@@ -89,34 +90,47 @@ class CodaSheet(private val activity: Activity) {
 
     fun subtitle(text: String): CodaSheet = apply { subtitleText = text }
 
-    fun headerAction(text: String, block: (CodaSheet) -> Unit): CodaSheet = apply {
-        headerActionText = text
-        headerActionBlock = block
-    }
+    fun headerAction(
+        text: String,
+        block: (CodaSheet) -> Unit,
+    ): CodaSheet =
+        apply {
+            headerActionText = text
+            headerActionBlock = block
+        }
 
     fun content(block: (LinearLayout) -> Unit): CodaSheet = apply { contentBlock = block }
 
-    fun primaryAction(text: String, block: (CodaSheet) -> Unit): CodaSheet = apply {
-        primaryText = text
-        primaryBlock = block
-    }
+    fun primaryAction(
+        text: String,
+        block: (CodaSheet) -> Unit,
+    ): CodaSheet =
+        apply {
+            primaryText = text
+            primaryBlock = block
+        }
 
     /** 页脚次要按钮（与主按钮并排，描边样式）。 */
-    fun secondaryAction(text: String, block: (CodaSheet) -> Unit): CodaSheet = apply {
-        secondaryText = text
-        secondaryBlock = block
-    }
+    fun secondaryAction(
+        text: String,
+        block: (CodaSheet) -> Unit,
+    ): CodaSheet =
+        apply {
+            secondaryText = text
+            secondaryBlock = block
+        }
 
     fun onDismiss(block: () -> Unit): CodaSheet = apply { onDismissBlock = block }
 
     /** 紧凑模式：高度随内容自适应（上限约 0.72 屏），仅支持下拉关闭。 */
     fun compact(): CodaSheet = apply { compactMode = true }
 
-    private fun dp(v: Float): Int =
-        (v * activity.resources.displayMetrics.density + 0.5f).toInt()
+    private fun dp(v: Float): Int = (v * activity.resources.displayMetrics.density + 0.5f).toInt()
 
-    private fun color(attr: Int, fallback: Int): Int =
-        MaterialColors.getColor(activity.window.decorView, attr, fallback)
+    private fun color(
+        attr: Int,
+        fallback: Int,
+    ): Int = MaterialColors.getColor(activity.window.decorView, attr, fallback)
 
     private fun cardHeightPx(): Int = (fullScreenH * HALF_RATIO).toInt()
 
@@ -139,63 +153,81 @@ class CodaSheet(private val activity: Activity) {
         val rootView = FrameLayout(activity)
 
         // 遮罩：点击关闭
-        val scrimView = View(activity).apply {
-            setBackgroundColor(0x88000000.toInt())
-            alpha = 0f
-            setOnClickListener { dismiss() }
-        }
+        val scrimView =
+            View(activity).apply {
+                setBackgroundColor(0x88000000.toInt())
+                alpha = 0f
+                setOnClickListener { dismiss() }
+            }
         rootView.addView(scrimView, matchParams())
 
         // 面板（卡片态：四周留距 + 四角圆角；全屏态：无距、无圆角、贴满屏幕）
         cornerPx = dp(CARD_CORNER_DP).toFloat()
-        val panelView = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
-                setColor(surface)
-                cornerRadii = floatArrayOf(
-                    cornerPx, cornerPx, cornerPx, cornerPx,
-                    cornerPx, cornerPx, cornerPx, cornerPx,
+        val panelView =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                background =
+                    GradientDrawable().apply {
+                        setColor(surface)
+                        cornerRadii =
+                            floatArrayOf(
+                                cornerPx,
+                                cornerPx,
+                                cornerPx,
+                                cornerPx,
+                                cornerPx,
+                                cornerPx,
+                                cornerPx,
+                                cornerPx,
+                            )
+                    }
+                elevation = dp(24f).toFloat()
+                outlineProvider =
+                    object : ViewOutlineProvider() {
+                        override fun getOutline(
+                            view: View,
+                            outline: Outline,
+                        ) {
+                            outline.setRoundRect(0, 0, view.width, view.height, cornerPx)
+                        }
+                    }
+            }
+        val panelParams =
+            if (compactMode) {
+                FrameLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.BOTTOM,
+                    ).apply {
+                        leftMargin = dp(CARD_GAP_DP)
+                        rightMargin = dp(CARD_GAP_DP)
+                        bottomMargin = dp(CARD_GAP_DP)
+                    }
+            } else {
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    cardHeightPx(),
+                    Gravity.BOTTOM,
                 )
             }
-            elevation = dp(24f).toFloat()
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, cornerPx)
-                }
-            }
-        }
-        val panelParams = if (compactMode) {
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM,
-            ).apply {
-                leftMargin = dp(CARD_GAP_DP)
-                rightMargin = dp(CARD_GAP_DP)
-                bottomMargin = dp(CARD_GAP_DP)
-            }
-        } else {
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                cardHeightPx(),
-                Gravity.BOTTOM,
-            )
-        }
         rootView.addView(panelView, panelParams)
 
         // 拖拽区：滑动把手行（+ 可选操作行）
         val dragArea = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        val grabRow = FrameLayout(activity).apply {
-            addView(
-                View(activity).apply {
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(2f).toFloat()
-                        setColor(withAlpha(onSurface, 0.35f))
-                    }
-                },
-                FrameLayout.LayoutParams(dp(36f), dp(4f), Gravity.CENTER),
-            )
-        }
+        val grabRow =
+            FrameLayout(activity).apply {
+                addView(
+                    View(activity).apply {
+                        background =
+                            GradientDrawable().apply {
+                                cornerRadius = dp(2f).toFloat()
+                                setColor(withAlpha(onSurface, 0.35f))
+                            }
+                    },
+                    FrameLayout.LayoutParams(dp(36f), dp(4f), Gravity.CENTER),
+                )
+            }
         grabberRow = grabRow
         dragArea.addView(
             grabRow,
@@ -203,21 +235,23 @@ class CodaSheet(private val activity: Activity) {
         )
 
         if (headerActionText != null) {
-            val header = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(20f), dp(6f), dp(20f), dp(4f))
-            }
+            val header =
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(20f), dp(6f), dp(20f), dp(4f))
+                }
             header.addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
             header.addView(
                 TextView(activity).apply {
                     text = headerActionText
                     textSize = 14f
                     setTextColor(onSurface)
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(18f).toFloat()
-                        setStroke(dp(1f), withAlpha(onSurface, 0.25f))
-                    }
+                    background =
+                        GradientDrawable().apply {
+                            cornerRadius = dp(18f).toFloat()
+                            setStroke(dp(1f), withAlpha(onSurface, 0.25f))
+                        }
                     setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
                     setOnClickListener { headerActionBlock?.invoke(this@CodaSheet) }
                 },
@@ -239,18 +273,20 @@ class CodaSheet(private val activity: Activity) {
         )
 
         // 内容滚动区
-        val contentCol = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(insetH(), dp(8f), insetH(), dp(20f))
-        }
-        liveContentCol = contentCol
-        val scroll: ScrollView = if (compactMode) {
-            MaxHeightScrollView(activity).apply {
-                maxHeightPx = (screenH * COMPACT_MAX_RATIO).toInt()
+        val contentCol =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(insetH(), dp(8f), insetH(), dp(20f))
             }
-        } else {
-            ScrollView(activity)
-        }
+        liveContentCol = contentCol
+        val scroll: ScrollView =
+            if (compactMode) {
+                MaxHeightScrollView(activity).apply {
+                    maxHeightPx = (screenH * COMPACT_MAX_RATIO).toInt()
+                }
+            } else {
+                ScrollView(activity)
+            }
         scroll.isFillViewport = true
         scroll.overScrollMode = View.OVER_SCROLL_ALWAYS
         // 记下容器与配色，供 navigate() 在同一张卡片里重建内容
@@ -282,10 +318,11 @@ class CodaSheet(private val activity: Activity) {
                     text = titleText
                     textSize = 22f
                     setTextColor(onSurface)
-                    typeface = android.graphics.Typeface.create(
-                        "sans-serif-medium",
-                        android.graphics.Typeface.NORMAL,
-                    )
+                    typeface =
+                        android.graphics.Typeface.create(
+                            "sans-serif-medium",
+                            android.graphics.Typeface.NORMAL,
+                        )
                 },
             )
         }
@@ -303,34 +340,39 @@ class CodaSheet(private val activity: Activity) {
 
         // 页脚按钮（可选：单主按钮，或 副+主 双按钮）
         if (primaryText != null || secondaryText != null) {
-            val footer = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(insetH(), dp(10f), insetH(), dp(24f))
-            }
+            val footer =
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(insetH(), dp(10f), insetH(), dp(24f))
+                }
+
             fun footerButton(
                 label: String,
                 filled: Boolean,
                 block: (CodaSheet) -> Unit,
-            ): TextView = TextView(activity).apply {
-                text = label
-                textSize = 15f
-                gravity = Gravity.CENTER
-                if (filled) {
-                    setTextColor(onPrimary)
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(26f).toFloat()
-                        setColor(primary)
+            ): TextView =
+                TextView(activity).apply {
+                    text = label
+                    textSize = 15f
+                    gravity = Gravity.CENTER
+                    if (filled) {
+                        setTextColor(onPrimary)
+                        background =
+                            GradientDrawable().apply {
+                                cornerRadius = dp(26f).toFloat()
+                                setColor(primary)
+                            }
+                    } else {
+                        setTextColor(onSurface)
+                        background =
+                            GradientDrawable().apply {
+                                cornerRadius = dp(26f).toFloat()
+                                setStroke(dp(1f), withAlpha(onSurface, 0.25f))
+                            }
                     }
-                } else {
-                    setTextColor(onSurface)
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(26f).toFloat()
-                        setStroke(dp(1f), withAlpha(onSurface, 0.25f))
-                    }
+                    setOnClickListener { block(this@CodaSheet) }
                 }
-                setOnClickListener { block(this@CodaSheet) }
-            }
             val both = primaryText != null && secondaryText != null
             if (secondaryText != null) {
                 footer.addView(
@@ -430,17 +472,20 @@ class CodaSheet(private val activity: Activity) {
                     true
                 }
 
-                else -> false
+                else -> {
+                    false
+                }
             }
         }
 
         // 返回键优先关闭
         if (activity is ComponentActivity) {
-            val cb = object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    dismiss()
+            val cb =
+                object : OnBackPressedCallback(true) {
+                    override fun handleOnBackPressed() {
+                        dismiss()
+                    }
                 }
-            }
             backCallback = cb
             (activity as ComponentActivity).onBackPressedDispatcher.addCallback(activity as ComponentActivity, cb)
         }
@@ -455,7 +500,8 @@ class CodaSheet(private val activity: Activity) {
         if (!compactMode) {
             applyDock(0f)
             panelView.translationY = (cardHeightPx() + dp(CARD_GAP_DP)).toFloat()
-            panelView.animate()
+            panelView
+                .animate()
                 .translationY(0f)
                 .setDuration(280)
                 .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
@@ -464,21 +510,29 @@ class CodaSheet(private val activity: Activity) {
             panelView.post {
                 val slide = (panelView.height + dp(CARD_GAP_DP)).toFloat()
                 panelView.translationY = slide
-                panelView.animate()
+                panelView
+                    .animate()
                     .translationY(0f)
                     .setDuration(260)
                     .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
                     .start()
             }
         }
-        scrimView.animate().alpha(1f).setDuration(200).start()
+        scrimView
+            .animate()
+            .alpha(1f)
+            .setDuration(200)
+            .start()
     }
 
     /**
      * 应用停靠进度：p=0 卡片态（半屏），p=1 全屏态。
      * 调整高度 / 四周留距 / 圆角 / 顶部内边距（状态栏避让）与阴影。
      */
-    private fun applyDock(pRaw: Float, heightOverride: Int? = null) {
+    private fun applyDock(
+        pRaw: Float,
+        heightOverride: Int? = null,
+    ) {
         val panelView = panel ?: return
         val p = pRaw.coerceIn(0f, 1f)
         dockProgress = p
@@ -496,10 +550,17 @@ class CodaSheet(private val activity: Activity) {
         }
         val radius = dp(CARD_CORNER_DP) * (1f - p)
         (panelView.background as? GradientDrawable)?.let { bg ->
-            bg.cornerRadii = floatArrayOf(
-                radius, radius, radius, radius,
-                radius, radius, radius, radius,
-            )
+            bg.cornerRadii =
+                floatArrayOf(
+                    radius,
+                    radius,
+                    radius,
+                    radius,
+                    radius,
+                    radius,
+                    radius,
+                    radius,
+                )
         }
         cornerPx = radius
         panelView.invalidateOutline()
@@ -518,7 +579,10 @@ class CodaSheet(private val activity: Activity) {
     }
 
     /** 拖拽松手后吸附到卡片（p=0）或全屏（p=1）。 */
-    private fun snapTo(p: Float, fromH: Int? = null) {
+    private fun snapTo(
+        p: Float,
+        fromH: Int? = null,
+    ) {
         val panelView = panel ?: return
         cancelPanelAnim()
         val full = fullScreenH
@@ -526,15 +590,16 @@ class CodaSheet(private val activity: Activity) {
         val h0 = fromH ?: panelView.height
         val h1 = card + ((full - card) * p).toInt()
         val p0 = ((h0 - card).toFloat() / (full - card)).coerceIn(0f, 1f)
-        val anim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 230
-            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
-            addUpdateListener { a ->
-                val t = a.animatedValue as Float
-                applyDock(p0 + (p - p0) * t, (h0 + ((h1 - h0) * t)).toInt())
+        val anim =
+            ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 230
+                interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+                addUpdateListener { a ->
+                    val t = a.animatedValue as Float
+                    applyDock(p0 + (p - p0) * t, (h0 + ((h1 - h0) * t)).toInt())
+                }
+                start()
             }
-            start()
-        }
         panelAnim = anim
     }
 
@@ -542,7 +607,8 @@ class CodaSheet(private val activity: Activity) {
     private fun animateCompactBack() {
         val p = panel ?: return
         p.animate().cancel()
-        p.animate()
+        p
+            .animate()
             .translationY(0f)
             .setDuration(220)
             .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
@@ -577,28 +643,36 @@ class CodaSheet(private val activity: Activity) {
         val onSurface = colors[0]
         val primary = colors[2]
         val onPrimary = colors[3]
-        val footer = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(insetH(), dp(10f), insetH(), dp(24f))
-        }
-        fun footerButton(label: String, filled: Boolean, block: (CodaSheet) -> Unit): TextView =
+        val footer =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(insetH(), dp(10f), insetH(), dp(24f))
+            }
+
+        fun footerButton(
+            label: String,
+            filled: Boolean,
+            block: (CodaSheet) -> Unit,
+        ): TextView =
             TextView(activity).apply {
                 text = label
                 textSize = 15f
                 gravity = Gravity.CENTER
                 if (filled) {
                     setTextColor(onPrimary)
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(26f).toFloat()
-                        setColor(primary)
-                    }
+                    background =
+                        GradientDrawable().apply {
+                            cornerRadius = dp(26f).toFloat()
+                            setColor(primary)
+                        }
                 } else {
                     setTextColor(onSurface)
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(26f).toFloat()
-                        setStroke(dp(1f), withAlpha(onSurface, 0.25f))
-                    }
+                    background =
+                        GradientDrawable().apply {
+                            cornerRadius = dp(26f).toFloat()
+                            setStroke(dp(1f), withAlpha(onSurface, 0.25f))
+                        }
                 }
                 setOnClickListener { block(this@CodaSheet) }
             }
@@ -654,10 +728,11 @@ class CodaSheet(private val activity: Activity) {
                     text = titleText
                     textSize = 22f
                     setTextColor(onSurface)
-                    typeface = android.graphics.Typeface.create(
-                        "sans-serif-medium",
-                        android.graphics.Typeface.NORMAL,
-                    )
+                    typeface =
+                        android.graphics.Typeface.create(
+                            "sans-serif-medium",
+                            android.graphics.Typeface.NORMAL,
+                        )
                 },
             )
         }
@@ -674,28 +749,36 @@ class CodaSheet(private val activity: Activity) {
         contentBlock?.invoke(contentCol)
 
         if (primaryText != null || secondaryText != null) {
-            val footer = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(insetH(), dp(10f), insetH(), dp(24f))
-            }
-            fun footerButton(label: String, filled: Boolean, block: (CodaSheet) -> Unit): TextView =
+            val footer =
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(insetH(), dp(10f), insetH(), dp(24f))
+                }
+
+            fun footerButton(
+                label: String,
+                filled: Boolean,
+                block: (CodaSheet) -> Unit,
+            ): TextView =
                 TextView(activity).apply {
                     text = label
                     textSize = 15f
                     gravity = Gravity.CENTER
                     if (filled) {
                         setTextColor(onPrimary)
-                        background = GradientDrawable().apply {
-                            cornerRadius = dp(26f).toFloat()
-                            setColor(primary)
-                        }
+                        background =
+                            GradientDrawable().apply {
+                                cornerRadius = dp(26f).toFloat()
+                                setColor(primary)
+                            }
                     } else {
                         setTextColor(onSurface)
-                        background = GradientDrawable().apply {
-                            cornerRadius = dp(26f).toFloat()
-                            setStroke(dp(1f), withAlpha(onSurface, 0.25f))
-                        }
+                        background =
+                            GradientDrawable().apply {
+                                cornerRadius = dp(26f).toFloat()
+                                setStroke(dp(1f), withAlpha(onSurface, 0.25f))
+                            }
                     }
                     setOnClickListener { block(this@CodaSheet) }
                 }
@@ -764,8 +847,16 @@ class CodaSheet(private val activity: Activity) {
 
         // 关掉旧页：内容区与底部按钮一起淡出并轻微左移
         val fadeOut = 110L
-        col.animate().alpha(0f).translationX(-dp(12f).toFloat()).setDuration(fadeOut)
-        footerRow?.animate()?.alpha(0f)?.setDuration(fadeOut)?.start()
+        col
+            .animate()
+            .alpha(0f)
+            .translationX(-dp(12f).toFloat())
+            .setDuration(fadeOut)
+        footerRow
+            ?.animate()
+            ?.alpha(0f)
+            ?.setDuration(fadeOut)
+            ?.start()
 
         col.postDelayed({
             // 复位动画状态
@@ -788,9 +879,10 @@ class CodaSheet(private val activity: Activity) {
 
             // 先判断这一页是不是真的定义了内容。判断必须放在动画之前：
             // 否则会先给空页播一遍淡入，再回滚，屏幕上会闪一下。
-            val pageDefined = titleText != null || subtitleText != null ||
-                headerActionText != null || contentBlock != null ||
-                primaryText != null || secondaryText != null
+            val pageDefined =
+                titleText != null || subtitleText != null ||
+                    headerActionText != null || contentBlock != null ||
+                    primaryText != null || secondaryText != null
             if (!pageDefined) {
                 // 调用方没定义任何东西：把旧页原样填回去，卡片保持不可用状态而不是空白
                 titleText = oldTitle
@@ -810,10 +902,19 @@ class CodaSheet(private val activity: Activity) {
             // 新页从右侧轻轻推入（内容区与底栏一起）
             col.alpha = 0f
             col.translationX = dp(16f).toFloat()
-            col.animate().alpha(1f).translationX(0f).setDuration(160).start()
+            col
+                .animate()
+                .alpha(1f)
+                .translationX(0f)
+                .setDuration(160)
+                .start()
             footerRow?.let {
                 it.alpha = 0f
-                it.animate().alpha(1f).setDuration(160).start()
+                it
+                    .animate()
+                    .alpha(1f)
+                    .setDuration(160)
+                    .start()
             }
             // 过渡结束，放开连点限制
             col.postDelayed({ navigating = false }, 170)
@@ -835,7 +936,8 @@ class CodaSheet(private val activity: Activity) {
         backCallback = null
         panelView?.animate()?.cancel()
         val exit = ((panelView?.height ?: 0) + dp(CARD_GAP_DP)).toFloat()
-        panelView?.animate()
+        panelView
+            ?.animate()
             ?.translationY(exit)
             ?.setDuration(200)
             ?.withEndAction {
@@ -853,25 +955,32 @@ class CodaSheet(private val activity: Activity) {
                 liveColors = null
                 navigating = false
                 onDismissBlock?.invoke()
-            }
+            }?.start()
+        scrimView
+            ?.animate()
+            ?.alpha(0f)
+            ?.setDuration(160)
             ?.start()
-        scrimView?.animate()?.alpha(0f)?.setDuration(160)?.start()
     }
 
     /** 顶部安全避让：状态栏与挖孔取较大值（对齐主界面 topSafeInset 口径）。 */
     private val safeTopInsetPx: Int by lazy {
         var cut = 0
         if (android.os.Build.VERSION.SDK_INT >= 28) {
-            cut = activity.window.decorView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
+            cut = activity.window.decorView.rootWindowInsets
+                ?.displayCutout
+                ?.safeInsetTop ?: 0
         }
         maxOf(statusBarHeightPx(), cut)
     }
-    private fun statusBarHeightPx(): Int = try {
-        val id = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
-        if (id > 0) activity.resources.getDimensionPixelSize(id) else dp(24f)
-    } catch (e: Throwable) {
-        dp(24f)
-    }
+
+    private fun statusBarHeightPx(): Int =
+        try {
+            val id = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
+            if (id > 0) activity.resources.getDimensionPixelSize(id) else dp(24f)
+        } catch (_: Throwable) {
+            dp(24f)
+        }
 
     /**
      * 卡片内容的水平边距。
@@ -882,30 +991,41 @@ class CodaSheet(private val activity: Activity) {
      */
     private fun insetH(): Int = activity.resources.getDimensionPixelSize(R.dimen.content_padding_h)
 
-    private fun navBarHeightPx(): Int = try {
-        val id = activity.resources.getIdentifier("navigation_bar_height", "dimen", "android")
-        if (id > 0) activity.resources.getDimensionPixelSize(id) else 0
-    } catch (e: Throwable) {
-        0
-    }
+    private fun navBarHeightPx(): Int =
+        try {
+            val id = activity.resources.getIdentifier("navigation_bar_height", "dimen", "android")
+            if (id > 0) activity.resources.getDimensionPixelSize(id) else 0
+        } catch (_: Throwable) {
+            0
+        }
 
-    private fun matchParams(): ViewGroup.LayoutParams = ViewGroup.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.MATCH_PARENT,
-    )
+    private fun matchParams(): ViewGroup.LayoutParams =
+        ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
 
-    private fun withAlpha(color: Int, alpha: Float): Int = Color.argb(
-        (alpha * 255).toInt(),
-        Color.red(color),
-        Color.green(color),
-        Color.blue(color),
-    )
+    private fun withAlpha(
+        color: Int,
+        alpha: Float,
+    ): Int =
+        Color.argb(
+            (alpha * 255).toInt(),
+            Color.red(color),
+            Color.green(color),
+            Color.blue(color),
+        )
 
     /** 高度受限的滚动容器（紧凑模式内容上限）。 */
-    private class MaxHeightScrollView(context: Context) : ScrollView(context) {
+    private class MaxHeightScrollView(
+        context: Context,
+    ) : ScrollView(context) {
         var maxHeightPx: Int = Int.MAX_VALUE
 
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        override fun onMeasure(
+            widthMeasureSpec: Int,
+            heightMeasureSpec: Int,
+        ) {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
             if (measuredHeight > maxHeightPx) {
                 setMeasuredDimension(measuredWidth, maxHeightPx)

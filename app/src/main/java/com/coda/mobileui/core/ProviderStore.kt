@@ -10,10 +10,10 @@ import java.io.File
  * 核心进程读取该文件生成模型注册表。
  */
 object ProviderStore {
-
     enum class ProviderKind {
         /** 语言模型（对话/补全），走内核原有通路。 */
         LLM,
+
         /** 语音转文字，只用于把录音转成文本。 */
         ASR,
     }
@@ -21,8 +21,10 @@ object ProviderStore {
     enum class ProviderOrigin {
         /** 用户手填端点与密钥。 */
         MANUAL,
+
         /** 通过 OAuth 授权添加，凭据在网关侧。 */
         OAUTH,
+
         /** App 自带的实现（如豆包网页匿名反代），不需要端点与密钥。 */
         BUILTIN,
     }
@@ -52,15 +54,16 @@ object ProviderStore {
 
     fun load(ctx: Context): MutableList<Provider> {
         val f = fileFor(ctx)
-        val parsed = if (!f.exists()) {
-            mutableListOf()
-        } else {
-            try {
-                parse(JSONObject(f.readText()))
-            } catch (_: Throwable) {
+        val parsed =
+            if (!f.exists()) {
                 mutableListOf()
+            } else {
+                try {
+                    parse(JSONObject(f.readText()))
+                } catch (_: Throwable) {
+                    mutableListOf()
+                }
             }
-        }
         return mergeBuiltins(parsed)
     }
 
@@ -79,18 +82,19 @@ object ProviderStore {
     const val BUILTIN_DOUBAO_SCHEME = "coda-doubao-web://anonymous"
 
     /** 定义所有内置 provider（当前只有一个，后续可加）。 */
-    fun builtins(): List<Provider> = listOf(
-        Provider(
-            id = BUILTIN_DOUBAO_ASR,
-            name = "豆包语音（内置）",
-            apiType = "doubao-web-anonymous",
-            baseUrl = BUILTIN_DOUBAO_SCHEME,
-            apiKey = "",
-            models = mutableListOf("doubao-voice"),
-            kind = ProviderKind.ASR,
-            origin = ProviderOrigin.BUILTIN,
-        ),
-    )
+    fun builtins(): List<Provider> =
+        listOf(
+            Provider(
+                id = BUILTIN_DOUBAO_ASR,
+                name = "豆包语音（内置）",
+                apiType = "doubao-web-anonymous",
+                baseUrl = BUILTIN_DOUBAO_SCHEME,
+                apiKey = "",
+                models = mutableListOf("doubao-voice"),
+                kind = ProviderKind.ASR,
+                origin = ProviderOrigin.BUILTIN,
+            ),
+        )
 
     /** 这条 provider 是不是内置的（不需要端点、不需要密钥）。 */
     fun isBuiltin(p: Provider): Boolean = p.id == BUILTIN_DOUBAO_ASR || p.origin == ProviderOrigin.BUILTIN
@@ -112,9 +116,11 @@ object ProviderStore {
 
     fun parse(root: JSONObject): MutableList<Provider> {
         val out = mutableListOf<Provider>()
-        val rules = root.optJSONObject("config")
-            ?.optJSONObject("providerConfigRules")
-            ?.optJSONArray("providerRules") ?: return out
+        val rules =
+            root
+                .optJSONObject("config")
+                ?.optJSONObject("providerConfigRules")
+                ?.optJSONArray("providerRules") ?: return out
         for (i in 0 until rules.length()) {
             val r = rules.optJSONObject(i) ?: continue
             val cfg = r.optJSONObject("config") ?: continue
@@ -123,32 +129,38 @@ object ProviderStore {
             cfg.optJSONArray("personalModelIds")?.let { a ->
                 for (j in 0 until a.length()) models += a.optString(j)
             }
-            out += Provider(
-                id = r.optString("providerId"),
-                name = r.optString("providerName").ifEmpty { r.optString("providerId") },
-                apiType = api?.optString("type") ?: "openai-chat-completions",
-                baseUrl = api?.optString("baseUrl") ?: "",
-                apiKey = cfg.optJSONObject("access")?.optString("apiKey") ?: "",
-                models = models,
-                // 老配置文件没有这两个字段：默认语言模型 + 手动添加，
-                // 保证升级后既有供应商表现不变。
-                kind = when (r.optString("codaKind")) {
-                    "asr" -> ProviderKind.ASR
-                    else -> ProviderKind.LLM
-                },
-                // 来源可以从 id 反推：OAuth 供应商的 id 与注册表里的平台 id 一一对应
-                // （OAuthLogin 落库时就是这么写的）。这样即使字段缺失也能正确识别。
-                origin = when {
-                    r.optString("codaOrigin") == "oauth" -> ProviderOrigin.OAUTH
-                    OAuthProviders.all.any { it.id == r.optString("providerId") } -> ProviderOrigin.OAUTH
-                    else -> ProviderOrigin.MANUAL
-                },
-            )
+            out +=
+                Provider(
+                    id = r.optString("providerId"),
+                    name = r.optString("providerName").ifEmpty { r.optString("providerId") },
+                    apiType = api?.optString("type") ?: "openai-chat-completions",
+                    baseUrl = api?.optString("baseUrl") ?: "",
+                    apiKey = cfg.optJSONObject("access")?.optString("apiKey") ?: "",
+                    models = models,
+                    // 老配置文件没有这两个字段：默认语言模型 + 手动添加，
+                    // 保证升级后既有供应商表现不变。
+                    kind =
+                        when (r.optString("codaKind")) {
+                            "asr" -> ProviderKind.ASR
+                            else -> ProviderKind.LLM
+                        },
+                    // 来源可以从 id 反推：OAuth 供应商的 id 与注册表里的平台 id 一一对应
+                    // （OAuthLogin 落库时就是这么写的）。这样即使字段缺失也能正确识别。
+                    origin =
+                        when {
+                            r.optString("codaOrigin") == "oauth" -> ProviderOrigin.OAUTH
+                            OAuthProviders.all.any { it.id == r.optString("providerId") } -> ProviderOrigin.OAUTH
+                            else -> ProviderOrigin.MANUAL
+                        },
+                )
         }
         return out
     }
 
-    fun save(ctx: Context, providers: List<Provider>) {
+    fun save(
+        ctx: Context,
+        providers: List<Provider>,
+    ) {
         val root = JSONObject()
         root.put("schemaVersion", 1)
         val config = JSONObject()

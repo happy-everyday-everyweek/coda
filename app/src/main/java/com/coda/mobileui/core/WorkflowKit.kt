@@ -66,29 +66,28 @@ data class ZWorkflowActor(
  * （格式与内核 get-workflow-run-format-roster.ts 一致）。
  */
 object ZWorkflowKit {
-
     // ---------------------------------------------------------------- 识别
 
     /** 工作流一族的工具名（对齐桌面端 packages/ui/src/lib/workflowToolNames.ts）。 */
-    private val WORKFLOW_TOOLS = setOf(
-        "createworkflow",
-        "amendworkflow",
-        "getworkflowrun",
-        "resumeworkflowrun",
-        "listworkflowruns",
-        "evalworkflowsnippet",
-        "saveworkflow",
-        "listsavedworkflows",
-        "resolveworkflowquestion",
-        "listmodels",
-        "escalate",
-    )
+    private val WORKFLOW_TOOLS =
+        setOf(
+            "createworkflow",
+            "amendworkflow",
+            "getworkflowrun",
+            "resumeworkflowrun",
+            "listworkflowruns",
+            "evalworkflowsnippet",
+            "saveworkflow",
+            "listsavedworkflows",
+            "resolveworkflowquestion",
+            "listmodels",
+            "escalate",
+        )
 
     /** 子代理一族的工具名。 */
     private val AGENT_TOOLS = setOf("agent", "task", "explore")
 
-    private fun token(name: String?): String =
-        name?.lowercase()?.filter { it.isLetterOrDigit() } ?: ""
+    private fun token(name: String?): String = name?.lowercase()?.filter { it.isLetterOrDigit() } ?: ""
 
     /**
      * 从部件/事件 JSON 里读 parentToolUseId（兼容 parentToolCallId，以及 _meta、_meta.zcode 两种包装）。
@@ -97,16 +96,18 @@ object ZWorkflowKit {
      */
     fun parentToolUseIdOf(o: JSONObject?): String {
         if (o == null) return ""
-        val direct = firstNonEmpty(
-            o.optString("parentToolUseId"),
-            o.optString("parentToolCallId"),
-        )
+        val direct =
+            firstNonEmpty(
+                o.optString("parentToolUseId"),
+                o.optString("parentToolCallId"),
+            )
         if (direct.isNotEmpty()) return direct
         val meta = o.optJSONObject("_meta") ?: return ""
-        val fromMeta = firstNonEmpty(
-            meta.optString("parentToolUseId"),
-            meta.optString("parentToolCallId"),
-        )
+        val fromMeta =
+            firstNonEmpty(
+                meta.optString("parentToolUseId"),
+                meta.optString("parentToolCallId"),
+            )
         if (fromMeta.isNotEmpty()) return fromMeta
         val zcode = meta.optJSONObject("zcode") ?: return ""
         return firstNonEmpty(
@@ -115,41 +116,43 @@ object ZWorkflowKit {
         )
     }
 
-    private fun firstNonEmpty(vararg values: String): String =
-        values.firstOrNull { it.isNotEmpty() } ?: ""
+    private fun firstNonEmpty(vararg values: String): String = values.firstOrNull { it.isNotEmpty() } ?: ""
 
     fun isWorkflowTool(name: String?): Boolean = WORKFLOW_TOOLS.contains(token(name))
 
     fun isAgentTool(name: String?): Boolean = AGENT_TOOLS.contains(token(name))
 
-    fun isWorkflowToolRunning(name: String?): Boolean = token(name) == "createworkflow" ||
-        token(name) == "resumeworkflowrun"
+    fun isWorkflowToolRunning(name: String?): Boolean =
+        token(name) == "createworkflow" ||
+            token(name) == "resumeworkflowrun"
 
-    fun workflowToolLabel(name: String?): String = when (token(name)) {
-        "createworkflow" -> "创建工作流"
-        "amendworkflow" -> "修订工作流"
-        "getworkflowrun" -> "查看工作流"
-        "resumeworkflowrun" -> "恢复工作流"
-        "listworkflowruns" -> "运行记录"
-        "evalworkflowsnippet" -> "运行工作流片段"
-        "saveworkflow" -> "保存工作流"
-        "listsavedworkflows" -> "已保存工作流"
-        "resolveworkflowquestion" -> "回答工作流问题"
-        "listmodels" -> "模型目录"
-        "escalate" -> "向用户提问"
-        else -> name ?: "工作流"
-    }
+    fun workflowToolLabel(name: String?): String =
+        when (token(name)) {
+            "createworkflow" -> "创建工作流"
+            "amendworkflow" -> "修订工作流"
+            "getworkflowrun" -> "查看工作流"
+            "resumeworkflowrun" -> "恢复工作流"
+            "listworkflowruns" -> "运行记录"
+            "evalworkflowsnippet" -> "运行工作流片段"
+            "saveworkflow" -> "保存工作流"
+            "listsavedworkflows" -> "已保存工作流"
+            "resolveworkflowquestion" -> "回答工作流问题"
+            "listmodels" -> "模型目录"
+            "escalate" -> "向用户提问"
+            else -> name ?: "工作流"
+        }
 
     // ---------------------------------------------------------------- 文案
 
-    fun runStatusLabel(status: String): String = when (status) {
-        "pending" -> "排队中"
-        "running" -> "运行中"
-        "completed" -> "已完成"
-        "errored" -> "出错"
-        "stopped" -> "已停止"
-        else -> status
-    }
+    fun runStatusLabel(status: String): String =
+        when (status) {
+            "pending" -> "排队中"
+            "running" -> "运行中"
+            "completed" -> "已完成"
+            "errored" -> "出错"
+            "stopped" -> "已停止"
+            else -> status
+        }
 
     /**
      * 工作流控制被拒时的原因文案。
@@ -157,91 +160,100 @@ object ZWorkflowKit {
      * 内核按 reasonCode 分流（见 workflowRunResumeRejected.<reason>），这里只翻译给用户看；
      * 空串表示没有具体原因，调用方回落到内核给的 message。
      */
-    fun rejectReasonLabel(reason: String?): String = when (reason) {
-        "not_resumable" -> "这个运行已经不能再继续了"
-        "already_running" -> "它已经在运行中"
-        "not_found" -> "找不到这个运行"
-        "script_missing" -> "脚本已丢失，无法继续"
-        "script_mismatch" -> "脚本已变更，无法继续"
-        "compile_failed" -> "脚本编译失败，无法继续"
-        "unsupported" -> "当前内核不支持这项操作"
-        else -> ""
-    }
+    fun rejectReasonLabel(reason: String?): String =
+        when (reason) {
+            "not_resumable" -> "这个运行已经不能再继续了"
+            "already_running" -> "它已经在运行中"
+            "not_found" -> "找不到这个运行"
+            "script_missing" -> "脚本已丢失，无法继续"
+            "script_mismatch" -> "脚本已变更，无法继续"
+            "compile_failed" -> "脚本编译失败，无法继续"
+            "unsupported" -> "当前内核不支持这项操作"
+            else -> ""
+        }
 
-    fun phaseStateLabel(state: String): String = when (state) {
-        "done" -> "已完成"
-        "current" -> "进行中"
-        "ahead" -> "未开始"
-        "unfinished" -> "未结算"
-        else -> state
-    }
+    fun phaseStateLabel(state: String): String =
+        when (state) {
+            "done" -> "已完成"
+            "current" -> "进行中"
+            "ahead" -> "未开始"
+            "unfinished" -> "未结算"
+            else -> state
+        }
 
-    fun actorStateLabel(state: String): String = when (state) {
-        "executing" -> "执行中"
-        "waiting" -> "等待中"
-        "parked" -> "等回答"
-        "idle" -> "空闲"
-        "done" -> "已完成"
-        "failed" -> "失败"
-        "unfinished" -> "未结算"
-        else -> state
-    }
+    fun actorStateLabel(state: String): String =
+        when (state) {
+            "executing" -> "执行中"
+            "waiting" -> "等待中"
+            "parked" -> "等回答"
+            "idle" -> "空闲"
+            "done" -> "已完成"
+            "failed" -> "失败"
+            "unfinished" -> "未结算"
+            else -> state
+        }
 
-    fun subagentStatusLabel(status: String): String = when (status) {
-        "running" -> "进行中"
-        "waiting" -> "等待中"
-        "blocked" -> "受阻"
-        "success" -> "成功"
-        "failed" -> "失败"
-        "cancelled" -> "已取消"
-        "lost" -> "已失联"
-        else -> status
-    }
+    fun subagentStatusLabel(status: String): String =
+        when (status) {
+            "running" -> "进行中"
+            "waiting" -> "等待中"
+            "blocked" -> "受阻"
+            "success" -> "成功"
+            "failed" -> "失败"
+            "cancelled" -> "已取消"
+            "lost" -> "已失联"
+            else -> status
+        }
 
-    fun toolStatusLabel(status: String): String = when (status) {
-        "running", "scheduled" -> "进行中"
-        "error", "denied" -> "失败"
-        else -> "完成"
-    }
+    fun toolStatusLabel(status: String): String =
+        when (status) {
+            "running", "scheduled" -> "进行中"
+            "error", "denied" -> "失败"
+            else -> "完成"
+        }
 
     /** 阶段状态 → StatusMarkView 的生命周期词。 */
-    fun phaseMarkState(state: String): String = when (state) {
-        "current" -> "running"
-        "done" -> "done"
-        "unfinished" -> "failed"
-        else -> "pending"
-    }
+    fun phaseMarkState(state: String): String =
+        when (state) {
+            "current" -> "running"
+            "done" -> "done"
+            "unfinished" -> "failed"
+            else -> "pending"
+        }
 
     /** 子代理 / actor 状态 → StatusMarkView 的生命周期词。 */
-    fun actorMarkState(state: String): String = when (state) {
-        "running", "executing" -> "running"
-        "success", "done" -> "done"
-        "failed", "lost" -> "failed"
-        "blocked", "cancelled", "unfinished" -> "cancelled"
-        else -> "pending"
-    }
+    fun actorMarkState(state: String): String =
+        when (state) {
+            "running", "executing" -> "running"
+            "success", "done" -> "done"
+            "failed", "lost" -> "failed"
+            "blocked", "cancelled", "unfinished" -> "cancelled"
+            else -> "pending"
+        }
 
     // ---------------------------------------------------------------- 解析
 
     /** session/subagents → 运行中 + 已结束（一页）子代理。 */
     fun parseSubagents(root: JSONObject): List<ZSubagent> {
         val out = ArrayList<ZSubagent>()
+
         fun read(arr: JSONArray?) {
             if (arr == null) return
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
                 val child = o.optString("childSessionId")
                 if (child.isEmpty()) continue
-                out += ZSubagent(
-                    childSessionId = child,
-                    toolCallId = o.optString("toolCallId").takeIf { it.isNotEmpty() },
-                    subagentType = o.optString("subagentType"),
-                    title = o.optString("title"),
-                    summary = o.optString("summary").takeIf { it.isNotEmpty() },
-                    status = o.optString("status"),
-                    startedAt = o.optLong("startedAt", 0L),
-                    endedAt = o.optLong("endedAt", 0L),
-                )
+                out +=
+                    ZSubagent(
+                        childSessionId = child,
+                        toolCallId = o.optString("toolCallId").takeIf { it.isNotEmpty() },
+                        subagentType = o.optString("subagentType"),
+                        title = o.optString("title"),
+                        summary = o.optString("summary").takeIf { it.isNotEmpty() },
+                        status = o.optString("status"),
+                        startedAt = o.optLong("startedAt", 0L),
+                        endedAt = o.optLong("endedAt", 0L),
+                    )
             }
         }
         read(root.optJSONArray("running"))
@@ -257,21 +269,25 @@ object ZWorkflowKit {
             val o = arr.optJSONObject(i) ?: continue
             val id = o.optString("runId")
             if (id.isEmpty()) continue
-            out += ZWorkflowRun(
-                runId = id,
-                name = o.optString("name").takeIf { it.isNotEmpty() } ?: id.take(12),
-                status = o.optString("status"),
-                updatedAt = o.optLong("updatedAt", 0L),
-                spentTokens = o.optLong("spentTokens", 0L),
-                toolCallId = o.optString("toolCallId").takeIf { it.isNotEmpty() },
-                parentSessionId = o.optString("parentSessionId").takeIf { it.isNotEmpty() },
-            )
+            out +=
+                ZWorkflowRun(
+                    runId = id,
+                    name = o.optString("name").takeIf { it.isNotEmpty() } ?: id.take(12),
+                    status = o.optString("status"),
+                    updatedAt = o.optLong("updatedAt", 0L),
+                    spentTokens = o.optLong("spentTokens", 0L),
+                    toolCallId = o.optString("toolCallId").takeIf { it.isNotEmpty() },
+                    parentSessionId = o.optString("parentSessionId").takeIf { it.isNotEmpty() },
+                )
         }
         return out
     }
 
     /** 取 <tag>…</tag> 之间的正文。 */
-    private fun section(text: String?, tag: String): String? {
+    private fun section(
+        text: String?,
+        tag: String,
+    ): String? {
         if (text.isNullOrBlank()) return null
         val start = text.indexOf("<$tag>")
         if (start < 0) return null
@@ -300,8 +316,12 @@ object ZWorkflowKit {
             if (cells.isEmpty()) continue
             val head = cells[0]
             val dot = head.indexOf('.')
-            val index = if (dot > 0) head.substring(0, dot).trim().toIntOrNull() ?: (out.size + 1)
-            else out.size + 1
+            val index =
+                if (dot > 0) {
+                    head.substring(0, dot).trim().toIntOrNull() ?: (out.size + 1)
+                } else {
+                    out.size + 1
+                }
             val name = if (dot > 0) head.substring(dot + 1).trim() else head
             var state = ""
             var rounds = 0
@@ -310,18 +330,27 @@ object ZWorkflowKit {
             var duration = ""
             for (cell in cells.drop(1)) {
                 when {
-                    PHASE_STATES.contains(cell) -> state = cell
-                    ROUNDS.matches(cell) -> rounds = ROUNDS.find(cell)!!.groupValues[1].toInt()
+                    PHASE_STATES.contains(cell) -> {
+                        state = cell
+                    }
+
+                    ROUNDS.matches(cell) -> {
+                        rounds = ROUNDS.find(cell)!!.groupValues[1].toInt()
+                    }
+
                     COUNTS_RUNNING.matches(cell) -> {
                         val m = COUNTS_RUNNING.find(cell)!!
                         settled = m.groupValues[1].toInt()
                         running = m.groupValues[2].toInt()
                     }
 
-                    COUNTS_SETTLED.matches(cell) ->
+                    COUNTS_SETTLED.matches(cell) -> {
                         settled = COUNTS_SETTLED.find(cell)!!.groupValues[1].toInt()
+                    }
 
-                    duration.isEmpty() -> duration = cell
+                    duration.isEmpty() -> {
+                        duration = cell
+                    }
                 }
             }
             out += ZWorkflowPhase(index, name, state, rounds, settled, running, duration)
@@ -358,27 +387,45 @@ object ZWorkflowKit {
                 when {
                     name.isEmpty() && state.isEmpty() && phase == null && tokens.isEmpty() &&
                         !ADDRESS.matches(cell) && !ACTOR_STATES.contains(cell) &&
-                        !cell.startsWith("phase ") && !cell.endsWith(" tokens") -> name = cell
+                        !cell.startsWith("phase ") && !cell.endsWith(" tokens") -> {
+                        name = cell
+                    }
 
-                    address.isEmpty() && ADDRESS.matches(cell) -> address = cell
-                    state.isEmpty() && ACTOR_STATES.contains(cell) -> state = cell
-                    phase == null && cell.startsWith("phase ") ->
+                    address.isEmpty() && ADDRESS.matches(cell) -> {
+                        address = cell
+                    }
+
+                    state.isEmpty() && ACTOR_STATES.contains(cell) -> {
+                        state = cell
+                    }
+
+                    phase == null && cell.startsWith("phase ") -> {
                         phase = cell.removePrefix("phase ").trim()
+                    }
 
-                    tokens.isEmpty() && cell.endsWith(" tokens") -> tokens = cell
-                    else -> if (activity.isNotEmpty()) activity.append(' ').append(cell)
-                    else activity.append(cell)
+                    tokens.isEmpty() && cell.endsWith(" tokens") -> {
+                        tokens = cell
+                    }
+
+                    else -> {
+                        if (activity.isNotEmpty()) {
+                            activity.append(' ').append(cell)
+                        } else {
+                            activity.append(cell)
+                        }
+                    }
                 }
             }
             if (state.isEmpty() && address.isEmpty() && name.isEmpty()) continue
-            out += ZWorkflowActor(
-                name = name,
-                address = address,
-                state = state,
-                phaseName = phase,
-                activity = activity.toString(),
-                tokens = tokens,
-            )
+            out +=
+                ZWorkflowActor(
+                    name = name,
+                    address = address,
+                    state = state,
+                    phaseName = phase,
+                    activity = activity.toString(),
+                    tokens = tokens,
+                )
         }
         return out
     }
@@ -388,14 +435,19 @@ object ZWorkflowKit {
         phases.firstOrNull { it.isCurrent } ?: phases.lastOrNull { it.state != "ahead" }
 
     /** 某个阶段（步骤）上的子智能体。 */
-    fun actorsOfPhase(actors: List<ZWorkflowActor>, phase: ZWorkflowPhase?): List<ZWorkflowActor> {
+    fun actorsOfPhase(
+        actors: List<ZWorkflowActor>,
+        phase: ZWorkflowPhase?,
+    ): List<ZWorkflowActor> {
         if (phase == null) return emptyList()
         return actors.filter { it.phaseName == phase.name }
     }
 
     /** 当前步骤上仍在跑/在等的子智能体数量。 */
-    fun activeActorCount(actors: List<ZWorkflowActor>, phase: ZWorkflowPhase?): Int =
-        actorsOfPhase(actors, phase).count { it.isActive }
+    fun activeActorCount(
+        actors: List<ZWorkflowActor>,
+        phase: ZWorkflowPhase?,
+    ): Int = actorsOfPhase(actors, phase).count { it.isActive }
 
     /** 当前步骤的进度读数：已结算 /（已结算 + 在跑）。 */
     fun stepProgressLabel(phase: ZWorkflowPhase?): String {
@@ -412,7 +464,10 @@ object ZWorkflowKit {
      *
      * 同一 run 里地址唯一；跨 run 同名 actor 很常见，所以必须带 runId 才不撞。
      */
-    fun actorKey(runId: String, address: String): String = "$runId#$address"
+    fun actorKey(
+        runId: String,
+        address: String,
+    ): String = "$runId#$address"
 
     /**
      * 从一条 dynamic_workflow_run_progress 事件里取 actor 地址。
@@ -449,18 +504,35 @@ object ZWorkflowKit {
         val phase = payload.optString("phaseName").takeIf { it.isNotEmpty() }
         val actorName = payload.optString("actorName").takeIf { it.isNotEmpty() }
         val settled = eventType == "run-settled"
-        val line = when (eventType) {
-            "actor-created" -> if (actorName.isNullOrEmpty()) "子智能体已就绪" else "$actorName 已就绪"
-            "phase-entered" -> if (phase.isNullOrEmpty()) "进入新阶段" else "进入 $phase"
-            "node-dispatched" -> when {
-                actorName != null -> "$actorName 开始执行"
-                else -> "派发新节点"
-            }
+        val line =
+            when (eventType) {
+                "actor-created" -> {
+                    if (actorName.isNullOrEmpty()) "子智能体已就绪" else "$actorName 已就绪"
+                }
 
-            "run-started" -> "运行已开始"
-            "run-settled" -> if (payload.optBoolean("resumable", false)) "已停止，可继续" else "运行已结束"
-            else -> return null
-        }
+                "phase-entered" -> {
+                    if (phase.isNullOrEmpty()) "进入新阶段" else "进入 $phase"
+                }
+
+                "node-dispatched" -> {
+                    when {
+                        actorName != null -> "$actorName 开始执行"
+                        else -> "派发新节点"
+                    }
+                }
+
+                "run-started" -> {
+                    "运行已开始"
+                }
+
+                "run-settled" -> {
+                    if (payload.optBoolean("resumable", false)) "已停止，可继续" else "运行已结束"
+                }
+
+                else -> {
+                    return null
+                }
+            }
         return ZWorkflowLive(
             runId = runId,
             eventType = eventType,

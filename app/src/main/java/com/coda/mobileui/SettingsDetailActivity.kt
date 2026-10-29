@@ -1,10 +1,6 @@
 package com.coda.mobileui
 
 import android.content.ClipData
-import com.coda.mobileui.core.Bg
-import com.coda.mobileui.core.AppLog
-import com.coda.mobileui.core.SilentUpdater
-import com.coda.mobileui.core.WebUiHost
 import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.drawable.Drawable
@@ -23,21 +19,25 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatDelegate
-import com.google.android.material.color.MaterialColors
-import com.google.android.material.snackbar.Snackbar
 import com.coda.mobileui.core.AgentAssets
+import com.coda.mobileui.core.AppLog
+import com.coda.mobileui.core.AsrClient
+import com.coda.mobileui.core.AsrTester
 import com.coda.mobileui.core.AutomationSchedule
-import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.AutomationStore
+import com.coda.mobileui.core.Bg
+import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
-import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.OAuthProviders
-import com.coda.mobileui.core.AsrClient
-import com.coda.mobileui.core.AsrTester
+import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.ProviderStore
+import com.coda.mobileui.core.SilentUpdater
+import com.coda.mobileui.core.WebUiHost
 import com.coda.mobileui.core.ZController
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.File
@@ -45,19 +45,23 @@ import java.io.File
 /**
  * 设置的二级页面。外观页与代码设置页接入真实设置。
  */
-class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
-
+class SettingsDetailActivity :
+    BaseActivity(),
+    SettingsActionListener {
     private lateinit var store: SettingsStore
     private var pageKey: String = PAGE_SYSTEM
+
     /** 当前正在看的供应商类型（两级页面共用一页时靠它区分）。 */
     private var providerKind: ProviderStore.ProviderKind = ProviderStore.ProviderKind.LLM
     private var firstResume = true
+
     /** 进入插件页时的一次性内置市场源同步标记。 */
     private var marketSyncedOnEnter = false
 
     /** 供应商配置防抖重启（连续保存合并为一次）。 */
     private val providerRestartHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingProviderRestart: Runnable? = null
+
     /** GitHub 登录轮询。 */
     private val ghHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var ghPollRunnable: Runnable? = null
@@ -99,9 +103,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         findViewById<View>(R.id.detail_root).applySystemBarsInset()
         findViewById<View>(R.id.btn_back).setOnClickListener { goBack() }
         // 系统返回键与顶栏返回保持一致：子页先回上一层，根页才退出。
-        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = goBack()
-        })
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : androidx.activity.OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() = goBack()
+            },
+        )
         renderPage()
         // 进入插件页时自动写入内置市场源并刷新市场索引。
         syncMarketplacesOnEnter()
@@ -113,15 +120,28 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
      * 用与 CodaSheet.navigate 同方向的位移：旧内容快速淡出，新内容从右侧推入。
      * 这里没有独立卡片，所以只用内容容器本身做，时长比卡片内略短（110/150ms）。
      */
-    private fun navigatePage(forward: Boolean, block: () -> Unit) {
+    private fun navigatePage(
+        forward: Boolean,
+        block: () -> Unit,
+    ) {
         val container = findViewById<LinearLayout>(R.id.page_container)
         val out = if (forward) -dp(12).toFloat() else dp(12).toFloat()
         val inFrom = if (forward) dp(16).toFloat() else -dp(16).toFloat()
-        container.animate().alpha(0f).translationX(out).setDuration(110).withEndAction {
-            block()
-            container.translationX = inFrom
-            container.animate().alpha(1f).translationX(0f).setDuration(150).start()
-        }.start()
+        container
+            .animate()
+            .alpha(0f)
+            .translationX(out)
+            .setDuration(110)
+            .withEndAction {
+                block()
+                container.translationX = inFrom
+                container
+                    .animate()
+                    .alpha(1f)
+                    .translationX(0f)
+                    .setDuration(150)
+                    .start()
+            }.start()
     }
 
     /** 返回：子页先回上一层，根页才退出。 */
@@ -171,46 +191,116 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         super.onDestroy()
     }
 
-    private fun currentPage(): SettingsPage = when (pageKey) {
-        PAGE_APPEARANCE -> SettingsData.appearance(store)
-        PAGE_GENERAL -> SettingsData.general(store)
-        PAGE_ABOUT -> SettingsData.about(this)
-        PAGE_PLUGIN_MARKET -> {
-            ensureExtrasLoaded("plugins")
-            SettingsData.pluginMarket(this, extrasCache["plugins"])
+    private fun currentPage(): SettingsPage =
+        when (pageKey) {
+            PAGE_APPEARANCE -> {
+                SettingsData.appearance(store)
+            }
+
+            PAGE_GENERAL -> {
+                SettingsData.general(store)
+            }
+
+            PAGE_ABOUT -> {
+                SettingsData.about(this)
+            }
+
+            PAGE_PLUGIN_MARKET -> {
+                ensureExtrasLoaded("plugins")
+                SettingsData.pluginMarket(this, extrasCache["plugins"])
+            }
+
+            PAGE_PROVIDERS -> {
+                SettingsData.providers(this)
+            }
+
+            PAGE_PROVIDERS_OF_KIND -> {
+                SettingsData.providersOfKind(this, providerKind)
+            }
+
+            PAGE_SUBAGENTS -> {
+                SettingsData.subagents(this)
+            }
+
+            PAGE_SKILLS -> {
+                SettingsData.skills(this)
+            }
+
+            PAGE_COMMANDS -> {
+                SettingsData.commands(this)
+            }
+
+            PAGE_USAGE -> {
+                ensureExtrasLoaded("usage")
+                SettingsData.usage(this, usageRange(), extrasCache["usage"])
+            }
+
+            PAGE_PLUGINS -> {
+                ensureExtrasLoaded("plugins")
+                SettingsData.plugins(this, extrasCache["plugins"])
+            }
+
+            PAGE_GITHUB -> {
+                SettingsData.github(this)
+            }
+
+            PAGE_INTEGRATIONS -> {
+                SettingsData.integrations(this)
+            }
+
+            PAGE_CLOUD -> {
+                SettingsData.cloud(this)
+            }
+
+            PAGE_MCP -> {
+                ensureExtrasLoaded("mcp")
+                SettingsData.mcp(this, extrasCache["mcp"])
+            }
+
+            PAGE_AUTOMATIONS -> {
+                SettingsData.automations(this)
+            }
+
+            PAGE_HOOKS -> {
+                SettingsData.hooks(this, ZController.get(this).workspacePath())
+            }
+
+            PAGE_PET -> {
+                SettingsData.pet(store, this)
+            }
+
+            PAGE_WEB_UI -> {
+                SettingsData.webUi(store, this)
+            }
+
+            PAGE_PET_APPEARANCE -> {
+                SettingsData.petAppearance(store, this)
+            }
+
+            PAGE_PET_PLACES -> {
+                SettingsData.petPlaces(store)
+            }
+
+            PAGE_PET_BEHAVIOR -> {
+                SettingsData.petBehavior(store)
+            }
+
+            PAGE_COMPUTER -> {
+                SettingsData.phoneControl(this)
+            }
+
+            PAGE_BROWSER -> {
+                SettingsData.browser(this)
+            }
+
+            PAGE_SYSTEM -> {
+                SettingsData.system(this)
+            }
+
+            else -> {
+                SettingsData.pages[pageKey] ?: SettingsData.system(this)
+            }
         }
-        PAGE_PROVIDERS -> SettingsData.providers(this)
-        PAGE_PROVIDERS_OF_KIND -> SettingsData.providersOfKind(this, providerKind)
-        PAGE_SUBAGENTS -> SettingsData.subagents(this)
-        PAGE_SKILLS -> SettingsData.skills(this)
-        PAGE_COMMANDS -> SettingsData.commands(this)
-        PAGE_USAGE -> {
-            ensureExtrasLoaded("usage")
-            SettingsData.usage(this, usageRange(), extrasCache["usage"])
-        }
-        PAGE_PLUGINS -> {
-            ensureExtrasLoaded("plugins")
-            SettingsData.plugins(this, extrasCache["plugins"])
-        }
-        PAGE_GITHUB -> SettingsData.github(this)
-        PAGE_INTEGRATIONS -> SettingsData.integrations(this)
-        PAGE_CLOUD -> SettingsData.cloud(this)
-        PAGE_MCP -> {
-            ensureExtrasLoaded("mcp")
-            SettingsData.mcp(this, extrasCache["mcp"])
-        }
-        PAGE_AUTOMATIONS -> SettingsData.automations(this)
-        PAGE_HOOKS -> SettingsData.hooks(this, ZController.get(this).workspacePath())
-        PAGE_PET -> SettingsData.pet(store, this)
-        PAGE_WEB_UI -> SettingsData.webUi(store, this)
-        PAGE_PET_APPEARANCE -> SettingsData.petAppearance(store, this)
-        PAGE_PET_PLACES -> SettingsData.petPlaces(store)
-        PAGE_PET_BEHAVIOR -> SettingsData.petBehavior(store)
-        PAGE_COMPUTER -> SettingsData.phoneControl(this)
-        PAGE_BROWSER -> SettingsData.browser(this)
-        PAGE_SYSTEM -> SettingsData.system(this)
-        else -> SettingsData.pages[pageKey] ?: SettingsData.system(this)
-    }
 
     private fun renderPage() {
         val page = currentPage()
@@ -227,6 +317,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                         renderPage()
                     }
                 }
+
                 "providers_asr" -> {
                     providerKind = ProviderStore.ProviderKind.ASR
                     navigatePage(forward = true) {
@@ -234,7 +325,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                         renderPage()
                     }
                 }
-                else -> Unit
+
+                else -> {
+                    Unit
+                }
             }
         }
     }
@@ -267,7 +361,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
-    override fun onToggleChange(key: String, checked: Boolean) {
+    override fun onToggleChange(
+        key: String,
+        checked: Boolean,
+    ) {
         // 实验性 Web UI 总开关：开启时若资产已就位则顺手拉起服务，关闭时停掉。
         if (key == "webui_enabled") {
             store.webUiEnabled = checked
@@ -335,37 +432,54 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             renderPage()
             return
         }
-        val needRecreate = when (key) {
-            KEY_AUTO_COLOR -> {
-                store.autoColor = checked
-                true
-            }
-            KEY_CODE_LINE_NUMBERS -> {
-                store.showLineNumbers = checked
-                false
-            }
+        val needRecreate =
+            when (key) {
+                KEY_AUTO_COLOR -> {
+                    store.autoColor = checked
+                    true
+                }
 
-            KEY_CODE_WRAP -> {
-                store.wrapLongLines = checked
-                false
+                KEY_CODE_LINE_NUMBERS -> {
+                    store.showLineNumbers = checked
+                    false
+                }
+
+                KEY_CODE_WRAP -> {
+                    store.wrapLongLines = checked
+                    false
+                }
+
+                else -> {
+                    false
+                }
             }
-            else -> false
-        }
         if (needRecreate) recreate() else renderPage()
     }
 
     override fun onValueClick(key: String) {
         when {
-            key == "check_update" -> checkUpdate()
-            key == "webui_download" -> downloadWebUiAssets()
-            key == "webui_start" -> startWebUi()
+            key == "check_update" -> {
+                checkUpdate()
+            }
+
+            key == "webui_download" -> {
+                downloadWebUiAssets()
+            }
+
+            key == "webui_start" -> {
+                startWebUi()
+            }
+
             key == "webui_stop" -> {
                 WebUiHost.stop()
                 snack("Web UI 已停止")
                 renderPage()
             }
+
             key == "pet_skin" -> {
-                val skins = com.coda.mobileui.core.PetSkins.all(this)
+                val skins =
+                    com.coda.mobileui.core.PetSkins
+                        .all(this)
                 sheetPickList(
                     "宠物形象",
                     skins.map { it.title },
@@ -375,36 +489,68 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     renderPage()
                 }
             }
+
             key == "chat_default_send_mode" -> {
-            sheetPickList("默认发送模式", listOf("Yolo", "Build", "Chat"), store.defaultSendMode) { which ->
-                store.defaultSendMode = which
+                sheetPickList("默认发送模式", listOf("Yolo", "Build", "Chat"), store.defaultSendMode) { which ->
+                    store.defaultSendMode = which
+                    renderPage()
+                }
+            }
+
+            key == "browser_clear_data" -> {
+                BrowserControl.clearData(this)
+                snack("已清除浏览器数据")
                 renderPage()
             }
-        }
-        key == "browser_clear_data" -> {
-            BrowserControl.clearData(this)
-            snack("已清除浏览器数据")
-            renderPage()
-        }
-        // 日志：查看/导出与清空。
-        // 放在设置里而不是工作区标签：它属于诊断与排障，不是工作区的一种"页"。
-        key == "logs_view" -> showLogsSheet()
-        key == "logs_clear" -> {
-            AppLog.clear()
-            snack("日志已清空")
-            renderPage()
-        }
-        key == KEY_ACCENT -> pickAccent()
-            key == KEY_FONT_SCALE -> pickFontScale()
-            key == KEY_CODE_FONT_SIZE -> pickCodeFontSize()
-            key == KEY_CODE_THEME_LIGHT ->
+
+            // 日志：查看/导出与清空。
+            // 放在设置里而不是工作区标签：它属于诊断与排障，不是工作区的一种"页"。
+            key == "logs_view" -> {
+                showLogsSheet()
+            }
+
+            key == "logs_clear" -> {
+                AppLog.clear()
+                snack("日志已清空")
+                renderPage()
+            }
+
+            key == KEY_ACCENT -> {
+                pickAccent()
+            }
+
+            key == KEY_FONT_SCALE -> {
+                pickFontScale()
+            }
+
+            key == KEY_CODE_FONT_SIZE -> {
+                pickCodeFontSize()
+            }
+
+            key == KEY_CODE_THEME_LIGHT -> {
                 pickCodeTheme(getString(R.string.appearance_code_theme_light), isLight = true)
-            key == KEY_CODE_THEME_DARK ->
+            }
+
+            key == KEY_CODE_THEME_DARK -> {
                 pickCodeTheme(getString(R.string.appearance_code_theme_dark), isLight = false)
-            key == "providers_add" -> showAddProviderKind()
-            key == "providers_add_asr" -> editProvider(null, kind = ProviderStore.ProviderKind.ASR)
-            key == "providers_oauth_pick" -> pickOAuthProvider()
-            key == "providers_oauth_accounts" -> OAuthAccountsSheet(this).show()
+            }
+
+            key == "providers_add" -> {
+                showAddProviderKind()
+            }
+
+            key == "providers_add_asr" -> {
+                editProvider(null, kind = ProviderStore.ProviderKind.ASR)
+            }
+
+            key == "providers_oauth_pick" -> {
+                pickOAuthProvider()
+            }
+
+            key == "providers_oauth_accounts" -> {
+                OAuthAccountsSheet(this).show()
+            }
+
             key.startsWith("providers_oauth_open:") -> {
                 // 点已添加的供应商 = 进它的管理页，而不是再走一遍授权向导。
                 // 之前的写法直接开 OAuthSheet（授权流程），用户点自己已有的供应商
@@ -419,20 +565,24 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     if (p != null) editProvider(p) else renderPage()
                 }
             }
+
             key.startsWith("providers_edit:") -> {
                 val id = key.removePrefix("providers_edit:")
                 val p = ProviderStore.load(this).firstOrNull { it.id == id }
                 if (p != null) editProvider(p) else renderPage()
             }
+
             key.startsWith("providers_test:") -> {
                 val id = key.removePrefix("providers_test:")
                 val p = ProviderStore.load(this).firstOrNull { it.id == id }
                 if (p != null) showAsrTestMenu(p) else renderPage()
             }
+
             key.startsWith("assets_new:") -> {
                 val kind = parseAssetKind(key.removePrefix("assets_new:"))
                 if (kind != null) editAsset(kind, null)
             }
+
             key.startsWith("assets_edit:") -> {
                 val rest = key.removePrefix("assets_edit:")
                 val kind = parseAssetKind(rest.substringBefore(':'))
@@ -440,12 +590,23 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 val item = if (path.isNotEmpty()) AgentAssets.readItem(path) else null
                 if (kind != null && item != null) editAsset(kind, item) else renderPage()
             }
-            key == "usage_range" -> pickUsageRange()
+
+            key == "usage_range" -> {
+                pickUsageRange()
+            }
+
             key.startsWith("automation_edit:") -> {
                 automationDialog(key.removePrefix("automation_edit:"))
             }
-            key == "hooks_new" -> addHookDialog()
-            key.startsWith("hooks_edit:") -> hookDialog(key.removePrefix("hooks_edit:"))
+
+            key == "hooks_new" -> {
+                addHookDialog()
+            }
+
+            key.startsWith("hooks_edit:") -> {
+                hookDialog(key.removePrefix("hooks_edit:"))
+            }
+
             key == "system_restart" -> {
                 ZController.get(this).restartCore { ok, msg ->
                     runOnUiThread {
@@ -454,68 +615,131 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     }
                 }
             }
-            key == "system_clear_tmp" -> clearTmp()
-            key == "system_copy_logs" -> copyLogsPath()
-            key == "system_license" -> showLicense()
-            key == "system_github" -> openUrl("https://github.com/happy-everyday-everyweek/coda")
-            key == "phone_control_accessibility" -> PhoneControl.openAccessibilitySettings(this)
+
+            key == "system_clear_tmp" -> {
+                clearTmp()
+            }
+
+            key == "system_copy_logs" -> {
+                copyLogsPath()
+            }
+
+            key == "system_license" -> {
+                showLicense()
+            }
+
+            key == "system_github" -> {
+                openUrl("https://github.com/happy-everyday-everyweek/coda")
+            }
+
+            key == "phone_control_accessibility" -> {
+                PhoneControl.openAccessibilitySettings(this)
+            }
+
             key == "phone_control_sync" -> {
                 PhoneControl.syncMcpConfig(this, true)
                 snack("已重新写入内核 MCP 配置")
                 renderPage()
             }
-            key == "plugins_market" -> openSettingsPage(PAGE_PLUGIN_MARKET)
-            key == "plugins_market_sources" -> openMarketplaceManager()
-            key == "market_refresh" -> refreshMarketplaces()
+
+            key == "plugins_market" -> {
+                openSettingsPage(PAGE_PLUGIN_MARKET)
+            }
+
+            key == "plugins_market_sources" -> {
+                openMarketplaceManager()
+            }
+
+            key == "market_refresh" -> {
+                refreshMarketplaces()
+            }
+
             key.startsWith("market_install:") -> {
                 val rest = key.removePrefix("market_install:")
                 val name = rest.substringBefore('|')
                 val market = rest.substringAfter('|', "")
                 if (name.isNotEmpty()) installFromMarket(name, market) else renderPage()
             }
+
             key.startsWith("plugins_add_builtin:") -> {
                 addBuiltinMarketplace(key.removePrefix("plugins_add_builtin:"))
             }
-            key.startsWith("plugins_detail:") -> openPluginDetail(key.removePrefix("plugins_detail:"))
-            key.startsWith("plugins_restore:") -> restoreBuiltinPlugin(key.removePrefix("plugins_restore:"))
-            key == "github_login" -> startGitHubLogin()
-            key == "github_repos" -> openGitHubRepos()
-            key == "github_logout" -> confirmGitHubLogout()
-            key == "integrations_cloud" -> openSettingsPage(PAGE_CLOUD)
+
+            key.startsWith("plugins_detail:") -> {
+                openPluginDetail(key.removePrefix("plugins_detail:"))
+            }
+
+            key.startsWith("plugins_restore:") -> {
+                restoreBuiltinPlugin(key.removePrefix("plugins_restore:"))
+            }
+
+            key == "github_login" -> {
+                startGitHubLogin()
+            }
+
+            key == "github_repos" -> {
+                openGitHubRepos()
+            }
+
+            key == "github_logout" -> {
+                confirmGitHubLogout()
+            }
+
+            key == "integrations_cloud" -> {
+                openSettingsPage(PAGE_CLOUD)
+            }
+
             key == "cloud_github" -> {
-                if (com.coda.mobileui.core.GitHub.loginName(this) != null) {
+                if (com.coda.mobileui.core.GitHub
+                        .loginName(this) != null
+                ) {
                     openSettingsPage(PAGE_GITHUB)
                 } else {
                     startGitHubLogin()
                 }
             }
-            key == "cloud_add" -> showCloudProviderPicker()
+
+            key == "cloud_add" -> {
+                showCloudProviderPicker()
+            }
+
             key.startsWith("extras_refresh:") -> {
                 extrasCache.remove(key.removePrefix("extras_refresh:"))
                 renderPage()
             }
-            else -> Snackbar.make(
-                findViewById(android.R.id.content),
-                R.string.setting_not_wired,
-                Snackbar.LENGTH_SHORT,
-            ).show()
+
+            else -> {
+                Snackbar
+                    .make(
+                        findViewById(android.R.id.content),
+                        R.string.setting_not_wired,
+                        Snackbar.LENGTH_SHORT,
+                    ).show()
+            }
         }
     }
 
     /** 半屏单选列表：点击项后自动关闭。 */
-    private fun sheetPickList(title: String, options: List<String>, current: Int, onPick: (Int) -> Unit) {
+    private fun sheetPickList(
+        title: String,
+        options: List<String>,
+        current: Int,
+        onPick: (Int) -> Unit,
+    ) {
         val sheet = CodaSheet(this).title(title)
         sheet.content { col ->
-            val neutral = MaterialColors.getColor(
-                this,
-                com.google.android.material.R.attr.colorOnSurfaceVariant,
-                android.graphics.Color.GRAY,
-            )
-            val primary = MaterialColors.getColor(
-                this,
-                androidx.appcompat.R.attr.colorPrimary,
-                neutral,
-            )
+            val neutral =
+                MaterialColors.getColor(
+                    this,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                )
+            val primary =
+                MaterialColors.getColor(
+                    this,
+                    androidx.appcompat.R.attr.colorPrimary,
+                    neutral,
+                )
             options.forEachIndexed { index, label ->
                 col.addView(
                     TextView(this).apply {
@@ -535,7 +759,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 半屏确认卡片：紧凑模式 + 取消/确认双按钮。 */
-    private fun sheetConfirm(title: String, message: String, confirmText: String, onConfirm: () -> Unit) {
+    private fun sheetConfirm(
+        title: String,
+        message: String,
+        confirmText: String,
+        onConfirm: () -> Unit,
+    ) {
         CodaSheet(this)
             .compact()
             .title(title)
@@ -544,11 +773,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             .primaryAction(confirmText) { sheet ->
                 sheet.dismiss()
                 onConfirm()
-            }
-            .show()
+            }.show()
     }
 
     // ------------------------------------------------------------ 插件管理
+
     /** 插件详情：读取 plugins/list 全量数据，找到目标插件后弹出半屏卡片。 */
     private fun openPluginDetail(pluginId: String) {
         ZController.get(this).fetchPlugins { ok, data ->
@@ -566,15 +795,16 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 插件详情卡：信息、组件清单、配置编辑与操作按钮。 */
     private fun showPluginDetailSheet(d: CodaExtras.PluginDetail) {
         val editors = LinkedHashMap<String, View>()
-        val sheet = CodaSheet(this)
-            .title(d.name)
-            .subtitle(
-                buildString {
-                    append(if (d.enabled) "启用中" else "已停用")
-                    d.version?.let { append(" · v$it") }
-                    if (d.marketplace.isNotEmpty()) append(" · ${d.marketplace}")
-                },
-            )
+        val sheet =
+            CodaSheet(this)
+                .title(d.name)
+                .subtitle(
+                    buildString {
+                        append(if (d.enabled) "启用中" else "已停用")
+                        d.version?.let { append(" · v$it") }
+                        if (d.marketplace.isNotEmpty()) append(" · ${d.marketplace}")
+                    },
+                )
         sheet.content { col ->
             d.description?.let { desc -> col.addView(sheetBodyText(desc)) }
             val meta = mutableListOf<String>()
@@ -630,11 +860,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 sheetWideButton(if (d.enabled) "停用此插件" else "启用此插件") {
                     ZController.get(this).setPluginEnabled(d.id, !d.enabled) { ok, msg ->
                         runOnUiThread {
-                            val text = if (ok) {
-                                if (d.enabled) "已停用插件" else "已启用插件"
-                            } else {
-                                "插件设置失败: $msg"
-                            }
+                            val text =
+                                if (ok) {
+                                    if (d.enabled) "已停用插件" else "已启用插件"
+                                } else {
+                                    "插件设置失败: $msg"
+                                }
                             snack(text)
                             extrasCache.remove("plugins")
                             if (ok) renderPage()
@@ -700,18 +931,20 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         opt: CodaExtras.PluginConfigOption,
         editors: MutableMap<String, View>,
     ): View {
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, dp(2))
-        }
+        val col =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(10), 0, dp(2))
+            }
         col.addView(
             TextView(this).apply {
                 text = opt.title ?: opt.key
                 textSize = 14f
-                typeface = android.graphics.Typeface.create(
-                    "sans-serif-medium",
-                    android.graphics.Typeface.NORMAL,
-                )
+                typeface =
+                    android.graphics.Typeface.create(
+                        "sans-serif-medium",
+                        android.graphics.Typeface.NORMAL,
+                    )
             },
         )
         opt.description?.let {
@@ -730,35 +963,47 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             )
         }
         if (opt.type == "boolean") {
-            val sw = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
-                isChecked = (opt.current as? Boolean) ?: (opt.default as? Boolean) ?: false
-            }
+            val sw =
+                com.google.android.material.materialswitch.MaterialSwitch(this).apply {
+                    isChecked = (opt.current as? Boolean) ?: (opt.default as? Boolean) ?: false
+                }
             col.addView(sw)
             editors[opt.key] = sw
         } else {
-            val et = EditText(this).apply {
-                setText(CodaExtras.anyToText(opt.current ?: opt.default))
-                hint = opt.key
-                inputType = when {
-                    opt.sensitive -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                    opt.type == "number" -> InputType.TYPE_CLASS_NUMBER or
-                        InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
-                    else -> InputType.TYPE_CLASS_TEXT
+            val et =
+                EditText(this).apply {
+                    setText(CodaExtras.anyToText(opt.current ?: opt.default))
+                    hint = opt.key
+                    inputType =
+                        when {
+                            opt.sensitive -> {
+                                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                            }
+
+                            opt.type == "number" -> {
+                                InputType.TYPE_CLASS_NUMBER or
+                                    InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+                            }
+
+                            else -> {
+                                InputType.TYPE_CLASS_TEXT
+                            }
+                        }
                 }
-            }
             col.addView(et)
             editors[opt.key] = et
         }
         return col
     }
 
-    /** sheet 小标题（与聊天页工具详情同款样式）。 */
-    /**
-     * 日志卡片：看当前日志、按级别过滤、导出。
-     *
-     * 直接用可滚动的内容列展示：日志的价值在于"一眼看到最近发生了什么"，
-     * 再套一层列表或代码块反而让长行难读、也难选中复制。
-     */
+    // sheet 小标题（与聊天页工具详情同款样式）。
+
+    //
+    // 日志卡片：看当前日志、按级别过滤、导出。
+    //
+    // 直接用可滚动的内容列展示：日志的价值在于"一眼看到最近发生了什么"，
+    // 再套一层列表或代码块反而让长行难读、也难选中复制。
+    //
     private fun showLogsSheet() {
         // 只用一条路径：每次打开或切换级别都重新拼正文，不在闭包里维护可变状态，
         // 这样连续点"切换级别"不会出现上一轮的字漏进来。
@@ -781,13 +1026,15 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     secondaryAction("切换级别") { again -> switchLogLevelInPlace(again, next) }
                     primaryAction("导出") { s -> exportLogs(s) }
                 }
-            }
-            .primaryAction("导出") { self -> exportLogs(self) }
+            }.primaryAction("导出") { self -> exportLogs(self) }
             .show()
     }
 
     /** 已打开卡片里的级别切换：只重画内容与副标题。 */
-    private fun switchLogLevelInPlace(sheet: CodaSheet, next: AppLog.Level) {
+    private fun switchLogLevelInPlace(
+        sheet: CodaSheet,
+        next: AppLog.Level,
+    ) {
         sheet.navigate {
             title("日志")
             subtitle(logSubtitle(next))
@@ -797,21 +1044,23 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
-    private fun nextLogLevel(level: AppLog.Level): AppLog.Level = when (level) {
-        AppLog.Level.INFO -> AppLog.Level.DEBUG
-        AppLog.Level.DEBUG -> AppLog.Level.VERBOSE
-        AppLog.Level.VERBOSE -> AppLog.Level.ERROR
-        AppLog.Level.ERROR -> AppLog.Level.WARN
-        AppLog.Level.WARN -> AppLog.Level.INFO
-    }
+    private fun nextLogLevel(level: AppLog.Level): AppLog.Level =
+        when (level) {
+            AppLog.Level.INFO -> AppLog.Level.DEBUG
+            AppLog.Level.DEBUG -> AppLog.Level.VERBOSE
+            AppLog.Level.VERBOSE -> AppLog.Level.ERROR
+            AppLog.Level.ERROR -> AppLog.Level.WARN
+            AppLog.Level.WARN -> AppLog.Level.INFO
+        }
 
-    private fun logLevelLabel(level: AppLog.Level): String = when (level) {
-        AppLog.Level.VERBOSE -> "全部"
-        AppLog.Level.DEBUG -> "调试+"
-        AppLog.Level.INFO -> "信息+"
-        AppLog.Level.WARN -> "警告+"
-        AppLog.Level.ERROR -> "错误"
-    }
+    private fun logLevelLabel(level: AppLog.Level): String =
+        when (level) {
+            AppLog.Level.VERBOSE -> "全部"
+            AppLog.Level.DEBUG -> "调试+"
+            AppLog.Level.INFO -> "信息+"
+            AppLog.Level.WARN -> "警告+"
+            AppLog.Level.ERROR -> "错误"
+        }
 
     private fun logSubtitle(minLevel: AppLog.Level): String {
         if (AppLog.dir() == null) return "日志目录不可用"
@@ -822,7 +1071,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     private fun logLines(): List<String> {
         val file = AppLog.currentFile() ?: return emptyList()
         if (!file.isFile) return emptyList()
-        return runCatching { file.readLines() }.getOrDefault(emptyList())
+        return runCatching { file.readLines() }
+            .getOrDefault(emptyList())
             .let { if (it.size <= 2000) it else it.takeLast(2000) }
     }
 
@@ -840,18 +1090,21 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 ),
             )
             setTextIsSelectable(true)
-            text = if (shown.isEmpty()) {
-                if (AppLog.dir() == null) "日志目录不可用" else "当前级别下没有日志"
-            } else {
-                shown.joinToString("\n")
-            }
+            text =
+                if (shown.isEmpty()) {
+                    if (AppLog.dir() == null) "日志目录不可用" else "当前级别下没有日志"
+                } else {
+                    shown.joinToString("\n")
+                }
         }
     }
 
     /** 导出日志到应用私有目录，并提示文件名。 */
     private fun exportLogs(sheet: CodaSheet) {
-        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
-            .format(java.util.Date())
+        val stamp =
+            java.text
+                .SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                .format(java.util.Date())
         val target = java.io.File(filesDir, "coda-logs-$stamp.txt")
         if (AppLog.exportTo(target)) {
             snack("已导出：${target.name}")
@@ -862,50 +1115,61 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 按行首级别标记过滤；续行（堆栈）跟随上一条显示。 */
-    private fun keepLogLine(line: String, minLevel: AppLog.Level): Boolean {
-        val marker = Regex("""^\S+\s+\S+\s+([VDIWE])/""").find(line)?.groupValues?.get(1)
-            ?: return true
-        val level = when (marker) {
-            "V" -> AppLog.Level.VERBOSE
-            "D" -> AppLog.Level.DEBUG
-            "I" -> AppLog.Level.INFO
-            "W" -> AppLog.Level.WARN
-            "E" -> AppLog.Level.ERROR
-            else -> return true
-        }
+    private fun keepLogLine(
+        line: String,
+        minLevel: AppLog.Level,
+    ): Boolean {
+        val marker =
+            Regex("""^\S+\s+\S+\s+([VDIWE])/""").find(line)?.groupValues?.get(1)
+                ?: return true
+        val level =
+            when (marker) {
+                "V" -> AppLog.Level.VERBOSE
+                "D" -> AppLog.Level.DEBUG
+                "I" -> AppLog.Level.INFO
+                "W" -> AppLog.Level.WARN
+                "E" -> AppLog.Level.ERROR
+                else -> return true
+            }
         return level.ordinal >= minLevel.ordinal
     }
 
-    private fun sheetSectionLabel(text: String): TextView = TextView(this).apply {
-        this.text = text
-        textSize = 13f
-        setTextColor(
-            MaterialColors.getColor(
-                this@SettingsDetailActivity,
-                com.google.android.material.R.attr.colorOnSurfaceVariant,
-                android.graphics.Color.GRAY,
-            ),
-        )
-        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
-        setPadding(0, dp(14), 0, dp(6))
-    }
+    private fun sheetSectionLabel(text: String): TextView =
+        TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setTextColor(
+                MaterialColors.getColor(
+                    this@SettingsDetailActivity,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                ),
+            )
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            setPadding(0, dp(14), 0, dp(6))
+        }
 
     /** sheet 正文小字。 */
-    private fun sheetBodyText(text: String): TextView = TextView(this).apply {
-        this.text = text
-        textSize = 13f
-        setTextColor(
-            MaterialColors.getColor(
-                this@SettingsDetailActivity,
-                com.google.android.material.R.attr.colorOnSurfaceVariant,
-                android.graphics.Color.GRAY,
-            ),
-        )
-        setPadding(0, dp(2), 0, dp(2))
-    }
+    private fun sheetBodyText(text: String): TextView =
+        TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setTextColor(
+                MaterialColors.getColor(
+                    this@SettingsDetailActivity,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                ),
+            )
+            setPadding(0, dp(2), 0, dp(2))
+        }
 
     /** sheet 内整行按钮；danger 时使用主题警示色。 */
-    private fun sheetWideButton(label: String, danger: Boolean = false, onClick: () -> Unit): Button =
+    private fun sheetWideButton(
+        label: String,
+        danger: Boolean = false,
+        onClick: () -> Unit,
+    ): Button =
         Button(this).apply {
             text = label
             isAllCaps = false
@@ -918,10 +1182,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     ),
                 )
             }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(6) }
+            layoutParams =
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(6) }
             setOnClickListener { onClick() }
         }
 
@@ -999,7 +1265,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 从市场安装插件。 */
-    private fun installFromMarket(name: String, marketplace: String) {
+    private fun installFromMarket(
+        name: String,
+        marketplace: String,
+    ) {
         snack("正在安装 $name…")
         ZController.get(this).installPlugin(name, marketplace) { ok, msg ->
             runOnUiThread {
@@ -1064,17 +1333,19 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
-    /** 添加市场源：输入 Git 仓库或 URL。 */
-    /**
-     * 添加插件市场源。
-     *
-     * [into] 不为空时表示"就地换页"：复用那张已经打开的卡片，不新开一张。
-     * 插件市场源页点「添加」就走这条路，避免先关卡片再弹新卡的空档。
-     */
+    // 添加市场源：输入 Git 仓库或 URL。
+
+    //
+    // 添加插件市场源。
+    //
+    // [into] 不为空时表示"就地换页"：复用那张已经打开的卡片，不新开一张。
+    // 插件市场源页点「添加」就走这条路，避免先关卡片再弹新卡的空档。
+    //
     private fun addMarketplaceDialog(into: CodaSheet? = null) {
-        val input = EditText(this).apply {
-            hint = "Git 仓库或 URL，如 owner/repo"
-        }
+        val input =
+            EditText(this).apply {
+                hint = "Git 仓库或 URL，如 owner/repo"
+            }
         // 就地换页只换面板内容，卡片外壳（高度、拖拽方式）保持不变，
         // 因此这里不能调 compact()：compactMode 与已建好的外壳不一致会让拖拽走错分支。
         if (into != null) {
@@ -1084,27 +1355,30 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 content { col ->
                     col.addView(
                         input,
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ).apply { topMargin = dp(10) },
+                        LinearLayout
+                            .LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ).apply { topMargin = dp(10) },
                     )
                 }
                 primaryAction("添加") { s -> submitMarketplace(s, input) }
             }
             return
         }
-        val sheet = CodaSheet(this)
-            .compact()
-            .title("添加插件市场源")
-            .secondaryAction("取消") { it.dismiss() }
+        val sheet =
+            CodaSheet(this)
+                .compact()
+                .title("添加插件市场源")
+                .secondaryAction("取消") { it.dismiss() }
         sheet.content { col ->
             col.addView(
                 input,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(10) },
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(10) },
             )
         }
         sheet.primaryAction("添加") { s -> submitMarketplace(s, input) }
@@ -1112,7 +1386,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 提交市场源：抽出来，卡片内换页与独立弹卡共用同一套逻辑。 */
-    private fun submitMarketplace(s: CodaSheet, input: EditText) {
+    private fun submitMarketplace(
+        s: CodaSheet,
+        input: EditText,
+    ) {
         val source = input.text.toString().trim()
         if (source.isEmpty()) {
             snack("请输入市场来源")
@@ -1146,6 +1423,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     // ------------------------------------------------------------ GitHub 集成
+
     /** 页内跳转：打开另一个设置页面实例（返回键自然回到上一屏）。 */
     private fun openSettingsPage(page: String) {
         try {
@@ -1161,7 +1439,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 云服务：选择要连接的提供商。 */
     private fun showCloudProviderPicker() {
         sheetPickList("添加云服务提供商", listOf("GitHub"), -1) { _ ->
-            if (com.coda.mobileui.core.GitHub.loginName(this) != null) {
+            if (com.coda.mobileui.core.GitHub
+                    .loginName(this) != null
+            ) {
                 snack("GitHub 已连接")
                 openSettingsPage(PAGE_GITHUB)
             } else {
@@ -1186,22 +1466,24 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     private fun showGitHubLoginSheet(dc: com.coda.mobileui.core.GitHub.DeviceCode) {
         val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("GitHub device code", dc.userCode))
-        val statusView = TextView(this).apply {
-            text = "等待浏览器中完成授权…"
-            textSize = 13f
-            setTextColor(
-                MaterialColors.getColor(
-                    this@SettingsDetailActivity,
-                    com.google.android.material.R.attr.colorOnSurfaceVariant,
-                    android.graphics.Color.GRAY,
-                ),
-            )
-            setPadding(0, dp(10), 0, 0)
-        }
-        val sheet = CodaSheet(this)
-            .compact()
-            .title("连接 GitHub")
-            .subtitle("代码已复制，粘贴到浏览器完成授权")
+        val statusView =
+            TextView(this).apply {
+                text = "等待浏览器中完成授权…"
+                textSize = 13f
+                setTextColor(
+                    MaterialColors.getColor(
+                        this@SettingsDetailActivity,
+                        com.google.android.material.R.attr.colorOnSurfaceVariant,
+                        android.graphics.Color.GRAY,
+                    ),
+                )
+                setPadding(0, dp(10), 0, 0)
+            }
+        val sheet =
+            CodaSheet(this)
+                .compact()
+                .title("连接 GitHub")
+                .subtitle("代码已复制，粘贴到浏览器完成授权")
         sheet.content { col ->
             col.addView(sheetBodyText("1. 在打开的浏览器页面粘贴代码：github.com/login/device"))
             col.addView(sheetBodyText("2. 点击继续并确认授权"))
@@ -1249,42 +1531,46 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         stopGitHubPolling()
         var delayMs = dc.interval * 1000L
         var attempts = (dc.expiresIn / dc.interval.coerceAtLeast(1)).coerceAtLeast(1)
-        val schedule = object : Runnable {
-            override fun run() {
-                com.coda.mobileui.core.GitHub.pollAccessToken(this@SettingsDetailActivity, dc.deviceCode) { status, _, msg ->
-                    when (status) {
-                        "ok" -> {
-                            stopGitHubPolling()
-                            com.coda.mobileui.core.GitHub.fetchUser(this@SettingsDetailActivity) { ok2, u, _ ->
-                                statusView.text = if (ok2 && u != null) "已连接：@${u.login}" else "已连接"
-                                snack("GitHub 已连接")
-                                sheet.dismiss()
-                                renderPage()
-                            }
-                        }
-                        "pending" -> {
-                            attempts -= 1
-                            if (attempts <= 0) {
-                                statusView.text = "已超时，请重新发起连接"
+        val schedule =
+            object : Runnable {
+                override fun run() {
+                    com.coda.mobileui.core.GitHub.pollAccessToken(this@SettingsDetailActivity, dc.deviceCode) { status, _, msg ->
+                        when (status) {
+                            "ok" -> {
                                 stopGitHubPolling()
-                            } else {
+                                com.coda.mobileui.core.GitHub.fetchUser(this@SettingsDetailActivity) { ok2, u, _ ->
+                                    statusView.text = if (ok2 && u != null) "已连接：@${u.login}" else "已连接"
+                                    snack("GitHub 已连接")
+                                    sheet.dismiss()
+                                    renderPage()
+                                }
+                            }
+
+                            "pending" -> {
+                                attempts -= 1
+                                if (attempts <= 0) {
+                                    statusView.text = "已超时，请重新发起连接"
+                                    stopGitHubPolling()
+                                } else {
+                                    ghPollRunnable = this
+                                    ghHandler.postDelayed(this, delayMs)
+                                }
+                            }
+
+                            "slow_down" -> {
+                                delayMs += 5000
                                 ghPollRunnable = this
                                 ghHandler.postDelayed(this, delayMs)
                             }
-                        }
-                        "slow_down" -> {
-                            delayMs += 5000
-                            ghPollRunnable = this
-                            ghHandler.postDelayed(this, delayMs)
-                        }
-                        else -> {
-                            statusView.text = msg ?: "连接失败"
-                            stopGitHubPolling()
+
+                            else -> {
+                                statusView.text = msg ?: "连接失败"
+                                stopGitHubPolling()
+                            }
                         }
                     }
                 }
             }
-        }
         ghPollRunnable = schedule
         ghHandler.postDelayed(schedule, delayMs)
     }
@@ -1297,7 +1583,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     /** 退出 GitHub 登录（清除本机令牌）。 */
     private fun confirmGitHubLogout() {
         sheetConfirm("退出登录", "确定断开 GitHub 连接？本机保存的访问令牌将被清除。", "退出") {
-            com.coda.mobileui.core.GitHub.logout(this)
+            com.coda.mobileui.core.GitHub
+                .logout(this)
             snack("已断开 GitHub 连接")
             renderPage()
         }
@@ -1329,19 +1616,24 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 仓库行：名称 + 私有标记 + 描述 + 最近推送。 */
-    private fun buildRepoRow(repo: com.coda.mobileui.core.GitHub.Repo, onClick: () -> Unit): View {
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, dp(10))
-            isClickable = true
-            setOnClickListener { onClick() }
-        }
+    private fun buildRepoRow(
+        repo: com.coda.mobileui.core.GitHub.Repo,
+        onClick: () -> Unit,
+    ): View {
+        val col =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
+                isClickable = true
+                setOnClickListener { onClick() }
+            }
         col.addView(
             TextView(this).apply {
-                text = buildString {
-                    append(repo.name)
-                    if (repo.privateRepo) append(" · 私有")
-                }
+                text =
+                    buildString {
+                        append(repo.name)
+                        if (repo.privateRepo) append(" · 私有")
+                    }
                 textSize = 15f
                 typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
             },
@@ -1377,14 +1669,18 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         return col
     }
 
-    /** 仓库详情：分支与 PR 两个区块（异步加载，就绪后刷新卡片）。 */
-    /**
-     * 仓库详情：分支与 PR 列表。
-     *
-     * [into] 不为空时表示就地换页（从仓库列表点进来），复用那张已打开的卡片；
-     * 为空则照旧新开一张。
-     */
-    private fun openRepoDetail(repo: com.coda.mobileui.core.GitHub.Repo, into: CodaSheet? = null) {
+    // 仓库详情：分支与 PR 两个区块（异步加载，就绪后刷新卡片）。
+
+    //
+    // 仓库详情：分支与 PR 列表。
+    //
+    // [into] 不为空时表示就地换页（从仓库列表点进来），复用那张已打开的卡片；
+    // 为空则照旧新开一张。
+    //
+    private fun openRepoDetail(
+        repo: com.coda.mobileui.core.GitHub.Repo,
+        into: CodaSheet? = null,
+    ) {
         val sheet = into ?: CodaSheet(this)
         if (into != null) {
             // 复用宿主：把标题、副标题与"加载中"内容整体推进去
@@ -1409,6 +1705,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         var pulls: List<com.coda.mobileui.core.GitHub.Pull>? = null
         var failMsg: String? = null
         var done = 0
+
         fun tryRender() {
             if (done < 2) return
             val bs = branches
@@ -1437,12 +1734,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     col.addView(sheetBodyText(if (ps != null) "没有 PR" else (fm ?: "无 PR")))
                 } else {
                     ps.forEach { p ->
-                        val state = when {
-                            p.draft -> "草稿"
-                            p.state == "open" -> "开启"
-                            p.state == "closed" -> "已关闭"
-                            else -> p.state
-                        }
+                        val state =
+                            when {
+                                p.draft -> "草稿"
+                                p.state == "open" -> "开启"
+                                p.state == "closed" -> "已关闭"
+                                else -> p.state
+                            }
                         col.addView(
                             sheetBodyText(
                                 buildString {
@@ -1471,12 +1769,20 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             }
         }
         com.coda.mobileui.core.GitHub.fetchBranches(this, repo.owner, repo.name) { ok, list, err ->
-            if (ok) branches = list else if (failMsg == null) failMsg = err
+            if (ok) {
+                branches = list
+            } else if (failMsg == null) {
+                failMsg = err
+            }
             done += 1
             tryRender()
         }
         com.coda.mobileui.core.GitHub.fetchPulls(this, repo.owner, repo.name) { ok, list, err ->
-            if (ok) pulls = list else if (failMsg == null) failMsg = err
+            if (ok) {
+                pulls = list
+            } else if (failMsg == null) {
+                failMsg = err
+            }
             done += 1
             tryRender()
         }
@@ -1491,11 +1797,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheet.content { col -> col.addView(sheetBodyText("正在查询最新版本…")) }
         sheet.show()
         Bg.run {
-            val err = WebUiHost.download(this) { text ->
-                runOnUiThread {
-                    sheet.refreshContent { col -> col.addView(sheetBodyText(text)) }
+            val err =
+                WebUiHost.download(this) { text ->
+                    runOnUiThread {
+                        sheet.refreshContent { col -> col.addView(sheetBodyText(text)) }
+                    }
                 }
-            }
             // 版本号从 WebUiHost 读回，不依赖进度回调的临时变量跨线程传递。
             val version = WebUiHost.downloadedVersion(this)
             runOnUiThread {
@@ -1530,9 +1837,14 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             return
         }
 
-        val sheet = if (silent) null else CodaSheet(this)
-            .title("检查更新")
-            .subtitle("${checker.channelLabel} · 当前 ${checker.currentVersionName}")
+        val sheet =
+            if (silent) {
+                null
+            } else {
+                CodaSheet(this)
+                    .title("检查更新")
+                    .subtitle("${checker.channelLabel} · 当前 ${checker.currentVersionName}")
+            }
         // 检查过程本身也要有日志：它要先 ping 一遍镜像、再逐个试源。
         // 之前这里只有一句「正在查询…」，失败时用户完全不知道卡在哪。
         var panel: ProgressLogView? = null
@@ -1543,9 +1855,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheet?.show()
 
         Bg.run {
-            val r = checker.check(applicationContext) { msg ->
-                runOnUiThread { panel?.append(msg) }
-            }
+            val r =
+                checker.check(applicationContext) { msg ->
+                    runOnUiThread { panel?.append(msg) }
+                }
             runOnUiThread {
                 // 静默检查（启动时）只在新版本时打扰用户，其余情况一概不出现。
                 if (silent) {
@@ -1554,13 +1867,19 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 }
                 panel?.finish()
                 when {
-                    !r.ok -> panel?.append("检查失败：${r.error ?: "未知原因"}", emphasis = true)
+                    !r.ok -> {
+                        panel?.append("检查失败：${r.error ?: "未知原因"}", emphasis = true)
+                    }
+
                     !r.hasUpdate -> {
                         panel?.append("已是最新版本（${checker.currentVersionName}）", emphasis = true)
                         panel?.append("渠道：${checker.channelLabel}")
                     }
+
                     // 有新版本就换成「发现新版本」那张卡，日志留着也没意义。
-                    else -> showUpdateSheet(r)
+                    else -> {
+                        showUpdateSheet(r)
+                    }
                 }
             }
         }
@@ -1576,9 +1895,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val checker = com.coda.mobileui.core.UpdateChecker
         val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
 
-        val sheet = CodaSheet(this)
-            .title(if (SilentUpdater.takeReady() != null) "新版本已就绪" else "发现新版本")
-            .subtitle("${r.versionName} · $sizeMb")
+        val sheet =
+            CodaSheet(this)
+                .title(if (SilentUpdater.takeReady() != null) "新版本已就绪" else "发现新版本")
+                .subtitle("${r.versionName} · $sizeMb")
 
         // 启动时很可能已经后台下好了，那就只差一次点击，不必再下一次。
         val ready = SilentUpdater.takeReady()
@@ -1586,13 +1906,18 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             // 必须先设按钮再 refresh：refreshContent 才会按当前字段重建底栏。
             // 反过来写按钮永远不会出现（CodaSheet 的页脚只在 show/refresh 时构建）。
             sheet.primaryAction("立即安装") { s ->
-                val ok = com.coda.mobileui.core.UpdateInstaller.install(this, ready.second)
+                val ok =
+                    com.coda.mobileui.core.UpdateInstaller
+                        .install(this, ready.second)
                 s.refreshContent { col ->
                     col.addView(
                         sheetBodyText(
-                            if (ok) "已交给系统安装器，按提示完成安装。"
-                            else "无法拉起安装器：请允许本应用「安装未知应用」。"
-                        )
+                            if (ok) {
+                                "已交给系统安装器，按提示完成安装。"
+                            } else {
+                                "无法拉起安装器：请允许本应用「安装未知应用」。"
+                            },
+                        ),
                     )
                 }
             }
@@ -1604,8 +1929,8 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 col.addView(
                     sheetBodyText(
                         "这是${r.candidateChannelLabel}，当前安装的是${checker.channelLabel}。" +
-                            "两个渠道的版本可以互相覆盖，装完不会丢数据。"
-                    )
+                            "两个渠道的版本可以互相覆盖，装完不会丢数据。",
+                    ),
                 )
             }
             col.addView(sheetBodyText("版本号 ${r.versionCode}（当前 ${checker.currentVersionCode}）"))
@@ -1635,32 +1960,33 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             panel.append("开始下载：版本 ${r.versionCode}（${r.versionName}）", emphasis = true)
         }
         Bg.run {
-            val file = com.coda.mobileui.core.UpdateInstaller.download(
-                activity,
-                r,
-                onProgress = { done, total ->
-                    val pct = if (total > 0) (done * 100 / total).toInt() else 0
-                    val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
-                    runOnUiThread {
-                        val text = "下载中 $pct%（$mb）"
-                        val line = progressLine
-                        if (line != null && line.parent != null) {
-                            line.text = text
-                        } else {
-                            // 第一次进度回调时插入，并且只插一次。
-                            panel?.append(text)
-                            progressLine = panel?.lastLine()
+            val file =
+                com.coda.mobileui.core.UpdateInstaller.download(
+                    activity,
+                    r,
+                    onProgress = { done, total ->
+                        val pct = if (total > 0) (done * 100 / total).toInt() else 0
+                        val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
+                        runOnUiThread {
+                            val text = "下载中 $pct%（$mb）"
+                            val line = progressLine
+                            if (line != null && line.parent != null) {
+                                line.text = text
+                            } else {
+                                // 第一次进度回调时插入，并且只插一次。
+                                panel?.append(text)
+                                progressLine = panel?.lastLine()
+                            }
                         }
-                    }
-                },
-                onLog = { msg ->
-                    runOnUiThread {
-                        // 下载进度行之后的新步骤，说明进度阶段已过去，断开引用。
-                        progressLine = null
-                        panel?.append(msg)
-                    }
-                },
-            )
+                    },
+                    onLog = { msg ->
+                        runOnUiThread {
+                            // 下载进度行之后的新步骤，说明进度阶段已过去，断开引用。
+                            progressLine = null
+                            panel?.append(msg)
+                        }
+                    },
+                )
             runOnUiThread {
                 if (file == null) {
                     panel?.finish()
@@ -1669,7 +1995,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 }
                 panel?.append("已下载并通过校验：${file.name}", emphasis = true)
                 panel?.finish()
-                val ok = com.coda.mobileui.core.UpdateInstaller.install(activity, file)
+                val ok =
+                    com.coda.mobileui.core.UpdateInstaller
+                        .install(activity, file)
                 if (ok) {
                     panel?.append("已交给系统安装器，按提示完成安装。", emphasis = true)
                     panel?.append("安装完成后旧版本的下载包会自动清理。")
@@ -1682,7 +2010,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 启动 Web UI 服务（资产需已下载）。 */
-     private fun startWebUi() {
+    private fun startWebUi() {
         val err = WebUiHost.start(this)
         if (err != null) {
             snack(err)
@@ -1704,14 +2032,21 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheet.content { col -> col.addView(sheetBodyText("正在克隆到工作区…")) }
         sheet.show()
         Bg.run {
-            val target = java.io.File(com.coda.mobileui.core.Workspaces.root(this), repo.name)
+            val target =
+                java.io.File(
+                    com.coda.mobileui.core.Workspaces
+                        .root(this),
+                    repo.name,
+                )
             if (target.exists()) {
                 runOnUiThread {
                     sheet.refreshContent { col -> col.addView(sheetBodyText("目录已存在：${target.name}")) }
                 }
                 return@run
             }
-            val env = com.coda.mobileui.core.LinuxEnv(this)
+            val env =
+                com.coda.mobileui.core
+                    .LinuxEnv(this)
             if (!env.isReady() && !env.ensureReady {}) {
                 runOnUiThread {
                     sheet.refreshContent { col -> col.addView(sheetBodyText("Linux 环境不可用，无法克隆")) }
@@ -1719,14 +2054,19 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 return@run
             }
             val url = "https://github.com/${repo.fullName}.git"
-            val result = com.coda.mobileui.workspace.Git.clone(env, url, target)
+            val result =
+                com.coda.mobileui.workspace.Git
+                    .clone(env, url, target)
             runOnUiThread {
                 if (result.ok) {
                     // 先设按钮再刷新内容：primaryAction 只写字段，靠 rebuild 渲染；
                     // 顺序反了会出现"内容已更新、按钮不出现"。
                     sheet.primaryAction("打开工作区") { s ->
                         s.dismiss()
-                        startActivity(com.coda.mobileui.workspace.WorkspaceActivity.intent(this))
+                        startActivity(
+                            com.coda.mobileui.workspace.WorkspaceActivity
+                                .intent(this),
+                        )
                     }
                     sheet.refreshContent { col ->
                         col.addView(sheetBodyText("已克隆到 ${target.absolutePath}"))
@@ -1748,18 +2088,20 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     private fun pickAccent() {
         val sheet = CodaSheet(this).title(getString(R.string.appearance_accent))
         sheet.content { col ->
-            val grid = GridLayout(this).apply {
-                columnCount = 4
-                rowCount = 2
-            }
+            val grid =
+                GridLayout(this).apply {
+                    columnCount = 4
+                    rowCount = 2
+                }
             val cellSize = dp(48)
             SettingsStore.ACCENT_COLORS.forEachIndexed { index, color ->
                 val cell = View(this)
-                cell.layoutParams = GridLayout.LayoutParams().apply {
-                    width = cellSize
-                    height = cellSize
-                    setMargins(dp(8), dp(8), dp(8), dp(8))
-                }
+                cell.layoutParams =
+                    GridLayout.LayoutParams().apply {
+                        width = cellSize
+                        height = cellSize
+                        setMargins(dp(8), dp(8), dp(8), dp(8))
+                    }
                 cell.background = accentSwatch(color, index == store.accentIndex && !store.autoColor)
                 cell.contentDescription = SettingsStore.ACCENT_NAMES[index]
                 cell.setOnClickListener {
@@ -1781,44 +2123,56 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                         pickCustomAccent(sheet)
                     }
                 },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(16) },
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(16) },
             )
         }
         sheet.show()
     }
 
     /** 色板色块：圆形填充，选中时描边。 */
-    private fun accentSwatch(color: Int, selected: Boolean): Drawable = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
-        setColor(color)
-        if (selected) {
-            setStroke(
-                dp(3),
-                MaterialColors.getColor(
-                    this@SettingsDetailActivity,
-                    com.google.android.material.R.attr.colorOnSurface,
-                    color,
-                ),
-            )
+    private fun accentSwatch(
+        color: Int,
+        selected: Boolean,
+    ): Drawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+            if (selected) {
+                setStroke(
+                    dp(3),
+                    MaterialColors.getColor(
+                        this@SettingsDetailActivity,
+                        com.google.android.material.R.attr.colorOnSurface,
+                        color,
+                    ),
+                )
+            }
         }
-    }
 
-    /** 自定义颜色：输入 #RRGGBB，落到最接近的色板档位，主题与图标一起切换。 */
-    /**
-     * 自定义颜色：输入 #RRGGBB，落到最接近的色板档位，主题与图标一起切换。
-     *
-     * [into] 不为空时表示就地换页（从色板卡片点"自定义"进来），复用那张卡片。
-     */
+    // 自定义颜色：输入 #RRGGBB，落到最接近的色板档位，主题与图标一起切换。
+
+    //
+    // 自定义颜色：输入 #RRGGBB，落到最接近的色板档位，主题与图标一起切换。
+    //
+    // [into] 不为空时表示就地换页（从色板卡片点"自定义"进来），复用那张卡片。
+    //
     private fun pickCustomAccent(into: CodaSheet? = null) {
-        val input = EditText(this).apply {
-            hint = getString(R.string.appearance_accent_custom_hint)
-            setText(store.customAccentHex.removePrefix("#"))
-        }
+        val input =
+            EditText(this).apply {
+                hint = getString(R.string.appearance_accent_custom_hint)
+                setText(store.customAccentHex.removePrefix("#"))
+            }
+
         fun submit(s: CodaSheet) {
-            val hex = input.text.toString().trim().removePrefix("#")
+            val hex =
+                input.text
+                    .toString()
+                    .trim()
+                    .removePrefix("#")
             val parsed = hex.toLongOrNull(16)?.toInt() ?: return
             val color = parsed or 0xFF000000.toInt()
             store.customAccentHex = "#" + hex.uppercase().padStart(6, '0')
@@ -1834,27 +2188,30 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 content { col ->
                     col.addView(
                         input,
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ).apply { topMargin = dp(10) },
+                        LinearLayout
+                            .LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ).apply { topMargin = dp(10) },
                     )
                 }
                 primaryAction(getString(android.R.string.ok)) { s -> submit(s) }
             }
             return
         }
-        val sheet = CodaSheet(this)
-            .compact()
-            .title(getString(R.string.appearance_accent_custom))
-            .secondaryAction(getString(android.R.string.cancel)) { it.dismiss() }
+        val sheet =
+            CodaSheet(this)
+                .compact()
+                .title(getString(R.string.appearance_accent_custom))
+                .secondaryAction(getString(android.R.string.cancel)) { it.dismiss() }
         sheet.content { col ->
             col.addView(
                 input,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(10) },
+                LinearLayout
+                    .LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(10) },
             )
         }
         sheet.primaryAction(getString(android.R.string.ok)) { s -> submit(s) }
@@ -1884,7 +2241,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
-    private fun pickCodeTheme(title: String, isLight: Boolean) {
+    private fun pickCodeTheme(
+        title: String,
+        isLight: Boolean,
+    ) {
         val current = if (isLight) store.codeThemeLightIndex else store.codeThemeDarkIndex
         sheetPickList(title, SettingsStore.CODE_THEMES.toList(), current) { which ->
             if (isLight) store.codeThemeLightIndex = which else store.codeThemeDarkIndex = which
@@ -1926,28 +2286,39 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             rows += SettingRow.Header("OAuth 授权")
             rows += SettingRow.Value("OAuth 登录", "", "add_oauth")
             SettingsViewBuilder.render(
-                this, group, rows,
+                this,
+                group,
+                rows,
                 // 这张列表已经在 CodaSheet 的 content 里，而 CodaSheet 本身
                 // 已经用 content_padding_h 做过左右留白。这里再套一层 20dp，
                 // 卡片文字就会比上面的标题多缩进 20dp——截图里「OpenAI 兼容」
                 // 与「添加供应商」标题没对齐就是这个原因。传 0 让卡片边缘
                 // 与标题落在同一条竖线。
                 horizontalInsetPx = 0,
-                listener = object : SettingsActionListener {
-                    override fun onRadioSelect(key: String) = Unit
-                    override fun onToggleChange(key: String, checked: Boolean) = Unit
-                    override fun onValueClick(key: String) {
-                        when (key) {
-                            // 这三条都在同一张卡片里换页（navigate），沿用项目统一的过渡动画，
-                            // 不再 dismiss 再另开——那样会出现关-开两个动画互相抢同一层。
-                            "add_openai", "add_anthropic" -> {
-                                val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
-                                showProviderEditor(sheet, null, t, providerKind)
+                listener =
+                    object : SettingsActionListener {
+                        override fun onRadioSelect(key: String) = Unit
+
+                        override fun onToggleChange(
+                            key: String,
+                            checked: Boolean,
+                        ) = Unit
+
+                        override fun onValueClick(key: String) {
+                            when (key) {
+                                // 这三条都在同一张卡片里换页（navigate），沿用项目统一的过渡动画，
+                                // 不再 dismiss 再另开——那样会出现关-开两个动画互相抢同一层。
+                                "add_openai", "add_anthropic" -> {
+                                    val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
+                                    showProviderEditor(sheet, null, t, providerKind)
+                                }
+
+                                "add_oauth" -> {
+                                    showOAuthPicker(sheet)
+                                }
                             }
-                            "add_oauth" -> showOAuthPicker(sheet)
                         }
-                    }
-                },
+                    },
             )
         }
         sheet.show()
@@ -1967,53 +2338,39 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 self.navigate { rebuildAddProviderKindPage() }
             }
             content { col ->
-                val group = LinearLayout(this@SettingsDetailActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                }
+                val group =
+                    LinearLayout(this@SettingsDetailActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                    }
                 col.addView(group)
-                val rows = providers.map { p ->
-                    SettingRow.Value(p.name, "${p.vendor} · ${p.note}", "oauth_pick:${p.id}")
-                }
+                val rows =
+                    providers.map { p ->
+                        SettingRow.Value(p.name, "${p.vendor} · ${p.note}", "oauth_pick:${p.id}")
+                    }
                 SettingsViewBuilder.render(
                     this@SettingsDetailActivity,
                     group,
                     rows,
-                    listener = object : SettingsActionListener {
-                        override fun onRadioSelect(key: String) = Unit
-                        override fun onToggleChange(key: String, checked: Boolean) = Unit
-                        override fun onValueClick(key: String) {
-                            val p = OAuthProviders.byId(key.removePrefix("oauth_pick:")) ?: return
-                            OAuthSheet(this@SettingsDetailActivity, p).attachTo(sheet)
-                        }
-                    },
+                    listener =
+                        object : SettingsActionListener {
+                            override fun onRadioSelect(key: String) = Unit
+
+                            override fun onToggleChange(
+                                key: String,
+                                checked: Boolean,
+                            ) = Unit
+
+                            override fun onValueClick(key: String) {
+                                val p = OAuthProviders.byId(key.removePrefix("oauth_pick:")) ?: return
+                                OAuthSheet(this@SettingsDetailActivity, p).attachTo(sheet)
+                            }
+                        },
                     // 本列表已在 CodaSheet 的内容区里，那层已有 content_padding_h 留白；
                     // 再传 20dp 会叠加成双倍缩进，卡片左缘与标题对不齐。
                     horizontalInsetPx = 0,
                 )
             }
         }
-    }
-
-    /**
-     * 卡片里的分组容器。
-     *
-     * 直接塞 SettingsViewBuilder 会双重内缩：卡片内容区本身有 24dp 内边距，
-     * 而 view_settings_row 自带 16dp，叠起来文字落在 40dp 处，比标题明显偏右。
-     *
-     * 用负 margin 抵消在 LinearLayout 里不可靠（部分版本会把负值当 0 处理），
-     * 所以改为给 render 传一个「行内边距补偿」：正数表示把行内容整体左移，
-     * 由 SettingsViewBuilder 在行内部处理，不动外层布局。
-     */
-    private fun groupedRowsIn(column: LinearLayout): LinearLayout {
-        val g = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        column.addView(
-            g,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-        return g
     }
 
     /**
@@ -2031,36 +2388,43 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val kindOfRecord = existing?.kind ?: kind
         val typeOfRecord = existing?.apiType ?: apiType
 
-        val idInput = EditText(this).apply {
-            hint = "供应商 ID，仅英文，如 myai"
-            setText(existing?.id ?: "")
-            isEnabled = existing == null
-        }
-        val nameInput = EditText(this).apply {
-            hint = "显示名称"
-            setText(existing?.name ?: "")
-        }
-        val urlInput = EditText(this).apply {
-            hint = if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
-                "转写端点，如 https://api.example.com/v1"
-            } else {
-                "API 端点，如 https://api.example.com/v1"
+        val idInput =
+            EditText(this).apply {
+                hint = "供应商 ID，仅英文，如 myai"
+                setText(existing?.id ?: "")
+                isEnabled = existing == null
             }
-            setText(existing?.baseUrl ?: "")
-            inputType = InputType.TYPE_TEXT_VARIATION_URI
-        }
-        val keyInput = EditText(this).apply {
-            hint = "API Key"
-            setText(existing?.apiKey ?: "")
-        }
-        val modelsInput = EditText(this).apply {
-            hint = if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
-                "转写模型名，如 whisper-1；多个用英文逗号分隔"
-            } else {
-                "模型名，多个用英文逗号分隔"
+        val nameInput =
+            EditText(this).apply {
+                hint = "显示名称"
+                setText(existing?.name ?: "")
             }
-            setText(existing?.models?.joinToString(",") ?: "")
-        }
+        val urlInput =
+            EditText(this).apply {
+                hint =
+                    if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                        "转写端点，如 https://api.example.com/v1"
+                    } else {
+                        "API 端点，如 https://api.example.com/v1"
+                    }
+                setText(existing?.baseUrl ?: "")
+                inputType = InputType.TYPE_TEXT_VARIATION_URI
+            }
+        val keyInput =
+            EditText(this).apply {
+                hint = "API Key"
+                setText(existing?.apiKey ?: "")
+            }
+        val modelsInput =
+            EditText(this).apply {
+                hint =
+                    if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                        "转写模型名，如 whisper-1；多个用英文逗号分隔"
+                    } else {
+                        "模型名，多个用英文逗号分隔"
+                    }
+                setText(existing?.models?.joinToString(",") ?: "")
+            }
 
         sheet.navigate {
             title(
@@ -2068,7 +2432,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     existing != null -> "编辑供应商"
                     kindOfRecord == ProviderStore.ProviderKind.ASR -> "添加 ASR 供应商"
                     else -> "添加 LLM 供应商"
-                }
+                },
             )
             subtitle("接口类型：$typeOfRecord")
             secondaryAction("取消") { it.dismiss() }
@@ -2081,11 +2445,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             }
             primaryAction("保存") { s ->
                 val id = idInput.text.toString().trim()
-                val models = modelsInput.text.toString()
-                    .split(',', '，')
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .toMutableList()
+                val models =
+                    modelsInput.text
+                        .toString()
+                        .split(',', '，')
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .toMutableList()
                 if (id.isEmpty() || models.isEmpty()) {
                     snack("供应商 ID 与至少一个模型名不能为空")
                 } else {
@@ -2094,7 +2460,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                     list.add(
                         ProviderStore.Provider(
                             id = id,
-                            name = nameInput.text.toString().trim().ifEmpty { id },
+                            name =
+                                nameInput.text
+                                    .toString()
+                                    .trim()
+                                    .ifEmpty { id },
                             apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
                             baseUrl = urlInput.text.toString().trim(),
                             apiKey = keyInput.text.toString().trim(),
@@ -2123,9 +2493,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         subtitle("先选类型，再填参数")
         secondaryAction("取消") { it.dismiss() }
         content { col ->
-            val group = LinearLayout(this@SettingsDetailActivity).apply {
-                orientation = LinearLayout.VERTICAL
-            }
+            val group =
+                LinearLayout(this@SettingsDetailActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                }
             col.addView(group)
             val rows = mutableListOf<SettingRow>()
             rows += SettingRow.Header("通用格式")
@@ -2137,19 +2508,28 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 this@SettingsDetailActivity,
                 group,
                 rows,
-                listener = object : SettingsActionListener {
-                    override fun onRadioSelect(key: String) = Unit
-                    override fun onToggleChange(key: String, checked: Boolean) = Unit
-                    override fun onValueClick(key: String) {
-                        when (key) {
-                            "add_openai", "add_anthropic" -> {
-                                val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
-                                showProviderEditor(sheet, null, t, providerKind)
+                listener =
+                    object : SettingsActionListener {
+                        override fun onRadioSelect(key: String) = Unit
+
+                        override fun onToggleChange(
+                            key: String,
+                            checked: Boolean,
+                        ) = Unit
+
+                        override fun onValueClick(key: String) {
+                            when (key) {
+                                "add_openai", "add_anthropic" -> {
+                                    val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
+                                    showProviderEditor(sheet, null, t, providerKind)
+                                }
+
+                                "add_oauth" -> {
+                                    showOAuthPicker(sheet)
+                                }
                             }
-                            "add_oauth" -> showOAuthPicker(sheet)
                         }
-                    }
-                },
+                    },
                 // 本列表已在 CodaSheet 的内容区里，那层已有 content_padding_h 留白；
                 // 再传 20dp 会叠加成双倍缩进，卡片左缘与标题对不齐。
                 horizontalInsetPx = 0,
@@ -2167,54 +2547,62 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val kindOfRecord = existing?.kind ?: kind
         val typeOfRecord = existing?.apiType ?: apiType
 
-        val idInput = EditText(this).apply {
-            hint = "供应商 ID，仅英文，如 myai"
-            setText(existing?.id ?: "")
-            isEnabled = existing == null
-        }
-        val nameInput = EditText(this).apply {
-            hint = "显示名称"
-            setText(existing?.name ?: "")
-        }
-        val urlInput = EditText(this).apply {
-            // ASR 只要一个能收 /v1/audio/transcriptions 的端点，与 LLM 同形。
-            hint = if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
-                "转写端点，如 https://api.example.com/v1"
-            } else {
-                "API 端点，如 https://api.example.com/v1"
+        val idInput =
+            EditText(this).apply {
+                hint = "供应商 ID，仅英文，如 myai"
+                setText(existing?.id ?: "")
+                isEnabled = existing == null
             }
-            setText(existing?.baseUrl ?: "")
-            inputType = InputType.TYPE_TEXT_VARIATION_URI
-        }
-        val keyInput = EditText(this).apply {
-            hint = "API Key"
-            setText(existing?.apiKey ?: "")
-        }
-        val modelsInput = EditText(this).apply {
-            hint = if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
-                "转写模型名，如 whisper-1；多个用英文逗号分隔"
-            } else {
-                "模型名，多个用英文逗号分隔"
+        val nameInput =
+            EditText(this).apply {
+                hint = "显示名称"
+                setText(existing?.name ?: "")
             }
-            setText(existing?.models?.joinToString(",") ?: "")
-        }
+        val urlInput =
+            EditText(this).apply {
+                // ASR 只要一个能收 /v1/audio/transcriptions 的端点，与 LLM 同形。
+                hint =
+                    if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                        "转写端点，如 https://api.example.com/v1"
+                    } else {
+                        "API 端点，如 https://api.example.com/v1"
+                    }
+                setText(existing?.baseUrl ?: "")
+                inputType = InputType.TYPE_TEXT_VARIATION_URI
+            }
+        val keyInput =
+            EditText(this).apply {
+                hint = "API Key"
+                setText(existing?.apiKey ?: "")
+            }
+        val modelsInput =
+            EditText(this).apply {
+                hint =
+                    if (kindOfRecord == ProviderStore.ProviderKind.ASR) {
+                        "转写模型名，如 whisper-1；多个用英文逗号分隔"
+                    } else {
+                        "模型名，多个用英文逗号分隔"
+                    }
+                setText(existing?.models?.joinToString(",") ?: "")
+            }
         // 接口类型不再让用户手填：路由已经按类型决定了，多一个输入框只会被填错。
         // 仍然留一行只读展示，方便排查。
-        val apiTypeLabel = TextView(this).apply {
-            text = "接口类型：$typeOfRecord"
-            textSize = 13f
-            setPadding(0, dp(6), 0, dp(2))
-        }
+        val apiTypeLabel =
+            TextView(this).apply {
+                text = "接口类型：$typeOfRecord"
+                textSize = 13f
+                setPadding(0, dp(6), 0, dp(2))
+            }
 
-        val sheet = CodaSheet(this)
-            .title(
-                when {
-                    existing != null -> "编辑供应商"
-                    kindOfRecord == ProviderStore.ProviderKind.ASR -> "添加 ASR 供应商"
-                    else -> "添加 LLM 供应商"
-                }
-            )
-            .secondaryAction("取消") { it.dismiss() }
+        val sheet =
+            CodaSheet(this)
+                .title(
+                    when {
+                        existing != null -> "编辑供应商"
+                        kindOfRecord == ProviderStore.ProviderKind.ASR -> "添加 ASR 供应商"
+                        else -> "添加 LLM 供应商"
+                    },
+                ).secondaryAction("取消") { it.dismiss() }
         if (existing != null) {
             sheet.headerAction("删除") { s ->
                 s.dismiss()
@@ -2240,39 +2628,48 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                         setPadding(0, dp(8), 0, 0)
                     },
                 )
-                val testBtn = com.google.android.material.button.MaterialButton(
-                    this,
-                    null,
-                    com.google.android.material.R.attr.materialButtonOutlinedStyle,
-                ).apply {
-                    text = "保存并测试"
-                    setPadding(0, dp(4), 0, dp(4))
-                }
+                val testBtn =
+                    com.google.android.material.button
+                        .MaterialButton(
+                            this,
+                            null,
+                            com.google.android.material.R.attr.materialButtonOutlinedStyle,
+                        ).apply {
+                            text = "保存并测试"
+                            setPadding(0, dp(4), 0, dp(4))
+                        }
                 testBtn.setOnClickListener {
                     // 先落库再测：用户在表单里改过的端点/密钥应该立即生效，
                     // 否则测的还是旧配置，结论没有意义。
                     val id = idInput.text.toString().trim()
-                    val models = modelsInput.text.toString()
-                        .split(',', '，')
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .toMutableList()
+                    val models =
+                        modelsInput.text
+                            .toString()
+                            .split(',', '，')
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .toMutableList()
                     if (id.isEmpty() || models.isEmpty()) {
                         snack("供应商 ID 与至少一个模型名不能为空")
                         return@setOnClickListener
                     }
                     val list = ProviderStore.load(this)
                     list.removeAll { it.id == id }
-                    val record = ProviderStore.Provider(
-                        id = id,
-                        name = nameInput.text.toString().trim().ifEmpty { id },
-                        apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
-                        baseUrl = urlInput.text.toString().trim(),
-                        apiKey = keyInput.text.toString().trim(),
-                        models = models,
-                        kind = kindOfRecord,
-                        origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
-                    )
+                    val record =
+                        ProviderStore.Provider(
+                            id = id,
+                            name =
+                                nameInput.text
+                                    .toString()
+                                    .trim()
+                                    .ifEmpty { id },
+                            apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
+                            baseUrl = urlInput.text.toString().trim(),
+                            apiKey = keyInput.text.toString().trim(),
+                            models = models,
+                            kind = kindOfRecord,
+                            origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
+                        )
                     list.add(record)
                     ProviderStore.save(this, list)
                     startAsrTest(record)
@@ -2282,11 +2679,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
         sheet.primaryAction("保存") { s ->
             val id = idInput.text.toString().trim()
-            val models = modelsInput.text.toString()
-                .split(',', '，')
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .toMutableList()
+            val models =
+                modelsInput.text
+                    .toString()
+                    .split(',', '，')
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .toMutableList()
             if (id.isEmpty() || models.isEmpty()) {
                 snack("供应商 ID 与至少一个模型名不能为空")
             } else {
@@ -2295,7 +2694,11 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 list.add(
                     ProviderStore.Provider(
                         id = id,
-                        name = nameInput.text.toString().trim().ifEmpty { id },
+                        name =
+                            nameInput.text
+                                .toString()
+                                .trim()
+                                .ifEmpty { id },
                         apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
                         baseUrl = urlInput.text.toString().trim(),
                         apiKey = keyInput.text.toString().trim(),
@@ -2325,18 +2728,20 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
      * 普通 OpenAI 兼容端点只有后者。
      */
     private fun showAsrTestMenu(provider: ProviderStore.Provider) {
-        val sheet = CodaSheet(this)
-            .title("测试 ${provider.name}")
-            .subtitle(AsrTester.endpointLabel(provider))
+        val sheet =
+            CodaSheet(this)
+                .title("测试 ${provider.name}")
+                .subtitle(AsrTester.endpointLabel(provider))
         val rows = mutableListOf<SettingRow>()
         if (AsrTester.realtimeSupported(provider)) {
             rows += SettingRow.Value("实时识别", "边说边出字，说完自动收尾", "asr_live")
         }
-        rows += SettingRow.Value(
-            "录完再识别",
-            if (ProviderStore.isBuiltin(provider)) "录一段音，推流后一次返回" else "录一段音，上传到转写端点",
-            "asr_once",
-        )
+        rows +=
+            SettingRow.Value(
+                "录完再识别",
+                if (ProviderStore.isBuiltin(provider)) "录一段音，推流后一次返回" else "录一段音，上传到转写端点",
+                "asr_once",
+            )
         sheet.content { col ->
             val group = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             col.addView(group)
@@ -2344,22 +2749,29 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
                 this,
                 group,
                 rows,
-                listener = object : SettingsActionListener {
-                    override fun onRadioSelect(key: String) = Unit
-                    override fun onToggleChange(key: String, checked: Boolean) = Unit
-                    override fun onValueClick(key: String) {
-                        when (key) {
-                            "asr_live" -> {
-                                sheet.dismiss()
-                                startAsrTest(provider, live = true)
-                            }
-                            "asr_once" -> {
-                                sheet.dismiss()
-                                startAsrTest(provider, live = false)
+                listener =
+                    object : SettingsActionListener {
+                        override fun onRadioSelect(key: String) = Unit
+
+                        override fun onToggleChange(
+                            key: String,
+                            checked: Boolean,
+                        ) = Unit
+
+                        override fun onValueClick(key: String) {
+                            when (key) {
+                                "asr_live" -> {
+                                    sheet.dismiss()
+                                    startAsrTest(provider, live = true)
+                                }
+
+                                "asr_once" -> {
+                                    sheet.dismiss()
+                                    startAsrTest(provider, live = false)
+                                }
                             }
                         }
-                    }
-                },
+                    },
                 horizontalInsetPx = 0,
             )
         }
@@ -2379,9 +2791,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
      * 自己建一个反而更明确——页面销毁时在 onDestroy 里 cancel 掉，
      * 所有 ASR 任务（含录音器、WebSocket 会话）一起收干净。
      */
-    private val asrScope = kotlinx.coroutines.CoroutineScope(
-        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate,
-    )
+    private val asrScope =
+        kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate,
+        )
 
     /** 本页正在跑的识别任务；换页或取消时一起取消。 */
     private var asrJob: kotlinx.coroutines.Job? = null
@@ -2399,7 +2812,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
      * 收尾顺序、异常归类都在 AsrClient 里，调用方不再各写一套
      * Thread + postToUi + postDelayed。
      */
-    private fun startAsrTest(provider: ProviderStore.Provider, live: Boolean = false) {
+    private fun startAsrTest(
+        provider: ProviderStore.Provider,
+        live: Boolean = false,
+    ) {
         if (asrJob?.isActive == true) {
             snack("已有一个录音正在进行")
             return
@@ -2422,16 +2838,21 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 一次性模式：录成 wav，停止后上传或推流。 */
-    private fun startOnceAsr(provider: ProviderStore.Provider, model: String) {
-        val sheet = CodaSheet(this)
-            .title("录完再识别")
-            .subtitle(asrClient.describe(provider))
-        val statusText = TextView(this).apply {
-            text = "正在录音…说一句话后点「停止并识别」"
-            textSize = 14f
-            setTextColor(onSurfaceColor())
-            setPadding(0, dp(8), 0, dp(8))
-        }
+    private fun startOnceAsr(
+        provider: ProviderStore.Provider,
+        model: String,
+    ) {
+        val sheet =
+            CodaSheet(this)
+                .title("录完再识别")
+                .subtitle(asrClient.describe(provider))
+        val statusText =
+            TextView(this).apply {
+                text = "正在录音…说一句话后点「停止并识别」"
+                textSize = 14f
+                setTextColor(onSurfaceColor())
+                setPadding(0, dp(8), 0, dp(8))
+            }
         sheet.content { col -> col.addView(statusText) }
         // 用信号控制「什么时候停」，而不是让 UI 直接碰录音器。
         val stop = kotlinx.coroutines.CompletableDeferred<Unit>()
@@ -2444,34 +2865,39 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             stop.complete(Unit)
         }
         sheet.show()
-        asrJob = asrScope.launch {
-            val result = asrClient.transcribe(
-                provider = provider,
-                model = model,
-                stopSignal = stop,
-            )
-            if (isFinishing || isDestroyed) return@launch
-            showAsrResult(provider, model, result)
-        }
+        asrJob =
+            asrScope.launch {
+                val result =
+                    asrClient.transcribe(
+                        provider = provider,
+                        model = model,
+                        stopSignal = stop,
+                    )
+                if (isFinishing || isDestroyed) return@launch
+                showAsrResult(provider, model, result)
+            }
     }
 
     /** 实时模式：边说边出字。collect 这个 Flow 就是「开始」，取消就是「停止」。 */
     private fun startLiveAsr(provider: ProviderStore.Provider) {
         val model = provider.models.firstOrNull().orEmpty()
-        val sheet = CodaSheet(this)
-            .title("实时识别")
-            .subtitle(asrClient.describe(provider))
-        val liveText = TextView(this).apply {
-            text = ""
-            textSize = 16f
-            setTextColor(onSurfaceColor())
-            setPadding(0, dp(8), 0, dp(8))
-        }
-        val statusText = TextView(this).apply {
-            text = "正在连接…"
-            textSize = 12f
-            setTextColor(onSurfaceVariantColor())
-        }
+        val sheet =
+            CodaSheet(this)
+                .title("实时识别")
+                .subtitle(asrClient.describe(provider))
+        val liveText =
+            TextView(this).apply {
+                text = ""
+                textSize = 16f
+                setTextColor(onSurfaceColor())
+                setPadding(0, dp(8), 0, dp(8))
+            }
+        val statusText =
+            TextView(this).apply {
+                text = "正在连接…"
+                textSize = 12f
+                setTextColor(onSurfaceVariantColor())
+            }
         sheet.content { col ->
             col.addView(liveText)
             col.addView(statusText)
@@ -2486,47 +2912,51 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             asrJob?.cancel()
         }
         sheet.show()
-        asrJob = asrScope.launch {
-            // 已定稿的文本。中间结果每次都覆盖「最后一句」，不追加。
-            val settled = StringBuilder()
-            try {
-                asrClient.transcribeStream(provider).collect { chunk ->
-                    statusText.text = "正在录音…说完点「结束」"
-                    liveText.text = if (chunk.isFinal) {
-                        settled.append(chunk.text)
-                        settled.toString()
-                    } else {
-                        // 中间结果接在已定稿内容之后覆盖显示。
-                        settled.toString() + chunk.text
+        asrJob =
+            asrScope.launch {
+                // 已定稿的文本。中间结果每次都覆盖「最后一句」，不追加。
+                val settled = StringBuilder()
+                try {
+                    asrClient.transcribeStream(provider).collect { chunk ->
+                        statusText.text = "正在录音…说完点「结束」"
+                        liveText.text =
+                            if (chunk.isFinal) {
+                                settled.append(chunk.text)
+                                settled.toString()
+                            } else {
+                                // 中间结果接在已定稿内容之后覆盖显示。
+                                settled.toString() + chunk.text
+                            }
+                    }
+                } catch (_: kotlinx.coroutines.CancellationException) {
+                    // 用户主动结束，不是错误。
+                    AppLog.i("AsrUi", "实时识别由用户结束，已定稿 ${settled.length} 字")
+                } catch (e: Throwable) {
+                    AppLog.i("AsrUi", "实时识别出错：${e.javaClass.simpleName}: ${e.message}")
+                    if (!isFinishing && !isDestroyed) {
+                        showAsrResult(
+                            provider,
+                            model,
+                            AsrTester.Result.Fail(e.message ?: e.javaClass.simpleName),
+                        )
                     }
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                // 用户主动结束，不是错误。
-                AppLog.i("AsrUi", "实时识别由用户结束，已定稿 ${settled.length} 字")
-            } catch (e: Throwable) {
-                AppLog.i("AsrUi", "实时识别出错：${e.javaClass.simpleName}: ${e.message}")
-                if (!isFinishing && !isDestroyed) {
-                    showAsrResult(
-                        provider,
-                        model,
-                        AsrTester.Result.Fail(e.message ?: e.javaClass.simpleName),
-                    )
-                }
             }
-        }
     }
 
-    private fun onSurfaceColor(): Int = MaterialColors.getColor(
-        this,
-        com.google.android.material.R.attr.colorOnSurface,
-        android.graphics.Color.BLACK,
-    )
+    private fun onSurfaceColor(): Int =
+        MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurface,
+            android.graphics.Color.BLACK,
+        )
 
-    private fun onSurfaceVariantColor(): Int = MaterialColors.getColor(
-        this,
-        com.google.android.material.R.attr.colorOnSurfaceVariant,
-        android.graphics.Color.GRAY,
-    )
+    private fun onSurfaceVariantColor(): Int =
+        MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            android.graphics.Color.GRAY,
+        )
 
     /** 把测试结果摊开显示：成功给文本，失败给具体原因。 */
     private fun showAsrResult(
@@ -2534,36 +2964,40 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         model: String,
         result: AsrTester.Result,
     ) {
-        val sheet = CodaSheet(this)
-            .title(if (result is AsrTester.Result.Ok) "识别成功" else "测试失败")
-            .subtitle("${provider.name} · ${model.ifEmpty { "未填模型" }}")
-        val body = TextView(this).apply {
-            textSize = 14f
-            setTextColor(
-                MaterialColors.getColor(
-                    this@SettingsDetailActivity,
-                    com.google.android.material.R.attr.colorOnSurface,
-                    android.graphics.Color.BLACK,
-                ),
-            )
-            setTextIsSelectable(true)
-            setPadding(0, dp(8), 0, dp(8))
-        }
-        val meta = TextView(this).apply {
-            textSize = 12f
-            setTextColor(
-                MaterialColors.getColor(
-                    this@SettingsDetailActivity,
-                    com.google.android.material.R.attr.colorOnSurfaceVariant,
-                    android.graphics.Color.GRAY,
-                ),
-            )
-        }
+        val sheet =
+            CodaSheet(this)
+                .title(if (result is AsrTester.Result.Ok) "识别成功" else "测试失败")
+                .subtitle("${provider.name} · ${model.ifEmpty { "未填模型" }}")
+        val body =
+            TextView(this).apply {
+                textSize = 14f
+                setTextColor(
+                    MaterialColors.getColor(
+                        this@SettingsDetailActivity,
+                        com.google.android.material.R.attr.colorOnSurface,
+                        android.graphics.Color.BLACK,
+                    ),
+                )
+                setTextIsSelectable(true)
+                setPadding(0, dp(8), 0, dp(8))
+            }
+        val meta =
+            TextView(this).apply {
+                textSize = 12f
+                setTextColor(
+                    MaterialColors.getColor(
+                        this@SettingsDetailActivity,
+                        com.google.android.material.R.attr.colorOnSurfaceVariant,
+                        android.graphics.Color.GRAY,
+                    ),
+                )
+            }
         when (result) {
             is AsrTester.Result.Ok -> {
                 body.text = result.text
                 meta.text = "耗时 ${result.elapsedMs} ms · 端点 ${AsrTester.endpoint(provider.baseUrl)}"
             }
+
             is AsrTester.Result.Fail -> {
                 body.text = result.reason
                 meta.text = "端点 ${AsrTester.endpoint(provider.baseUrl)}"
@@ -2593,8 +3027,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val target = pendingAsrTest
         pendingAsrTest = null
         if (target == null) return
-        val granted = grantResults.isNotEmpty() &&
-            grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val granted =
+            grantResults.isNotEmpty() &&
+                grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (granted) {
             startAsrTest(target, pendingAsrLive)
         } else {
@@ -2613,12 +3048,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         renderPage()
         val debouncing = pendingProviderRestart != null
         pendingProviderRestart?.let { providerRestartHandler.removeCallbacks(it) }
-        val job = Runnable {
-            pendingProviderRestart = null
-            ZController.get(this).restartCore { ok, msg ->
-                snack(if (ok) "已保存，核心已重启；返回后可在模型面板选择新模型" else "核心重启失败: $msg")
+        val job =
+            Runnable {
+                pendingProviderRestart = null
+                ZController.get(this).restartCore { ok, msg ->
+                    snack(if (ok) "已保存，核心已重启；返回后可在模型面板选择新模型" else "核心重启失败: $msg")
+                }
             }
-        }
         pendingProviderRestart = job
         providerRestartHandler.postDelayed(job, 700)
         if (!debouncing) snack("已保存，正在应用新配置…")
@@ -2634,26 +3070,33 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     /** 子智能体 / 技能 / 命令 的编辑对话框（与设置系统其它对话框同套组件）。 */
-    private fun editAsset(kind: AgentAssets.Kind, item: AgentAssets.Item?) {
-        val nameInput = EditText(this).apply {
-            hint = "名称，仅字母、数字、- 与 _"
-            setText(item?.name ?: "")
-            isEnabled = item == null
-        }
-        val descInput = EditText(this).apply {
-            hint = "描述"
-            setText(item?.description ?: "")
-        }
-        val bodyInput = EditText(this).apply {
-            hint = "正文，支持 Markdown"
-            setText(item?.body ?: "")
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            minLines = 6
-            gravity = android.view.Gravity.TOP or android.view.Gravity.START
-        }
-        val sheet = CodaSheet(this)
-            .title(if (item == null) "新建${kind.label}" else "编辑${kind.label}")
-            .secondaryAction("取消") { it.dismiss() }
+    private fun editAsset(
+        kind: AgentAssets.Kind,
+        item: AgentAssets.Item?,
+    ) {
+        val nameInput =
+            EditText(this).apply {
+                hint = "名称，仅字母、数字、- 与 _"
+                setText(item?.name ?: "")
+                isEnabled = item == null
+            }
+        val descInput =
+            EditText(this).apply {
+                hint = "描述"
+                setText(item?.description ?: "")
+            }
+        val bodyInput =
+            EditText(this).apply {
+                hint = "正文，支持 Markdown"
+                setText(item?.body ?: "")
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                minLines = 6
+                gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            }
+        val sheet =
+            CodaSheet(this)
+                .title(if (item == null) "新建${kind.label}" else "编辑${kind.label}")
+                .secondaryAction("取消") { it.dismiss() }
         if (item != null) {
             sheet.headerAction("删除") { s ->
                 s.dismiss()
@@ -2671,14 +3114,15 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             col.addView(bodyInput)
         }
         sheet.primaryAction("保存") { s ->
-            val err = AgentAssets.save(
-                this,
-                kind,
-                nameInput.text.toString().trim(),
-                descInput.text.toString().trim(),
-                bodyInput.text.toString(),
-                item?.path,
-            )
+            val err =
+                AgentAssets.save(
+                    this,
+                    kind,
+                    nameInput.text.toString().trim(),
+                    descInput.text.toString().trim(),
+                    bodyInput.text.toString(),
+                    item?.path,
+                )
             if (err != null) {
                 snack(err)
             } else {
@@ -2707,27 +3151,30 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val title = row.optString("title").ifEmpty { "（未命名任务）" }
         val enabled = row.optLong("enabled", 0L) != 0L
         val runCount = row.optLong("run_count", 0L)
-        val detail = buildString {
-            append("计划：").append(row.optString("cron_expr")).append('\n')
-            append("提示词：").append(row.optString("prompt").take(160)).append('\n')
-            if (!row.isNull("next_run_at")) {
-                append("下次运行：").append(CodaExtras.formatTs(row.optLong("next_run_at"))).append('\n')
+        val detail =
+            buildString {
+                append("计划：").append(row.optString("cron_expr")).append('\n')
+                append("提示词：").append(row.optString("prompt").take(160)).append('\n')
+                if (!row.isNull("next_run_at")) {
+                    append("下次运行：").append(CodaExtras.formatTs(row.optLong("next_run_at"))).append('\n')
+                }
+                if (!row.isNull("last_error")) {
+                    append("上次错误：").append(row.optString("last_error").take(120))
+                }
             }
-            if (!row.isNull("last_error")) {
-                append("上次错误：").append(row.optString("last_error").take(120))
-            }
-        }
-        val sheet = CodaSheet(this)
-            .title(title)
-            .subtitle(
-                (if (enabled) "启用中" else "已停用") + " · 已运行 $runCount 次",
-            )
+        val sheet =
+            CodaSheet(this)
+                .title(title)
+                .subtitle(
+                    (if (enabled) "启用中" else "已停用") + " · 已运行 $runCount 次",
+                )
         sheet.content { col ->
-            val neutral = MaterialColors.getColor(
-                this,
-                com.google.android.material.R.attr.colorOnSurfaceVariant,
-                android.graphics.Color.GRAY,
-            )
+            val neutral =
+                MaterialColors.getColor(
+                    this,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                )
             col.addView(
                 TextView(this).apply {
                     text = detail
@@ -2749,22 +3196,27 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheet.show()
     }
 
-    private fun toggleAutomation(id: String, enable: Boolean) {
+    private fun toggleAutomation(
+        id: String,
+        enable: Boolean,
+    ) {
         Bg.run {
             val store = AutomationStore(applicationContext)
             val row = store.getRow(id)
-            val next: Long? = if (enable && row != null) {
-                val rule = AutomationSchedule.parseRule(
-                    row.optString("schedule_rule").takeIf { it != "null" },
-                )
-                AutomationSchedule.computeNext(
-                    row.optString("cron_expr"),
-                    rule,
-                    System.currentTimeMillis(),
-                )
-            } else {
-                null
-            }
+            val next: Long? =
+                if (enable && row != null) {
+                    val rule =
+                        AutomationSchedule.parseRule(
+                            row.optString("schedule_rule").takeIf { it != "null" },
+                        )
+                    AutomationSchedule.computeNext(
+                        row.optString("cron_expr"),
+                        rule,
+                        System.currentTimeMillis(),
+                    )
+                } else {
+                    null
+                }
             val ok = store.setEnabled(id, enable, next, System.currentTimeMillis())
             runOnUiThread {
                 snack(if (ok) (if (enable) "已启用" else "已停用") else "操作失败")
@@ -2773,7 +3225,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
-    private fun confirmDeleteAutomation(id: String, title: String) {
+    private fun confirmDeleteAutomation(
+        id: String,
+        title: String,
+    ) {
         sheetConfirm("删除任务", "确定删除「$title」？此操作不可恢复。", "删除") {
             Bg.run {
                 val ok = AutomationStore(applicationContext).delete(id)
@@ -2817,8 +3272,9 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val home = File(filesDir, "home")
         val wp = ctrl.workspacePath()
         val snap = HooksCore.discover(wp, home)
-        val entry = snap.entries.firstOrNull { it.declarationDigest.startsWith(digestPrefix) }
-            ?: snap.userEntries.firstOrNull { it.declarationDigest.startsWith(digestPrefix) }
+        val entry =
+            snap.entries.firstOrNull { it.declarationDigest.startsWith(digestPrefix) }
+                ?: snap.userEntries.firstOrNull { it.declarationDigest.startsWith(digestPrefix) }
         if (entry == null) {
             snack("钩子已变化，请刷新后重试")
             renderPage()
@@ -2826,28 +3282,31 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
         val isProject = snap.entries.any { it.declarationDigest == entry.declarationDigest }
         val trusted = HooksCore.readTrustedDigests(wp, home).contains(entry.declarationDigest)
-        val detail = buildString {
-            append("事件：").append(HooksCore.EVENT_LABELS[entry.event] ?: entry.event).append('\n')
-            if (entry.matcher != null) append("匹配：").append(entry.matcher).append('\n')
-            append("类型：").append(if (entry.hook.optString("type") == "process") "进程" else "命令").append('\n')
-            append("命令：").append(entry.command.take(300)).append('\n')
-            append("来源：").append(entry.source.relPath).append('\n')
-            append("信任：").append(
-                when {
-                    !isProject -> "用户级，不可在此信任"
-                    trusted -> "已信任"
-                    else -> "未信任，运行时不会执行"
-                },
-            )
-        }
-        val sheet = CodaSheet(this)
-            .title(entry.event)
+        val detail =
+            buildString {
+                append("事件：").append(HooksCore.EVENT_LABELS[entry.event] ?: entry.event).append('\n')
+                if (entry.matcher != null) append("匹配：").append(entry.matcher).append('\n')
+                append("类型：").append(if (entry.hook.optString("type") == "process") "进程" else "命令").append('\n')
+                append("命令：").append(entry.command.take(300)).append('\n')
+                append("来源：").append(entry.source.relPath).append('\n')
+                append("信任：").append(
+                    when {
+                        !isProject -> "用户级，不可在此信任"
+                        trusted -> "已信任"
+                        else -> "未信任，运行时不会执行"
+                    },
+                )
+            }
+        val sheet =
+            CodaSheet(this)
+                .title(entry.event)
         sheet.content { col ->
-            val neutral = MaterialColors.getColor(
-                this,
-                com.google.android.material.R.attr.colorOnSurfaceVariant,
-                android.graphics.Color.GRAY,
-            )
+            val neutral =
+                MaterialColors.getColor(
+                    this,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                )
             col.addView(
                 TextView(this).apply {
                     text = detail
@@ -2868,12 +3327,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         if (isProject && entry.source.editable) {
             sheet.headerAction("删除") { s ->
                 s.dismiss()
-                val err = HooksCore.removeHook(
-                    entry.source.canonicalPath,
-                    entry.event,
-                    entry.matcherIndex,
-                    entry.hookIndex,
-                )
+                val err =
+                    HooksCore.removeHook(
+                        entry.source.canonicalPath,
+                        entry.event,
+                        entry.matcherIndex,
+                        entry.hookIndex,
+                    )
                 snack(err ?: "已删除")
                 renderPage()
             }
@@ -2881,7 +3341,12 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         sheet.show()
     }
 
-    private fun grantHook(ctrl: ZController, wp: String, bundleDigest: String, declarationDigest: String) {
+    private fun grantHook(
+        ctrl: ZController,
+        wp: String,
+        bundleDigest: String,
+        declarationDigest: String,
+    ) {
         HooksCore.grant(ctrl.runtime, wp, bundleDigest, declarationDigest) { ok, reason ->
             runOnUiThread {
                 snack(
@@ -2907,34 +3372,46 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
 
     private fun addHookInputDialog(event: String) {
         val matcherInput = EditText(this).apply { hint = "匹配条件，可选，如工具名前缀" }
-        val commandInput = EditText(this).apply {
-            hint = "命令，如 echo hook-ok"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            minLines = 2
-        }
-        val timeoutInput = EditText(this).apply {
-            hint = "超时毫秒，可选，默认 60000"
-            inputType = InputType.TYPE_CLASS_NUMBER
-        }
-        val sheet = CodaSheet(this)
-            .title("添加钩子 · $event")
-            .secondaryAction("取消") { it.dismiss() }
+        val commandInput =
+            EditText(this).apply {
+                hint = "命令，如 echo hook-ok"
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                minLines = 2
+            }
+        val timeoutInput =
+            EditText(this).apply {
+                hint = "超时毫秒，可选，默认 60000"
+                inputType = InputType.TYPE_CLASS_NUMBER
+            }
+        val sheet =
+            CodaSheet(this)
+                .title("添加钩子 · $event")
+                .secondaryAction("取消") { it.dismiss() }
         sheet.content { col ->
             col.addView(matcherInput)
             col.addView(commandInput)
             col.addView(timeoutInput)
         }
         sheet.primaryAction("保存") { s ->
-            val matcher = matcherInput.text.toString().trim().takeIf { it.isNotEmpty() }
+            val matcher =
+                matcherInput.text
+                    .toString()
+                    .trim()
+                    .takeIf { it.isNotEmpty() }
             val command = commandInput.text.toString().trim()
-            val timeout = timeoutInput.text.toString().trim().toLongOrNull()
-            val err = HooksCore.addHook(
-                ZController.get(this).workspacePath(),
-                event,
-                matcher,
-                command,
-                timeout,
-            )
+            val timeout =
+                timeoutInput.text
+                    .toString()
+                    .trim()
+                    .toLongOrNull()
+            val err =
+                HooksCore.addHook(
+                    ZController.get(this).workspacePath(),
+                    event,
+                    matcher,
+                    command,
+                    timeout,
+                )
             snack(err ?: "已保存；未信任的钩子需要在本页授予信任后才会执行")
             s.dismiss()
             renderPage()
@@ -2949,6 +3426,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             val tmp = File(filesDir, "tmp")
             var freed = 0L
             var count = 0
+
             fun wipe(f: File) {
                 if (f.isDirectory) {
                     f.listFiles()?.forEach { wipe(it) }
@@ -2966,16 +3444,17 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
     }
 
     private fun copyLogsPath() {
-        val path = try {
-            val ext = getExternalMediaDirs()
-            if (ext != null && ext.isNotEmpty() && ext[0] != null) {
-                File(ext[0], "logs").absolutePath
-            } else {
+        val path =
+            try {
+                val ext = getExternalMediaDirs()
+                if (ext != null && ext.isNotEmpty() && ext[0] != null) {
+                    File(ext[0], "logs").absolutePath
+                } else {
+                    File(filesDir, "run-logs").absolutePath
+                }
+            } catch (_: Throwable) {
                 File(filesDir, "run-logs").absolutePath
             }
-        } catch (_: Throwable) {
-            File(filesDir, "run-logs").absolutePath
-        }
         val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("coda-logs", path))
         snack("已复制日志目录路径：$path")
@@ -2986,25 +3465,25 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
             .compact()
             .title("开源许可")
             .content { col ->
-                val neutral = MaterialColors.getColor(
-                    this,
-                    com.google.android.material.R.attr.colorOnSurfaceVariant,
-                    android.graphics.Color.GRAY,
-                )
+                val neutral =
+                    MaterialColors.getColor(
+                        this,
+                        com.google.android.material.R.attr.colorOnSurfaceVariant,
+                        android.graphics.Color.GRAY,
+                    )
                 col.addView(
                     TextView(this).apply {
                         text =
                             "Coda 以 AGPL-3.0 许可证发布。\n\n" +
-                                "内置运行时内核来自 zCode 开源项目，遵循 Apache-2.0 许可，版权归其各自作者所有；" +
-                                "再分发时保留上游许可与声明。\n\n" +
-                                "完整许可证文本见项目仓库 LICENSE 文件。"
+                            "内置运行时内核来自 zCode 开源项目，遵循 Apache-2.0 许可，版权归其各自作者所有；" +
+                            "再分发时保留上游许可与声明。\n\n" +
+                            "完整许可证文本见项目仓库 LICENSE 文件。"
                         textSize = 14f
                         setTextColor(neutral)
                         setPadding(0, dp(8), 0, dp(4))
                     },
                 )
-            }
-            .primaryAction("关闭") { it.dismiss() }
+            }.primaryAction("关闭") { it.dismiss() }
             .show()
     }
 
@@ -3016,12 +3495,13 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         }
     }
 
-    private fun parseAssetKind(name: String): AgentAssets.Kind? = when (name) {
-        AgentAssets.Kind.SUBAGENT.name -> AgentAssets.Kind.SUBAGENT
-        AgentAssets.Kind.COMMAND.name -> AgentAssets.Kind.COMMAND
-        AgentAssets.Kind.SKILL.name -> AgentAssets.Kind.SKILL
-        else -> null
-    }
+    private fun parseAssetKind(name: String): AgentAssets.Kind? =
+        when (name) {
+            AgentAssets.Kind.SUBAGENT.name -> AgentAssets.Kind.SUBAGENT
+            AgentAssets.Kind.COMMAND.name -> AgentAssets.Kind.COMMAND
+            AgentAssets.Kind.SKILL.name -> AgentAssets.Kind.SKILL
+            else -> null
+        }
 
     /** 使用统计的时间范围：近 7 日 / 近 30 日 / 全部。 */
     private fun pickUsageRange() {
@@ -3029,8 +3509,10 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         val values = arrayOf("7d", "30d", "all")
         val current = values.indexOf(usageRange()).coerceAtLeast(0)
         sheetPickList("统计范围", labels, current) { which ->
-            getSharedPreferences("zcode_bridge", MODE_PRIVATE).edit()
-                .putString("usage_range", values[which]).apply()
+            getSharedPreferences("zcode_bridge", MODE_PRIVATE)
+                .edit()
+                .putString("usage_range", values[which])
+                .apply()
             extrasCache.remove("usage")
             renderPage()
         }
@@ -3054,6 +3536,7 @@ class SettingsDetailActivity : BaseActivity(), SettingsActionListener {
         const val PAGE_ABOUT = "about"
         const val PAGE_PLUGIN_MARKET = "plugin_market"
         const val PAGE_PROVIDERS = "providers"
+
         /** 某一类模型的供应商列表。两级页面共用同一个 pageKey，靠 extra 区分类型。 */
         const val PAGE_PROVIDERS_OF_KIND = "providers_kind"
         const val EXTRA_PROVIDER_KIND = "extra_provider_kind"

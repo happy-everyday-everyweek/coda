@@ -20,9 +20,10 @@ object Bg {
     private const val MAX_THREADS = 16
 
     private val counter = AtomicInteger(1)
-    private val factory = ThreadFactory { r ->
-        Thread(r, "coda-io-${counter.getAndIncrement()}").apply { isDaemon = true }
-    }
+    private val factory =
+        ThreadFactory { r ->
+            Thread(r, "coda-io-${counter.getAndIncrement()}").apply { isDaemon = true }
+        }
 
     val io: ExecutorService = Executors.newFixedThreadPool(MAX_THREADS, factory)
 

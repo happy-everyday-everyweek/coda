@@ -6,6 +6,7 @@ import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.UpdateInstaller
 import com.coda.mobileui.ext.Extensions
+
 /**
  * 启动时应用用户选择的主题模式（浅色 / 深色 / 跟随系统）。
  * 动态取色与自定义主色由 BaseActivity 按设置开关处理。

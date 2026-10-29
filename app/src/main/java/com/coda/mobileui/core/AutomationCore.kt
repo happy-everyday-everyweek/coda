@@ -18,15 +18,20 @@ import kotlin.math.floor
 import kotlin.math.max
 
 /** 定时任务业务错误（应答端会将 message 回传给内核）。 */
-class AutomationException(message: String) : Exception(message)
+class AutomationException(
+    message: String,
+) : Exception(message)
 
 /**
  * 调度计算层：标准五段 cron 解析与下次触发时间、scheduleRule（自定义重复规则）推进。
  * 语义与桌面端一致：cron 仅用于「解析 + 算下次时间」，调度循环由本地 tick 完成。
  */
 object AutomationSchedule {
-
-    class CronField(val set: BooleanArray, val star: Boolean, val min: Int)
+    class CronField(
+        val set: BooleanArray,
+        val star: Boolean,
+        val min: Int,
+    )
 
     class CronExpr(
         val minute: CronField,
@@ -52,7 +57,11 @@ object AutomationSchedule {
         return CronExpr(minute, hour, dom, month, dow)
     }
 
-    private fun parseField(seg: String, min: Int, max: Int): CronField? {
+    private fun parseField(
+        seg: String,
+        min: Int,
+        max: Int,
+    ): CronField? {
         val set = BooleanArray(max + 1)
         if (seg == "*" || seg == "?") {
             for (i in min..max) set[i] = true
@@ -102,7 +111,10 @@ object AutomationSchedule {
         return if (any) CronField(set, false, min) else null
     }
 
-    private fun dayMatches(e: CronExpr, date: LocalDate): Boolean {
+    private fun dayMatches(
+        e: CronExpr,
+        date: LocalDate,
+    ): Boolean {
         val domMatch = e.dom.set[date.dayOfMonth]
         val dowIdx = date.dayOfWeek.value % 7
         val dowMatch = e.dow.set[dowIdx]
@@ -115,22 +127,43 @@ object AutomationSchedule {
     }
 
     /** cron 的下一次触发（严格晚于 from）；无未来触发返回 null。 */
-    fun computeCronNext(expr: String, from: Long): Long? {
+    fun computeCronNext(
+        expr: String,
+        from: Long,
+    ): Long? {
         val e = parseCron(expr) ?: return null
         val zone = ZoneId.systemDefault()
         var t = LocalDateTime.ofInstant(Instant.ofEpochMilli(from / 60_000L * 60_000L + 60_000L), zone)
         var guard = 0
         while (guard++ < 400_000) {
             if (!e.month.set[t.monthValue]) {
-                t = t.plusMonths(1).withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0)
+                t =
+                    t
+                        .plusMonths(1)
+                        .withDayOfMonth(1)
+                        .withHour(0)
+                        .withMinute(0)
+                        .withSecond(0)
+                        .withNano(0)
                 continue
             }
             if (!dayMatches(e, t.toLocalDate())) {
-                t = t.plusDays(1).withHour(0).withMinute(0).withSecond(0).withNano(0)
+                t =
+                    t
+                        .plusDays(1)
+                        .withHour(0)
+                        .withMinute(0)
+                        .withSecond(0)
+                        .withNano(0)
                 continue
             }
             if (!e.hour.set[t.hour]) {
-                t = t.plusHours(1).withMinute(0).withSecond(0).withNano(0)
+                t =
+                    t
+                        .plusHours(1)
+                        .withMinute(0)
+                        .withSecond(0)
+                        .withNano(0)
                 continue
             }
             if (!e.minute.set[t.minute]) {
@@ -185,7 +218,10 @@ object AutomationSchedule {
     )
 
     /** 自定义重复规则的下一次运行（本地日历时间）。 */
-    fun computeRuleNext(rule: Rule, from: Long): Long? {
+    fun computeRuleNext(
+        rule: Rule,
+        from: Long,
+    ): Long? {
         val zone = ZoneId.systemDefault()
         val interval = max(1, rule.interval)
         val anchor = Instant.ofEpochMilli(rule.anchorAt).atZone(zone)
@@ -195,12 +231,19 @@ object AutomationSchedule {
                 val steps = max(1L, floor((from - rule.anchorAt).toDouble() / step).toLong() + 1)
                 return rule.anchorAt + steps * step
             }
+
             "hourly" -> {
-                val base = anchor.toLocalDateTime().withMinute(rule.minute).withSecond(0).withNano(0)
+                val base =
+                    anchor
+                        .toLocalDateTime()
+                        .withMinute(rule.minute)
+                        .withSecond(0)
+                        .withNano(0)
                 val step = interval * 3_600_000L
                 val steps = max(0L, floor((from - base.atZone(zone).toInstant().toEpochMilli()).toDouble() / step).toLong() + 1)
                 return base.atZone(zone).toInstant().toEpochMilli() + steps * step
             }
+
             "daily" -> {
                 for (index in 0 until 36_600) {
                     val date = anchor.toLocalDate().plusDays(index.toLong() * interval)
@@ -209,6 +252,7 @@ object AutomationSchedule {
                 }
                 return null
             }
+
             "weekly" -> {
                 var anchorWeek = anchor.toLocalDate()
                 val dowSun0 = anchorWeek.dayOfWeek.value % 7
@@ -226,18 +270,20 @@ object AutomationSchedule {
                 }
                 return null
             }
+
             "monthly" -> {
                 var offset = 0
                 while (offset <= 1_200) {
                     val monthBase = LocalDate.of(anchor.year, anchor.monthValue, 1).plusMonths(offset.toLong())
-                    val candidates: List<LocalDate> = if (rule.monthlyMode == "weekday") {
-                        listOf(firstWeekdayOfMonth(monthBase.year, monthBase.monthValue, rule.weekdays?.firstOrNull() ?: 1))
-                    } else {
-                        (rule.monthDays?.takeIf { it.isNotEmpty() } ?: listOf(1)).sorted().mapNotNull { day ->
-                            val d = monthBase.plusDays((day - 1).toLong())
-                            if (d.monthValue == monthBase.monthValue) d else null
+                    val candidates: List<LocalDate> =
+                        if (rule.monthlyMode == "weekday") {
+                            listOf(firstWeekdayOfMonth(monthBase.year, monthBase.monthValue, rule.weekdays?.firstOrNull() ?: 1))
+                        } else {
+                            (rule.monthDays?.takeIf { it.isNotEmpty() } ?: listOf(1)).sorted().mapNotNull { day ->
+                                val d = monthBase.plusDays((day - 1).toLong())
+                                if (d.monthValue == monthBase.monthValue) d else null
+                            }
                         }
-                    }
                     for (d in candidates) {
                         val candidate = atTime(d, rule.hour, rule.minute, zone)
                         if (candidate > from) return candidate
@@ -246,6 +292,7 @@ object AutomationSchedule {
                 }
                 return null
             }
+
             "yearly" -> {
                 val targetMonth = rule.months?.firstOrNull()?.let { (((it - 1) % 12) + 12) % 12 } ?: (anchor.monthValue - 1)
                 val targetDay = rule.monthDays?.firstOrNull() ?: anchor.dayOfMonth
@@ -267,24 +314,45 @@ object AutomationSchedule {
         return null
     }
 
-    private fun firstWeekdayOfMonth(year: Int, month: Int, weekday: Int): LocalDate {
+    private fun firstWeekdayOfMonth(
+        year: Int,
+        month: Int,
+        weekday: Int,
+    ): LocalDate {
         val first = LocalDate.of(year, month, 1)
         val firstDow = first.dayOfWeek.value % 7
         return first.plusDays(((weekday - firstDow + 7) % 7).toLong())
     }
 
-    private fun atTime(date: LocalDate, hour: Int, minute: Int, zone: ZoneId): Long =
-        date.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
+    private fun atTime(
+        date: LocalDate,
+        hour: Int,
+        minute: Int,
+        zone: ZoneId,
+    ): Long =
+        date
+            .atTime(hour, minute)
+            .atZone(zone)
+            .toInstant()
+            .toEpochMilli()
 
     /** 统一入口：有 scheduleRule 用规则推进，否则回退 cron 解析。 */
-    fun computeNext(cronExpr: String, rule: Rule?, from: Long): Long? =
-        if (rule != null) computeRuleNext(rule, from) else computeCronNext(cronExpr, from)
+    fun computeNext(
+        cronExpr: String,
+        rule: Rule?,
+        from: Long,
+    ): Long? = if (rule != null) computeRuleNext(rule, from) else computeCronNext(cronExpr, from)
 
     /**
      * 新建任务的首次触发。一次性固定月日 cron 刚错过目标分钟（小于 1 分钟）立即补执行；
      * 已陈旧（超过 1 分钟、30 分钟窗口内）的目标视为模型算错，拒绝并提示改用相对延迟。
      */
-    fun computeInitialNext(cronExpr: String, rule: Rule?, oneShot: Boolean, from: Long): Long? {
+    fun computeInitialNext(
+        cronExpr: String,
+        rule: Rule?,
+        oneShot: Boolean,
+        from: Long,
+    ): Long? {
         val next = if (rule != null) computeRuleNext(rule, from) else computeCronNext(cronExpr, from)
         if (!oneShot || rule != null) return next
         if (!fixedCalendar.matches(cronExpr.trim())) return next
@@ -301,14 +369,21 @@ object AutomationSchedule {
     }
 
     /** 「每 N 单位」carrier（intervalUnit + interval）归一化为权威 scheduleRule。 */
-    fun buildIntervalRule(unit: String, interval: Int, cronExpr: String, anchorAt: Long): JSONObject {
+    fun buildIntervalRule(
+        unit: String,
+        interval: Int,
+        cronExpr: String,
+        anchorAt: Long,
+    ): JSONObject {
         val parts = cronExpr.trim().split(ws)
+
         fun single(idx: Int): Int? {
             if (idx >= parts.size) return null
             val s = parts[idx]
             if (s == "*" || s == "?") return null
             return s.toIntOrNull()
         }
+
         fun list(idx: Int): List<Int>? {
             if (idx >= parts.size) return null
             val s = parts[idx]
@@ -325,16 +400,47 @@ object AutomationSchedule {
         val weekdays = list(4) ?: listOf(1)
         val o = JSONObject().put("interval", interval).put("anchorAt", anchorAt)
         when (unit) {
-            "minute" -> o.put("unit", "minute").put("hour", anchor.hour).put("minute", anchor.minute)
-            "hourly" -> o.put("unit", "hourly").put("hour", 0).put("minute", minute)
-            "daily" -> o.put("unit", "daily").put("hour", hour).put("minute", minute)
-            "weekly" -> o.put("unit", "weekly").put("hour", hour).put("minute", minute)
-                .put("weekdays", JSONArray(weekdays))
-            "monthly" -> o.put("unit", "monthly").put("hour", hour).put("minute", minute)
-                .put("monthDays", JSONArray(monthDays)).put("monthlyMode", "date")
-            "yearly" -> o.put("unit", "yearly").put("hour", hour).put("minute", minute)
-                .put("months", JSONArray(months)).put("monthDays", JSONArray(monthDays))
-            else -> throw AutomationException("不支持的 intervalUnit: $unit")
+            "minute" -> {
+                o.put("unit", "minute").put("hour", anchor.hour).put("minute", anchor.minute)
+            }
+
+            "hourly" -> {
+                o.put("unit", "hourly").put("hour", 0).put("minute", minute)
+            }
+
+            "daily" -> {
+                o.put("unit", "daily").put("hour", hour).put("minute", minute)
+            }
+
+            "weekly" -> {
+                o
+                    .put("unit", "weekly")
+                    .put("hour", hour)
+                    .put("minute", minute)
+                    .put("weekdays", JSONArray(weekdays))
+            }
+
+            "monthly" -> {
+                o
+                    .put("unit", "monthly")
+                    .put("hour", hour)
+                    .put("minute", minute)
+                    .put("monthDays", JSONArray(monthDays))
+                    .put("monthlyMode", "date")
+            }
+
+            "yearly" -> {
+                o
+                    .put("unit", "yearly")
+                    .put("hour", hour)
+                    .put("minute", minute)
+                    .put("months", JSONArray(months))
+                    .put("monthDays", JSONArray(monthDays))
+            }
+
+            else -> {
+                throw AutomationException("不支持的 intervalUnit: $unit")
+            }
         }
         return o
     }
@@ -344,29 +450,31 @@ object AutomationSchedule {
  * automations 表的本地读写层。与内核共用 tasks-index.sqlite；
  * 写入仅在应答内核请求与本地调度时发生，读取全部经由本类。
  */
-class AutomationStore(private val ctx: Context) {
-
+class AutomationStore(
+    private val ctx: Context,
+) {
     @Volatile
     private var db: SQLiteDatabase? = null
 
-    private val schemaStatements = listOf(
-        "CREATE TABLE IF NOT EXISTS automations (" +
-            "automation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', cron_expr TEXT NOT NULL, " +
-            "prompt TEXT NOT NULL, model TEXT, provider TEXT, mode TEXT, thought_level TEXT, " +
-            "model_selection TEXT, workspace_key TEXT NOT NULL, workspace_path TEXT NOT NULL, " +
-            "workspace_identity TEXT, target_task_id TEXT, bot_delivery_target TEXT, " +
-            "location_kind TEXT NOT NULL DEFAULT 'local', recurring INTEGER NOT NULL DEFAULT 1, " +
-            "max_runs INTEGER, end_at INTEGER, schedule_rule TEXT, " +
-            "schedule_edited_by_user INTEGER NOT NULL DEFAULT 0, run_count INTEGER NOT NULL DEFAULT 0, " +
-            "scheduled_run_count INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, " +
-            "lifecycle_status TEXT NOT NULL DEFAULT 'active', next_run_at INTEGER, last_run_at INTEGER, " +
-            "running INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, " +
-            "dispatch_status TEXT NOT NULL DEFAULT 'idle', dispatch_attempts INTEGER NOT NULL DEFAULT 0, " +
-            "retry_at INTEGER, last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-        "CREATE INDEX IF NOT EXISTS idx_automations_due ON automations (enabled, next_run_at)",
-        "CREATE INDEX IF NOT EXISTS idx_automations_retry ON automations (enabled, retry_at)",
-        "CREATE INDEX IF NOT EXISTS idx_automations_workspace ON automations (workspace_key)",
-    )
+    private val schemaStatements =
+        listOf(
+            "CREATE TABLE IF NOT EXISTS automations (" +
+                "automation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', cron_expr TEXT NOT NULL, " +
+                "prompt TEXT NOT NULL, model TEXT, provider TEXT, mode TEXT, thought_level TEXT, " +
+                "model_selection TEXT, workspace_key TEXT NOT NULL, workspace_path TEXT NOT NULL, " +
+                "workspace_identity TEXT, target_task_id TEXT, bot_delivery_target TEXT, " +
+                "location_kind TEXT NOT NULL DEFAULT 'local', recurring INTEGER NOT NULL DEFAULT 1, " +
+                "max_runs INTEGER, end_at INTEGER, schedule_rule TEXT, " +
+                "schedule_edited_by_user INTEGER NOT NULL DEFAULT 0, run_count INTEGER NOT NULL DEFAULT 0, " +
+                "scheduled_run_count INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, " +
+                "lifecycle_status TEXT NOT NULL DEFAULT 'active', next_run_at INTEGER, last_run_at INTEGER, " +
+                "running INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER, " +
+                "dispatch_status TEXT NOT NULL DEFAULT 'idle', dispatch_attempts INTEGER NOT NULL DEFAULT 0, " +
+                "retry_at INTEGER, last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE INDEX IF NOT EXISTS idx_automations_due ON automations (enabled, next_run_at)",
+            "CREATE INDEX IF NOT EXISTS idx_automations_retry ON automations (enabled, retry_at)",
+            "CREATE INDEX IF NOT EXISTS idx_automations_workspace ON automations (workspace_key)",
+        )
 
     private fun open(): SQLiteDatabase? {
         db?.let { if (it.isOpen) return it }
@@ -375,11 +483,12 @@ class AutomationStore(private val ctx: Context) {
             return try {
                 val f = File(ctx.filesDir, "zcode-data/.zcode/v2/tasks-index.sqlite")
                 f.parentFile?.mkdirs()
-                val d = SQLiteDatabase.openDatabase(
-                    f.absolutePath,
-                    null,
-                    SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
-                )
+                val d =
+                    SQLiteDatabase.openDatabase(
+                        f.absolutePath,
+                        null,
+                        SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
+                    )
                 try {
                     d.execSQL("PRAGMA busy_timeout=5000")
                 } catch (_: Throwable) {
@@ -405,9 +514,18 @@ class AutomationStore(private val ctx: Context) {
             when (c.getType(i)) {
                 Cursor.FIELD_TYPE_NULL -> {
                 }
-                Cursor.FIELD_TYPE_INTEGER -> o.put(name, c.getLong(i))
-                Cursor.FIELD_TYPE_FLOAT -> o.put(name, c.getDouble(i))
-                else -> o.put(name, c.getString(i))
+
+                Cursor.FIELD_TYPE_INTEGER -> {
+                    o.put(name, c.getLong(i))
+                }
+
+                Cursor.FIELD_TYPE_FLOAT -> {
+                    o.put(name, c.getDouble(i))
+                }
+
+                else -> {
+                    o.put(name, c.getString(i))
+                }
             }
         }
         return o
@@ -445,7 +563,10 @@ class AutomationStore(private val ctx: Context) {
         return out
     }
 
-    fun update(id: String, values: ContentValues): Boolean {
+    fun update(
+        id: String,
+        values: ContentValues,
+    ): Boolean {
         val d = open() ?: return false
         return try {
             d.update("automations", values, "automation_id = ?", arrayOf(id)) > 0
@@ -463,13 +584,17 @@ class AutomationStore(private val ctx: Context) {
         }
     }
 
-    fun checkBinding(workspaceKey: String, targetTaskId: String): Boolean {
+    fun checkBinding(
+        workspaceKey: String,
+        targetTaskId: String,
+    ): Boolean {
         val d = open() ?: return false
         return try {
-            d.rawQuery(
-                "SELECT COUNT(*) FROM automations WHERE workspace_key = ? AND target_task_id = ?",
-                arrayOf(workspaceKey, targetTaskId),
-            ).use { c -> c.moveToNext() && c.getLong(0) > 0 }
+            d
+                .rawQuery(
+                    "SELECT COUNT(*) FROM automations WHERE workspace_key = ? AND target_task_id = ?",
+                    arrayOf(workspaceKey, targetTaskId),
+                ).use { c -> c.moveToNext() && c.getLong(0) > 0 }
         } catch (_: Throwable) {
             false
         }
@@ -480,25 +605,30 @@ class AutomationStore(private val ctx: Context) {
         val d = open() ?: return emptyList()
         val out = mutableListOf<JSONObject>()
         try {
-            d.rawQuery(
-                "SELECT * FROM automations WHERE enabled = 1 AND running = 0 AND lifecycle_status = 'active' AND " +
-                    "((next_run_at IS NOT NULL AND next_run_at <= ?) OR (retry_at IS NOT NULL AND retry_at <= ?))",
-                arrayOf(now.toString(), now.toString()),
-            ).use { c ->
-                while (c.moveToNext()) out += rowToJson(c)
-            }
+            d
+                .rawQuery(
+                    "SELECT * FROM automations WHERE enabled = 1 AND running = 0 AND lifecycle_status = 'active' AND " +
+                        "((next_run_at IS NOT NULL AND next_run_at <= ?) OR (retry_at IS NOT NULL AND retry_at <= ?))",
+                    arrayOf(now.toString(), now.toString()),
+                ).use { c ->
+                    while (c.moveToNext()) out += rowToJson(c)
+                }
         } catch (_: Throwable) {
         }
         return out
     }
 
     /** 原子认领：仅当 running = 0 时置为运行中。 */
-    fun claim(id: String, now: Long): Boolean {
+    fun claim(
+        id: String,
+        now: Long,
+    ): Boolean {
         val d = open() ?: return false
         return try {
-            val st = d.compileStatement(
-                "UPDATE automations SET running = 1, claimed_at = ?, updated_at = ? WHERE automation_id = ? AND running = 0",
-            )
+            val st =
+                d.compileStatement(
+                    "UPDATE automations SET running = 1, claimed_at = ?, updated_at = ? WHERE automation_id = ? AND running = 0",
+                )
             try {
                 st.bindLong(1, now)
                 st.bindLong(2, now)
@@ -513,7 +643,11 @@ class AutomationStore(private val ctx: Context) {
     }
 
     /** 运行完成结算：计数 +1，清运行态；nextRunAt 为 null 时进入 completed 终态。 */
-    fun settle(id: String, now: Long, nextRunAt: Long?) {
+    fun settle(
+        id: String,
+        now: Long,
+        nextRunAt: Long?,
+    ) {
         val d = open() ?: return
         try {
             if (nextRunAt == null) {
@@ -538,7 +672,11 @@ class AutomationStore(private val ctx: Context) {
     }
 
     /** 派发失败：记录错误，最多重试 3 次（5 分钟退避）。 */
-    fun fail(id: String, message: String, now: Long) {
+    fun fail(
+        id: String,
+        message: String,
+        now: Long,
+    ) {
         val d = open() ?: return
         try {
             var attempts = 0L
@@ -565,7 +703,12 @@ class AutomationStore(private val ctx: Context) {
         }
     }
 
-    fun setEnabled(id: String, enabled: Boolean, nextRunAt: Long?, now: Long): Boolean {
+    fun setEnabled(
+        id: String,
+        enabled: Boolean,
+        nextRunAt: Long?,
+        now: Long,
+    ): Boolean {
         val cv = ContentValues()
         cv.put("enabled", if (enabled) 1 else 0)
         if (enabled) {
@@ -584,7 +727,6 @@ class AutomationStore(private val ctx: Context) {
  * 五个方法均为「内核向客户端发起」，在此完成校验、落库与应答。
  */
 object AutomationHost {
-
     @Volatile
     private var inst: AutomationHost? = null
 
@@ -609,23 +751,31 @@ object AutomationHost {
                         val a = create(ctrl, params)
                         rt.respond(id, JSONObject().put("automation", a))
                     }
+
                     "automation/list" -> {
                         val arr = JSONArray()
                         list(ctrl).forEach { arr.put(it) }
                         rt.respond(id, JSONObject().put("automations", arr))
                     }
+
                     "automation/update" -> {
-                        val a = update(ctrl, params)
-                            ?: throw AutomationException("Scheduled task not found in the current workspace.")
+                        val a =
+                            update(ctrl, params)
+                                ?: throw AutomationException("Scheduled task not found in the current workspace.")
                         rt.respond(id, JSONObject().put("automation", a))
                     }
+
                     "automation/delete" -> {
                         rt.respond(id, JSONObject().put("deleted", delete(ctrl, params)))
                     }
+
                     "automation/checkTaskBinding" -> {
                         rt.respond(id, JSONObject().put("bound", checkBinding(ctrl, params)))
                     }
-                    else -> rt.respond(id, JSONObject())
+
+                    else -> {
+                        rt.respond(id, JSONObject())
+                    }
                 }
             } catch (e: AutomationException) {
                 rt.respondError(id, -32603, e.message ?: "automation error")
@@ -638,7 +788,10 @@ object AutomationHost {
 
     // ------------------------------------------------------------ 各方法实现
 
-    fun create(ctrl: ZController, params: JSONObject): JSONObject {
+    fun create(
+        ctrl: ZController,
+        params: JSONObject,
+    ): JSONObject {
         val now = System.currentTimeMillis()
         val title = params.optString("title", "")
         val prompt = params.optString("prompt").trim()
@@ -647,7 +800,13 @@ object AutomationHost {
         if (cronExpr.isEmpty()) throw AutomationException("cronExpr is required")
         if (AutomationSchedule.parseCron(cronExpr) == null) throw AutomationException("无效的 cron 表达式: $cronExpr")
         val relativeDelayMinutes =
-            if (params.has("relativeDelayMinutes") && !params.isNull("relativeDelayMinutes")) params.optInt("relativeDelayMinutes") else null
+            if (params.has("relativeDelayMinutes") &&
+                !params.isNull("relativeDelayMinutes")
+            ) {
+                params.optInt("relativeDelayMinutes")
+            } else {
+                null
+            }
         val intervalUnit = params.optString("intervalUnit").takeIf { it.isNotEmpty() }
         val interval = if (params.has("interval") && !params.isNull("interval")) params.optInt("interval") else null
         if ((intervalUnit == null) != (interval == null)) throw AutomationException("intervalUnit 与 interval 必须配对")
@@ -667,13 +826,14 @@ object AutomationHost {
             val zone = ZoneId.systemDefault()
             val target = Instant.ofEpochMilli(now + relativeDelayMinutes * 60_000L).atZone(zone)
             cronExpr = "${target.minute} ${target.hour} ${target.dayOfMonth} ${target.monthValue} *"
-            ruleJson = JSONObject()
-                .put("unit", "minute")
-                .put("interval", relativeDelayMinutes)
-                .put("hour", target.hour)
-                .put("minute", target.minute)
-                .put("anchorAt", now)
-                .toString()
+            ruleJson =
+                JSONObject()
+                    .put("unit", "minute")
+                    .put("interval", relativeDelayMinutes)
+                    .put("hour", target.hour)
+                    .put("minute", target.minute)
+                    .put("anchorAt", now)
+                    .toString()
         } else if (intervalUnit != null && interval != null) {
             ruleJson = AutomationSchedule.buildIntervalRule(intervalUnit, interval, cronExpr, now).toString()
         }
@@ -722,10 +882,12 @@ object AutomationHost {
         return toProtocol(row)
     }
 
-    fun list(ctrl: ZController): List<JSONObject> =
-        AutomationStore(ctrl.appContext()).listRows().map { toProtocol(it) }
+    fun list(ctrl: ZController): List<JSONObject> = AutomationStore(ctrl.appContext()).listRows().map { toProtocol(it) }
 
-    fun update(ctrl: ZController, params: JSONObject): JSONObject? {
+    fun update(
+        ctrl: ZController,
+        params: JSONObject,
+    ): JSONObject? {
         val id = params.optString("automationId")
         if (id.isEmpty()) throw AutomationException("automationId is required")
         val store = AutomationStore(ctrl.appContext())
@@ -734,6 +896,7 @@ object AutomationHost {
         val cv = ContentValues()
         var newCron = cur.optString("cron_expr")
         var ruleJson = cur.optString("schedule_rule").takeIf { it.isNotEmpty() && it != "null" }
+
         fun has(k: String): Boolean = params.has(k) && !params.isNull(k)
 
         if (has("title")) cv.put("title", params.optString("title"))
@@ -776,13 +939,19 @@ object AutomationHost {
         return toProtocol(row)
     }
 
-    fun delete(ctrl: ZController, params: JSONObject): Boolean {
+    fun delete(
+        ctrl: ZController,
+        params: JSONObject,
+    ): Boolean {
         val id = params.optString("automationId")
         if (id.isEmpty()) throw AutomationException("automationId is required")
         return AutomationStore(ctrl.appContext()).delete(id)
     }
 
-    fun checkBinding(ctrl: ZController, params: JSONObject): Boolean {
+    fun checkBinding(
+        ctrl: ZController,
+        params: JSONObject,
+    ): Boolean {
         val taskId = params.optString("targetTaskId")
         if (taskId.isEmpty()) throw AutomationException("targetTaskId is required")
         return AutomationStore(ctrl.appContext()).checkBinding(ctrl.workspacePath(), taskId)
@@ -824,8 +993,9 @@ object AutomationHost {
  * 移动端前台调度器：应用核心进程存活时周期性检查到期任务，
  * 派发方式为「新建独立会话并发送 prompt」。后台（进程被杀）不执行，与桌面端的宿主多进程方案不同。
  */
-class AutomationScheduler private constructor(private val ctrl: ZController) {
-
+class AutomationScheduler private constructor(
+    private val ctrl: ZController,
+) {
     companion object {
         @Volatile
         private var instance: AutomationScheduler? = null
@@ -846,17 +1016,18 @@ class AutomationScheduler private constructor(private val ctrl: ZController) {
     @Volatile
     private var resetDone = false
 
-    private val tick = object : Runnable {
-        override fun run() {
-            Bg.run {
-                try {
-                    runDue()
-                } catch (_: Throwable) {
+    private val tick =
+        object : Runnable {
+            override fun run() {
+                Bg.run {
+                    try {
+                        runDue()
+                    } catch (_: Throwable) {
+                    }
                 }
+                handler.postDelayed(this, 30_000)
             }
-            handler.postDelayed(this, 30_000)
         }
-    }
 
     fun ensureRunning() {
         if (running) return
@@ -881,13 +1052,17 @@ class AutomationScheduler private constructor(private val ctrl: ZController) {
         }
     }
 
-    private fun dispatch(row: JSONObject, store: AutomationStore) {
+    private fun dispatch(
+        row: JSONObject,
+        store: AutomationStore,
+    ) {
         val id = row.optString("automation_id")
         val wp = ctrl.workspacePath()
-        val create = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("mode", row.optString("mode").takeIf { it.isNotEmpty() } ?: ctrl.defaultMode())
-            .put("titleGenerationEnabled", false)
+        val create =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("mode", row.optString("mode").takeIf { it.isNotEmpty() } ?: ctrl.defaultMode())
+                .put("titleGenerationEnabled", false)
         parseSel(row)?.let { create.put("model", it) }
         ctrl.runtime.call("session/create", create) { ok, body ->
             if (!ok) {
@@ -920,11 +1095,19 @@ class AutomationScheduler private constructor(private val ctrl: ZController) {
         }
     }
 
-    private fun failRow(store: AutomationStore, id: String, message: String) {
+    private fun failRow(
+        store: AutomationStore,
+        id: String,
+        message: String,
+    ) {
         store.fail(id, message, System.currentTimeMillis())
     }
 
-    private fun settleRow(row: JSONObject, store: AutomationStore, now: Long) {
+    private fun settleRow(
+        row: JSONObject,
+        store: AutomationStore,
+        now: Long,
+    ) {
         val id = row.optString("automation_id")
         val rule = AutomationSchedule.parseRule(row.optString("schedule_rule").takeIf { it != "null" })
         val recurring = row.optLong("recurring", 1L) != 0L
@@ -935,6 +1118,5 @@ class AutomationScheduler private constructor(private val ctrl: ZController) {
         store.settle(id, now, next)
     }
 
-    private fun errText(body: JSONObject): String =
-        body.optString("message").ifEmpty { body.toString().take(160) }
+    private fun errText(body: JSONObject): String = body.optString("message").ifEmpty { body.toString().take(160) }
 }

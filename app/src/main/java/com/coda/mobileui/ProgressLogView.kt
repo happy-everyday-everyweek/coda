@@ -19,7 +19,11 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
  * 传 Context 时推不出类型，会连带把它后面的 attr 引用一起报成 Unresolved。
  * TypedValue.resolveAttribute 是平台 API，只要 Context 就够。
  */
-private fun themeColor(context: Context, attr: Int, fallback: Int): Int {
+private fun themeColor(
+    context: Context,
+    attr: Int,
+    fallback: Int,
+): Int {
     val tv = TypedValue()
     if (!context.theme.resolveAttribute(attr, tv, true)) return fallback
     // 关键：主题里的 colorPrimary 值是 @color/xxx 引用，此时 tv.data 是
@@ -27,16 +31,24 @@ private fun themeColor(context: Context, attr: Int, fallback: Int): Int {
     // 必须按 tv.type 分情况解析：引用要再查一次资源表。
     return when {
         tv.type >= TypedValue.TYPE_FIRST_COLOR_INT &&
-            tv.type <= TypedValue.TYPE_LAST_COLOR_INT -> tv.data
-        tv.resourceId != 0 -> runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                context.resources.getColor(tv.resourceId, context.theme)
-            } else {
-                @Suppress("DEPRECATION")
-                context.resources.getColor(tv.resourceId)
-            }
-        }.getOrDefault(fallback)
-        else -> tv.data
+            tv.type <= TypedValue.TYPE_LAST_COLOR_INT -> {
+            tv.data
+        }
+
+        tv.resourceId != 0 -> {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    context.resources.getColor(tv.resourceId, context.theme)
+                } else {
+                    @Suppress("DEPRECATION")
+                    context.resources.getColor(tv.resourceId)
+                }
+            }.getOrDefault(fallback)
+        }
+
+        else -> {
+            tv.data
+        }
     }
 }
 
@@ -62,9 +74,11 @@ private fun themeColor(context: Context, attr: Int, fallback: Int): Int {
  * 注意构造参数必须存成属性（private val ctx）：不存的写法下类体内
  * 没有 context 这个成员，TextView(context) 会直接报 Unresolved。
  */
-class ProgressLogView(private val ctx: Context) {
-
+class ProgressLogView(
+    private val ctx: Context,
+) {
     private val density = ctx.resources.displayMetrics.density
+
     private fun dp(v: Float): Int = (v * density + 0.5f).toInt()
 
     private val onSurface: Int =
@@ -77,10 +91,11 @@ class ProgressLogView(private val ctx: Context) {
         themeColor(ctx, androidx.appcompat.R.attr.colorPrimary, Color.WHITE)
 
     /** 整体容器：进度条 + 日志滚动区。直接把这个加进卡片。 */
-    val view: LinearLayout = LinearLayout(ctx).apply {
-        orientation = LinearLayout.VERTICAL
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
-    }
+    val view: LinearLayout =
+        LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+        }
 
     /**
      * MD3 不确定进度条。
@@ -88,32 +103,35 @@ class ProgressLogView(private val ctx: Context) {
      * 轨道厚度自己定：主题默认 4dp 但四周留白偏大，放进日志卡片会显得空。
      * 4dp 厚度配 2dp 圆角，与之前自绘的 3.5dp 视觉密度接近。
      */
-    private val bar = LinearProgressIndicator(ctx).apply {
-        // 形态用 DISJOINT：一段色块在轨道里变长变短、来回游走，
-        // 就是「有条在走」的加载效果。
-        //
-        // 之前用的是 CONTIGUOUS，那是 MD3 的新形态：三条色段首尾拼接、
-        // 各自长大缩小。传同一颜色时三段视觉上连成整条，
-        // 参数又要求「圆角必须配 gap、至少 3 个颜色」，
-        // 结果在真机上就是一条几乎静止的满轨黑条——截图里的样子。
-        // 单色 + DISJOINT 没有这些约束，动画也明显。
-        setIndicatorColor(primary)
-        indeterminateAnimationType =
-            LinearProgressIndicator.INDETERMINATE_ANIMATION_TYPE_DISJOINT
-        isIndeterminate = true
-        trackThickness = dp(4f)
-        trackCornerRadius = dp(2f)
-        // MD3 默认在轨道末端画一个小停靠点，短轨道上显得多余。
-        trackStopIndicatorSize = 0
-        setTrackColor(surfaceVariant)
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-            bottomMargin = dp(10f)
+    private val bar =
+        LinearProgressIndicator(ctx).apply {
+            // 形态用 DISJOINT：一段色块在轨道里变长变短、来回游走，
+            // 就是「有条在走」的加载效果。
+            //
+            // 之前用的是 CONTIGUOUS，那是 MD3 的新形态：三条色段首尾拼接、
+            // 各自长大缩小。传同一颜色时三段视觉上连成整条，
+            // 参数又要求「圆角必须配 gap、至少 3 个颜色」，
+            // 结果在真机上就是一条几乎静止的满轨黑条——截图里的样子。
+            // 单色 + DISJOINT 没有这些约束，动画也明显。
+            setIndicatorColor(primary)
+            indeterminateAnimationType =
+                LinearProgressIndicator.INDETERMINATE_ANIMATION_TYPE_DISJOINT
+            isIndeterminate = true
+            trackThickness = dp(4f)
+            trackCornerRadius = dp(2f)
+            // MD3 默认在轨道末端画一个小停靠点，短轨道上显得多余。
+            trackStopIndicatorSize = 0
+            setTrackColor(surfaceVariant)
+            layoutParams =
+                LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                    bottomMargin = dp(10f)
+                }
         }
-    }
 
-    private val logColumn = LinearLayout(ctx).apply {
-        orientation = LinearLayout.VERTICAL
-    }
+    private val logColumn =
+        LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+        }
 
     /**
      * 日志区。不用 ScrollView 限高——
@@ -122,11 +140,12 @@ class ProgressLogView(private val ctx: Context) {
      * 这里靠 maxLines 限制行数，行数有限自然就不会无限长，
      * 外层卡片本来也有滚动，不需要再套一层。
      */
-    private val scroll = ScrollView(ctx).apply {
-        isFillViewport = false
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
-        addView(logColumn)
-    }
+    private val scroll =
+        ScrollView(ctx).apply {
+            isFillViewport = false
+            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+            addView(logColumn)
+        }
 
     /** 保留的最大行数。再多也不会让视图无限长。 */
     private val maxLines = 80
@@ -142,16 +161,20 @@ class ProgressLogView(private val ctx: Context) {
      * @param text 这一行的内容
      * @param emphasis true 表示这是「结果行」（成功/失败），用主色强调
      */
-    fun append(text: String, emphasis: Boolean = false) {
+    fun append(
+        text: String,
+        emphasis: Boolean = false,
+    ) {
         if (text.isBlank()) return
-        val line = TextView(ctx).apply {
-            this.text = text
-            textSize = 12f
-            setTextColor(if (emphasis) onSurface else onSurfaceVariant)
-            setPadding(0, dp(2f), 0, dp(2f))
-            // 长行（比如带 URL 的）要能折行，不能横向溢出。
-            setLineSpacing(0f, 1.15f)
-        }
+        val line =
+            TextView(ctx).apply {
+                this.text = text
+                textSize = 12f
+                setTextColor(if (emphasis) onSurface else onSurfaceVariant)
+                setPadding(0, dp(2f), 0, dp(2f))
+                // 长行（比如带 URL 的）要能折行，不能横向溢出。
+                setLineSpacing(0f, 1.15f)
+            }
         logColumn.addView(line)
         // 超出上限时从头部删，保留尾部（最新的信息最有用）。
         while (logColumn.childCount > maxLines) {

@@ -18,8 +18,9 @@ import kotlin.math.roundToInt
 fun AppCompatActivity.setupEdgeToEdge() {
     WindowCompat.setDecorFitsSystemWindows(window, false)
     val controller = WindowInsetsControllerCompat(window, window.decorView)
-    val isNight = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-        Configuration.UI_MODE_NIGHT_YES
+    val isNight =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
     controller.isAppearanceLightStatusBars = !isNight
     controller.isAppearanceLightNavigationBars = !isNight
     controller.systemBarsBehavior =
@@ -38,9 +39,10 @@ fun AppCompatActivity.setupEdgeToEdge() {
 /** 顶部组件内边距：系统栏与刘海/挖孔区域取并集（保证组件可达）。 */
 fun View.applyTopSystemBarInset() {
     ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
-        val bars = insets.getInsets(
-            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
-        )
+        val bars =
+            insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
         view.setPadding(view.paddingLeft, bars.top, view.paddingRight, view.paddingBottom)
         insets
     }
@@ -49,9 +51,10 @@ fun View.applyTopSystemBarInset() {
 /** 顶部 + 底部组件内边距：系统栏与刘海/挖孔区域取并集。 */
 fun View.applySystemBarsInset() {
     ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
-        val bars = insets.getInsets(
-            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
-        )
+        val bars =
+            insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
         view.setPadding(view.paddingLeft, bars.top, view.paddingRight, bars.bottom)
         insets
     }
@@ -66,12 +69,18 @@ fun View.applySystemBarsInset() {
 fun Context.topSafeInsetPx(): Int {
     val id = resources.getIdentifier("status_bar_height", "dimen", "android")
     val statusBar = if (id > 0) resources.getDimensionPixelSize(id) else dpPx(26)
-    val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        val activity = this as? android.app.Activity
-        activity?.window?.decorView?.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
-    } else {
-        0
-    }
+    val cutout =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val activity = this as? android.app.Activity
+            activity
+                ?.window
+                ?.decorView
+                ?.rootWindowInsets
+                ?.displayCutout
+                ?.safeInsetTop ?: 0
+        } else {
+            0
+        }
     return maxOf(statusBar, cutout)
 }
 
@@ -81,8 +90,7 @@ fun Context.bottomSafeInsetPx(): Int {
     return if (id > 0) resources.getDimensionPixelSize(id) else dpPx(24)
 }
 
-private fun Context.dpPx(v: Int): Int =
-    (v * resources.displayMetrics.density).roundToInt()
+private fun Context.dpPx(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
 
 /**
  * 给一个顶部组件加状态栏避让：把原有内边距整体下移一个安全区高度。
@@ -105,9 +113,10 @@ fun View.padForBottomSafeInset() {
 fun View.applyBottomInsetWithIme() {
     val baseBottom = paddingBottom
     ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
-        val bars = insets.getInsets(
-            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
-        )
+        val bars =
+            insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
         val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
         view.setPadding(
             view.paddingLeft,
@@ -123,9 +132,10 @@ fun View.applyBottomInsetWithIme() {
 fun View.applyDrawerInset(topGapDp: Int) {
     val gap = (topGapDp * resources.displayMetrics.density).roundToInt()
     ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
-        val bars = insets.getInsets(
-            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
-        )
+        val bars =
+            insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
         view.setPadding(view.paddingLeft, bars.top + gap, view.paddingRight, bars.bottom)
         insets
     }

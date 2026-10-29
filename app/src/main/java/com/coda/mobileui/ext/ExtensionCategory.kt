@@ -14,7 +14,6 @@ import java.io.File
  * 新增分类只需实现本接口并注册到引擎，引擎与已有分类都不用改。
  */
 interface ExtensionCategory {
-
     /** 分类标识，与清单里的 `category` 字段一致。 */
     val id: String
 
@@ -51,7 +50,6 @@ data class ExtensionLoadContext(
 
 /** 已装载拓展在某分类下的运行时接口。 */
 interface ExtensionProvider {
-
     val extensionId: String
 
     /** 清单里声明的二进制是否已经释放到运行目录且可用。 */

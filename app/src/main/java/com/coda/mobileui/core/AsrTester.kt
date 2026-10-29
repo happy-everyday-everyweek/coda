@@ -24,7 +24,6 @@ import java.util.concurrent.TimeUnit
  * 3. 录音固定单声道 16kHz、3gp/aac，这是转写端点的通用输入，不需要用户配置。
  */
 object AsrTester {
-
     private const val TAG = "AsrTester"
 
     /** 录音时长上限，防止用户忘记停止。 */
@@ -32,8 +31,15 @@ object AsrTester {
 
     /** 测试结果：成功带文本，失败带可读原因。 */
     sealed class Result {
-        data class Ok(val text: String, val model: String, val elapsedMs: Long) : Result()
-        data class Fail(val reason: String) : Result()
+        data class Ok(
+            val text: String,
+            val model: String,
+            val elapsedMs: Long,
+        ) : Result()
+
+        data class Fail(
+            val reason: String,
+        ) : Result()
     }
 
     /**
@@ -46,11 +52,13 @@ object AsrTester {
      * wav/webm——**3gp 不在列表里**。所以走 AudioRecord + 手写 RIFF 头最稳，
      * 输出同时满足 OpenAI 兼容端点与豆包反代（16kHz 单声道 PCM16）。
      */
-    class Recorder(private val ctx: Context) {
-
+    class Recorder(
+        private val ctx: Context,
+    ) {
         private var record: android.media.AudioRecord? = null
         private var file: File? = null
         private var worker: Thread? = null
+
         /** 实时模式下把每块 PCM 交给它（不落盘）。 */
         private var sink: ((ByteArray) -> Unit)? = null
 
@@ -64,11 +72,12 @@ object AsrTester {
          *
          * [liveSink] 非空时进入实时模式：PCM 直接喂给回调，不写文件，
          * 适合边录边转写；为空时写 WAV，供一次性上传。
+         *
+         * 前置条件：调用方必须先拿到 RECORD_AUDIO。
+         * 唯一调用点是 SettingsDetailActivity 的「测试转写」，那里在调本方法前
+         * 已 checkSelfPermission 并在未授权时走 requestPermissions 直接返回。
+         * 这里标注出来，既说明契约，也让 lint 不再把 AudioRecord 当成裸调用。
          */
-        // 前置条件：调用方必须先拿到 RECORD_AUDIO。
-        // 唯一调用点是 SettingsDetailActivity 的「测试转写」，那里在调本方法前
-        // 已 checkSelfPermission 并在未授权时走 requestPermissions 直接返回。
-        // 这里标注出来，既说明契约，也让 lint 不再把 AudioRecord 当成裸调用。
         @android.annotation.SuppressLint("MissingPermission")
         fun start(liveSink: ((ByteArray) -> Unit)? = null): Boolean {
             stopQuietly()
@@ -79,63 +88,66 @@ object AsrTester {
                 return false
             }
             val bufSize = maxOf(minBuf * 2, 8192)
-            val rec = try {
-                android.media.AudioRecord(
-                    android.media.MediaRecorder.AudioSource.MIC,
-                    sampleRate,
-                    channelMask,
-                    encoding,
-                    bufSize,
-                )
-            } catch (e: Throwable) {
-                AppLog.i(TAG, "录音器创建失败：${e.javaClass.simpleName}: ${e.message}")
-                return false
-            }
+            val rec =
+                try {
+                    android.media.AudioRecord(
+                        android.media.MediaRecorder.AudioSource.MIC,
+                        sampleRate,
+                        channelMask,
+                        encoding,
+                        bufSize,
+                    )
+                } catch (e: Throwable) {
+                    AppLog.i(TAG, "录音器创建失败：${e.javaClass.simpleName}: ${e.message}")
+                    return false
+                }
             if (rec.state != android.media.AudioRecord.STATE_INITIALIZED) {
                 AppLog.i(TAG, "录音器未初始化（权限缺失或麦克风被占用）")
                 runCatching { rec.release() }
                 return false
             }
             val f = File(ctx.cacheDir, "asr-test-${System.currentTimeMillis()}.wav")
-            val out = if (liveSink == null) {
-                try {
-                    java.io.FileOutputStream(f)
-                } catch (e: Throwable) {
-                    AppLog.i(TAG, "创建音频文件失败：${e.message}")
-                    runCatching { rec.release() }
-                    return false
+            val out =
+                if (liveSink == null) {
+                    try {
+                        java.io.FileOutputStream(f)
+                    } catch (e: Throwable) {
+                        AppLog.i(TAG, "创建音频文件失败：${e.message}")
+                        runCatching { rec.release() }
+                        return false
+                    }
+                } else {
+                    null
                 }
-            } else {
-                null
-            }
             // 一次性模式先占 44 字节，停止时回填真实长度，避免整段留在内存。
             return try {
                 out?.write(ByteArray(44))
                 rec.startRecording()
                 record = rec
                 file = if (liveSink == null) f else null
-                worker = Thread {
-                    val buf = ByteArray(bufSize)
-                    try {
-                        while (record === rec) {
-                            val n = rec.read(buf, 0, buf.size)
-                            if (n > 0) {
-                                if (sink != null) {
-                                    sink?.invoke(buf.copyOf(n))
-                                } else {
-                                    synchronized(out!!) { out.write(buf, 0, n) }
+                worker =
+                    Thread {
+                        val buf = ByteArray(bufSize)
+                        try {
+                            while (record === rec) {
+                                val n = rec.read(buf, 0, buf.size)
+                                if (n > 0) {
+                                    if (sink != null) {
+                                        sink?.invoke(buf.copyOf(n))
+                                    } else {
+                                        synchronized(out!!) { out.write(buf, 0, n) }
+                                    }
+                                } else if (n < 0) {
+                                    break
                                 }
-                            } else if (n < 0) {
-                                break
                             }
+                        } catch (e: Throwable) {
+                            AppLog.i(TAG, "录音读取中断：${e.javaClass.simpleName}")
+                        } finally {
+                            runCatching { out?.flush() }
+                            runCatching { out?.close() }
                         }
-                    } catch (e: Throwable) {
-                        AppLog.i(TAG, "录音读取中断：${e.javaClass.simpleName}")
-                    } finally {
-                        runCatching { out?.flush() }
-                        runCatching { out?.close() }
-                    }
-                }.apply { start() }
+                    }.apply { start() }
                 true
             } catch (e: Throwable) {
                 AppLog.i(TAG, "录音启动失败：${e.javaClass.simpleName}: ${e.message}")
@@ -157,15 +169,16 @@ object AsrTester {
             runCatching { rec.release() }
             if (f == null || !f.exists()) return null
             // 回填 RIFF 头：data 段长度 = 总长 - 44。
-            val ok = runCatching {
-                java.io.RandomAccessFile(f, "rw").use { raf ->
-                    val dataLen = (raf.length() - 44).toInt()
-                    if (dataLen <= 0) return@use false
-                    raf.seek(0)
-                    raf.write(wavHeader(dataLen, sampleRate, 1, 16))
-                    true
-                }
-            }.getOrDefault(false)
+            val ok =
+                runCatching {
+                    java.io.RandomAccessFile(f, "rw").use { raf ->
+                        val dataLen = (raf.length() - 44).toInt()
+                        if (dataLen <= 0) return@use false
+                        raf.seek(0)
+                        raf.write(wavHeader(dataLen, sampleRate, 1, 16))
+                        true
+                    }
+                }.getOrDefault(false)
             if (!ok) {
                 f.delete()
                 return null
@@ -192,30 +205,45 @@ object AsrTester {
         }
 
         /** 标准 44 字节 RIFF/WAVE 头，PCM16 小端。 */
-        private fun wavHeader(dataLen: Int, rate: Int, channels: Int, bits: Int): ByteArray {
+        private fun wavHeader(
+            dataLen: Int,
+            rate: Int,
+            channels: Int,
+            bits: Int,
+        ): ByteArray {
             val byteRate = rate * channels * bits / 8
             val blockAlign = channels * bits / 8
             val out = java.io.ByteArrayOutputStream(44)
-            fun le32(v: Int) = byteArrayOf(
-                (v and 0xFF).toByte(),
-                ((v ushr 8) and 0xFF).toByte(),
-                ((v ushr 16) and 0xFF).toByte(),
-                ((v ushr 24) and 0xFF).toByte(),
-            )
+
+            fun le32(v: Int) =
+                byteArrayOf(
+                    (v and 0xFF).toByte(),
+                    ((v ushr 8) and 0xFF).toByte(),
+                    ((v ushr 16) and 0xFF).toByte(),
+                    ((v ushr 24) and 0xFF).toByte(),
+                )
+
             fun le16(v: Int) = byteArrayOf((v and 0xFF).toByte(), ((v ushr 8) and 0xFF).toByte())
-            out.write("RIFF".toByteArray()); out.write(le32(36 + dataLen))
+            out.write("RIFF".toByteArray())
+            out.write(le32(36 + dataLen))
             out.write("WAVE".toByteArray())
-            out.write("fmt ".toByteArray()); out.write(le32(16))
-            out.write(le16(1)); out.write(le16(channels))
-            out.write(le32(rate)); out.write(le32(byteRate))
-            out.write(le16(blockAlign)); out.write(le16(bits))
-            out.write("data".toByteArray()); out.write(le32(dataLen))
+            out.write("fmt ".toByteArray())
+            out.write(le32(16))
+            out.write(le16(1))
+            out.write(le16(channels))
+            out.write(le32(rate))
+            out.write(le32(byteRate))
+            out.write(le16(blockAlign))
+            out.write(le16(bits))
+            out.write("data".toByteArray())
+            out.write(le32(dataLen))
             return out.toByteArray()
         }
     }
 
     private val http: OkHttpClient by lazy {
-        OkHttpClient.Builder()
+        OkHttpClient
+            .Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
@@ -244,34 +272,35 @@ object AsrTester {
         val url = endpoint(provider.baseUrl)
         val started = System.currentTimeMillis()
         return try {
-            val body = MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("model", model)
-                .addFormDataPart("response_format", "json")
-                // 官方要求「带扩展名的文件名 + 匹配的 content type」，
-                // 否则服务端可能认不出格式。文件名与 MIME 都从实际文件推断，
-                // 不再写死 audio.wav——那是只有本项目自录 wav 时才成立的假设。
-                .addFormDataPart(
-                    "file",
-                    audio.name,
-                    audio.asRequestBody(mimeOf(audio).toMediaType()),
-                )
-                .apply {
-                    // 中文场景必须显式指定语言。whisper 类模型不给 language 时
-                    // 会自己猜，中文长音频有概率被猜成粤语或直接输出英文翻译。
-                    if (language.isNotBlank()) addFormDataPart("language", language)
-                }
-                .build()
-            val req = Request.Builder()
-                .url(url)
-                .header("Accept", "application/json")
-                .apply {
-                    if (provider.apiKey.isNotBlank()) {
-                        header("Authorization", "Bearer ${provider.apiKey}")
-                    }
-                }
-                .post(body)
-                .build()
+            val body =
+                MultipartBody
+                    .Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("model", model)
+                    .addFormDataPart("response_format", "json")
+                    // 官方要求「带扩展名的文件名 + 匹配的 content type」，
+                    // 否则服务端可能认不出格式。文件名与 MIME 都从实际文件推断，
+                    // 不再写死 audio.wav——那是只有本项目自录 wav 时才成立的假设。
+                    .addFormDataPart(
+                        "file",
+                        audio.name,
+                        audio.asRequestBody(mimeOf(audio).toMediaType()),
+                    ).apply {
+                        // 中文场景必须显式指定语言。whisper 类模型不给 language 时
+                        // 会自己猜，中文长音频有概率被猜成粤语或直接输出英文翻译。
+                        if (language.isNotBlank()) addFormDataPart("language", language)
+                    }.build()
+            val req =
+                Request
+                    .Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                    .apply {
+                        if (provider.apiKey.isNotBlank()) {
+                            header("Authorization", "Bearer ${provider.apiKey}")
+                        }
+                    }.post(body)
+                    .build()
             AppLog.i(TAG, "转写请求：POST $url model=$model 音频=${audio.length()}B")
             http.newCall(req).execute().use { resp ->
                 val raw = resp.body?.string().orEmpty()
@@ -290,10 +319,10 @@ object AsrTester {
                     Result.Ok(text, model, elapsed)
                 }
             }
-        } catch (e: java.net.ConnectException) {
+        } catch (_: java.net.ConnectException) {
             AppLog.i(TAG, "转写失败：无法连接 $url")
             Result.Fail("无法连接 $url（端点不可达或被拒绝）")
-        } catch (e: java.net.SocketTimeoutException) {
+        } catch (_: java.net.SocketTimeoutException) {
             Result.Fail("请求超时（$url）")
         } catch (e: Throwable) {
             AppLog.i(TAG, "转写失败：${e.javaClass.simpleName}: ${e.message}")
@@ -317,21 +346,25 @@ object AsrTester {
      * flac / mp3 / mp4 / mpeg / mpga / m4a / ogg / wav / webm。
      * 认不出就退回 application/octet-stream，让服务端自己嗅探。
      */
-    fun mimeOf(file: File): String = when (file.extension.lowercase()) {
-        "wav" -> "audio/wav"
-        "mp3", "mpga" -> "audio/mpeg"
-        "mp4", "m4a" -> "audio/mp4"
-        "mpeg" -> "audio/mpeg"
-        "flac" -> "audio/flac"
-        "ogg" -> "audio/ogg"
-        "webm" -> "audio/webm"
-        else -> "application/octet-stream"
-    }
+    fun mimeOf(file: File): String =
+        when (file.extension.lowercase()) {
+            "wav" -> "audio/wav"
+            "mp3", "mpga" -> "audio/mpeg"
+            "mp4", "m4a" -> "audio/mp4"
+            "mpeg" -> "audio/mpeg"
+            "flac" -> "audio/flac"
+            "ogg" -> "audio/ogg"
+            "webm" -> "audio/webm"
+            else -> "application/octet-stream"
+        }
 
     /** 设置页上显示给用户的「目标」描述，内置 provider 没有 URL。 */
     fun endpointLabel(provider: ProviderStore.Provider): String =
-        if (ProviderStore.isBuiltin(provider)) "内置豆包网页版（匿名，无需密钥）"
-        else endpoint(provider.baseUrl)
+        if (ProviderStore.isBuiltin(provider)) {
+            "内置豆包网页版（匿名，无需密钥）"
+        } else {
+            endpoint(provider.baseUrl)
+        }
 
     // ------------------------------------------------------------ 内置豆包
 
@@ -341,7 +374,10 @@ object AsrTester {
      * 豆包反代要的是裸 PCM16，不需要容器头，所以这里要把 RIFF 头剥掉——
      * 直接把整个 wav 丢过去，服务端会把 44 字节头当噪声一起识别。
      */
-    private fun transcribeBuiltin(audio: File, model: String): Result {
+    private fun transcribeBuiltin(
+        audio: File,
+        model: String,
+    ): Result {
         return try {
             val pcm = readWavPcm(audio)
             if (pcm.isEmpty()) {
@@ -376,10 +412,11 @@ object AsrTester {
         var pos = 12
         while (pos + 8 <= all.size) {
             val id = String(all, pos, 4, Charsets.US_ASCII)
-            val size = (all[pos + 4].toInt() and 0xFF) or
-                ((all[pos + 5].toInt() and 0xFF) shl 8) or
-                ((all[pos + 6].toInt() and 0xFF) shl 16) or
-                ((all[pos + 7].toInt() and 0xFF) shl 24)
+            val size =
+                (all[pos + 4].toInt() and 0xFF) or
+                    ((all[pos + 5].toInt() and 0xFF) shl 8) or
+                    ((all[pos + 6].toInt() and 0xFF) shl 16) or
+                    ((all[pos + 7].toInt() and 0xFF) shl 24)
             val body = pos + 8
             if (id == "data") {
                 val end = minOf(body + size, all.size)
@@ -477,8 +514,12 @@ object AsrTester {
             val parsed = runCatching { JSONObject(trimmed) }.getOrNull()
             if (parsed != null) {
                 parsed.optString("text").takeIf { it.isNotBlank() }?.let { return it.trim() }
-                parsed.optJSONArray("results")?.optJSONObject(0)?.optString("text")
-                    ?.takeIf { it.isNotBlank() }?.let { return it.trim() }
+                parsed
+                    .optJSONArray("results")
+                    ?.optJSONObject(0)
+                    ?.optString("text")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { return it.trim() }
                 parsed.optJSONArray("segments")?.let { segs ->
                     // verbose_json：没有顶层 text 时把各段拼起来。
                     val sb = StringBuilder()

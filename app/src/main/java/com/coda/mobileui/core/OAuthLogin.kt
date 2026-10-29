@@ -14,7 +14,6 @@ import org.json.JSONObject
  * 不解析各家登录协议细节，那些都在插件里。
  */
 object OAuthLogin {
-
     private const val TAG = "OAuthLogin"
 
     /** 一次登录的中间状态。插件按 [providerId] 区分，[state] 由插件发给我们。 */
@@ -30,8 +29,12 @@ object OAuthLogin {
     /** 登录结果。 */
     sealed class Result {
         data object Pending : Result()
+
         data object Ready : Result()
-        data class Failed(val message: String) : Result()
+
+        data class Failed(
+            val message: String,
+        ) : Result()
     }
 
     /**
@@ -57,7 +60,11 @@ object OAuthLogin {
      * 插件又必须在宿主进程拉起**之前**放到位，宿主启动时才会扫描到它。所以是
      * 环境 → 二进制 → 插件 → 启动，一次起步，不需要为加载插件再重起一遍。
      */
-    fun prepare(ctx: Context, provider: OAuthProviders.Provider, onProgress: (String) -> Unit = {}): Boolean {
+    fun prepare(
+        ctx: Context,
+        provider: OAuthProviders.Provider,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
         // CodeBuddy 走独立网关：静态二进制，不需要 glibc 包装与插件目录。
         if (OAuthProviders.usesWorkBuddyGateway(provider.id)) {
             if (!LinuxEnv(ctx).isReady()) {
@@ -107,24 +114,30 @@ object OAuthLogin {
         if (OAuthProviders.usesWorkBuddyGateway(provider.id)) {
             // 只认 global，其余一律回落到 cn：上游的 loginEndpoints 就是这么兜底的。
             val effectiveRealm = if (realm == "global") "global" else "cn"
-            val raw = panelJson(
-                ctx,
-                "/panel/api/login/start",
-                method = "POST",
-                payload = org.json.JSONObject().put("realm", effectiveRealm).toString(),
-            ) ?: run {
-                // panelJson 失败时已经把具体原因（HTTP 状态码或异常类型）写进
-                // lastBeginError。这里只有在它没写时才兜底，否则会把真实原因
-                // 覆盖成一句「无响应」，诊断信息等于白埋。
-                if (lastBeginError == null) {
-                    lastBeginError = "面板 /panel/api/login/start 无响应（网关在家但接口不通）"
+            val raw =
+                panelJson(
+                    ctx,
+                    "/panel/api/login/start",
+                    method = "POST",
+                    payload =
+                        org.json
+                            .JSONObject()
+                            .put("realm", effectiveRealm)
+                            .toString(),
+                ) ?: run {
+                    // panelJson 失败时已经把具体原因（HTTP 状态码或异常类型）写进
+                    // lastBeginError。这里只有在它没写时才兜底，否则会把真实原因
+                    // 覆盖成一句「无响应」，诊断信息等于白埋。
+                    if (lastBeginError == null) {
+                        lastBeginError = "面板 /panel/api/login/start 无响应（网关在家但接口不通）"
+                    }
+                    return null
                 }
-                return null
-            }
-            val body = runCatching { org.json.JSONObject(raw) }.getOrNull() ?: run {
-                lastBeginError = "面板返回非 JSON：${raw.take(200)}"
-                return null
-            }
+            val body =
+                runCatching { org.json.JSONObject(raw) }.getOrNull() ?: run {
+                    lastBeginError = "面板返回非 JSON：${raw.take(200)}"
+                    return null
+                }
             val state = body.optString("state")
             // 上游实际字段名是 url（不是 authUrl）：loginStart 里
             // writeJSON(..., {"ok":true,"url":st.AuthURL,"state":st.State,"realm":realm})。
@@ -155,61 +168,71 @@ object OAuthLogin {
             // redirect_origin 只允许 origin（不能带路径/query），插件会用它拼出
             // http://127.0.0.1:<port>/authorize 这个必须精确匹配白名单的形状。
             // 直接给网关地址即可：端口与网关一致，正好被 WebView 拦截。
-            val payload = org.json.JSONObject()
-                .put("redirect_origin", ProxyHost.baseUrl())
-                .toString()
-            val body = ProxyHost.managementJson(ctx, path, method = "POST", body = payload) ?: run {
-                val detail = ProxyHost.lastError
-                lastBeginError = if (detail.isNullOrEmpty()) {
-                    "宿主管理面 $path 无响应（TRAE 插件可能未就绪）"
-                } else {
-                    "宿主管理面 $path 失败：$detail"
+            val payload =
+                org.json
+                    .JSONObject()
+                    .put("redirect_origin", ProxyHost.baseUrl())
+                    .toString()
+            val body =
+                ProxyHost.managementJson(ctx, path, method = "POST", body = payload) ?: run {
+                    val detail = ProxyHost.lastError
+                    lastBeginError =
+                        if (detail.isNullOrEmpty()) {
+                            "宿主管理面 $path 无响应（TRAE 插件可能未就绪）"
+                        } else {
+                            "宿主管理面 $path 失败：$detail"
+                        }
+                    return null
                 }
-                return null
-            }
             val data = body.optJSONObject("data") ?: body
             val state = data.optString("state")
             val url = data.optString("auth_url").ifEmpty { data.optString("url") }
             if (url.isEmpty()) {
                 // 插件失败时会回 {"error": "..."}，原样带出来，别吞掉。
                 val err = data.optString("error").ifEmpty { body.optString("error") }
-                lastBeginError = if (err.isNotEmpty()) {
-                    "TRAE 授权地址获取失败：$err"
-                } else {
-                    "TRAE 授权响应缺少 auth_url：${body.toString().take(300)}"
-                }
+                lastBeginError =
+                    if (err.isNotEmpty()) {
+                        "TRAE 授权地址获取失败：$err"
+                    } else {
+                        "TRAE 授权响应缺少 auth_url：${body.toString().take(300)}"
+                    }
                 return null
             }
             AppLog.i(TAG, "TRAE 浏览器授权已发起 state=${state.take(8)}…")
             return Session(provider.id, state, url, "")
         }
         val authUrlPath = "/v0/management/${provider.pluginId}-auth-url"
-        val body = ProxyHost.managementJson(
-            ctx,
-            authUrlPath,
-            method = "GET",
-        ) ?: run {
-            // 宿主的管理面是把请求转发给插件处理的（pluginabi 里是
-            // management.register / management.handle 两个方法），没有固定的
-            // 路径表。所以这里拿不到时，必须把「请求了哪条路径」和
-            // 「ProxyHost 记下的原因」一起带出来——只显示一句「请重试」，
-            // 排查时无从下手。
-            val detail = ProxyHost.lastError
-            lastBeginError = if (detail.isNullOrEmpty()) {
-                "宿主管理面 $authUrlPath 无响应（宿主可能未就绪或该插件未注册该路由）"
-            } else {
-                "宿主管理面 $authUrlPath 失败：$detail"
+        val body =
+            ProxyHost.managementJson(
+                ctx,
+                authUrlPath,
+                method = "GET",
+            ) ?: run {
+                // 宿主的管理面是把请求转发给插件处理的（pluginabi 里是
+                // management.register / management.handle 两个方法），没有固定的
+                // 路径表。所以这里拿不到时，必须把「请求了哪条路径」和
+                // 「ProxyHost 记下的原因」一起带出来——只显示一句「请重试」，
+                // 排查时无从下手。
+                val detail = ProxyHost.lastError
+                lastBeginError =
+                    if (detail.isNullOrEmpty()) {
+                        "宿主管理面 $authUrlPath 无响应（宿主可能未就绪或该插件未注册该路由）"
+                    } else {
+                        "宿主管理面 $authUrlPath 失败：$detail"
+                    }
+                return null
             }
-            return null
-        }
         // 宿主的这层响应是扁平的，没有 data 包装，但兼容一层以防上游改形。
         val data = body.optJSONObject("data") ?: body
         val state = data.optString("state").ifEmpty { data.optString("flow_id") }
-        val url = data.optString("url").ifEmpty { data.optString("auth_url") }
-            .ifEmpty { data.optString("authUrl") }
-            .ifEmpty { data.optString("authorize_url") }
-            .ifEmpty { data.optString("verification_uri_complete") }
-            .ifEmpty { data.optString("verification_uri") }
+        val url =
+            data
+                .optString("url")
+                .ifEmpty { data.optString("auth_url") }
+                .ifEmpty { data.optString("authUrl") }
+                .ifEmpty { data.optString("authorize_url") }
+                .ifEmpty { data.optString("verification_uri_complete") }
+                .ifEmpty { data.optString("verification_uri") }
         val code = data.optString("user_code")
         if (state.isEmpty() && url.isEmpty()) {
             // 同样不能静默返回：拿到响应但字段都不认识，说明插件返回的形状
@@ -226,16 +249,21 @@ object OAuthLogin {
      * 宿主的会话状态只有三种取值：`wait` 等待、`ok` 完成、`error` 失败。
      * 没有单独的"已就绪"状态——`ok` 即表示凭据已经落盘。
      */
-    fun poll(ctx: Context, session: Session): Result {
+    fun poll(
+        ctx: Context,
+        session: Session,
+    ): Result {
         // CodeBuddy：workbuddy2api 用 done 布尔表示完成，错误通过 message 给。
         if (OAuthProviders.usesWorkBuddyGateway(session.providerId)) {
-            val raw = panelJson(
-                ctx,
-                "/panel/api/login/poll?state=${android.net.Uri.encode(session.state)}",
-                method = "GET",
-            ) ?: return Result.Failed("无法连接网关")
-            val body = runCatching { org.json.JSONObject(raw) }.getOrNull()
-                ?: return Result.Failed("网关返回无法解析")
+            val raw =
+                panelJson(
+                    ctx,
+                    "/panel/api/login/poll?state=${android.net.Uri.encode(session.state)}",
+                    method = "GET",
+                ) ?: return Result.Failed("无法连接网关")
+            val body =
+                runCatching { org.json.JSONObject(raw) }.getOrNull()
+                    ?: return Result.Failed("网关返回无法解析")
             if (body.optBoolean("done", false)) return Result.Ready
             val err = body.optString("error")
             if (err.isNotEmpty()) return Result.Failed(err)
@@ -247,14 +275,17 @@ object OAuthLogin {
         // （read-once：读走即删）。
         if (OAuthProviders.usesBrowserLoginSubmit(session.providerId)) {
             val path = "/v0/management/plugins/${session.providerId}/browser-login/result"
-            val payload = org.json.JSONObject()
-                .put("state", session.state)
-                .toString()
-            val raw = ProxyHost.managementJson(ctx, path, method = "POST", body = payload)
-                ?: return Result.Failed(
-                    ProxyHost.lastError?.takeIf { it.isNotEmpty() }?.let { "无法连接网关：$it" }
-                        ?: "无法连接网关",
-                )
+            val payload =
+                org.json
+                    .JSONObject()
+                    .put("state", session.state)
+                    .toString()
+            val raw =
+                ProxyHost.managementJson(ctx, path, method = "POST", body = payload)
+                    ?: return Result.Failed(
+                        ProxyHost.lastError?.takeIf { it.isNotEmpty() }?.let { "无法连接网关：$it" }
+                            ?: "无法连接网关",
+                    )
             val data = raw.optJSONObject("data") ?: raw
             // 未完成的会话返回 pending=true，这是正常状态，不是失败。
             if (data.optBoolean("pending", false)) return Result.Pending
@@ -269,11 +300,12 @@ object OAuthLogin {
                 if (err.isNotEmpty()) err else "TRAE 授权未完成：${raw.toString().take(200)}",
             )
         }
-        val body = ProxyHost.managementJson(
-            ctx,
-            "/v0/management/get-auth-status?state=${android.net.Uri.encode(session.state)}",
-            method = "GET",
-        ) ?: return Result.Failed("无法连接网关")
+        val body =
+            ProxyHost.managementJson(
+                ctx,
+                "/v0/management/get-auth-status?state=${android.net.Uri.encode(session.state)}",
+                method = "GET",
+            ) ?: return Result.Failed("无法连接网关")
         val data = body.optJSONObject("data") ?: body
         return when (data.optString("status")) {
             "ok", "ready", "success" -> Result.Ready
@@ -296,21 +328,22 @@ object OAuthLogin {
         val wb = OAuthProviders.usesWorkBuddyGateway(provider.id)
         val list = ProviderStore.load(ctx)
         list.removeAll { it.id == provider.id }
-        list += ProviderStore.Provider(
-            id = provider.id,
-            name = provider.name,
-            apiType = "openai-chat-completions",
-            // 指向本机网关，内核照旧走它原有的 OpenAI 兼容通路。
-            baseUrl = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1",
-            // 网关对下游的密钥；宿主用同一个管理密钥即可，本机回环不外露。
-            apiKey = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey(),
-            models = models.toMutableList(),
-            // 关键：标成 OAuth 来源。列表页据此把它认作「OAuth 添加的供应商」，
-            // 点进去直接回到对应平台的管理页，而不是甩一堆手填字段给它看。
-            // 不标记的话，落库后就是一条普通 api-key 供应商，用户会觉得「我明明是授权登录的」。
-            kind = ProviderStore.ProviderKind.LLM,
-            origin = ProviderStore.ProviderOrigin.OAUTH,
-        )
+        list +=
+            ProviderStore.Provider(
+                id = provider.id,
+                name = provider.name,
+                apiType = "openai-chat-completions",
+                // 指向本机网关，内核照旧走它原有的 OpenAI 兼容通路。
+                baseUrl = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1",
+                // 网关对下游的密钥；宿主用同一个管理密钥即可，本机回环不外露。
+                apiKey = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey(),
+                models = models.toMutableList(),
+                // 关键：标成 OAuth 来源。列表页据此把它认作「OAuth 添加的供应商」，
+                // 点进去直接回到对应平台的管理页，而不是甩一堆手填字段给它看。
+                // 不标记的话，落库后就是一条普通 api-key 供应商，用户会觉得「我明明是授权登录的」。
+                kind = ProviderStore.ProviderKind.LLM,
+                origin = ProviderStore.ProviderOrigin.OAUTH,
+            )
         ProviderStore.save(ctx, list)
     }
 
@@ -323,10 +356,11 @@ object OAuthLogin {
     fun models(ctx: Context): List<String> {
         // 两个网关的 /v1/models 都是标准 OpenAI 形状，差别只在 baseUrl 与密钥，
         // 所以优先问正在运行的那个；都在跑时以 WorkBuddy 为准（它是 CodeBuddy 专用）。
-        val body = when {
-            WorkBuddyGateway.isRunning -> panelJsonObject(ctx, "/v1/models", "GET")
-            else -> ProxyHost.clientJson(ctx, "/v1/models")
-        } ?: return emptyList()
+        val body =
+            when {
+                WorkBuddyGateway.isRunning -> panelJsonObject(ctx, "/v1/models", "GET")
+                else -> ProxyHost.clientJson(ctx, "/v1/models")
+            } ?: return emptyList()
         val array = body.optJSONArray("data") ?: body.optJSONArray("models") ?: return emptyList()
         val out = mutableListOf<String>()
         for (i in 0 until array.length()) {
@@ -356,26 +390,32 @@ object OAuthLogin {
         val url = WorkBuddyGateway.baseUrl() + path
         AppLog.i("OAuthLogin", "面板请求 $method $url（网关运行中=${WorkBuddyGateway.isRunning}）")
         return try {
-            val conn = (java.net.URL(url)
-                .openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection).apply {
-                requestMethod = method
-                connectTimeout = 10_000
-                // login/start 要拿上游的 state，慢起来能到十几秒；给 30 秒避免
-                // 把「上游慢」误报成「面板不通」。
-                readTimeout = 30_000
-                setRequestProperty("Authorization", "Bearer ${WorkBuddyGateway.apiKey()}")
-                if (payload != null) {
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json")
+            val conn =
+                (
+                    java.net
+                        .URL(url)
+                        .openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection
+                ).apply {
+                    requestMethod = method
+                    connectTimeout = 10_000
+                    // login/start 要拿上游的 state，慢起来能到十几秒；给 30 秒避免
+                    // 把「上游慢」误报成「面板不通」。
+                    readTimeout = 30_000
+                    setRequestProperty("Authorization", "Bearer ${WorkBuddyGateway.apiKey()}")
+                    if (payload != null) {
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json")
+                    }
                 }
-            }
             if (payload != null) {
                 conn.outputStream.use { it.write(payload.toByteArray()) }
             }
             val code = conn.responseCode
             val ok = code in 200..299
-            val text = (if (ok) conn.inputStream else conn.errorStream)
-                ?.bufferedReader()?.use { it.readText() }
+            val text =
+                (if (ok) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader()
+                    ?.use { it.readText() }
             conn.disconnect()
             if (ok) {
                 text
@@ -389,19 +429,23 @@ object OAuthLogin {
         } catch (t: Throwable) {
             // 区分「连不上」与「连上了但没回」：前者是进程/端口问题，
             // 后者是上游卡住。两者的排查方向完全相反，不能混成一句话。
-            val kind = when (t) {
-                is java.net.ConnectException -> "无法连接（网关未监听该端口）"
-                is java.net.SocketTimeoutException -> "读取超时（面板已连接但 30 秒无响应，多半卡在等上游）"
-                else -> "${t.javaClass.simpleName}: ${t.message}"
-            }
+            val kind =
+                when (t) {
+                    is java.net.ConnectException -> "无法连接（网关未监听该端口）"
+                    is java.net.SocketTimeoutException -> "读取超时（面板已连接但 30 秒无响应，多半卡在等上游）"
+                    else -> "${t.javaClass.simpleName}: ${t.message}"
+                }
             AppLog.w("OAuthLogin", "$path 请求失败：$kind url=$url")
             lastBeginError = "面板请求失败：$kind（$url）"
             null
         }
     }
 
-    private fun panelJsonObject(ctx: Context, path: String, method: String): JSONObject? =
-        panelJson(ctx, path, method)?.let { runCatching { JSONObject(it) }.getOrNull() }
+    private fun panelJsonObject(
+        ctx: Context,
+        path: String,
+        method: String,
+    ): JSONObject? = panelJson(ctx, path, method)?.let { runCatching { JSONObject(it) }.getOrNull() }
 
     /** 从 ProviderStore 里认出哪些是 OAuth 供应商（按 id 与注册表对应）。 */
     fun oauthProvidersInStore(ctx: Context): List<ProviderStore.Provider> =

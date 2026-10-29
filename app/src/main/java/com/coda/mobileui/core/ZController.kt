@@ -13,26 +13,39 @@ import java.util.concurrent.CopyOnWriteArrayList
  * 会话与消息状态控制器：把协议能力封装成 UI 可直接调用的一组操作。
  * 所有回调都会切到主线程。
  */
-class ZController private constructor(private val app: Context) {
-
+class ZController private constructor(
+    private val app: Context,
+) {
     interface Listener {
         /** 任意状态变化（会话列表/消息/设置），UI 重新渲染。 */
         fun onStateChanged() {}
 
         /** 流式文本增量（用于局部渲染）。 */
-        fun onDelta(assistantMessageId: String, text: String) {}
+        fun onDelta(
+            assistantMessageId: String,
+            text: String,
+        ) {}
 
         /** 流式思考增量（用于局部渲染）。 */
-        fun onReasoningDelta(assistantMessageId: String, text: String) {}
+        fun onReasoningDelta(
+            assistantMessageId: String,
+            text: String,
+        ) {}
 
         /** 轻提示（错误/状态）。 */
         fun onNotice(text: String) {}
 
         /** 权限请求需要 UI 决策。 */
-        fun onPermissionRequest(requestId: Any, params: JSONObject) {}
+        fun onPermissionRequest(
+            requestId: Any,
+            params: JSONObject,
+        ) {}
 
         /** 用户提问需要 UI 决策。 */
-        fun onUserInputRequest(requestId: Any, params: JSONObject) {}
+        fun onUserInputRequest(
+            requestId: Any,
+            params: JSONObject,
+        ) {}
 
         /** 会话已打开。 */
         fun onSessionOpened(sessionId: String) {}
@@ -70,15 +83,19 @@ class ZController private constructor(private val app: Context) {
         private set
     var slashCommands: List<ZSlashCommand> = emptyList()
         private set
+
     /** 当前会话待办列表（随会话快照同步）。 */
     var todos: List<ZParse.ZTodo> = emptyList()
         private set
+
     /** 当前会话的子代理（session/subagents：运行中 + 已结束一页）。 */
     var subagents: List<ZSubagent> = emptyList()
         private set
+
     /** 当前工作区的动态工作流运行摘要（workflows/runs）。 */
     var workflowRuns: List<ZWorkflowRun> = emptyList()
         private set
+
     /**
      * 工作流子智能体（actor）→ 它自己的子会话 id。
      *
@@ -87,8 +104,10 @@ class ZController private constructor(private val app: Context) {
      * [ZWorkflowKit.actorKey]，即 runId + 地址，避免两个 run 的同名 actor 相撞。
      */
     private val actorSessions = java.util.concurrent.ConcurrentHashMap<String, String>()
+
 /** 每个 run 最近一条进度事件（折叠卡靠它显示"正在做什么"，不必等工具结果）。 */
     private val workflowLive = java.util.concurrent.ConcurrentHashMap<String, ZWorkflowLive>()
+
     /** 关心工作流进度的轻量订阅者（打开中的半屏），与主聊天页的整页重渲染分开。 */
     private val workflowWatchers = CopyOnWriteArrayList<WorkflowWatcher>()
 
@@ -99,14 +118,19 @@ class ZController private constructor(private val app: Context) {
     fun removeWorkflowWatcher(w: WorkflowWatcher) {
         workflowWatchers -= w
     }
+
     /** 子会话消息缓存（子代理半屏的整页会话视图用）。 */
     private val childMessages = HashMap<String, List<ZMessage>>()
+
     /** 子会话消息读取失败过的会话 id（避免把「读失败」当成「确实为空」）。 */
     private val childMessageFailures = HashSet<String>()
+
     /** 正在读取中的子会话 id（同会话只保留一个在途请求）。 */
     private val childLoading = HashSet<String>()
+
     /** 父 Agent 工具调用 id → 子会话 id（由流式事件的 parentToolUseId 解析而来）。 */
     private val parentCallToChild = HashMap<String, String>()
+
     /** 子工具调用 id → 父 Agent 工具调用 id。 */
     private val toolCallToParentCall = HashMap<String, String>()
 
@@ -116,17 +140,18 @@ class ZController private constructor(private val app: Context) {
 
     private var started = false
     private var startWaiters = mutableListOf<(Boolean, String) -> Unit>()
+
     /** 连续意外退出计数（稳定运行超 2 分钟后重置）。 */
     private var exitCount = 0
+
     /** 最近一次启动成功的时刻。 */
     private var lastStartAt = 0L
+
     /** 是否已安排自动重启（防重复安排）。 */
     private var autoRestartScheduled = false
     private var refreshScheduled = false
     private var refreshing = false
     private var refreshAgain = false
-
-    private val refreshRunnable = Runnable { doRefreshMessages() }
 
     fun addListener(l: Listener) {
         if (!listeners.contains(l)) listeners += l
@@ -186,91 +211,103 @@ class ZController private constructor(private val app: Context) {
         }, 600)
     }
 
-    private fun runtimeEvents(): CoreRuntime.Events = object : CoreRuntime.Events {
+    private fun runtimeEvents(): CoreRuntime.Events =
+        object : CoreRuntime.Events {
+            override fun onNotification(
+                method: String,
+                params: JSONObject,
+            ) {
+                when (method) {
+                    "session/event" -> {
+                        handleSessionEvent(params)
+                    }
 
-        override fun onNotification(method: String, params: JSONObject) {
-            when (method) {
-                "session/event" -> handleSessionEvent(params)
-                "state.updated" -> handleStateUpdated(params)
-                else -> {
+                    "state.updated" -> {
+                        handleStateUpdated(params)
+                    }
+
+                    else -> {
+                    }
                 }
             }
-        }
 
-        override fun onExit(code: Int) {
-            started = false
-            running = false
-            val now = System.currentTimeMillis()
-            val ranFor = if (lastStartAt > 0L) now - lastStartAt else -1L
-            if (ranFor > 120_000L) exitCount = 0
-            exitCount += 1
-            val reason = CoreRuntime.describeExit(code)
-            runtime.log("[core] 退出：$reason，本次运行 ${ranFor}ms，连续第 $exitCount 次")
-            // 刚拉起就被信号带走的进程，重启只会把同样的退出再演一遍，几秒里刷出十几次相同记录，
-            // 真正的原因反被淹没。第二次起不再自动重启，把原因留在提示与日志里。
-            val hopeless = ranFor >= 0L && ranFor <= 10_000L && code > 128 && exitCount >= 2
-            if (exitCount <= 5 && !autoRestartScheduled && !hopeless) {
-                autoRestartScheduled = true
-                notif { onNotice("核心进程意外退出：$reason，正在自动重启…") }
-                main.postDelayed({
-                    autoRestartScheduled = false
-                    ensureStarted { ok, msg ->
-                        if (ok) {
-                            notif { onNotice("核心已自动重启") }
-                            currentSessionId?.let { openSession(it, null) }
+            override fun onExit(code: Int) {
+                started = false
+                running = false
+                val now = System.currentTimeMillis()
+                val ranFor = if (lastStartAt > 0L) now - lastStartAt else -1L
+                if (ranFor > 120_000L) exitCount = 0
+                exitCount += 1
+                val reason = CoreRuntime.describeExit(code)
+                runtime.log("[core] 退出：$reason，本次运行 ${ranFor}ms，连续第 $exitCount 次")
+                // 刚拉起就被信号带走的进程，重启只会把同样的退出再演一遍，几秒里刷出十几次相同记录，
+                // 真正的原因反被淹没。第二次起不再自动重启，把原因留在提示与日志里。
+                val hopeless = ranFor >= 0L && ranFor <= 10_000L && code > 128 && exitCount >= 2
+                if (exitCount <= 5 && !autoRestartScheduled && !hopeless) {
+                    autoRestartScheduled = true
+                    notif { onNotice("核心进程意外退出：$reason，正在自动重启…") }
+                    main.postDelayed({
+                        autoRestartScheduled = false
+                        ensureStarted { ok, msg ->
+                            if (ok) {
+                                notif { onNotice("核心已自动重启") }
+                                currentSessionId?.let { openSession(it, null) }
+                            } else {
+                                notif { onNotice("自动重启失败：$msg") }
+                            }
+                        }
+                    }, 1200)
+                } else if (hopeless) {
+                    notif { onNotice("核心进程启动即退出：$reason，已停止自动重启，原因见运行日志") }
+                } else {
+                    notif { onNotice("核心进程已退出，$reason") }
+                }
+                notif { onStateChanged() }
+            }
+
+            override fun onInteractiveReverse(
+                requestId: Any,
+                method: String,
+                params: JSONObject,
+            ): Boolean =
+                when (method) {
+                    "interaction/requestPermission" -> {
+                        runtime.log("[perm] requestPermission tool=${params.optString("toolName")} mode=$mode")
+                        if (mode == "yolo") {
+                            // 全权模式：自动放行（优先使用选项里的允许应答）
+                            val resp = findAllowResponse(params) ?: JSONObject().put("decision", "allow")
+                            runtime.respond(requestId, resp)
+                            true
+                        } else if (listeners.isNotEmpty()) {
+                            notif { onPermissionRequest(requestId, params) }
+                            true
                         } else {
-                            notif { onNotice("自动重启失败：$msg") }
+                            runtime.respond(requestId, findDenyResponse(params) ?: JSONObject().put("decision", "deny"))
+                            true
                         }
                     }
-                }, 1200)
-            } else if (hopeless) {
-                notif { onNotice("核心进程启动即退出：$reason，已停止自动重启，原因见运行日志") }
-            } else {
-                notif { onNotice("核心进程已退出，$reason") }
-            }
-            notif { onStateChanged() }
+
+                    "interaction/requestUserInput" -> {
+                        if (listeners.isNotEmpty()) {
+                            notif { onUserInputRequest(requestId, params) }
+                            true
+                        } else {
+                            runtime.respond(requestId, JSONObject().put("action", "decline"))
+                            true
+                        }
+                    }
+
+                    else -> {
+                        if (AutomationHost.get(app).handleReverse(runtime, this@ZController, requestId, method, params)) {
+                            true
+                        } else if (BrowserControl.handleReverse(runtime, requestId, method, params)) {
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
         }
-
-        override fun onInteractiveReverse(requestId: Any, method: String, params: JSONObject): Boolean {
-            return when (method) {
-                "interaction/requestPermission" -> {
-                    runtime.log("[perm] requestPermission tool=${params.optString("toolName")} mode=$mode")
-                    if (mode == "yolo") {
-                        // 全权模式：自动放行（优先使用选项里的允许应答）
-                        val resp = findAllowResponse(params) ?: JSONObject().put("decision", "allow")
-                        runtime.respond(requestId, resp)
-                        true
-                    } else if (listeners.isNotEmpty()) {
-                        notif { onPermissionRequest(requestId, params) }
-                        true
-                    } else {
-                        runtime.respond(requestId, findDenyResponse(params) ?: JSONObject().put("decision", "deny"))
-                        true
-                    }
-                }
-
-                "interaction/requestUserInput" -> {
-                    if (listeners.isNotEmpty()) {
-                        notif { onUserInputRequest(requestId, params) }
-                        true
-                    } else {
-                        runtime.respond(requestId, JSONObject().put("action", "decline"))
-                        true
-                    }
-                }
-
-                else -> {
-                    if (AutomationHost.get(app).handleReverse(runtime, this@ZController, requestId, method, params)) {
-                        true
-                    } else if (BrowserControl.handleReverse(runtime, requestId, method, params)) {
-                        true
-                    } else {
-                        false
-                    }
-                }
-            }
-        }
-    }
 
     /** 供调度器等内部组件访问应用上下文。 */
     fun appContext(): Context = app
@@ -341,7 +378,11 @@ class ZController private constructor(private val app: Context) {
         val patch = params.optJSONObject("patch") ?: return
         val st = patch.optString("status")
         if (st.isNotEmpty()) running = (st == "running" || st == "waiting")
-        patch.optJSONObject("mode")?.optString("current")?.takeIf { it.isNotEmpty() }?.let { mode = it }
+        patch
+            .optJSONObject("mode")
+            ?.optString("current")
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { mode = it }
         patch.optJSONObject("model")?.let { mo ->
             val root = JSONObject().put("settings", JSONObject().put("model", mo))
             val list = ZParse.parseModelOptions(root)
@@ -412,13 +453,17 @@ class ZController private constructor(private val app: Context) {
                 val mid = payload.optString("assistantMessageId")
                 if (kind == "tool_input_delta") linkParentToolUse(payload)
                 when (kind) {
-                    "text_delta" -> if (delta.isNotEmpty()) {
-                        notif { onDelta(mid, delta) }
-                        scheduleRefreshSoon()
+                    "text_delta" -> {
+                        if (delta.isNotEmpty()) {
+                            notif { onDelta(mid, delta) }
+                            scheduleRefreshSoon()
+                        }
                     }
 
-                    "reasoning_delta" -> if (delta.isNotEmpty()) {
-                        notif { onReasoningDelta(mid, delta) }
+                    "reasoning_delta" -> {
+                        if (delta.isNotEmpty()) {
+                            notif { onReasoningDelta(mid, delta) }
+                        }
                     }
                 }
             }
@@ -475,9 +520,11 @@ class ZController private constructor(private val app: Context) {
     private fun linkParentToolUse(payload: JSONObject) {
         val parent = ZWorkflowKit.parentToolUseIdOf(payload)
         if (parent.isEmpty()) return
-        val toolCallId = payload.optString("toolCallId")
-            .ifEmpty { payload.optString("childToolCallId") }
-            .ifEmpty { payload.optString("callID") }
+        val toolCallId =
+            payload
+                .optString("toolCallId")
+                .ifEmpty { payload.optString("childToolCallId") }
+                .ifEmpty { payload.optString("callID") }
         if (toolCallId.isNotEmpty()) toolCallToParentCall[toolCallId] = parent
         val childSessionId = payload.optString("childSessionId")
         if (childSessionId.isNotEmpty()) parentCallToChild[parent] = childSessionId
@@ -490,10 +537,11 @@ class ZController private constructor(private val app: Context) {
         val sid = currentSessionId ?: return
         if (snapshotRefreshing) return
         snapshotRefreshing = true
-        val params = JSONObject()
-            .put("sessionId", sid)
-            .put("deliveryKind", "desktop-continuous")
-            .put("includeSnapshot", true)
+        val params =
+            JSONObject()
+                .put("sessionId", sid)
+                .put("deliveryKind", "desktop-continuous")
+                .put("includeSnapshot", true)
         runtime.call("session/subscribe", params) { ok, body ->
             snapshotRefreshing = false
             if (!ok) return@call
@@ -548,9 +596,10 @@ class ZController private constructor(private val app: Context) {
      */
     fun refreshSubagents() {
         val sid = currentSessionId ?: return
-        val params = JSONObject()
-            .put("sessionId", sid)
-            .put("endedLimit", 20)
+        val params =
+            JSONObject()
+                .put("sessionId", sid)
+                .put("endedLimit", 20)
         runtime.call("session/subagents", params) { ok, body ->
             if (ok) {
                 val list = ZWorkflowKit.parseSubagents(body)
@@ -564,9 +613,10 @@ class ZController private constructor(private val app: Context) {
 
     /** 拉取当前工作区的工作流运行摘要（workflows/runs）。 */
     fun refreshWorkflowRuns() {
-        val params = JSONObject()
-            .put("workspace", workspaceRef())
-            .put("limit", 20)
+        val params =
+            JSONObject()
+                .put("workspace", workspaceRef())
+                .put("limit", 20)
         runtime.call("workflows/runs", params) { ok, body ->
             if (ok) {
                 val list = ZWorkflowKit.parseWorkflowRuns(body)
@@ -596,14 +646,16 @@ class ZController private constructor(private val app: Context) {
      * [address] 是花名册里的 `siteId@ordinal`；取不到就返回 null（调用方据此提示"该子智能体
      * 还没有独立会话"，而不是打开一个空面板）。
      */
-    fun actorSessionOf(runId: String?, address: String?): String? {
+    fun actorSessionOf(
+        runId: String?,
+        address: String?,
+    ): String? {
         if (runId.isNullOrEmpty() || address.isNullOrEmpty()) return null
         return actorSessions[ZWorkflowKit.actorKey(runId, address)]
     }
 
     /** 当前会话里是否已经收到过某个 run 的实时进度（用来决定卡片要不要显示"实时"标记）。 */
-    fun hasLiveWorkflow(runId: String?): Boolean =
-        !runId.isNullOrEmpty() && workflowLive.containsKey(runId)
+    fun hasLiveWorkflow(runId: String?): Boolean = !runId.isNullOrEmpty() && workflowLive.containsKey(runId)
 
     /** CreateWorkflow 工具调用 → 对应运行摘要（按 toolCallId 联接）。 */
     fun workflowRunForToolCall(callId: String?): ZWorkflowRun? {
@@ -615,13 +667,17 @@ class ZController private constructor(private val app: Context) {
      * 读取子代理子会话的消息（只读）。半屏的整页会话视图直接复用主界面渲染，因此这里取原始消息
      * 而不是摘要行；结果缓存在 childMessages 里，重渲染时无需再次请求内核。
      */
-    fun loadChildMessages(childSessionId: String, cb: ((List<ZMessage>?) -> Unit)? = null) {
+    fun loadChildMessages(
+        childSessionId: String,
+        cb: ((List<ZMessage>?) -> Unit)? = null,
+    ) {
         if (childSessionId.isEmpty()) {
             post { cb?.invoke(emptyList()) }
             return
         }
         // 同一子会话只允许一个在途读取：冷恢复可能耗时数秒，3 秒跟随刷新会重复触发同一会话。
         if (!childLoading.add(childSessionId)) return
+
         fun settle(msgs: List<ZMessage>?) {
             post {
                 childLoading.remove(childSessionId)
@@ -653,7 +709,10 @@ class ZController private constructor(private val app: Context) {
     }
 
     /** 单次 session/messages 读取；失败返回 null（区别于「读到了空列表」）。 */
-    private fun readChildMessages(childSessionId: String, cb: (List<ZMessage>?) -> Unit) {
+    private fun readChildMessages(
+        childSessionId: String,
+        cb: (List<ZMessage>?) -> Unit,
+    ) {
         runtime.call("session/messages", JSONObject().put("sessionId", childSessionId)) { ok, body ->
             cb(if (ok) ZParse.parseMessages(body) else null)
         }
@@ -689,9 +748,10 @@ class ZController private constructor(private val app: Context) {
     }
 
     fun refreshSessions(cb: ((Boolean) -> Unit)?) {
-        val params = JSONObject()
-            .put("workspace", workspaceRef())
-            .put("includeArchived", false)
+        val params =
+            JSONObject()
+                .put("workspace", workspaceRef())
+                .put("includeArchived", false)
         runtime.call("session/list", params) { ok, body ->
             if (ok) {
                 val list = ZParse.parseSessionInfos(body)
@@ -707,8 +767,9 @@ class ZController private constructor(private val app: Context) {
     /** 拉取 workspace 级表现（含斜杠命令目录）：无会话时也能拿到内置命令表。 */
     fun refreshWorkspacePresentation(cb: ((Boolean) -> Unit)? = null) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
         runtime.call("workspace/readPresentation", params) { ok, body ->
             if (ok) {
                 val sc = ZParse.parseSlashCommands(body)
@@ -742,8 +803,12 @@ class ZController private constructor(private val app: Context) {
         }
         readModelOptions(sid) { ok -> if (ok) cb?.invoke(true) else readModelOptionsAfterResume(sid, cb) }
     }
+
     /** 冷会话读取失败：先恢复（resume）再读一次（与桌面端冷恢复语义一致）。 */
-    private fun readModelOptionsAfterResume(sessionId: String, cb: ((Boolean) -> Unit)?) {
+    private fun readModelOptionsAfterResume(
+        sessionId: String,
+        cb: ((Boolean) -> Unit)?,
+    ) {
         resumeSession(sessionId) { rok, _ ->
             if (!rok) {
                 cb?.invoke(false)
@@ -753,13 +818,17 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
-    private fun readModelOptions(sessionId: String, cb: ((Boolean) -> Unit)?) {
-        val params = JSONObject()
-            .put("sessionId", sessionId)
-            .put("deliveryKind", "desktop-continuous")
-            // 要全量模型清单：模型选择面板按它构建列表。内核默认只回当前模型一个
-            //（快照省流），这里必须显式声明 "all"，否则面板永远只有一个可选。
-            .put("modelAvailability", "all")
+    private fun readModelOptions(
+        sessionId: String,
+        cb: ((Boolean) -> Unit)?,
+    ) {
+        val params =
+            JSONObject()
+                .put("sessionId", sessionId)
+                .put("deliveryKind", "desktop-continuous")
+                // 要全量模型清单：模型选择面板按它构建列表。内核默认只回当前模型一个
+                // （快照省流），这里必须显式声明 "all"，否则面板永远只有一个可选。
+                .put("modelAvailability", "all")
         runtime.call("session/read", params) { ok, body ->
             var changed = false
             if (ok) {
@@ -777,7 +846,10 @@ class ZController private constructor(private val app: Context) {
     }
 
     /** 使用统计数据（range: "7d" | "30d" | "all"）。 */
-    fun fetchUsageStats(range: String, cb: (Boolean, JSONObject?) -> Unit) {
+    fun fetchUsageStats(
+        range: String,
+        cb: (Boolean, JSONObject?) -> Unit,
+    ) {
         runtime.call("usage/stats", JSONObject().put("range", range)) { ok, body ->
             cb(ok, if (ok) body else null)
         }
@@ -786,8 +858,9 @@ class ZController private constructor(private val app: Context) {
     /** 插件列表。 */
     fun fetchPlugins(cb: (Boolean, JSONObject?) -> Unit) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
         runtime.call("plugins/list", params) { ok, body ->
             cb(ok, if (ok) body else null)
         }
@@ -796,66 +869,92 @@ class ZController private constructor(private val app: Context) {
     /** MCP 服务器状态列表（mode: status 只读快照，不做连接操作）。 */
     fun fetchMcpList(cb: (Boolean, JSONObject?) -> Unit) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("mode", "status")
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("mode", "status")
         runtime.call("mcp/list", params) { ok, body ->
             cb(ok, if (ok) body else null)
         }
     }
 
     /** 启用 / 停用插件。 */
-    fun setPluginEnabled(pluginId: String, enabled: Boolean, cb: (Boolean, String) -> Unit) {
+    fun setPluginEnabled(
+        pluginId: String,
+        enabled: Boolean,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("pluginId", pluginId)
-            .put("enabled", enabled)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("pluginId", pluginId)
+                .put("enabled", enabled)
         runtime.call("plugins/setEnabled", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 插件总览：市场 / 可用插件 / 已安装 / 可恢复内置。 */
     fun fetchPluginsOverview(cb: (Boolean, JSONObject?) -> Unit) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
         runtime.call("plugins/overview", params) { ok, body ->
             cb(ok, if (ok) body else null)
         }
     }
+
     /** 安装插件。 */
-    fun installPlugin(pluginName: String, marketplace: String, cb: (Boolean, String) -> Unit) {
+    fun installPlugin(
+        pluginName: String,
+        marketplace: String,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("pluginName", pluginName)
-            .put("marketplace", marketplace)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("pluginName", pluginName)
+                .put("marketplace", marketplace)
         runtime.call("plugins/install", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 卸载插件。 */
-    fun uninstallPlugin(pluginId: String, cb: (Boolean, String) -> Unit) {
+    fun uninstallPlugin(
+        pluginId: String,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("pluginId", pluginId)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("pluginId", pluginId)
         runtime.call("plugins/uninstall", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 更新插件（pluginId 或整个 marketplace，二选一）。 */
-    fun updatePlugin(pluginId: String?, marketplace: String?, cb: (Boolean, String) -> Unit) {
+    fun updatePlugin(
+        pluginId: String?,
+        marketplace: String?,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
         pluginId?.let { params.put("pluginId", it) }
         marketplace?.let { params.put("marketplace", it) }
         runtime.call("plugins/update", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 写入插件配置项（options 为键值对；clearOptionKeys 用于清除选项）。 */
     fun configurePlugin(
         pluginId: String,
@@ -864,61 +963,87 @@ class ZController private constructor(private val app: Context) {
         cb: (Boolean, String) -> Unit,
     ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("pluginId", pluginId)
-            .put("options", options)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("pluginId", pluginId)
+                .put("options", options)
         if (clearKeys.isNotEmpty()) params.put("clearOptionKeys", JSONArray(clearKeys))
         runtime.call("plugins/configure", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 重置插件配置为默认值。 */
-    fun resetPluginConfig(pluginId: String, cb: (Boolean, String) -> Unit) {
+    fun resetPluginConfig(
+        pluginId: String,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("pluginId", pluginId)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("pluginId", pluginId)
         runtime.call("plugins/resetConfig", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 添加插件市场源。 */
-    fun addPluginMarketplace(source: String, cb: (Boolean, String) -> Unit) {
+    fun addPluginMarketplace(
+        source: String,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("source", source)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("source", source)
         runtime.call("plugins/marketplace/add", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 移除插件市场。 */
-    fun removePluginMarketplace(marketplace: String, cb: (Boolean, String) -> Unit) {
+    fun removePluginMarketplace(
+        marketplace: String,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("marketplace", marketplace)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("marketplace", marketplace)
         runtime.call("plugins/marketplace/remove", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 刷新插件市场索引（marketplace 为空时刷新全部）。 */
-    fun updatePluginMarketplace(marketplace: String?, cb: (Boolean, String) -> Unit) {
+    fun updatePluginMarketplace(
+        marketplace: String?,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
         marketplace?.let { params.put("marketplace", it) }
         runtime.call("plugins/marketplace/update", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
+
     /** 恢复内置插件。 */
-    fun restoreBuiltinPlugin(pluginId: String, cb: (Boolean, String) -> Unit) {
+    fun restoreBuiltinPlugin(
+        pluginId: String,
+        cb: (Boolean, String) -> Unit,
+    ) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("pluginId", pluginId)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("pluginId", pluginId)
         runtime.call("plugins/restoreBuiltin", params) { ok, body ->
             cb(ok, if (ok) "ok" else errMsg(body))
         }
@@ -929,10 +1054,11 @@ class ZController private constructor(private val app: Context) {
 
     fun newSession(cb: ((Boolean, String) -> Unit)?) {
         val wp = workspacePath()
-        val params = JSONObject()
-            .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
-            .put("mode", prefs.getString("default_mode", "build"))
-            .put("titleGenerationEnabled", false)
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("mode", prefs.getString("default_mode", "build"))
+                .put("titleGenerationEnabled", false)
         val sel = buildModelSelection()
         if (sel != null) params.put("model", sel)
         runtime.call("session/create", params) { ok, body ->
@@ -951,7 +1077,10 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
-    fun openSession(sessionId: String, cb: ((Boolean) -> Unit)?) {
+    fun openSession(
+        sessionId: String,
+        cb: ((Boolean) -> Unit)?,
+    ) {
         subscribeSession(sessionId) { ok, msg ->
             if (ok) {
                 cb?.invoke(true)
@@ -976,12 +1105,17 @@ class ZController private constructor(private val app: Context) {
             }
         }
     }
+
     /** 订阅会话（打开会话的第二段；冷会话需先 resumeSession 恢复）。 */
-    private fun subscribeSession(sessionId: String, cb: ((Boolean, String?) -> Unit)?) {
-        val params = JSONObject()
-            .put("sessionId", sessionId)
-            .put("deliveryKind", "desktop-continuous")
-            .put("includeSnapshot", true)
+    private fun subscribeSession(
+        sessionId: String,
+        cb: ((Boolean, String?) -> Unit)?,
+    ) {
+        val params =
+            JSONObject()
+                .put("sessionId", sessionId)
+                .put("deliveryKind", "desktop-continuous")
+                .put("includeSnapshot", true)
         runtime.call("session/subscribe", params) { ok, body ->
             if (ok) {
                 post {
@@ -1000,14 +1134,19 @@ class ZController private constructor(private val app: Context) {
             }
         }
     }
+
     /**
      * 恢复历史会话（桌面端 session/resume 语义）：
      * 冷会话必须先恢复（激活 runtime）后才能订阅、读取与发送。
      */
-    fun resumeSession(sessionId: String, cb: ((Boolean, String) -> Unit)? = null) {
-        val params = JSONObject()
-            .put("sessionId", sessionId)
-            .put("workspace", workspaceRef())
+    fun resumeSession(
+        sessionId: String,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
+        val params =
+            JSONObject()
+                .put("sessionId", sessionId)
+                .put("workspace", workspaceRef())
         runtime.call("session/resume", params) { ok, body ->
             if (ok) {
                 post { cb?.invoke(true, "ok") }
@@ -1016,6 +1155,7 @@ class ZController private constructor(private val app: Context) {
             }
         }
     }
+
     /** 统一的 workspace 引用（对齐桌面端 buildWorkspaceRef）。 */
     private fun workspaceRef(): JSONObject {
         val wp = workspacePath()
@@ -1039,9 +1179,10 @@ class ZController private constructor(private val app: Context) {
             cb?.invoke(false, "工作区路径为空")
             return
         }
-        val params = JSONObject()
-            .put("sessionId", sessionId)
-            .put("workspace", JSONObject().put("workspacePath", path).put("workspaceKey", path))
+        val params =
+            JSONObject()
+                .put("sessionId", sessionId)
+                .put("workspace", JSONObject().put("workspacePath", path).put("workspaceKey", path))
         runtime.call("session/rebindWorkspace", params) { ok, body ->
             if (!ok) {
                 post { cb?.invoke(false, errMsg(body)) }
@@ -1056,7 +1197,10 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
-    fun closeSession(sessionId: String, cb: ((Boolean) -> Unit)? = null) {
+    fun closeSession(
+        sessionId: String,
+        cb: ((Boolean) -> Unit)? = null,
+    ) {
         runtime.call("session/close", JSONObject().put("sessionId", sessionId)) { _, _ ->
             if (currentSessionId == sessionId) currentSessionId = null
             refreshSessions(null)
@@ -1064,7 +1208,11 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
-    fun send(text: String, attachments: JSONArray? = null, cb: ((Boolean, String) -> Unit)? = null) {
+    fun send(
+        text: String,
+        attachments: JSONArray? = null,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         val sid = currentSessionId
         if (sid == null) {
             cb?.invoke(false, "没有打开的会话")
@@ -1082,6 +1230,7 @@ class ZController private constructor(private val app: Context) {
         }
         doSend(sid, text, attachments, retried = false, cb = cb)
     }
+
     /** 发送请求（对齐桌面端：inputId/queryId/modelSelection/attachments）；冷会话失败时自动恢复一次后重试。 */
     private fun doSend(
         sid: String,
@@ -1125,11 +1274,15 @@ class ZController private constructor(private val app: Context) {
             }
         }
     }
+
     /**
      * 读取会话附件内容（v4/attachment/read 分块拼接）。
      * 用于消息里图片附件的预览；回调在主线程，bytes 为 null 表示失败。
      */
-    fun readAttachment(ref: String, cb: (Boolean, ByteArray?) -> Unit) {
+    fun readAttachment(
+        ref: String,
+        cb: (Boolean, ByteArray?) -> Unit,
+    ) {
         val sid = currentSessionId
         if (sid == null) {
             post { cb(false, null) }
@@ -1138,22 +1291,25 @@ class ZController private constructor(private val app: Context) {
         val maxBytes = 20 * 1024 * 1024
         val chunkLimit = 512 * 1024
         val out = java.io.ByteArrayOutputStream()
+
         fun step(offset: Long) {
-            val params = JSONObject()
-                .put("sessionId", sid)
-                .put("ref", ref)
-                .put("offset", offset)
-                .put("limit", chunkLimit)
+            val params =
+                JSONObject()
+                    .put("sessionId", sid)
+                    .put("ref", ref)
+                    .put("offset", offset)
+                    .put("limit", chunkLimit)
             runtime.call("v4/attachment/read", params) { ok, body ->
                 if (!ok || body == null) {
                     post { cb(false, null) }
                     return@call
                 }
-                val bytes = try {
-                    android.util.Base64.decode(body.optString("dataBase64"), android.util.Base64.DEFAULT)
-                } catch (e: Throwable) {
-                    null
-                }
+                val bytes =
+                    try {
+                        android.util.Base64.decode(body.optString("dataBase64"), android.util.Base64.DEFAULT)
+                    } catch (_: Throwable) {
+                        null
+                    }
                 if (bytes == null) {
                     post { cb(false, null) }
                     return@call
@@ -1170,6 +1326,7 @@ class ZController private constructor(private val app: Context) {
         }
         step(0L)
     }
+
     fun stop(cb: ((Boolean, String) -> Unit)? = null) {
         val sid = currentSessionId
         if (sid == null) {
@@ -1185,13 +1342,14 @@ class ZController private constructor(private val app: Context) {
                 }
                 cb?.invoke(true, "ok")
             } else {
-                val cmd = JSONObject()
-                    .put("commandId", UUID.randomUUID().toString())
-                    .put("clientId", "mobile-ui")
-                    .put("sessionId", sid)
-                    .put("type", "stop")
-                    .put("payload", JSONObject())
-                    .put("issuedAt", System.currentTimeMillis())
+                val cmd =
+                    JSONObject()
+                        .put("commandId", UUID.randomUUID().toString())
+                        .put("clientId", "mobile-ui")
+                        .put("sessionId", sid)
+                        .put("type", "stop")
+                        .put("payload", JSONObject())
+                        .put("issuedAt", System.currentTimeMillis())
                 runtime.call("v4/command", cmd) { ok2, body2 ->
                     cb?.invoke(ok2, if (ok2) "ok" else errMsg(body2))
                 }
@@ -1199,7 +1357,10 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
-    fun compact(instructions: String? = null, cb: ((Boolean, String) -> Unit)? = null) {
+    fun compact(
+        instructions: String? = null,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         val sid = currentSessionId
         if (sid == null) {
             cb?.invoke(false, "无会话")
@@ -1221,7 +1382,10 @@ class ZController private constructor(private val app: Context) {
      * 内核没有专属的工作流取消 RPC：详情页与后台面板的停止共用 v4 `cancelBackgroundWork`，
      * 载荷 workId ≡ runId。停下之后 run 变成 cancelled，可以用 [resumeWorkflowRun] 恢复。
      */
-    fun cancelWorkflowRun(runId: String, cb: ((Boolean, String) -> Unit)? = null) {
+    fun cancelWorkflowRun(
+        runId: String,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         val sid = currentSessionId
         if (sid == null || runId.isEmpty()) {
             cb?.invoke(false, "无会话")
@@ -1239,7 +1403,10 @@ class ZController private constructor(private val app: Context) {
      * 内核的门：只有 cancelled，或失败编码为 Interrupted 的 run 可恢复；其余情况回
      * `workflowRunResumeRejected.<reason>`，这里把 reason 原样带给调用方，由 UI 决定文案。
      */
-    fun resumeWorkflowRun(runId: String, cb: ((Boolean, String) -> Unit)? = null) {
+    fun resumeWorkflowRun(
+        runId: String,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         val sid = currentSessionId
         if (sid == null || runId.isEmpty()) {
             cb?.invoke(false, "无会话")
@@ -1263,13 +1430,14 @@ class ZController private constructor(private val app: Context) {
         payload: JSONObject,
         cb: (Boolean, String) -> Unit,
     ) {
-        val cmd = JSONObject()
-            .put("commandId", UUID.randomUUID().toString())
-            .put("clientId", "mobile-ui")
-            .put("sessionId", sid)
-            .put("type", type)
-            .put("payload", payload)
-            .put("issuedAt", System.currentTimeMillis())
+        val cmd =
+            JSONObject()
+                .put("commandId", UUID.randomUUID().toString())
+                .put("clientId", "mobile-ui")
+                .put("sessionId", sid)
+                .put("type", type)
+                .put("payload", payload)
+                .put("issuedAt", System.currentTimeMillis())
         runtime.call("v4/command", cmd) { ok, body ->
             if (ok) {
                 cb(true, "ok")
@@ -1284,7 +1452,10 @@ class ZController private constructor(private val app: Context) {
 
     // ---------------------------------------------------------------- 会话设置
 
-    fun setMode(protocolMode: String, cb: ((Boolean, String) -> Unit)? = null) {
+    fun setMode(
+        protocolMode: String,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         val sid = currentSessionId
         if (sid == null) {
             mode = protocolMode
@@ -1293,6 +1464,7 @@ class ZController private constructor(private val app: Context) {
         }
         doSetMode(sid, protocolMode, retried = false, cb = cb)
     }
+
     /** 设置发送模式；冷会话失败时自动恢复一次后重试（与发送同策略）。 */
     private fun doSetMode(
         sid: String,
@@ -1311,8 +1483,11 @@ class ZController private constructor(private val app: Context) {
                 val msg = errMsg(body)
                 if (!retried && msg.contains("not active", ignoreCase = true)) {
                     resumeSession(sid) { rok, _ ->
-                        if (rok) doSetMode(sid, protocolMode, retried = true, cb = cb)
-                        else cb?.invoke(false, msg)
+                        if (rok) {
+                            doSetMode(sid, protocolMode, retried = true, cb = cb)
+                        } else {
+                            cb?.invoke(false, msg)
+                        }
                     }
                 } else {
                     cb?.invoke(false, msg)
@@ -1321,16 +1496,20 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
-    fun setThoughtLevel(value: String, cb: ((Boolean, String) -> Unit)? = null) {
+    fun setThoughtLevel(
+        value: String,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         val sid = currentSessionId
         if (sid == null) {
             cb?.invoke(false, "无会话")
             return
         }
-        val params = JSONObject()
-            .put("sessionId", sid)
-            .put("thoughtLevel", value)
-            .put("persistAsWorkspaceLastUsed", true)
+        val params =
+            JSONObject()
+                .put("sessionId", sid)
+                .put("thoughtLevel", value)
+                .put("persistAsWorkspaceLastUsed", true)
         runtime.call("session/setThoughtLevel", params) { ok, body ->
             if (ok) {
                 currentThoughtLevel = value
@@ -1342,28 +1521,37 @@ class ZController private constructor(private val app: Context) {
         }
     }
 
-    fun setModel(providerId: String, modelId: String, level: String? = null, cb: ((Boolean, String) -> Unit)? = null) {
+    fun setModel(
+        providerId: String,
+        modelId: String,
+        level: String? = null,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         val sid = currentSessionId
         if (sid == null) {
             cb?.invoke(false, "无会话")
             return
         }
-        val lv = level
-            ?: modelOptions.find { it.providerId == providerId && it.modelId == modelId }
-                ?.let { it.defaultLevel ?: it.levels.firstOrNull()?.value }
-            ?: currentThoughtLevel
+        val lv =
+            level
+                ?: modelOptions
+                    .find { it.providerId == providerId && it.modelId == modelId }
+                    ?.let { it.defaultLevel ?: it.levels.firstOrNull()?.value }
+                ?: currentThoughtLevel
         if (lv.isNullOrEmpty()) {
             cb?.invoke(false, "该模型未声明推理档位")
             return
         }
-        val model = JSONObject()
-            .put("providerId", providerId)
-            .put("modelId", modelId)
-            .put("options", JSONObject().put("reasoningLevel", lv))
-        val params = JSONObject()
-            .put("sessionId", sid)
-            .put("model", model)
-            .put("persistAsWorkspaceLastUsed", true)
+        val model =
+            JSONObject()
+                .put("providerId", providerId)
+                .put("modelId", modelId)
+                .put("options", JSONObject().put("reasoningLevel", lv))
+        val params =
+            JSONObject()
+                .put("sessionId", sid)
+                .put("model", model)
+                .put("persistAsWorkspaceLastUsed", true)
         runtime.call("session/setModel", params) { ok, body ->
             if (ok) {
                 rememberSelection(providerId, modelId, lv)
@@ -1377,8 +1565,13 @@ class ZController private constructor(private val app: Context) {
 
     // ---------------------------------------------------------------- 选择与偏好
 
-    private fun rememberSelection(providerId: String, modelId: String, level: String?) {
-        prefs.edit()
+    private fun rememberSelection(
+        providerId: String,
+        modelId: String,
+        level: String?,
+    ) {
+        prefs
+            .edit()
             .putString("last_provider", providerId)
             .putString("last_model", modelId)
             .putString("last_level", level ?: "")
@@ -1400,7 +1593,8 @@ class ZController private constructor(private val app: Context) {
         if (lv.isNullOrEmpty()) {
             lv = currentThoughtLevel
                 ?: prefs.getString("last_level", "")?.takeIf { it.isNotEmpty() }
-                ?: modelOptions.find { it.providerId == p && it.modelId == m }
+                ?: modelOptions
+                    .find { it.providerId == p && it.modelId == m }
                     ?.let { it.defaultLevel ?: it.levels.firstOrNull()?.value }
         }
         val o = JSONObject().put("providerId", p).put("modelId", m)
@@ -1416,8 +1610,7 @@ class ZController private constructor(private val app: Context) {
 
     fun defaultMode(): String = prefs.getString("default_mode", "build") ?: "build"
 
-    private fun errMsg(body: JSONObject): String =
-        body.optString("message").ifEmpty { body.toString().take(200) }
+    private fun errMsg(body: JSONObject): String = body.optString("message").ifEmpty { body.toString().take(200) }
 
     companion object {
         @Volatile
@@ -1434,15 +1627,17 @@ class ZController private constructor(private val app: Context) {
 object SendModes {
     val names = arrayOf("Yolo", "Build", "Chat")
 
-    fun toProtocol(uiName: String): String = when (uiName) {
-        "Yolo" -> "yolo"
-        "Chat" -> "plan"
-        else -> "build"
-    }
+    fun toProtocol(uiName: String): String =
+        when (uiName) {
+            "Yolo" -> "yolo"
+            "Chat" -> "plan"
+            else -> "build"
+        }
 
-    fun toUiIndex(protocolMode: String): Int = when (protocolMode) {
-        "yolo" -> 0
-        "plan" -> 2
-        else -> 1
-    }
+    fun toUiIndex(protocolMode: String): Int =
+        when (protocolMode) {
+            "yolo" -> 0
+            "plan" -> 2
+            else -> 1
+        }
 }

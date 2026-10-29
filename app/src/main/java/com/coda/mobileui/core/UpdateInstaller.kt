@@ -19,10 +19,12 @@ import java.io.File
  * 「没有签名」），更新通道比普通资产更该守住这条线。
  */
 object UpdateInstaller {
-
     /** 下载进度。 */
     fun interface Progress {
-        fun onBytes(done: Long, total: Long)
+        fun onBytes(
+            done: Long,
+            total: Long,
+        )
     }
 
     /**
@@ -59,13 +61,14 @@ object UpdateInstaller {
             runCatching { target.delete() }
         }
 
-        val ok = AssetFetcher.ensure(
-            ctx = ctx,
-            target = target,
-            spec = specFor(result),
-            onProgress = onProgress?.let { AssetFetcher.Progress { d, t -> it.onBytes(d, t) } },
-            onLog = onLog,
-        )
+        val ok =
+            AssetFetcher.ensure(
+                ctx = ctx,
+                target = target,
+                spec = specFor(result),
+                onProgress = onProgress?.let { AssetFetcher.Progress { d, t -> it.onBytes(d, t) } },
+                onLog = onLog,
+            )
         if (!ok) return null
 
         // 从清单拿到的更新包一定带哈希；没有哈希说明走的是 API 兜底，
@@ -76,13 +79,14 @@ object UpdateInstaller {
         return target
     }
 
-    private fun specFor(result: UpdateChecker.Result) = AssetFetcher.Spec(
-        // 更新包不在 APK 内，assetPath 给一个必然不存在的名字，让 AssetFetcher 跳过释放步骤。
-        assetPath = "updates/not-bundled",
-        remoteUrl = result.apkUrl,
-        sha256 = result.sha256,
-        size = result.apkSize,
-    )
+    private fun specFor(result: UpdateChecker.Result) =
+        AssetFetcher.Spec(
+            // 更新包不在 APK 内，assetPath 给一个必然不存在的名字，让 AssetFetcher 跳过释放步骤。
+            assetPath = "updates/not-bundled",
+            remoteUrl = result.apkUrl,
+            sha256 = result.sha256,
+            size = result.apkSize,
+        )
 
     /**
      * 交给系统安装器。
@@ -91,22 +95,27 @@ object UpdateInstaller {
      * 没允许时系统会弹自己的引导页，这里不用额外判断——判断了也拦不住，系统
      * 自己的流程更准确。
      */
-    fun install(ctx: Context, apk: File): Boolean {
+    fun install(
+        ctx: Context,
+        apk: File,
+    ): Boolean {
         if (!apk.isFile || apk.length() == 0L) return false
         return try {
-            val uri = FileProvider.getUriForFile(
-                ctx,
-                "${BuildConfig.APPLICATION_ID}.workspacefiles",
-                apk,
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val uri =
+                FileProvider.getUriForFile(
+                    ctx,
+                    "${BuildConfig.APPLICATION_ID}.workspacefiles",
+                    apk,
+                )
+            val intent =
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
             ctx.startActivity(intent)
             true
-        } catch (t: Throwable) {
+        } catch (_: Throwable) {
             false
         }
     }
@@ -117,7 +126,10 @@ object UpdateInstaller {
      * 升级完成后旧包就没用了，但它可能占几十 MB。只保留 [keepVersionCode]
      * 对应的那个，其余删掉。
      */
-    fun cleanup(ctx: Context, keepVersionCode: Int) {
+    fun cleanup(
+        ctx: Context,
+        keepVersionCode: Int,
+    ) {
         val dir = File(ctx.filesDir, "updates")
         if (!dir.isDirectory) return
         val keep = "coda-$keepVersionCode.apk"

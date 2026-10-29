@@ -17,7 +17,6 @@ data class GhMirror(
 )
 
 object GhMirrors {
-
     /** host 需要以 / 结尾，否则拼出来的 URL 会把主机名和路径粘在一起。 */
     private fun p(host: String): String = if (host.endsWith("/")) host else "$host/"
 
@@ -28,37 +27,36 @@ object GhMirrors {
      * 保留在队尾——镜像会恢复，删掉反而要重新找。每条的 note 只写结论，
      * 不写具体毫秒数：延迟随网络变化，写死会误导。
      */
-    val DEFAULT: List<GhMirror> = listOf(
-        GhMirror("cxkpro", p("https://ghproxy.cxkpro.top"), "实测可用"),
-        GhMirror("gh-proxy", p("https://gh-proxy.com"), "实测可用"),
-        GhMirror("geekertao", p("https://ghfile.geekertao.top"), "实测可用"),
-        GhMirror("nxnow", p("https://gh.nxnow.top"), "实测可用"),
-        GhMirror("ghfast", p("https://ghfast.top"), "实测可用，大文件曾验证"),
-        GhMirror("npee", p("https://down.npee.cn/?"), "实测可用"),
-        GhMirror("jasonzeng", p("https://gh.jasonzeng.dev"), "实测可用"),
-        GhMirror("chjina", p("https://gh.chjina.com"), "实测可用"),
-        GhMirror("monlor", p("https://gh.monlor.com"), "实测可用"),
-        GhMirror("ghproxynethyph", p("https://gh-proxy.net"), "实测可用"),
-        GhMirror("ednovas", p("https://github.ednovas.xyz"), "实测可用"),
-        GhMirror("ghproxynet", p("https://ghproxy.net"), "大流量长连接不稳"),
-        GhMirror("zwy", p("https://gh.zwy.one"), "实测可用"),
-        GhMirror("mrhjx", p("https://gitproxy.mrhjx.cn"), "实测可用"),
-        GhMirror("bokimoe", p("https://github.boki.moe"), "实测可用"),
-        GhMirror("fastgitcc", p("https://fastgit.cc"), "实测可用"),
-        GhMirror("crashmc", p("https://cdn.crashmc.com"), "实测可用"),
-        GhMirror("monkeyray", p("https://ghproxy.monkeyray.net"), "实测可用"),
-
-        // ---- 历史上观测异常，留作后续重试 ----
-        GhMirror("ghproxymirror", p("https://mirror.ghproxy.com"), "曾异常"),
-        GhMirror("workers", p("https://github.abskoop.workers.dev"), "曾异常"),
-        GhMirror("tbedu", p("https://github.tbedu.top"), "曾异常"),
-        GhMirror("yylx", p("https://git.yylx.win"), "曾异常"),
-        GhMirror("xxooo", p("https://gh.xxooo.cf"), "曾异常"),
-        GhMirror("xx9527", p("https://gh.xx9527.cn"), "曾异常"),
-
-        // ---- 直连兜底：放最后 ----
-        GhMirror("github", p("https://github.com"), "官方直连"),
-    )
+    val DEFAULT: List<GhMirror> =
+        listOf(
+            GhMirror("cxkpro", p("https://ghproxy.cxkpro.top"), "实测可用"),
+            GhMirror("gh-proxy", p("https://gh-proxy.com"), "实测可用"),
+            GhMirror("geekertao", p("https://ghfile.geekertao.top"), "实测可用"),
+            GhMirror("nxnow", p("https://gh.nxnow.top"), "实测可用"),
+            GhMirror("ghfast", p("https://ghfast.top"), "实测可用，大文件曾验证"),
+            GhMirror("npee", p("https://down.npee.cn/?"), "实测可用"),
+            GhMirror("jasonzeng", p("https://gh.jasonzeng.dev"), "实测可用"),
+            GhMirror("chjina", p("https://gh.chjina.com"), "实测可用"),
+            GhMirror("monlor", p("https://gh.monlor.com"), "实测可用"),
+            GhMirror("ghproxynethyph", p("https://gh-proxy.net"), "实测可用"),
+            GhMirror("ednovas", p("https://github.ednovas.xyz"), "实测可用"),
+            GhMirror("ghproxynet", p("https://ghproxy.net"), "大流量长连接不稳"),
+            GhMirror("zwy", p("https://gh.zwy.one"), "实测可用"),
+            GhMirror("mrhjx", p("https://gitproxy.mrhjx.cn"), "实测可用"),
+            GhMirror("bokimoe", p("https://github.boki.moe"), "实测可用"),
+            GhMirror("fastgitcc", p("https://fastgit.cc"), "实测可用"),
+            GhMirror("crashmc", p("https://cdn.crashmc.com"), "实测可用"),
+            GhMirror("monkeyray", p("https://ghproxy.monkeyray.net"), "实测可用"),
+            // ---- 历史上观测异常，留作后续重试 ----
+            GhMirror("ghproxymirror", p("https://mirror.ghproxy.com"), "曾异常"),
+            GhMirror("workers", p("https://github.abskoop.workers.dev"), "曾异常"),
+            GhMirror("tbedu", p("https://github.tbedu.top"), "曾异常"),
+            GhMirror("yylx", p("https://git.yylx.win"), "曾异常"),
+            GhMirror("xxooo", p("https://gh.xxooo.cf"), "曾异常"),
+            GhMirror("xx9527", p("https://gh.xx9527.cn"), "曾异常"),
+            // ---- 直连兜底：放最后 ----
+            GhMirror("github", p("https://github.com"), "官方直连"),
+        )
 
     /**
      * 把一个 GitHub 原始链接套上镜像前缀。
@@ -66,9 +64,15 @@ object GhMirrors {
      * 直连那条不套前缀——它的 prefix 就是 github.com，再套一次会变成
      * `https://github.com/https://github.com/...`。
      */
-    fun wrap(prefix: String, rawUrl: String): String =
-        if (prefix.contains("github.com/") && rawUrl.startsWith("https://github.com/")) rawUrl
-        else prefix + rawUrl
+    fun wrap(
+        prefix: String,
+        rawUrl: String,
+    ): String =
+        if (prefix.contains("github.com/") && rawUrl.startsWith("https://github.com/")) {
+            rawUrl
+        } else {
+            prefix + rawUrl
+        }
 
     /**
      * 小于这个体积的目标跳过测速。
@@ -124,14 +128,16 @@ object GhMirrors {
             // 但 ping 只测 TCP 握手，一个「握手 80ms、传数据 3KB/s」的镜像会排在
             // 前面，几 KB 的清单被它拖上几分钟。现在把历史成绩折算成分数参与排序：
             // 大小和延迟之外，谁在这类网络下真递过正确内容，谁就往前站。
-            val scored = alive.map { m ->
-                val stat = history[m.id]
-                val score = MirrorScoreboard.scoreOf(stat)
-                // 延迟做次级排序：同分时快的在前。把毫秒量级压到很小的权重，
-                // 不至于盖过「校验通过」这种强证据。
-                val latencyPenalty = (latencyOf[m.id] ?: 0L) / 1000.0
-                m to (score - latencyPenalty)
-            }.sortedByDescending { it.second }
+            val scored =
+                alive
+                    .map { m ->
+                        val stat = history[m.id]
+                        val score = MirrorScoreboard.scoreOf(stat)
+                        // 延迟做次级排序：同分时快的在前。把毫秒量级压到很小的权重，
+                        // 不至于盖过「校验通过」这种强证据。
+                        val latencyPenalty = (latencyOf[m.id] ?: 0L) / 1000.0
+                        m to (score - latencyPenalty)
+                    }.sortedByDescending { it.second }
             val hasHistory = scored.any { (history[it.first.id]?.samples ?: 0) > 0 }
             onLog(
                 if (hasHistory) {
@@ -145,18 +151,22 @@ object GhMirrors {
         }
 
         onLog("测速挑选镜像…")
-        val usable = MirrorSpeedTester.testAll(alive, probeUrl)
-            .filter { it.ok && it.sustainedBps > 0 }
+        val usable =
+            MirrorSpeedTester
+                .testAll(alive, probeUrl)
+                .filter { it.ok && it.sustainedBps > 0 }
         if (usable.isEmpty()) {
             onLog("测速无结果，按 ping 延迟顺序尝试")
             return alive
         }
         // 大文件以本次测速为准（当场测的比历史更贴近此刻），
         // 历史只做同档微调：两个源测速接近时，历史上校验通过过的优先。
-        val ranked = usable.map { r ->
-            val bonus = MirrorScoreboard.scoreOf(history[r.mirror.id]).coerceIn(-400.0, 400.0)
-            r to (r.score + bonus)
-        }.sortedByDescending { it.second }
+        val ranked =
+            usable
+                .map { r ->
+                    val bonus = MirrorScoreboard.scoreOf(history[r.mirror.id]).coerceIn(-400.0, 400.0)
+                    r to (r.score + bonus)
+                }.sortedByDescending { it.second }
         val best = ranked.first().first
         onLog("选定 ${best.mirror.id}（${"%.1f MB/s".format(best.sustainedBps / 1024.0 / 1024.0)}）")
         // 测出速度的排前面，剩下的活源接在后面：前者优先，但一个都不丢。

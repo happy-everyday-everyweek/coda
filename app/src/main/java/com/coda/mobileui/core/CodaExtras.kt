@@ -12,7 +12,6 @@ import java.util.Locale
  * 数据来源与桌面端一致：协议（mcp/list、plugins/list、usage/stats 等）+ 本地文件与 SQLite。
  */
 object CodaExtras {
-
     // ---------------------------------------------------------------- MCP
 
     data class McpServerItem(
@@ -30,26 +29,28 @@ object CodaExtras {
         while (keys.hasNext()) {
             val name = keys.next()
             val s = statuses.optJSONObject(name) ?: continue
-            out += McpServerItem(
-                name = name,
-                status = s.optString("status"),
-                transport = s.optString("transport"),
-                toolCount = s.optInt("toolCount", 0),
-                error = s.optString("error").takeIf { it.isNotEmpty() },
-            )
+            out +=
+                McpServerItem(
+                    name = name,
+                    status = s.optString("status"),
+                    transport = s.optString("transport"),
+                    toolCount = s.optInt("toolCount", 0),
+                    error = s.optString("error").takeIf { it.isNotEmpty() },
+                )
         }
         return out.sortedBy { it.name.lowercase() }
     }
 
-    fun mcpStatusLabel(status: String): String = when (status) {
-        "connected" -> "已连接"
-        "connecting" -> "连接中"
-        "disabled" -> "已停用"
-        "disconnected" -> "未连接"
-        "failed" -> "连接失败"
-        "untrusted" -> "未信任"
-        else -> status
-    }
+    fun mcpStatusLabel(status: String): String =
+        when (status) {
+            "connected" -> "已连接"
+            "connecting" -> "连接中"
+            "disabled" -> "已停用"
+            "disconnected" -> "未连接"
+            "failed" -> "连接失败"
+            "untrusted" -> "未信任"
+            else -> status
+        }
 
     // ---------------------------------------------------------------- 插件
 
@@ -69,19 +70,21 @@ object CodaExtras {
         val out = mutableListOf<PluginItem>()
         for (i in 0 until arr.length()) {
             val p = arr.optJSONObject(i) ?: continue
-            out += PluginItem(
-                id = p.optString("id"),
-                name = p.optString("name").ifEmpty { p.optString("id") },
-                description = p.optString("description"),
-                version = p.optString("version").takeIf { it.isNotEmpty() },
-                enabled = p.optBoolean("enabled", false),
-                skillCount = p.optInt("skillCount", p.optInt("skillRootCount", 0)),
-                commandCount = p.optInt("commandRootCount", 0),
-                mcpCount = p.optJSONArray("mcpServerNames")?.length() ?: 0,
-            )
+            out +=
+                PluginItem(
+                    id = p.optString("id"),
+                    name = p.optString("name").ifEmpty { p.optString("id") },
+                    description = p.optString("description"),
+                    version = p.optString("version").takeIf { it.isNotEmpty() },
+                    enabled = p.optBoolean("enabled", false),
+                    skillCount = p.optInt("skillCount", p.optInt("skillRootCount", 0)),
+                    commandCount = p.optInt("commandRootCount", 0),
+                    mcpCount = p.optJSONArray("mcpServerNames")?.length() ?: 0,
+                )
         }
         return out.sortedBy { it.name.lowercase() }
     }
+
     // ---- 插件总览（plugins/overview） ----
     data class PluginMarketplace(
         val id: String,
@@ -92,6 +95,7 @@ object CodaExtras {
         val lastUpdated: String?,
         val refreshFailure: String?,
     )
+
     data class PluginCandidate(
         val id: String,
         val name: String,
@@ -101,6 +105,7 @@ object CodaExtras {
         val installed: Boolean,
         val componentTypes: List<String>,
     )
+
     data class PluginInstalled(
         val id: String,
         val name: String,
@@ -112,6 +117,7 @@ object CodaExtras {
         val latestVersion: String?,
         val componentTypes: List<String>,
     )
+
     data class PluginOverview(
         val marketplaces: List<PluginMarketplace>,
         val available: List<PluginCandidate>,
@@ -120,6 +126,7 @@ object CodaExtras {
         val capabilitySupported: Boolean,
         val capabilityReason: String?,
     )
+
     private fun readStringList(arr: org.json.JSONArray?): List<String> {
         if (arr == null) return emptyList()
         val out = mutableListOf<String>()
@@ -129,15 +136,18 @@ object CodaExtras {
         }
         return out
     }
-    private fun candidateFrom(p: JSONObject): PluginCandidate = PluginCandidate(
-        id = p.optString("id"),
-        name = p.optString("name").ifEmpty { p.optString("id") },
-        marketplace = p.optString("marketplace"),
-        description = p.optString("description").takeIf { it.isNotEmpty() },
-        version = p.optString("version").takeIf { it.isNotEmpty() },
-        installed = p.optBoolean("installed", false),
-        componentTypes = readStringList(p.optJSONArray("componentTypes")),
-    )
+
+    private fun candidateFrom(p: JSONObject): PluginCandidate =
+        PluginCandidate(
+            id = p.optString("id"),
+            name = p.optString("name").ifEmpty { p.optString("id") },
+            marketplace = p.optString("marketplace"),
+            description = p.optString("description").takeIf { it.isNotEmpty() },
+            version = p.optString("version").takeIf { it.isNotEmpty() },
+            installed = p.optBoolean("installed", false),
+            componentTypes = readStringList(p.optJSONArray("componentTypes")),
+        )
+
     fun parsePluginsOverview(root: JSONObject?): PluginOverview? {
         if (root == null) return null
         val marketplaces = mutableListOf<PluginMarketplace>()
@@ -145,16 +155,20 @@ object CodaExtras {
         if (mkArr != null) {
             for (i in 0 until mkArr.length()) {
                 val m = mkArr.optJSONObject(i) ?: continue
-                marketplaces += PluginMarketplace(
-                    id = m.optString("id"),
-                    name = m.optString("name").ifEmpty { m.optString("id") },
-                    description = m.optString("description").takeIf { it.isNotEmpty() },
-                    pluginCount = m.optInt("pluginCount", 0),
-                    isOfficial = m.optBoolean("isOfficial", false),
-                    lastUpdated = m.optString("lastUpdated").takeIf { it.isNotEmpty() },
-                    refreshFailure = m.optJSONObject("refreshFailure")
-                        ?.optString("message")?.takeIf { it.isNotEmpty() },
-                )
+                marketplaces +=
+                    PluginMarketplace(
+                        id = m.optString("id"),
+                        name = m.optString("name").ifEmpty { m.optString("id") },
+                        description = m.optString("description").takeIf { it.isNotEmpty() },
+                        pluginCount = m.optInt("pluginCount", 0),
+                        isOfficial = m.optBoolean("isOfficial", false),
+                        lastUpdated = m.optString("lastUpdated").takeIf { it.isNotEmpty() },
+                        refreshFailure =
+                            m
+                                .optJSONObject("refreshFailure")
+                                ?.optString("message")
+                                ?.takeIf { it.isNotEmpty() },
+                    )
             }
         }
         val available = mutableListOf<PluginCandidate>()
@@ -170,17 +184,18 @@ object CodaExtras {
         if (inArr != null) {
             for (i in 0 until inArr.length()) {
                 val p = inArr.optJSONObject(i) ?: continue
-                installed += PluginInstalled(
-                    id = p.optString("id"),
-                    name = p.optString("name").ifEmpty { p.optString("id") },
-                    marketplace = p.optString("marketplace"),
-                    description = p.optString("description").takeIf { it.isNotEmpty() },
-                    version = p.optString("version").takeIf { it.isNotEmpty() },
-                    enabled = p.optBoolean("enabled", false),
-                    updateStatus = p.optString("updateStatus").takeIf { it.isNotEmpty() && it != "none" },
-                    latestVersion = p.optString("latestVersion").takeIf { it.isNotEmpty() },
-                    componentTypes = readStringList(p.optJSONArray("componentTypes")),
-                )
+                installed +=
+                    PluginInstalled(
+                        id = p.optString("id"),
+                        name = p.optString("name").ifEmpty { p.optString("id") },
+                        marketplace = p.optString("marketplace"),
+                        description = p.optString("description").takeIf { it.isNotEmpty() },
+                        version = p.optString("version").takeIf { it.isNotEmpty() },
+                        enabled = p.optBoolean("enabled", false),
+                        updateStatus = p.optString("updateStatus").takeIf { it.isNotEmpty() && it != "none" },
+                        latestVersion = p.optString("latestVersion").takeIf { it.isNotEmpty() },
+                        componentTypes = readStringList(p.optJSONArray("componentTypes")),
+                    )
             }
         }
         val restorable = mutableListOf<PluginCandidate>()
@@ -201,8 +216,13 @@ object CodaExtras {
             capabilityReason = cap?.optString("reason")?.takeIf { it.isNotEmpty() },
         )
     }
+
     // ---- 插件详情（plugins/list 单条） ----
-    data class PluginComponentGroup(val kind: String, val names: List<String>)
+    data class PluginComponentGroup(
+        val kind: String,
+        val names: List<String>,
+    )
+
     data class PluginConfigOption(
         val key: String,
         val title: String?,
@@ -213,6 +233,7 @@ object CodaExtras {
         val sensitive: Boolean,
         val current: Any?,
     )
+
     data class PluginDetail(
         val id: String,
         val name: String,
@@ -230,22 +251,30 @@ object CodaExtras {
         val hookSummaries: List<String>,
         val options: List<PluginConfigOption>,
     )
-    fun componentKindLabel(kind: String): String = when (kind.lowercase().removeSuffix("s")) {
-        "agent" -> "智能体"
-        "command" -> "命令"
-        "skill" -> "技能"
-        "hook" -> "钩子"
-        "mcp" -> "MCP"
-        else -> kind
-    }
-    fun anyToText(v: Any?): String = when (v) {
-        null -> ""
-        is String -> v
-        is Boolean -> if (v) "true" else "false"
-        is Double -> if (v.isFinite() && v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
-        else -> v.toString()
-    }
-    fun findPluginDetail(root: JSONObject?, pluginId: String): PluginDetail? {
+
+    fun componentKindLabel(kind: String): String =
+        when (kind.lowercase().removeSuffix("s")) {
+            "agent" -> "智能体"
+            "command" -> "命令"
+            "skill" -> "技能"
+            "hook" -> "钩子"
+            "mcp" -> "MCP"
+            else -> kind
+        }
+
+    fun anyToText(v: Any?): String =
+        when (v) {
+            null -> ""
+            is String -> v
+            is Boolean -> if (v) "true" else "false"
+            is Double -> if (v.isFinite() && v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
+            else -> v.toString()
+        }
+
+    fun findPluginDetail(
+        root: JSONObject?,
+        pluginId: String,
+    ): PluginDetail? {
         val arr = root?.optJSONArray("plugins") ?: return null
         for (i in 0 until arr.length()) {
             val p = arr.optJSONObject(i) ?: continue
@@ -253,6 +282,7 @@ object CodaExtras {
         }
         return null
     }
+
     fun parsePluginDetail(p: JSONObject): PluginDetail {
         val components = mutableListOf<PluginComponentGroup>()
         val cmpArr = p.optJSONArray("components")
@@ -290,16 +320,17 @@ object CodaExtras {
             while (keys.hasNext()) all += keys.next()
             all.sorted().forEach { key ->
                 val o = cfg.optJSONObject(key) ?: return@forEach
-                options += PluginConfigOption(
-                    key = key,
-                    title = o.optString("title").takeIf { it.isNotEmpty() },
-                    description = o.optString("description").takeIf { it.isNotEmpty() },
-                    type = o.optString("type", "string").ifEmpty { "string" },
-                    default = if (o.has("default")) o.get("default") else null,
-                    required = o.optBoolean("required", false),
-                    sensitive = o.optBoolean("sensitive", false),
-                    current = if (configured != null && configured.has(key)) configured.get(key) else null,
-                )
+                options +=
+                    PluginConfigOption(
+                        key = key,
+                        title = o.optString("title").takeIf { it.isNotEmpty() },
+                        description = o.optString("description").takeIf { it.isNotEmpty() },
+                        type = o.optString("type", "string").ifEmpty { "string" },
+                        default = if (o.has("default")) o.get("default") else null,
+                        required = o.optBoolean("required", false),
+                        sensitive = o.optBoolean("sensitive", false),
+                        current = if (configured != null && configured.has(key)) configured.get(key) else null,
+                    )
             }
         }
         return PluginDetail(
@@ -330,7 +361,10 @@ object CodaExtras {
     )
 
     /** 读取工作区级与用户级 settings.json 的 hooks 段（兼容新旧两种结构）。 */
-    fun readHooks(workspacePath: String?, homeDir: File): List<HookItem> {
+    fun readHooks(
+        workspacePath: String?,
+        homeDir: File,
+    ): List<HookItem> {
         val out = mutableListOf<HookItem>()
         val files = mutableListOf<Pair<String, File>>()
         if (workspacePath != null) {
@@ -354,12 +388,13 @@ object CodaExtras {
                         val inner = m.optJSONArray("hooks") ?: continue
                         for (j in 0 until inner.length()) {
                             val h = inner.optJSONObject(j) ?: continue
-                            out += HookItem(
-                                event = event,
-                                matcher = matcher,
-                                command = h.optString("command"),
-                                source = label,
-                            )
+                            out +=
+                                HookItem(
+                                    event = event,
+                                    matcher = matcher,
+                                    command = h.optString("command"),
+                                    source = label,
+                                )
                         }
                     }
                 }
@@ -390,34 +425,37 @@ object CodaExtras {
         if (!dbFile.exists()) return emptyList()
         var db: SQLiteDatabase? = null
         return try {
-            db = SQLiteDatabase.openDatabase(
-                dbFile.absolutePath,
-                null,
-                SQLiteDatabase.OPEN_READONLY,
-            )
+            db =
+                SQLiteDatabase.openDatabase(
+                    dbFile.absolutePath,
+                    null,
+                    SQLiteDatabase.OPEN_READONLY,
+                )
             val out = mutableListOf<AutomationItem>()
-            db.rawQuery(
-                "SELECT automation_id, title, cron_expr, prompt, enabled, lifecycle_status, " +
-                    "recurring, run_count, next_run_at, last_run_at, last_error " +
-                    "FROM automations ORDER BY created_at DESC",
-                null,
-            ).use { c ->
-                while (c.moveToNext()) {
-                    out += AutomationItem(
-                        id = c.getString(0) ?: "",
-                        title = c.getString(1) ?: "",
-                        cron = c.getString(2) ?: "",
-                        prompt = c.getString(3) ?: "",
-                        enabled = c.getInt(4) != 0,
-                        lifecycle = c.getString(5) ?: "active",
-                        recurring = c.getInt(6) != 0,
-                        runCount = c.getInt(7),
-                        nextRunAt = if (c.isNull(8)) null else c.getLong(8),
-                        lastRunAt = if (c.isNull(9)) null else c.getLong(9),
-                        lastError = if (c.isNull(10)) null else c.getString(10),
-                    )
+            db
+                .rawQuery(
+                    "SELECT automation_id, title, cron_expr, prompt, enabled, lifecycle_status, " +
+                        "recurring, run_count, next_run_at, last_run_at, last_error " +
+                        "FROM automations ORDER BY created_at DESC",
+                    null,
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        out +=
+                            AutomationItem(
+                                id = c.getString(0) ?: "",
+                                title = c.getString(1) ?: "",
+                                cron = c.getString(2) ?: "",
+                                prompt = c.getString(3) ?: "",
+                                enabled = c.getInt(4) != 0,
+                                lifecycle = c.getString(5) ?: "active",
+                                recurring = c.getInt(6) != 0,
+                                runCount = c.getInt(7),
+                                nextRunAt = if (c.isNull(8)) null else c.getLong(8),
+                                lastRunAt = if (c.isNull(9)) null else c.getLong(9),
+                                lastError = if (c.isNull(10)) null else c.getString(10),
+                            )
+                    }
                 }
-            }
             out
         } catch (_: Throwable) {
             emptyList()
@@ -434,9 +472,10 @@ object CodaExtras {
         return SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(ts))
     }
 
-    fun formatCount(v: Long): String = when {
-        v >= 100_000_000 -> String.format(Locale.US, "%.1f亿", v / 100_000_000.0)
-        v >= 10_000 -> String.format(Locale.US, "%.1f万", v / 10_000.0)
-        else -> v.toString()
-    }
+    fun formatCount(v: Long): String =
+        when {
+            v >= 100_000_000 -> String.format(Locale.US, "%.1f亿", v / 100_000_000.0)
+            v >= 10_000 -> String.format(Locale.US, "%.1f万", v / 10_000.0)
+            else -> v.toString()
+        }
 }

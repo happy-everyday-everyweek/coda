@@ -22,8 +22,9 @@ import java.util.Calendar
  * 布局是日历式：一列一周，一行一周里的一天。列数由数据决定，行固定 7 行，
  * 因此宽度自适应、高度固定按 7 行算，控件可以直接放进 ScrollView 横向滚动。
  */
-class UsageHeatmapView(context: Context) : View(context) {
-
+class UsageHeatmapView(
+    context: Context,
+) : View(context) {
     init {
         // 要接点击，必须显式声明可点，否则父容器不会把触摸派发过来。
         isClickable = true
@@ -48,18 +49,22 @@ class UsageHeatmapView(context: Context) : View(context) {
 
     private fun dp(v: Float): Int = (v * density + 0.5f).toInt()
 
-    private fun themeColor(attr: Int, fallback: Int): Int =
-        MaterialColors.getColor(this, attr, fallback)
+    private fun themeColor(
+        attr: Int,
+        fallback: Int,
+    ): Int = MaterialColors.getColor(this, attr, fallback)
 
     private val cellPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = dp(9f).toFloat()
-        typeface = Typeface.DEFAULT
-    }
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = dp(11f).toFloat()
-        color = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
-    }
+    private val labelPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = dp(9f).toFloat()
+            typeface = Typeface.DEFAULT
+        }
+    private val textPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = dp(11f).toFloat()
+            color = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
+        }
 
     /** 格子边长；留出左侧星期标签与底部月份标签的空间。 */
     private val cellSize = dp(11f)
@@ -72,13 +77,14 @@ class UsageHeatmapView(context: Context) : View(context) {
     /** 五档颜色由浅到深。用主色的透明度叠加，深浅主题都能看清。 */
     private fun levelColor(level: Int): Int {
         val base = themeColor(androidx.appcompat.R.attr.colorPrimary, 0xFF2E7D32.toInt())
-        val alpha = when (level) {
-            0 -> 0x1A
-            1 -> 0x4D
-            2 -> 0x80
-            3 -> 0xB3
-            else -> 0xFF
-        }
+        val alpha =
+            when (level) {
+                0 -> 0x1A
+                1 -> 0x4D
+                2 -> 0x80
+                3 -> 0xB3
+                else -> 0xFF
+            }
         return (base and 0x00FFFFFF) or (alpha shl 24)
     }
 
@@ -114,12 +120,13 @@ class UsageHeatmapView(context: Context) : View(context) {
                     if (cell == null) {
                         col += null
                     } else {
-                        col += Cell(
-                            level = cell.optInt("level", 0).coerceIn(0, 4),
-                            tokens = cell.optLong("totalTokens", 0),
-                            turns = cell.optInt("turnCount", 0),
-                            date = cell.optString("date"),
-                        )
+                        col +=
+                            Cell(
+                                level = cell.optInt("level", 0).coerceIn(0, 4),
+                                tokens = cell.optLong("totalTokens", 0),
+                                turns = cell.optInt("turnCount", 0),
+                                date = cell.optString("date"),
+                            )
                     }
                 }
                 // 内核理应给满 7 天，短了就补空位，避免画歪。
@@ -150,19 +157,21 @@ class UsageHeatmapView(context: Context) : View(context) {
 
         // 用非零值的三分位切 1/2/3 档，最高档给 4，避免单日尖峰压平其余。
         val positive = byDate.values.filter { it > 0 }.sorted()
-        fun threshold(q: Double): Long =
-            if (positive.isEmpty()) 0L else positive[((positive.size - 1) * q).toInt()]
+
+        fun threshold(q: Double): Long = if (positive.isEmpty()) 0L else positive[((positive.size - 1) * q).toInt()]
 
         val t1 = threshold(0.25)
         val t2 = threshold(0.5)
         val t3 = threshold(0.75)
-        fun levelOf(v: Long): Int = when {
-            v <= 0 -> 0
-            v <= t1 -> 1
-            v <= t2 -> 2
-            v <= t3 -> 3
-            else -> 4
-        }
+
+        fun levelOf(v: Long): Int =
+            when {
+                v <= 0 -> 0
+                v <= t1 -> 1
+                v <= t2 -> 2
+                v <= t3 -> 3
+                else -> 4
+            }
 
         // 按日历补齐：从第一天的所在周开始，到最后的日期结束。
         val first = byDate.keys.minOrNull() ?: return emptyList()
@@ -196,14 +205,18 @@ class UsageHeatmapView(context: Context) : View(context) {
         return out
     }
 
-    private fun parseDate(s: String, cal: Calendar): Calendar? = runCatching {
-        val parts = s.split("-")
-        if (parts.size != 3) return@runCatching null
-        (cal.clone() as Calendar).apply {
-            clear()
-            set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
-        }
-    }.getOrNull()
+    private fun parseDate(
+        s: String,
+        cal: Calendar,
+    ): Calendar? =
+        runCatching {
+            val parts = s.split("-")
+            if (parts.size != 3) return@runCatching null
+            (cal.clone() as Calendar).apply {
+                clear()
+                set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
+            }
+        }.getOrNull()
 
     private fun formatDate(cal: Calendar): String {
         val m = cal.get(Calendar.MONTH) + 1
@@ -211,7 +224,10 @@ class UsageHeatmapView(context: Context) : View(context) {
         return "${cal.get(Calendar.YEAR)}-${if (m < 10) "0$m" else "$m"}-${if (d < 10) "0$d" else "$d"}"
     }
 
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    override fun onMeasure(
+        widthMeasureSpec: Int,
+        heightMeasureSpec: Int,
+    ) {
         val cols = weeks.size.coerceAtLeast(1)
         val w = leftPad + cols * (cellSize + gap) + dp(4f)
         val h = topPad + 7 * (cellSize + rowGap) + bottomPad
@@ -246,22 +262,28 @@ class UsageHeatmapView(context: Context) : View(context) {
                     (x + cellSize).toFloat(),
                     (y + cellSize).toFloat(),
                 )
-                val paint = if (cell == null) {
-                    cellPaint.apply { color = emptyColor }
-                } else {
-                    cellPaint.apply {
-                        color = if (cell === selected) {
-                            themeColor(com.google.android.material.R.attr.colorOnSurface, Color.BLACK)
-                        } else {
-                            levelColor(cell.level)
+                val paint =
+                    if (cell == null) {
+                        cellPaint.apply { color = emptyColor }
+                    } else {
+                        cellPaint.apply {
+                            color =
+                                if (cell === selected) {
+                                    themeColor(com.google.android.material.R.attr.colorOnSurface, Color.BLACK)
+                                } else {
+                                    levelColor(cell.level)
+                                }
                         }
                     }
-                }
                 canvas.drawRoundRect(rect, dp(2f).toFloat(), dp(2f).toFloat(), paint)
 
                 // 列首格的日期用作月份标签，同月只标一次。
                 if (cell != null) {
-                    val month = cell.date.split("-").getOrNull(1)?.toIntOrNull() ?: -1
+                    val month =
+                        cell.date
+                            .split("-")
+                            .getOrNull(1)
+                            ?.toIntOrNull() ?: -1
                     if (month > 0 && month != lastMonth && ri == 0) {
                         lastMonth = month
                         canvas.drawText("${month}月", x.toFloat(), (topPad - dp(4f)).toFloat(), labelPaint)
@@ -276,7 +298,10 @@ class UsageHeatmapView(context: Context) : View(context) {
      *
      * @return 被点中的那格；点在空位上返回 null。
      */
-    internal fun cellAt(x: Float, y: Float): Cell? {
+    internal fun cellAt(
+        x: Float,
+        y: Float,
+    ): Cell? {
         if (weeks.isEmpty()) return null
         val ci = ((x - leftPad) / (cellSize + gap)).toInt()
         val ri = ((y - topPad) / (cellSize + rowGap)).toInt()

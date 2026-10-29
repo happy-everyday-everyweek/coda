@@ -12,32 +12,36 @@ import android.content.pm.PackageManager
  * 其余设为禁用——这是系统允许的、唯一能在运行期更换启动图标的方式。
  */
 object AppIconManager {
-
-    private val ALIASES = arrayOf(
-        "LauncherAuto",
-        "LauncherBlack",
-        "LauncherBlue",
-        "LauncherViolet",
-        "LauncherGreen",
-        "LauncherAmber",
-        "LauncherRose",
-        "LauncherTeal",
-        "LauncherOrange",
-    )
+    private val ALIASES =
+        arrayOf(
+            "LauncherAuto",
+            "LauncherBlack",
+            "LauncherBlue",
+            "LauncherViolet",
+            "LauncherGreen",
+            "LauncherAmber",
+            "LauncherRose",
+            "LauncherTeal",
+            "LauncherOrange",
+        )
 
     /** 启用第 slot 套图标（0=自动取色，1..8 对应色板顺序）。 */
-    fun apply(context: Context, slot: Int) {
+    fun apply(
+        context: Context,
+        slot: Int,
+    ) {
         val packageName = context.packageName
         val manager = context.packageManager
         val target = slot.coerceIn(0, ALIASES.size - 1)
 
         ALIASES.forEachIndexed { index, alias ->
             val component = ComponentName(packageName, "$packageName.$alias")
-            val state = if (index == target) {
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-            } else {
-                PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-            }
+            val state =
+                if (index == target) {
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                } else {
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                }
             manager.setComponentEnabledSetting(component, state, PackageManager.DONT_KILL_APP)
         }
     }

@@ -22,7 +22,9 @@ import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicInteger
 
 /** 手机控制业务错误（转成 MCP 工具错误返回）。 */
-class ToolException(message: String) : Exception(message)
+class ToolException(
+    message: String,
+) : Exception(message)
 
 /**
  * 手机控制管理器：开关、token、本地 MCP 服务器与内核配置同步。
@@ -32,7 +34,6 @@ class ToolException(message: String) : Exception(message)
  * 安全模型借鉴 google/artemis 助手：仅回环地址 + Bearer token 鉴权，默认关闭。
  */
 object PhoneControl {
-
     const val PORT = 39217
     private const val PREFS = "coda_phone_control"
     private const val SERVER_NAME = "coda-mobile"
@@ -42,8 +43,7 @@ object PhoneControl {
 
     private val HEX = "0123456789abcdef".toCharArray()
 
-    fun isEnabled(ctx: Context): Boolean =
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("enabled", false)
+    fun isEnabled(ctx: Context): Boolean = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("enabled", false)
 
     /** 会话 token：首次生成后持久化；写进 MCP 配置的 Authorization 头。 */
     fun token(ctx: Context): String {
@@ -64,11 +64,12 @@ object PhoneControl {
 
     fun isServerRunning(): Boolean = server?.isAlive() == true
 
-    fun statusText(ctx: Context): String = when {
-        !isEnabled(ctx) -> "已停用"
-        isServerRunning() -> "运行中 · 127.0.0.1:$PORT"
-        else -> "已停止"
-    }
+    fun statusText(ctx: Context): String =
+        when {
+            !isEnabled(ctx) -> "已停用"
+            isServerRunning() -> "运行中 · 127.0.0.1:$PORT"
+            else -> "已停止"
+        }
 
     /** App 启动时调用：开关开启则确保服务器在跑。 */
     fun startIfEnabled(ctx: Context) {
@@ -92,9 +93,15 @@ object PhoneControl {
     }
 
     /** 开关切换总入口：启停服务器 + 同步内核 MCP 配置。返回 null 表示成功。 */
-    fun applyEnabled(ctx: Context, enable: Boolean): String? {
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean("enabled", enable).apply()
+    fun applyEnabled(
+        ctx: Context,
+        enable: Boolean,
+    ): String? {
+        ctx
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("enabled", enable)
+            .apply()
         if (enable) {
             val err = startServer(ctx)
             if (err != null) return "服务启动失败：$err"
@@ -107,18 +114,22 @@ object PhoneControl {
     }
 
     /** 去掉 MCP 配置里的手机控制条目（卸载/停用时保持内核配置干净）。 */
-    fun syncMcpConfig(ctx: Context, enable: Boolean): Boolean {
-        return try {
+    fun syncMcpConfig(
+        ctx: Context,
+        enable: Boolean,
+    ): Boolean =
+        try {
             val f = configFile(ctx)
-            val root = if (f.exists()) {
-                try {
-                    JSONObject(f.readText())
-                } catch (_: Throwable) {
+            val root =
+                if (f.exists()) {
+                    try {
+                        JSONObject(f.readText())
+                    } catch (_: Throwable) {
+                        JSONObject()
+                    }
+                } else {
                     JSONObject()
                 }
-            } else {
-                JSONObject()
-            }
             val mcp = root.optJSONObject("mcp") ?: JSONObject().also { root.put("mcp", it) }
             val servers = mcp.optJSONObject("servers") ?: JSONObject().also { mcp.put("servers", it) }
             if (enable) {
@@ -142,10 +153,8 @@ object PhoneControl {
         } catch (_: Throwable) {
             false
         }
-    }
 
-    fun configFile(ctx: Context): File =
-        File(File(ctx.filesDir, "home"), ".zcode/cli/config.json")
+    fun configFile(ctx: Context): File = File(File(ctx.filesDir, "home"), ".zcode/cli/config.json")
 
     fun openAccessibilitySettings(ctx: Context) {
         try {
@@ -166,7 +175,6 @@ class PhoneControlServer(
     private val port: Int,
     private val token: String,
 ) {
-
     @Volatile
     var isRunning = false
         private set
@@ -178,8 +186,8 @@ class PhoneControlServer(
         return isRunning && !ss.isClosed
     }
 
-    fun start(): String? {
-        return try {
+    fun start(): String? =
+        try {
             val ss = ServerSocket()
             ss.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 8)
             serverSocket = ss
@@ -189,7 +197,6 @@ class PhoneControlServer(
         } catch (e: Throwable) {
             "端口 $port 不可用：${e.message}"
         }
-    }
 
     fun stop() {
         isRunning = false
@@ -199,14 +206,16 @@ class PhoneControlServer(
         }
         serverSocket = null
     }
+
     private fun acceptLoop(ss: ServerSocket) {
         try {
             while (isRunning) {
-                val socket = try {
-                    ss.accept()
-                } catch (_: Throwable) {
-                    break
-                }
+                val socket =
+                    try {
+                        ss.accept()
+                    } catch (_: Throwable) {
+                        break
+                    }
                 Thread({ handleConnection(socket) }, "coda-phone-conn").start()
             }
         } finally {
@@ -254,7 +263,13 @@ class PhoneControlServer(
         }
     }
 
-    private fun route(output: OutputStream, method: String, path: String, auth: String?, body: ByteArray) {
+    private fun route(
+        output: OutputStream,
+        method: String,
+        path: String,
+        auth: String?,
+        body: ByteArray,
+    ) {
         when {
             method == "POST" && path == "/mcp" -> {
                 if (auth != "Bearer $token") {
@@ -262,36 +277,53 @@ class PhoneControlServer(
                     return
                 }
                 val text = String(body, Charsets.UTF_8)
-                val response = try {
-                    PhoneMcp.handle(ctx, text)
-                } catch (e: Throwable) {
-                    PhoneMcp.protocolError(text, e)
-                }
+                val response =
+                    try {
+                        PhoneMcp.handle(ctx, text)
+                    } catch (e: Throwable) {
+                        PhoneMcp.protocolError(text, e)
+                    }
                 if (response == null) {
                     writeEmpty(output, 202)
                 } else {
                     writeJson(output, 200, response)
                 }
             }
-            method == "GET" && path == "/mcp" -> writeEmpty(output, 405)
-            method == "GET" && path == "/ping" ->
+
+            method == "GET" && path == "/mcp" -> {
+                writeEmpty(output, 405)
+            }
+
+            method == "GET" && path == "/ping" -> {
                 writeJson(output, 200, """{"ok":true,"name":"coda-mobile"}""")
-            else -> writeEmpty(output, 404)
+            }
+
+            else -> {
+                writeEmpty(output, 404)
+            }
         }
     }
 
-    private fun writeJson(output: OutputStream, code: Int, body: String) {
+    private fun writeJson(
+        output: OutputStream,
+        code: Int,
+        body: String,
+    ) {
         val bytes = body.toByteArray(Charsets.UTF_8)
-        val head = "HTTP/1.1 $code OK\r\n" +
-            "Content-Type: application/json; charset=utf-8\r\n" +
-            "Content-Length: ${bytes.size}\r\n" +
-            "Connection: close\r\n\r\n"
+        val head =
+            "HTTP/1.1 $code OK\r\n" +
+                "Content-Type: application/json; charset=utf-8\r\n" +
+                "Content-Length: ${bytes.size}\r\n" +
+                "Connection: close\r\n\r\n"
         output.write(head.toByteArray(Charsets.US_ASCII))
         output.write(bytes)
         output.flush()
     }
 
-    private fun writeEmpty(output: OutputStream, code: Int) {
+    private fun writeEmpty(
+        output: OutputStream,
+        code: Int,
+    ) {
         val head = "HTTP/1.1 $code\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         output.write(head.toByteArray(Charsets.US_ASCII))
         output.flush()
@@ -310,7 +342,10 @@ class PhoneControlServer(
         return String(buf.toByteArray(), Charsets.ISO_8859_1)
     }
 
-    private fun readExactly(input: InputStream, length: Int): ByteArray {
+    private fun readExactly(
+        input: InputStream,
+        length: Int,
+    ): ByteArray {
         val buf = ByteArray(length)
         var total = 0
         while (total < length) {
@@ -332,15 +367,16 @@ class PhoneControlServer(
  * 通知类消息（无 id）返回 202。工具执行全部经由无障碍服务。
  */
 object PhoneMcp {
-
-    private val seq = AtomicInteger(1)
-
-    fun handle(ctx: Context, body: String): String? {
-        val req = try {
-            JSONObject(body)
-        } catch (_: Throwable) {
-            return """{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}}"""
-        }
+    fun handle(
+        ctx: Context,
+        body: String,
+    ): String? {
+        val req =
+            try {
+                JSONObject(body)
+            } catch (_: Throwable) {
+                return """{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}}"""
+            }
         val method = req.optString("method")
         val id = if (req.has("id") && !req.isNull("id")) req.get("id") else null
         if (id == null) {
@@ -348,60 +384,82 @@ object PhoneMcp {
             return null
         }
         return try {
-            val result: Any = when (method) {
-                "initialize" -> initializeResult(req)
-                "ping" -> JSONObject()
-                "tools/list" -> JSONObject().put("tools", toolsList())
-                "tools/call" -> callTool(ctx, req.optJSONObject("params") ?: JSONObject())
-                "resources/list" -> JSONObject().put("resources", JSONArray())
-                "prompts/list" -> JSONObject().put("prompts", JSONArray())
-                else -> return errorJson(id, -32601, "Method not found: $method")
-            }
-            JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", result).toString()
+            val result: Any =
+                when (method) {
+                    "initialize" -> initializeResult(req)
+                    "ping" -> JSONObject()
+                    "tools/list" -> JSONObject().put("tools", toolsList())
+                    "tools/call" -> callTool(ctx, req.optJSONObject("params") ?: JSONObject())
+                    "resources/list" -> JSONObject().put("resources", JSONArray())
+                    "prompts/list" -> JSONObject().put("prompts", JSONArray())
+                    else -> return errorJson(id, -32601, "Method not found: $method")
+                }
+            JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("id", id)
+                .put("result", result)
+                .toString()
         } catch (e: Throwable) {
             errorJson(id, -32603, e.toString())
         }
     }
 
     /** 服务器无法判断请求 id 时的兜底错误（解析失败等）。 */
-    fun protocolError(body: String, e: Throwable): String {
-        val id = try {
-            val o = JSONObject(body)
-            if (o.has("id") && !o.isNull("id")) o.get("id") else null
-        } catch (_: Throwable) {
-            null
-        }
-        return JSONObject().put("jsonrpc", "2.0").put("id", id ?: JSONObject.NULL)
+    fun protocolError(
+        body: String,
+        e: Throwable,
+    ): String {
+        val id =
+            try {
+                val o = JSONObject(body)
+                if (o.has("id") && !o.isNull("id")) o.get("id") else null
+            } catch (_: Throwable) {
+                null
+            }
+        return JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", id ?: JSONObject.NULL)
             .put("error", JSONObject().put("code", -32603).put("message", e.toString()))
             .toString()
     }
 
     private fun initializeResult(req: JSONObject): JSONObject {
-        val pv = req.optJSONObject("params")?.optString("protocolVersion")
-            ?.takeIf { it.isNotEmpty() } ?: "2025-06-18"
+        val pv =
+            req
+                .optJSONObject("params")
+                ?.optString("protocolVersion")
+                ?.takeIf { it.isNotEmpty() } ?: "2025-06-18"
         return JSONObject()
             .put("protocolVersion", pv)
             .put("capabilities", JSONObject().put("tools", JSONObject()))
             .put("serverInfo", JSONObject().put("name", "coda-mobile").put("version", "1.0.0"))
     }
 
-    private fun errorJson(id: Any, code: Int, message: String): String =
-        JSONObject().put("jsonrpc", "2.0").put("id", id)
+    private fun errorJson(
+        id: Any,
+        code: Int,
+        message: String,
+    ): String =
+        JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", id)
             .put("error", JSONObject().put("code", code).put("message", message))
             .toString()
 
     // ------------------------------------------------------------ 工具定义
 
-    private fun strProp(desc: String): JSONObject =
-        JSONObject().put("type", "string").put("description", desc)
+    private fun strProp(desc: String): JSONObject = JSONObject().put("type", "string").put("description", desc)
 
-    private fun numProp(desc: String): JSONObject =
-        JSONObject().put("type", "number").put("description", desc)
+    private fun numProp(desc: String): JSONObject = JSONObject().put("type", "number").put("description", desc)
 
-    private fun boolProp(desc: String): JSONObject =
-        JSONObject().put("type", "boolean").put("description", desc)
+    private fun boolProp(desc: String): JSONObject = JSONObject().put("type", "boolean").put("description", desc)
 
-    private fun tool(name: String, desc: String, props: JSONObject, required: List<String>): JSONObject {
+    private fun tool(
+        name: String,
+        desc: String,
+        props: JSONObject,
+        required: List<String>,
+    ): JSONObject {
         val schema = JSONObject().put("type", "object").put("properties", props)
         if (required.isNotEmpty()) schema.put("required", JSONArray(required))
         return JSONObject().put("name", name).put("description", desc).put("inputSchema", schema)
@@ -438,7 +496,9 @@ object PhoneMcp {
             tool(
                 "long_press",
                 "长按屏幕坐标。",
-                JSONObject().put("x", numProp("横坐标")).put("y", numProp("纵坐标"))
+                JSONObject()
+                    .put("x", numProp("横坐标"))
+                    .put("y", numProp("纵坐标"))
                     .put("duration_ms", numProp("按住时长毫秒，默认 600")),
                 listOf("x", "y"),
             ),
@@ -447,8 +507,11 @@ object PhoneMcp {
             tool(
                 "swipe",
                 "从一点滑动到另一点（滚动列表/翻页）。",
-                JSONObject().put("x1", numProp("起点横坐标")).put("y1", numProp("起点纵坐标"))
-                    .put("x2", numProp("终点横坐标")).put("y2", numProp("终点纵坐标"))
+                JSONObject()
+                    .put("x1", numProp("起点横坐标"))
+                    .put("y1", numProp("起点纵坐标"))
+                    .put("x2", numProp("终点横坐标"))
+                    .put("y2", numProp("终点纵坐标"))
                     .put("duration_ms", numProp("滑动时长毫秒，默认 300")),
                 listOf("x1", "y1", "x2", "y2"),
             ),
@@ -457,7 +520,8 @@ object PhoneMcp {
             tool(
                 "tap_element",
                 "按文本/描述/资源 ID 查找控件并点击其中心（自动寻找可点击祖先）。比坐标点击更稳。",
-                JSONObject().put("text", strProp("控件文本（包含匹配）"))
+                JSONObject()
+                    .put("text", strProp("控件文本（包含匹配）"))
                     .put("desc", strProp("contentDescription（包含匹配）"))
                     .put("id", strProp("资源 ID 短名，如 btn_ok")),
                 emptyList(),
@@ -483,7 +547,8 @@ object PhoneMcp {
             tool(
                 "open_app",
                 "启动一个已安装的应用（按名称模糊匹配或包名）。",
-                JSONObject().put("name", strProp("应用名（模糊匹配）"))
+                JSONObject()
+                    .put("name", strProp("应用名（模糊匹配）"))
                     .put("package", strProp("包名（精确）")),
                 emptyList(),
             ),
@@ -501,9 +566,15 @@ object PhoneMcp {
 
     // ------------------------------------------------------------ 工具执行
 
-    private class ToolOutput(val text: String, val imageBase64: String? = null)
+    private class ToolOutput(
+        val text: String,
+        val imageBase64: String? = null,
+    )
 
-    private fun callTool(ctx: Context, params: JSONObject): JSONObject {
+    private fun callTool(
+        ctx: Context,
+        params: JSONObject,
+    ): JSONObject {
         val name = params.optString("name")
         val args = params.optJSONObject("arguments") ?: JSONObject()
         return try {
@@ -531,60 +602,87 @@ object PhoneMcp {
         PhoneAccessibilityService.get()
             ?: throw ToolException("无障碍服务未启用：请在 Coda → 设置 → 手机控制 中开启无障碍授权")
 
-    private fun executeTool(ctx: Context, name: String, args: JSONObject): ToolOutput {
-        return when (name) {
+    private fun executeTool(
+        ctx: Context,
+        name: String,
+        args: JSONObject,
+    ): ToolOutput =
+        when (name) {
             "dump_ui" -> {
                 val json = service().dumpUi(args.optBoolean("include_invisible", false))
                 ToolOutput(json.toString())
             }
-            "screenshot" -> screenshot(ctx, args.optBoolean("inline", false))
+
+            "screenshot" -> {
+                screenshot(ctx, args.optBoolean("inline", false))
+            }
+
             "tap" -> {
                 val ok = service().tap(args.optDouble("x", 0.0).toFloat(), args.optDouble("y", 0.0).toFloat())
                 ToolOutput(if (ok) "已点击 (${args.optInt("x")}, ${args.optInt("y")})" else "点击失败")
             }
+
             "long_press" -> {
-                val ok = service().longPress(
-                    args.optDouble("x", 0.0).toFloat(),
-                    args.optDouble("y", 0.0).toFloat(),
-                    args.optLong("duration_ms", 600L).coerceIn(100L, 10_000L),
-                )
+                val ok =
+                    service().longPress(
+                        args.optDouble("x", 0.0).toFloat(),
+                        args.optDouble("y", 0.0).toFloat(),
+                        args.optLong("duration_ms", 600L).coerceIn(100L, 10_000L),
+                    )
                 ToolOutput(if (ok) "已长按 (${args.optInt("x")}, ${args.optInt("y")})" else "长按失败")
             }
+
             "swipe" -> {
-                val ok = service().swipe(
-                    args.optDouble("x1", 0.0).toFloat(),
-                    args.optDouble("y1", 0.0).toFloat(),
-                    args.optDouble("x2", 0.0).toFloat(),
-                    args.optDouble("y2", 0.0).toFloat(),
-                    args.optLong("duration_ms", 300L),
-                )
+                val ok =
+                    service().swipe(
+                        args.optDouble("x1", 0.0).toFloat(),
+                        args.optDouble("y1", 0.0).toFloat(),
+                        args.optDouble("x2", 0.0).toFloat(),
+                        args.optDouble("y2", 0.0).toFloat(),
+                        args.optLong("duration_ms", 300L),
+                    )
                 ToolOutput(if (ok) "已滑动" else "滑动失败")
             }
-            "tap_element" -> tapElement(args)
+
+            "tap_element" -> {
+                tapElement(args)
+            }
+
             "type_text" -> {
                 val text = args.optString("text")
                 if (text.isEmpty()) throw ToolException("text 不能为空")
                 val ok = service().setText(text)
                 ToolOutput(if (ok) "已输入文本（${text.length} 字）" else "输入失败：未找到可编辑的输入框")
             }
+
             "press_key" -> {
                 val key = args.optString("key")
                 val ok = service().globalAction(key)
                 ToolOutput(if (ok) "已执行 $key" else "不支持的按键: $key（可用 back/home/recents/notifications）")
             }
-            "open_app" -> openApp(ctx, args)
+
+            "open_app" -> {
+                openApp(ctx, args)
+            }
+
             "wait" -> {
                 val ms = args.optLong("ms", 1000L).coerceIn(0L, 30_000L)
                 Thread.sleep(ms)
                 ToolOutput("已等待 ${ms}ms")
             }
-            else -> throw ToolException("未知工具: $name")
-        }
-    }
 
-    private fun screenshot(ctx: Context, inline: Boolean): ToolOutput {
-        val bmp = service().screenshotBitmap()
-            ?: throw ToolException("截图失败（需要 Android 11+，且无障碍服务已授权）")
+            else -> {
+                throw ToolException("未知工具: $name")
+            }
+        }
+
+    private fun screenshot(
+        ctx: Context,
+        inline: Boolean,
+    ): ToolOutput {
+        val bmp =
+            service().screenshotBitmap()
+                ?: throw ToolException("截图失败（需要 Android 11+，且无障碍服务已授权）")
         // 落到应用自己的外部私有目录：Android 10 起普通应用无权在 /sdcard 下任意建目录，
         // 原硬编码 /sdcard/Coda/workspace/.coda/screenshots 会在 FileOutputStream 打开时抛异常，
         // 被上层 catch 成"截图保存失败"，Agent 再也拿不到图。
@@ -603,7 +701,7 @@ object PhoneMcp {
             val baos = ByteArrayOutputStream()
             bmp.compress(Bitmap.CompressFormat.PNG, 100, baos)
             ToolOutput(info, Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
-        } catch (e: Throwable) {
+        } catch (_: Throwable) {
             ToolOutput(info)
         }
     }
@@ -617,8 +715,9 @@ object PhoneMcp {
         }
         val svc = service()
         val root = svc.rootInActiveWindow ?: throw ToolException("当前没有活动窗口")
-        val node = findNode(root, text, desc, rid)
-            ?: throw ToolException("未找到匹配的控件（可先调用 dump_ui 查看界面）")
+        val node =
+            findNode(root, text, desc, rid)
+                ?: throw ToolException("未找到匹配的控件（可先调用 dump_ui 查看界面）")
         val nodeRect = Rect()
         node.getBoundsInScreen(nodeRect)
         var target: android.view.accessibility.AccessibilityNodeInfo? = node
@@ -673,30 +772,37 @@ object PhoneMcp {
         return null
     }
 
-    private fun openApp(ctx: Context, args: JSONObject): ToolOutput {
+    private fun openApp(
+        ctx: Context,
+        args: JSONObject,
+    ): ToolOutput {
         var target = args.optString("package").takeIf { it.isNotEmpty() }
         val query = args.optString("name").takeIf { it.isNotEmpty() }
         if (target == null && query == null) throw ToolException("需提供 name 或 package")
         val pm = ctx.packageManager
         if (target == null && query != null) {
-            val apps = try {
-                pm.getInstalledApplications(0)
-            } catch (_: Throwable) {
-                emptyList()
-            }
-            val hit = apps.firstOrNull { a ->
-                val label = try {
-                    pm.getApplicationLabel(a).toString()
+            val apps =
+                try {
+                    pm.getInstalledApplications(0)
                 } catch (_: Throwable) {
-                    ""
+                    emptyList()
                 }
-                label.contains(query, ignoreCase = true) || a.packageName.contains(query, ignoreCase = true)
-            } ?: throw ToolException("未找到应用：$query")
+            val hit =
+                apps.firstOrNull { a ->
+                    val label =
+                        try {
+                            pm.getApplicationLabel(a).toString()
+                        } catch (_: Throwable) {
+                            ""
+                        }
+                    label.contains(query, ignoreCase = true) || a.packageName.contains(query, ignoreCase = true)
+                } ?: throw ToolException("未找到应用：$query")
             target = hit.packageName
         }
         val pkg = target ?: throw ToolException("需提供 name 或 package")
-        val intent = pm.getLaunchIntentForPackage(pkg)
-            ?: throw ToolException("应用不可启动：$pkg")
+        val intent =
+            pm.getLaunchIntentForPackage(pkg)
+                ?: throw ToolException("应用不可启动：$pkg")
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return try {
             ctx.startActivity(intent)

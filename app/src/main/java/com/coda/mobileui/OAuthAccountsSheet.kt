@@ -33,7 +33,6 @@ class OAuthAccountsSheet(
     private val host: BaseActivity,
     private val onlyProviderId: String? = null,
 ) {
-
     private val sheet = CodaSheet(host)
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
@@ -42,8 +41,10 @@ class OAuthAccountsSheet(
 
     private fun dp(v: Float): Int = (v * host.resources.displayMetrics.density + 0.5f).toInt()
 
-    private fun color(attr: Int, fallback: Int): Int =
-        MaterialColors.getColor(host.window.decorView, attr, fallback)
+    private fun color(
+        attr: Int,
+        fallback: Int,
+    ): Int = MaterialColors.getColor(host.window.decorView, attr, fallback)
 
     private val onSurface: Int
         get() = color(com.google.android.material.R.attr.colorOnSurface, Color.WHITE)
@@ -53,24 +54,26 @@ class OAuthAccountsSheet(
         get() = color(com.google.android.material.R.attr.colorSurfaceContainerHigh, Color.DKGRAY)
 
     /** 健康度对应的颜色。绿、黄、红三档足够分辨，不再细分。 */
-    private fun healthColor(health: OAuthAccounts.Health): Int = when (health) {
-        OAuthAccounts.Health.GOOD -> 0xFF2E7D32.toInt()
-        OAuthAccounts.Health.LOW -> 0xFFF9A825.toInt()
-        OAuthAccounts.Health.COOLING -> 0xFF1565C0.toInt()
-        OAuthAccounts.Health.SUSPECT -> 0xFFEF6C00.toInt()
-        OAuthAccounts.Health.EXHAUSTED, OAuthAccounts.Health.DISABLED -> 0xFFC62828.toInt()
-        OAuthAccounts.Health.UNKNOWN -> 0xFF757575.toInt()
-    }
+    private fun healthColor(health: OAuthAccounts.Health): Int =
+        when (health) {
+            OAuthAccounts.Health.GOOD -> 0xFF2E7D32.toInt()
+            OAuthAccounts.Health.LOW -> 0xFFF9A825.toInt()
+            OAuthAccounts.Health.COOLING -> 0xFF1565C0.toInt()
+            OAuthAccounts.Health.SUSPECT -> 0xFFEF6C00.toInt()
+            OAuthAccounts.Health.EXHAUSTED, OAuthAccounts.Health.DISABLED -> 0xFFC62828.toInt()
+            OAuthAccounts.Health.UNKNOWN -> 0xFF757575.toInt()
+        }
 
-    private fun healthLabel(health: OAuthAccounts.Health): String = when (health) {
-        OAuthAccounts.Health.GOOD -> "正常"
-        OAuthAccounts.Health.LOW -> "额度偏低"
-        OAuthAccounts.Health.COOLING -> "冷却中"
-        OAuthAccounts.Health.SUSPECT -> "探活失败"
-        OAuthAccounts.Health.EXHAUSTED -> "额度耗尽"
-        OAuthAccounts.Health.DISABLED -> "已停用"
-        OAuthAccounts.Health.UNKNOWN -> "状态未知"
-    }
+    private fun healthLabel(health: OAuthAccounts.Health): String =
+        when (health) {
+            OAuthAccounts.Health.GOOD -> "正常"
+            OAuthAccounts.Health.LOW -> "额度偏低"
+            OAuthAccounts.Health.COOLING -> "冷却中"
+            OAuthAccounts.Health.SUSPECT -> "探活失败"
+            OAuthAccounts.Health.EXHAUSTED -> "额度耗尽"
+            OAuthAccounts.Health.DISABLED -> "已停用"
+            OAuthAccounts.Health.UNKNOWN -> "状态未知"
+        }
 
     fun show() {
         val one = onlyProviderId?.let { OAuthProviders.byId(it) }
@@ -81,15 +84,17 @@ class OAuthAccountsSheet(
             .content { col ->
                 column = col
                 render(col)
-            }
-            .primaryAction("全部签到") { checkinAll() }
+            }.primaryAction("全部签到") { checkinAll() }
             .secondaryAction("关闭") { self -> self.dismiss() }
             .onDismiss { io.shutdown() }
             .show()
     }
 
     /** 一个平台的账号数，用于列表里展示。 */
-    private data class PlatformRow(val provider: OAuthProviders.Provider, val accounts: List<OAuthAccounts.Account>)
+    private data class PlatformRow(
+        val provider: OAuthProviders.Provider,
+        val accounts: List<OAuthAccounts.Account>,
+    )
 
     /** 逐个平台取账号。没有账号的平台也画出来，并提示去添加。 */
     private fun render(col: LinearLayout) {
@@ -97,17 +102,21 @@ class OAuthAccountsSheet(
         col.addView(hint("正在读取账号…"))
 
         io.execute {
-            val store = com.coda.mobileui.core.ProviderStore.load(host)
+            val store =
+                com.coda.mobileui.core.ProviderStore
+                    .load(host)
             // 指定了平台就只画它一张卡：从某条 provider 点进来时，用户看的是
             // 「这条供应商下有几个账号」，铺出其它平台只是噪声。
-            val platforms = onlyProviderId
-                ?.let { id -> OAuthProviders.all.filter { it.id == id } }
-                ?: OAuthProviders.all
-            val rows = platforms.map { p ->
-                // 只有已经落成 provider 的平台才去问账号，没授权过的平台问了也是空的。
-                val authorized = store.any { it.id == p.id }
-                PlatformRow(p, if (authorized) OAuthAccounts.list(host, p) else emptyList())
-            }
+            val platforms =
+                onlyProviderId
+                    ?.let { id -> OAuthProviders.all.filter { it.id == id } }
+                    ?: OAuthProviders.all
+            val rows =
+                platforms.map { p ->
+                    // 只有已经落成 provider 的平台才去问账号，没授权过的平台问了也是空的。
+                    val authorized = store.any { it.id == p.id }
+                    PlatformRow(p, if (authorized) OAuthAccounts.list(host, p) else emptyList())
+                }
             main.post {
                 val target = column ?: return@post
                 target.removeAllViews()
@@ -120,115 +129,150 @@ class OAuthAccountsSheet(
     }
 
     /** 一个平台一张卡：标题行 + 账号行。 */
-    private fun platformCard(p: OAuthProviders.Provider, accounts: List<OAuthAccounts.Account>): View {
-        val card = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
-                cornerRadius = dp(14f).toFloat()
-                setColor(surfaceHigh)
+    private fun platformCard(
+        p: OAuthProviders.Provider,
+        accounts: List<OAuthAccounts.Account>,
+    ): View {
+        val card =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.VERTICAL
+                background =
+                    GradientDrawable().apply {
+                        cornerRadius = dp(14f).toFloat()
+                        setColor(surfaceHigh)
+                    }
+                setPadding(dp(14f), dp(12f), dp(14f), dp(6f))
+                layoutParams =
+                    LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                        bottomMargin = dp(12f)
+                    }
             }
-            setPadding(dp(14f), dp(12f), dp(14f), dp(6f))
-            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-                bottomMargin = dp(12f)
-            }
-        }
 
         // 标题行：平台名 + 账号数，右侧给一个"添加账号"的入口。
-        val head = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        head.addView(TextView(host).apply {
-            text = p.name
-            setTextColor(onSurface)
-            textSize = 15f
-            setTypeface(typeface, Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
-        })
-        head.addView(TextView(host).apply {
-            text = if (accounts.isEmpty()) "未登录" else "${accounts.size} 个账号"
-            setTextColor(onSurfaceVariant)
-            textSize = 12f
-            setPadding(0, 0, dp(10f), 0)
-        })
-        head.addView(TextView(host).apply {
-            text = "添加账号"
-            setTextColor(color(androidx.appcompat.R.attr.colorPrimary, onSurface))
-            textSize = 12.5f
-            setPadding(dp(8f), dp(4f), 0, dp(4f))
-            setOnClickListener { openAdd(p) }
-        })
+        val head =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+        head.addView(
+            TextView(host).apply {
+                text = p.name
+                setTextColor(onSurface)
+                textSize = 15f
+                setTypeface(typeface, Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+            },
+        )
+        head.addView(
+            TextView(host).apply {
+                text = if (accounts.isEmpty()) "未登录" else "${accounts.size} 个账号"
+                setTextColor(onSurfaceVariant)
+                textSize = 12f
+                setPadding(0, 0, dp(10f), 0)
+            },
+        )
+        head.addView(
+            TextView(host).apply {
+                text = "添加账号"
+                setTextColor(color(androidx.appcompat.R.attr.colorPrimary, onSurface))
+                textSize = 12.5f
+                setPadding(dp(8f), dp(4f), 0, dp(4f))
+                setOnClickListener { openAdd(p) }
+            },
+        )
         card.addView(head)
 
         if (accounts.isEmpty()) {
-            card.addView(TextView(host).apply {
-                text = "尚未授权。点「添加账号」登录一个。"
-                setTextColor(onSurfaceVariant)
-                textSize = 12.5f
-                setPadding(0, dp(8f), 0, dp(10f))
-            })
+            card.addView(
+                TextView(host).apply {
+                    text = "尚未授权。点「添加账号」登录一个。"
+                    setTextColor(onSurfaceVariant)
+                    textSize = 12.5f
+                    setPadding(0, dp(8f), 0, dp(10f))
+                },
+            )
             return card
         }
 
-        card.addView(View(host).apply {
-            setBackgroundColor(onSurfaceVariant and 0x33FFFFFF)
-            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(1f)).apply { topMargin = dp(8f) }
-        })
+        card.addView(
+            View(host).apply {
+                setBackgroundColor(onSurfaceVariant and 0x33FFFFFF)
+                layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(1f)).apply { topMargin = dp(8f) }
+            },
+        )
 
         accounts.forEach { account -> card.addView(accountRow(p, account)) }
         return card
     }
 
     /** 一行账号：健康点、名称、额度/签到摘要，右侧箭头。 */
-    private fun accountRow(p: OAuthProviders.Provider, a: OAuthAccounts.Account): View {
-        val row = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(11f), 0, dp(11f))
-            isClickable = true
-            setOnClickListener {
-                // 不再"关列表 → 弹详情"：直接把同一个卡片换成该账号的面板
-                OAuthAccountSheet(host, p, a) { refreshList() }.attachTo(sheet)
+    private fun accountRow(
+        p: OAuthProviders.Provider,
+        a: OAuthAccounts.Account,
+    ): View {
+        val row =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(11f), 0, dp(11f))
+                isClickable = true
+                setOnClickListener {
+                    // 不再"关列表 → 弹详情"：直接把同一个卡片换成该账号的面板
+                    OAuthAccountSheet(host, p, a) { refreshList() }.attachTo(sheet)
+                }
             }
-        }
 
         // 健康点，用颜色说话，省掉一个文字标签。
-        row.addView(View(host).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(healthColor(a.health))
-            }
-            layoutParams = LinearLayout.LayoutParams(dp(8f), dp(8f)).apply { rightMargin = dp(10f) }
-        })
+        row.addView(
+            View(host).apply {
+                background =
+                    GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(healthColor(a.health))
+                    }
+                layoutParams = LinearLayout.LayoutParams(dp(8f), dp(8f)).apply { rightMargin = dp(10f) }
+            },
+        )
 
-        val text = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
-        }
-        text.addView(TextView(host).apply {
-            this.text = a.title
-            setTextColor(onSurface)
-            textSize = 14f
-            maxLines = 1
-        })
+        val text =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+            }
+        text.addView(
+            TextView(host).apply {
+                this.text = a.title
+                setTextColor(onSurface)
+                textSize = 14f
+                maxLines = 1
+            },
+        )
         val bits = mutableListOf<String>()
         if (a.creditsSize > 0) bits += "余额 ${a.creditsRemain}"
-        if (a.todayCheckedIn) bits += "今日已签" else if (a.streakDays > 0) bits += "连签 ${a.streakDays} 天"
+        if (a.todayCheckedIn) {
+            bits += "今日已签"
+        } else if (a.streakDays > 0) {
+            bits += "连签 ${a.streakDays} 天"
+        }
         if (a.region == "global") bits += "国际版"
         if (bits.isEmpty()) bits += healthLabel(a.health)
-        text.addView(TextView(host).apply {
-            this.text = bits.joinToString(" · ")
-            setTextColor(onSurfaceVariant)
-            textSize = 11.5f
-            maxLines = 1
-        })
+        text.addView(
+            TextView(host).apply {
+                this.text = bits.joinToString(" · ")
+                setTextColor(onSurfaceVariant)
+                textSize = 11.5f
+                maxLines = 1
+            },
+        )
         row.addView(text)
 
-        row.addView(TextView(host).apply {
-            setText("›")
-            setTextColor(onSurfaceVariant)
-            textSize = 16f
-        })
+        row.addView(
+            TextView(host).apply {
+                setText("›")
+                setTextColor(onSurfaceVariant)
+                textSize = 16f
+            },
+        )
         return row
     }
 
@@ -248,16 +292,18 @@ class OAuthAccountsSheet(
         val picker = CodaSheet(host).title("选择平台")
         picker.content { col ->
             pool.forEach { p ->
-                col.addView(TextView(host).apply {
-                    text = p.name
-                    textSize = 16f
-                    setTextColor(onSurface)
-                    setPadding(dp(2f), dp(14f), dp(2f), dp(14f))
-                    setOnClickListener {
-                        // 同一个卡片换成"添加账号"那一页，不要再关掉选择器另开一张
-                        OAuthSheet(host, p) { refreshList() }.attachTo(picker)
-                    }
-                })
+                col.addView(
+                    TextView(host).apply {
+                        text = p.name
+                        textSize = 16f
+                        setTextColor(onSurface)
+                        setPadding(dp(2f), dp(14f), dp(2f), dp(14f))
+                        setOnClickListener {
+                            // 同一个卡片换成"添加账号"那一页，不要再关掉选择器另开一张
+                            OAuthSheet(host, p) { refreshList() }.attachTo(picker)
+                        }
+                    },
+                )
             }
         }
         picker.show()
@@ -273,7 +319,9 @@ class OAuthAccountsSheet(
         busy = true
         Toast.makeText(host, "正在签到…", Toast.LENGTH_SHORT).show()
         io.execute {
-            val store = com.coda.mobileui.core.ProviderStore.load(host)
+            val store =
+                com.coda.mobileui.core.ProviderStore
+                    .load(host)
             val lines = mutableListOf<String>()
             var anyFail = false
             OAuthProviders.all.forEach { p ->
@@ -293,11 +341,12 @@ class OAuthAccountsSheet(
         }
     }
 
-    private fun hint(text: String): TextView = TextView(host).apply {
-        this.text = text
-        setTextColor(onSurfaceVariant)
-        textSize = 13f
-        setLineSpacing(dp(3f).toFloat(), 1f)
-        setPadding(0, dp(10f), 0, dp(10f))
-    }
+    private fun hint(text: String): TextView =
+        TextView(host).apply {
+            this.text = text
+            setTextColor(onSurfaceVariant)
+            textSize = 13f
+            setLineSpacing(dp(3f).toFloat(), 1f)
+            setPadding(0, dp(10f), 0, dp(10f))
+        }
 }

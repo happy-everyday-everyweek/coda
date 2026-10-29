@@ -21,7 +21,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    `coda-<versionCode>.apk` 命名，与手动下载同版本时天然复用同一个文件。
  */
 object SilentUpdater {
-
     private const val TAG = "SilentUpdater"
 
     /** 正在跑（或已跑过）的标记。跨启动不做持久化：每次冷启动都算新机会。 */
@@ -76,13 +75,14 @@ object SilentUpdater {
             return
         }
 
-        val r = try {
-            UpdateChecker.check(ctx) { AppLog.i(TAG, it) }
-        } catch (t: Throwable) {
-            lastOutcome = "检查失败：${t.javaClass.simpleName}: ${t.message}"
-            AppLog.e(TAG, "检查抛异常：$lastOutcome", t)
-            return
-        }
+        val r =
+            try {
+                UpdateChecker.check(ctx) { AppLog.i(TAG, it) }
+            } catch (t: Throwable) {
+                lastOutcome = "检查失败：${t.javaClass.simpleName}: ${t.message}"
+                AppLog.e(TAG, "检查抛异常：$lastOutcome", t)
+                return
+            }
         val checkMs = System.currentTimeMillis() - t0
         if (!r.ok) {
             lastOutcome = "检查失败：${r.error}"
@@ -105,27 +105,28 @@ object SilentUpdater {
         // 同版本已经下好时 download() 会直接复用，这里先探一下，
         // 免得日志里出现一段没有意义的「再下一次」。
         val t1 = System.currentTimeMillis()
-        val file = try {
-            UpdateInstaller.download(
-                ctx,
-                r,
-                onProgress = { done, total ->
-                    // 进度回调太密，只在 25% 的整数倍上落日志，避免刷爆文件。
-                    if (total > 0) {
-                        val p = (done * 100 / total).toInt()
-                        if (p % 25 == 0 && p != lastPctLogged) {
-                            lastPctLogged = p
-                            AppLog.i(TAG, "下载进度 $p%（${fmtSize(done)}/${fmtSize(total)}）")
+        val file =
+            try {
+                UpdateInstaller.download(
+                    ctx,
+                    r,
+                    onProgress = { done, total ->
+                        // 进度回调太密，只在 25% 的整数倍上落日志，避免刷爆文件。
+                        if (total > 0) {
+                            val p = (done * 100 / total).toInt()
+                            if (p % 25 == 0 && p != lastPctLogged) {
+                                lastPctLogged = p
+                                AppLog.i(TAG, "下载进度 $p%（${fmtSize(done)}/${fmtSize(total)}）")
+                            }
                         }
-                    }
-                },
-                onLog = { AppLog.i(TAG, it) },
-            )
-        } catch (t: Throwable) {
-            lastOutcome = "下载异常：${t.javaClass.simpleName}: ${t.message}"
-            AppLog.e(TAG, "下载抛异常：$lastOutcome", t)
-            return
-        }
+                    },
+                    onLog = { AppLog.i(TAG, it) },
+                )
+            } catch (t: Throwable) {
+                lastOutcome = "下载异常：${t.javaClass.simpleName}: ${t.message}"
+                AppLog.e(TAG, "下载抛异常：$lastOutcome", t)
+                return
+            }
         val dlMs = System.currentTimeMillis() - t1
         if (file == null) {
             // 静默路径不提示失败：弱网下很常见，下个版本再查即可。
@@ -149,13 +150,14 @@ object SilentUpdater {
     @Volatile
     private var lastPctLogged = -1
 
-    private fun fmtSize(bytes: Long): String = when {
-        bytes <= 0 -> "未知"
-        bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
-        bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
-        bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
-        else -> "$bytes B"
-    }
+    private fun fmtSize(bytes: Long): String =
+        when {
+            bytes <= 0 -> "未知"
+            bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
+            bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
+            bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+            else -> "$bytes B"
+        }
 
     /**
      * 取出已经下好的包。

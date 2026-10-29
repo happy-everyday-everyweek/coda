@@ -37,9 +37,12 @@ import kotlin.concurrent.thread
  */
 class TerminalPage(
     host: WorkspaceActivity,
-    private val saved: JSONObject,
+    // 由 WorkspaceActivity 传入用于恢复页面状态；本页目前不读它，
+    // 但构造签名要与其余工作区页面保持一致，不能删。
+    // 不写成 private val：那样会变成未使用的私有属性，而这里只需要
+    // 接收构造参数即可。
+    saved: JSONObject,
 ) : WorkspacePage(host) {
-
     override val kind: String = WorkspaceTabs.TERMINAL
     override val title: String = "终端"
 
@@ -69,19 +72,21 @@ class TerminalPage(
     private var touchDownY = 0f
     private var touchDownAt = 0L
 
-    private val blink = object : Runnable {
-        override fun run() {
-            cursorOn = !cursorOn
-            render()
-            main.postDelayed(this, BLINK_MS)
+    private val blink =
+        object : Runnable {
+            override fun run() {
+                cursorOn = !cursorOn
+                render()
+                main.postDelayed(this, BLINK_MS)
+            }
         }
-    }
 
     override fun build(): View {
-        content = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(terminalBackground)
-        }
+        content =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(terminalBackground)
+            }
         content.addView(terminalArea(), LinearLayout.LayoutParams(MATCH, 0, 1f))
         content.addView(keyArea())
         content.viewTreeObserver.addOnGlobalLayoutListener { syncBottomInset() }
@@ -120,8 +125,9 @@ class TerminalPage(
 
     override fun subtitle(): String? = runCatching { host.env.guestPath(host.root.absolutePath) }.getOrNull()
 
-    override fun saveState(): JSONObject = JSONObject()
-        .put("cwd", runCatching { host.env.guestPath(host.root.absolutePath) }.getOrDefault(""))
+    override fun saveState(): JSONObject =
+        JSONObject()
+            .put("cwd", runCatching { host.env.guestPath(host.root.absolutePath) }.getOrDefault(""))
 
     override fun menuItems(): List<String> = listOf("清屏", "重开会话", "发送中断")
 
@@ -136,58 +142,64 @@ class TerminalPage(
     // ---------------------------------------------------------------- 视图
 
     private fun terminalArea(): View {
-        transcript = TextView(host).apply {
-            typeface = Typeface.MONOSPACE
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            setTextColor(terminalForeground)
-            setBackgroundColor(terminalBackground)
-            setTextIsSelectable(true)
-            // 只保留长按选择，不让它在触摸模式下拿焦点：否则手指一按输出区就把输入法
-            // 拽到自己身上，隐藏的输入视图再也收不到字符。
-            isFocusableInTouchMode = false
-            setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
-            setOnTouchListener { _, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        touchDownX = event.x
-                        touchDownY = event.y
-                        touchDownAt = SystemClock.uptimeMillis()
-                        false
-                    }
+        transcript =
+            TextView(host).apply {
+                typeface = Typeface.MONOSPACE
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextColor(terminalForeground)
+                setBackgroundColor(terminalBackground)
+                setTextIsSelectable(true)
+                // 只保留长按选择，不让它在触摸模式下拿焦点：否则手指一按输出区就把输入法
+                // 拽到自己身上，隐藏的输入视图再也收不到字符。
+                isFocusableInTouchMode = false
+                setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                setOnTouchListener { _, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            touchDownX = event.x
+                            touchDownY = event.y
+                            touchDownAt = SystemClock.uptimeMillis()
+                            false
+                        }
 
-                    MotionEvent.ACTION_UP -> {
-                        val moved = kotlin.math.abs(event.x - touchDownX) + kotlin.math.abs(event.y - touchDownY)
-                        val quick = SystemClock.uptimeMillis() - touchDownAt < 300
-                        val tap = moved < dp(10f).toFloat() && quick
-                        if (tap) toggleKeyboard()
-                        // 轻点必须消费掉：这个输出区是可选中文本，按下时它会把焦点抢过去，
-                        // 若把抬手继续交给它，输入法就会绑在输出区上，键盘输入再也进不了会话。
-                        tap
-                    }
+                        MotionEvent.ACTION_UP -> {
+                            val moved = kotlin.math.abs(event.x - touchDownX) + kotlin.math.abs(event.y - touchDownY)
+                            val quick = SystemClock.uptimeMillis() - touchDownAt < 300
+                            val tap = moved < dp(10f).toFloat() && quick
+                            if (tap) toggleKeyboard()
+                            // 轻点必须消费掉：这个输出区是可选中文本，按下时它会把焦点抢过去，
+                            // 若把抬手继续交给它，输入法就会绑在输出区上，键盘输入再也进不了会话。
+                            tap
+                        }
 
-                    else -> false
+                        else -> {
+                            false
+                        }
+                    }
                 }
             }
-        }
-        scroll = ScrollView(host).apply {
-            isFillViewport = true
-            setBackgroundColor(terminalBackground)
-            addView(transcript, ViewGroup.LayoutParams(MATCH, WRAP))
-            setOnScrollChangeListener { _, _, _, _, _ -> follow = atBottom() }
-        }
-        input = TerminalInput(host).apply {
-            isFocusable = true
-            isFocusableInTouchMode = true
-            ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
-                keyboardShown = insets.isVisible(WindowInsetsCompat.Type.ime())
-                insets
+        scroll =
+            ScrollView(host).apply {
+                isFillViewport = true
+                setBackgroundColor(terminalBackground)
+                addView(transcript, ViewGroup.LayoutParams(MATCH, WRAP))
+                setOnScrollChangeListener { _, _, _, _, _ -> follow = atBottom() }
             }
-        }
-        status = label("正在启动会话", 12.5f, terminalMuted).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(16f), dp(10f), dp(16f), dp(10f))
-            background = pill(0xFF141414.toInt())
-        }
+        input =
+            TerminalInput(host).apply {
+                isFocusable = true
+                isFocusableInTouchMode = true
+                ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
+                    keyboardShown = insets.isVisible(WindowInsetsCompat.Type.ime())
+                    insets
+                }
+            }
+        status =
+            label("正在启动会话", 12.5f, terminalMuted).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(16f), dp(10f), dp(16f), dp(10f))
+                background = pill(0xFF141414.toInt())
+            }
         val area = FrameLayout(host)
         area.setBackgroundColor(terminalBackground)
         area.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -198,11 +210,12 @@ class TerminalPage(
 
     /** Termux 的默认键位：上一行功能键，下一行修饰键与方向键。 */
     private fun keyArea(): View {
-        val bar = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(terminalBackground)
-            setPadding(dp(4f), dp(2f), dp(4f), dp(4f))
-        }
+        val bar =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(terminalBackground)
+                setPadding(dp(4f), dp(2f), dp(4f), dp(4f))
+            }
         bar.addView(keyRow(firstRow))
         bar.addView(keyRow(secondRow))
         return bar
@@ -217,13 +230,14 @@ class TerminalPage(
     }
 
     private fun keyCell(spec: KeySpec): TextView {
-        val cell = TextView(host).apply {
-            text = spec.label
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            setTextColor(terminalForeground)
-            gravity = Gravity.CENTER
-            isClickable = true
-        }
+        val cell =
+            TextView(host).apply {
+                text = spec.label
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextColor(terminalForeground)
+                gravity = Gravity.CENTER
+                isClickable = true
+            }
         when (spec.special) {
             "ctrl" -> {
                 modifierKeys += cell to "ctrl"
@@ -242,14 +256,22 @@ class TerminalPage(
                             keyDownY = event.y
                             // 按下即时压暗：功能键区没有背景，只靠颜色变化能立刻确认按到了。
                             view.animate().cancel()
-                            view.animate().alpha(0.55f)
-                                .setDuration(Motion.TAP_MS).setInterpolator(Motion.standard).start()
+                            view
+                                .animate()
+                                .alpha(0.55f)
+                                .setDuration(Motion.TAP_MS)
+                                .setInterpolator(Motion.standard)
+                                .start()
                             false
                         }
 
                         MotionEvent.ACTION_UP -> {
-                            view.animate().alpha(1f)
-                                .setDuration(Motion.SETTLE_MS).setInterpolator(Motion.settle).start()
+                            view
+                                .animate()
+                                .alpha(1f)
+                                .setDuration(Motion.SETTLE_MS)
+                                .setInterpolator(Motion.settle)
+                                .start()
                             view.performClick()
                             val popup = spec.popup
                             if (popup != null && keyDownY - event.y > dp(18f).toFloat()) sendKey(popup) else sendKey(spec.bytes)
@@ -257,12 +279,18 @@ class TerminalPage(
                         }
 
                         MotionEvent.ACTION_CANCEL -> {
-                            view.animate().alpha(1f)
-                                .setDuration(Motion.SETTLE_MS).setInterpolator(Motion.settle).start()
+                            view
+                                .animate()
+                                .alpha(1f)
+                                .setDuration(Motion.SETTLE_MS)
+                                .setInterpolator(Motion.settle)
+                                .start()
                             false
                         }
 
-                        else -> false
+                        else -> {
+                            false
+                        }
                     }
                 }
             }
@@ -276,7 +304,8 @@ class TerminalPage(
             cell.setTextColor(if (armed) terminalAccent else terminalForeground)
             // 文字颜色本身无法做属性动画，用轻微缩放表达状态切换：激活时放大一点，取消时回位。
             cell.animate().cancel()
-            cell.animate()
+            cell
+                .animate()
                 .scaleX(if (armed) 1.08f else 1f)
                 .scaleY(if (armed) 1.08f else 1f)
                 .setDuration(Motion.TAP_MS)
@@ -290,7 +319,10 @@ class TerminalPage(
         paintModifiers()
     }
 
-    private fun setModifiers(ctrl: Boolean, alt: Boolean) {
+    private fun setModifiers(
+        ctrl: Boolean,
+        alt: Boolean,
+    ) {
         ctrlArmed = ctrl
         altArmed = alt
         paintModifiers()
@@ -338,8 +370,9 @@ class TerminalPage(
     }
 
     /** 终端区的 IME 目标：把键盘输入按字节送进 shell。 */
-    private inner class TerminalInput(context: Context) : View(context) {
-
+    private inner class TerminalInput(
+        context: Context,
+    ) : View(context) {
         override fun onCheckIsTextEditor(): Boolean = true
 
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
@@ -360,25 +393,36 @@ class TerminalPage(
                 EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
             outAttrs.initialCapsMode = 0
             return object : BaseInputConnection(this@TerminalInput, false) {
-
-                override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                override fun commitText(
+                    text: CharSequence?,
+                    newCursorPosition: Int,
+                ): Boolean {
                     if (!text.isNullOrEmpty()) typeText(text.toString())
                     return true
                 }
 
-                override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                override fun setComposingText(
+                    text: CharSequence?,
+                    newCursorPosition: Int,
+                ): Boolean {
                     // 输入法的候选串只是中间态，这里不做处理，等它 commit 时统一送进会话。
                     return true
                 }
 
                 override fun finishComposingText(): Boolean = true
 
-                override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                override fun deleteSurroundingText(
+                    beforeLength: Int,
+                    afterLength: Int,
+                ): Boolean {
                     repeat(beforeLength) { typeText(BACKSPACE) }
                     return true
                 }
 
-                override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                override fun deleteSurroundingTextInCodePoints(
+                    beforeLength: Int,
+                    afterLength: Int,
+                ): Boolean {
                     repeat(beforeLength) { typeText(BACKSPACE) }
                     return true
                 }
@@ -386,8 +430,14 @@ class TerminalPage(
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
                     if (event.action != KeyEvent.ACTION_DOWN) return true
                     when (event.keyCode) {
-                        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> submitLine()
-                        KeyEvent.KEYCODE_DEL -> typeText(BACKSPACE)
+                        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                            submitLine()
+                        }
+
+                        KeyEvent.KEYCODE_DEL -> {
+                            typeText(BACKSPACE)
+                        }
+
                         else -> {
                             val code = event.unicodeChar
                             if (code != 0) {
@@ -414,7 +464,10 @@ class TerminalPage(
                     }
                 }
 
-                '\n', '\r' -> submitLine()
+                '\n', '\r' -> {
+                    submitLine()
+                }
+
                 else -> {
                     echo.append(char)
                     writeRaw(char.toString())
@@ -433,11 +486,12 @@ class TerminalPage(
         render()
     }
 
-    private fun controlCode(char: Char): Char = when (char.uppercaseChar()) {
-        in 'A'..'Z' -> (char.uppercaseChar().code - 'A'.code + 1).toChar()
-        ' ' -> '\u0000'
-        else -> char
-    }
+    private fun controlCode(char: Char): Char =
+        when (char.uppercaseChar()) {
+            in 'A'..'Z' -> (char.uppercaseChar().code - 'A'.code + 1).toChar()
+            ' ' -> '\u0000'
+            else -> char
+        }
 
     // ---------------------------------------------------------------- 会话
 
@@ -454,14 +508,15 @@ class TerminalPage(
             }
             host.background(
                 work = {
-                    val builder = host.env.builder(
-                        listOf("/bin/bash", "--norc", "-i"),
-                        mapOf(
-                            "TERM" to "dumb",
-                            "PS1" to "\\w \\$ ",
-                            "NO_COLOR" to "1",
-                        ),
-                    )
+                    val builder =
+                        host.env.builder(
+                            listOf("/bin/bash", "--norc", "-i"),
+                            mapOf(
+                                "TERM" to "dumb",
+                                "PS1" to "\\w \\$ ",
+                                "NO_COLOR" to "1",
+                            ),
+                        )
                     builder.redirectErrorStream(true)
                     builder.start()
                 },
@@ -587,11 +642,12 @@ class TerminalPage(
             lines.delete(0, lines.length - MAX_CHARS)
             lines.insert(0, "…\n")
         }
-        val tail = buildString {
-            append(pending)
-            append(PROMPT).append(echo)
-            append(if (cursorOn) CURSOR else ' ')
-        }
+        val tail =
+            buildString {
+                append(pending)
+                append(PROMPT).append(echo)
+                append(if (cursorOn) CURSOR else ' ')
+            }
         transcript.text = lines.toString() + tail
         if (follow) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
@@ -624,24 +680,26 @@ class TerminalPage(
         /** 退格：终端里就是发送删除字符。 */
         const val BACKSPACE = "\u007f"
 
-        val firstRow = listOf(
-            KeySpec("ESC", "\u001b"),
-            KeySpec("/", "/"),
-            KeySpec("-", "-", "|"),
-            KeySpec("HOME", "\u001b[H"),
-            KeySpec("\u2191", "\u001b[A"),
-            KeySpec("END", "\u001b[F"),
-            KeySpec("PGUP", "\u001b[5~"),
-        )
+        val firstRow =
+            listOf(
+                KeySpec("ESC", "\u001b"),
+                KeySpec("/", "/"),
+                KeySpec("-", "-", "|"),
+                KeySpec("HOME", "\u001b[H"),
+                KeySpec("\u2191", "\u001b[A"),
+                KeySpec("END", "\u001b[F"),
+                KeySpec("PGUP", "\u001b[5~"),
+            )
 
-        val secondRow = listOf(
-            KeySpec("TAB", "\t"),
-            KeySpec("CTRL", "", special = "ctrl"),
-            KeySpec("ALT", "", special = "alt"),
-            KeySpec("\u2190", "\u001b[D"),
-            KeySpec("\u2193", "\u001b[B"),
-            KeySpec("\u2192", "\u001b[C"),
-            KeySpec("PGDN", "\u001b[6~"),
-        )
+        val secondRow =
+            listOf(
+                KeySpec("TAB", "\t"),
+                KeySpec("CTRL", "", special = "ctrl"),
+                KeySpec("ALT", "", special = "alt"),
+                KeySpec("\u2190", "\u001b[D"),
+                KeySpec("\u2193", "\u001b[B"),
+                KeySpec("\u2192", "\u001b[C"),
+                KeySpec("PGDN", "\u001b[6~"),
+            )
     }
 }

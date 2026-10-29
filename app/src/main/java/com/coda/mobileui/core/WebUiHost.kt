@@ -27,7 +27,6 @@ import java.util.zip.ZipInputStream
  * - 实验性：默认关闭，全部失败路径都要给用户明确的文字原因，不静默。
  */
 object WebUiHost {
-
     /** 资产仓库：与本 App 同仓库，Release 附件名固定。 */
     private const val REPO = "happy-everyday-everyweek/coda"
     private const val ASSET_NAME = "coda-webui.zip"
@@ -42,8 +41,7 @@ object WebUiHost {
     private fun versionFile(ctx: Context): File = File(root(ctx), "version.txt")
 
     /** 是否已下载过资产。 */
-    fun isDownloaded(ctx: Context): Boolean =
-        distDir(ctx).isDirectory && File(distDir(ctx), "index.html").isFile
+    fun isDownloaded(ctx: Context): Boolean = distDir(ctx).isDirectory && File(distDir(ctx), "index.html").isFile
 
     /** 已下载的版本；没有时为 null。 */
     fun downloadedVersion(ctx: Context): String? =
@@ -56,7 +54,9 @@ object WebUiHost {
     private var lastStatus: String = "未启动"
 
     fun status(): String = lastStatus
+
     fun lastFailure(): String? = lastError
+
     fun port(): Int = boundPort
 
     // ---------------------------------------------------------------- 下载
@@ -66,21 +66,26 @@ object WebUiHost {
      *
      * 返回 null 表示成功，否则是失败原因。调用方负责放后台线程。
      */
-    fun download(ctx: Context, onProgress: (String) -> Unit): String? {
+    fun download(
+        ctx: Context,
+        onProgress: (String) -> Unit,
+    ): String? {
         val token = runCatching { GitHub.token(ctx) }.getOrNull()
-        val headers = mutableMapOf<String, String>(
-            "User-Agent" to "Coda-Android",
-            "Accept" to "application/vnd.github+json",
-        )
+        val headers =
+            mutableMapOf<String, String>(
+                "User-Agent" to "Coda-Android",
+                "Accept" to "application/vnd.github+json",
+            )
         if (!token.isNullOrEmpty()) headers["Authorization"] = "Bearer $token"
 
         onProgress("查询最新 Release…")
         // 注意 releases/latest 不含预发行版，而 dev 预览包固定是 prerelease；
         // 用列表接口取第一个（GitHub 按 created_at 倒序），保证 dev-latest 也能命中。
-        val releases = httpGetJsonArray(
-            "https://api.github.com/repos/$REPO/releases?per_page=10",
-            headers,
-        ) ?: return "无法访问 GitHub API（网络受限或速率限制），可稍后重试"
+        val releases =
+            httpGetJsonArray(
+                "https://api.github.com/repos/$REPO/releases?per_page=10",
+                headers,
+            ) ?: return "无法访问 GitHub API（网络受限或速率限制），可稍后重试"
         var found = false
         var assetUrl: String? = null
         var assetSize = 0L
@@ -122,10 +127,11 @@ object WebUiHost {
             return unpackError
         }
         // 解压完的目录可能套了一层 dist/，找 index.html 对齐
-        val realRoot = locateIndexRoot(staging) ?: run {
-            deleteRecursive(staging)
-            return "资产包里没有 index.html，不是有效的 Web UI"
-        }
+        val realRoot =
+            locateIndexRoot(staging) ?: run {
+                deleteRecursive(staging)
+                return "资产包里没有 index.html，不是有效的 Web UI"
+            }
         val finalDir = distDir(ctx)
         val backup = File(root(ctx), "dist.bak")
         deleteRecursive(backup)
@@ -184,7 +190,7 @@ object WebUiHost {
             lastStatus = "启动失败"
             runCatching { serverSocket?.close() }
             serverSocket = null
-            "端口绑定失败：${lastError}"
+            "端口绑定失败：$lastError"
         }
     }
 
@@ -212,13 +218,17 @@ object WebUiHost {
         return out
     }
 
-    private fun acceptLoop(ss: ServerSocket, appCtx: Context) {
+    private fun acceptLoop(
+        ss: ServerSocket,
+        appCtx: Context,
+    ) {
         while (running.get()) {
-            val socket = try {
-                ss.accept()
-            } catch (_: Throwable) {
-                break
-            }
+            val socket =
+                try {
+                    ss.accept()
+                } catch (_: Throwable) {
+                    break
+                }
             Thread({ runCatching { handle(socket, appCtx) } }, "coda-webui-conn").apply {
                 isDaemon = true
                 start()
@@ -231,7 +241,10 @@ object WebUiHost {
     // ---------------------------------------------------------------- 请求处理
 
     /** HTTP 线程里执行 ZController 动作前的公共前提：内核必须已启动。 */
-    private fun withKernel(appCtx: Context, action: () -> Unit) {
+    private fun withKernel(
+        appCtx: Context,
+        action: () -> Unit,
+    ) {
         val zc = ZController.get(appCtx)
         if (zc.runtime.isRunning) {
             action()
@@ -244,7 +257,10 @@ object WebUiHost {
         }
     }
 
-    private fun handle(socket: java.net.Socket, appCtx: Context) {
+    private fun handle(
+        socket: java.net.Socket,
+        appCtx: Context,
+    ) {
         socket.soTimeout = 15_000
         socket.use { s ->
             val input = BufferedInputStream(s.getInputStream())
@@ -265,19 +281,25 @@ object WebUiHost {
                 if (name == "content-length") contentLength = line.substring(idx + 1).trim().toIntOrNull() ?: 0
             }
             val path = rawPath.substringBefore('?')
-            val body = if (contentLength > 0) {
-                val buf = ByteArray(contentLength)
-                var read = 0
-                while (read < contentLength) {
-                    val n = input.read(buf, read, contentLength - read)
-                    if (n <= 0) break
-                    read += n
+            val body =
+                if (contentLength > 0) {
+                    val buf = ByteArray(contentLength)
+                    var read = 0
+                    while (read < contentLength) {
+                        val n = input.read(buf, read, contentLength - read)
+                        if (n <= 0) break
+                        read += n
+                    }
+                    String(buf, 0, read, Charsets.UTF_8)
+                } else {
+                    ""
                 }
-                String(buf, 0, read, Charsets.UTF_8)
-            } else ""
 
             when {
-                method == "GET" && path == "/api/state" -> respondJson(output, stateJson(appCtx))
+                method == "GET" && path == "/api/state" -> {
+                    respondJson(output, stateJson(appCtx))
+                }
+
                 method == "POST" && path == "/api/send" -> {
                     val zc = ZController.get(appCtx)
                     val msg = runCatching { JSONObject(body).optString("text") }.getOrDefault("")
@@ -297,19 +319,23 @@ object WebUiHost {
                     }
                     respondJson(output, JSONObject().put("ok", true))
                 }
+
                 method == "POST" && path == "/api/stop" -> {
                     withKernel(appCtx) { ZController.get(appCtx).stop { _, _ -> } }
                     respondJson(output, JSONObject().put("ok", true))
                 }
+
                 method == "POST" && path == "/api/session/new" -> {
                     withKernel(appCtx) { ZController.get(appCtx).newSession(null) }
                     respondJson(output, JSONObject().put("ok", true))
                 }
+
                 method == "POST" && path.startsWith("/api/session/open/") -> {
                     val sid = path.removePrefix("/api/session/open/")
                     withKernel(appCtx) { ZController.get(appCtx).openSession(sid) { _ -> } }
                     respondJson(output, JSONObject().put("ok", true))
                 }
+
                 method == "GET" && path == "/api/sessions" -> {
                     val zc = ZController.get(appCtx)
                     val arr = JSONArray()
@@ -326,10 +352,12 @@ object WebUiHost {
                     }
                     respondJson(output, JSONObject().put("sessions", arr))
                 }
+
                 method == "GET" && path.startsWith("/api/messages") -> {
                     val zc = ZController.get(appCtx)
-                    val sid = path.removePrefix("/api/messages/").takeIf { it.isNotEmpty() }
-                        ?: zc.currentSessionId
+                    val sid =
+                        path.removePrefix("/api/messages/").takeIf { it.isNotEmpty() }
+                            ?: zc.currentSessionId
                     val arr = JSONArray()
                     // 非当前会话先回空：客户端用 /api/session/open 切换后由轮询拉到。
                     // 消息列表同样用快照迭代，避免主线程并发写导致 CME。
@@ -346,11 +374,19 @@ object WebUiHost {
                     }
                     respondJson(output, JSONObject().put("messages", arr))
                 }
-                method == "GET" && path.startsWith("/api/") ->
+
+                method == "GET" && path.startsWith("/api/") -> {
                     respondJson(output, JSONObject().put("error", "not found"), 404)
+                }
+
                 // 其余 GET 一律走静态文件（含 SPA fallback），其它方法不支持。
-                method == "GET" -> serveStatic(output, distDir(appCtx), path)
-                else -> respondJson(output, JSONObject().put("error", "method not allowed"), 405)
+                method == "GET" -> {
+                    serveStatic(output, distDir(appCtx), path)
+                }
+
+                else -> {
+                    respondJson(output, JSONObject().put("error", "method not allowed"), 405)
+                }
             }
         }
     }
@@ -386,7 +422,11 @@ object WebUiHost {
 
     // ---------------------------------------------------------------- 静态文件
 
-    private fun serveStatic(output: java.io.OutputStream, root: File, path: String) {
+    private fun serveStatic(
+        output: java.io.OutputStream,
+        root: File,
+        path: String,
+    ) {
         val rel = path.trimStart('/').ifEmpty { "index.html" }
         val file = File(root, rel).canonicalFile
         if (!file.path.startsWith(root.canonicalFile.path + File.separator)) {
@@ -397,37 +437,52 @@ object WebUiHost {
             respond(output, "not found".toByteArray(), "text/plain", 404)
             return
         }
-        val mime = when (file.extension.lowercase()) {
-            "html" -> "text/html; charset=utf-8"
-            "js" -> "text/javascript; charset=utf-8"
-            "css" -> "text/css; charset=utf-8"
-            "svg" -> "image/svg+xml"
-            "png" -> "image/png"
-            "ico" -> "image/x-icon"
-            "json" -> "application/json"
-            "woff2" -> "font/woff2"
-            "map" -> "application/json"
-            else -> "application/octet-stream"
-        }
+        val mime =
+            when (file.extension.lowercase()) {
+                "html" -> "text/html; charset=utf-8"
+                "js" -> "text/javascript; charset=utf-8"
+                "css" -> "text/css; charset=utf-8"
+                "svg" -> "image/svg+xml"
+                "png" -> "image/png"
+                "ico" -> "image/x-icon"
+                "json" -> "application/json"
+                "woff2" -> "font/woff2"
+                "map" -> "application/json"
+                else -> "application/octet-stream"
+            }
         respond(output, file.readBytes(), mime, 200)
     }
 
     // ---------------------------------------------------------------- HTTP 工具
 
-    private fun respond(output: java.io.OutputStream, body: ByteArray, mime: String, code: Int) {
-        val reason = when (code) {
-            200 -> "OK"; 403 -> "Forbidden"; 404 -> "Not Found"; else -> "Error"
-        }
-        val head = "HTTP/1.1 $code $reason\r\n" +
-            "Content-Type: $mime\r\n" +
-            "Content-Length: ${body.size}\r\n" +
-            "Connection: close\r\n\r\n"
+    private fun respond(
+        output: java.io.OutputStream,
+        body: ByteArray,
+        mime: String,
+        code: Int,
+    ) {
+        val reason =
+            when (code) {
+                200 -> "OK"
+                403 -> "Forbidden"
+                404 -> "Not Found"
+                else -> "Error"
+            }
+        val head =
+            "HTTP/1.1 $code $reason\r\n" +
+                "Content-Type: $mime\r\n" +
+                "Content-Length: ${body.size}\r\n" +
+                "Connection: close\r\n\r\n"
         output.write(head.toByteArray(Charsets.ISO_8859_1))
         output.write(body)
         output.flush()
     }
 
-    private fun respondJson(output: java.io.OutputStream, json: JSONObject, code: Int = 200) {
+    private fun respondJson(
+        output: java.io.OutputStream,
+        json: JSONObject,
+        code: Int = 200,
+    ) {
         respond(output, json.toString().toByteArray(Charsets.UTF_8), "application/json; charset=utf-8", code)
     }
 
@@ -442,39 +497,26 @@ object WebUiHost {
         return sb.toString()
     }
 
-    private fun httpGetJson(url: String, headers: Map<String, String>): JSONObject? = try {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 15000
-        conn.readTimeout = 20000
-        headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
-        if (conn.responseCode != 200) {
-            conn.disconnect()
+    private fun httpGetJsonArray(
+        url: String,
+        headers: Map<String, String>,
+    ): JSONArray? =
+        try {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.connectTimeout = 15000
+            conn.readTimeout = 20000
+            headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+            if (conn.responseCode != 200) {
+                conn.disconnect()
+                null
+            } else {
+                val text = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                JSONArray(text)
+            }
+        } catch (_: Throwable) {
             null
-        } else {
-            val text = conn.inputStream.bufferedReader().readText()
-            conn.disconnect()
-            JSONObject(text)
         }
-    } catch (_: Throwable) {
-        null
-    }
-
-    private fun httpGetJsonArray(url: String, headers: Map<String, String>): JSONArray? = try {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 15000
-        conn.readTimeout = 20000
-        headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
-        if (conn.responseCode != 200) {
-            conn.disconnect()
-            null
-        } else {
-            val text = conn.inputStream.bufferedReader().readText()
-            conn.disconnect()
-            JSONArray(text)
-        }
-    } catch (_: Throwable) {
-        null
-    }
 
     /**
      * 下载 Release 附件。返回 null 表示成功；其余为具体失败原因。
@@ -483,7 +525,12 @@ object WebUiHost {
      * 而 GitHub Release 的下载 URL 一定 302 到对象存储——第一跳必须带鉴权，
      * 第二跳（对象存储签名 URL）绝不能再带（带了反而 400）。
      */
-    private fun httpDownload(url: String, target: File, headers: Map<String, String>, depth: Int = 0): String? {
+    private fun httpDownload(
+        url: String,
+        target: File,
+        headers: Map<String, String>,
+        depth: Int = 0,
+    ): String? {
         if (depth > 5) return "重定向次数过多"
         return try {
             val conn = URL(url).openConnection() as HttpURLConnection
@@ -518,30 +565,34 @@ object WebUiHost {
     }
 
     /** 解压 zip 到目标目录；条目路径越界直接跳过。返回 null 表示成功。 */
-    private fun unzip(zip: File, target: File): String? = try {
-        target.mkdirs()
-        ZipInputStream(java.io.FileInputStream(zip).buffered()).use { zis ->
-            val root = target.canonicalFile
-            while (true) {
-                val e = zis.nextEntry ?: break
-                val out = File(root, e.name).canonicalFile
-                if (!out.path.startsWith(root.path + File.separator)) {
+    private fun unzip(
+        zip: File,
+        target: File,
+    ): String? =
+        try {
+            target.mkdirs()
+            ZipInputStream(java.io.FileInputStream(zip).buffered()).use { zis ->
+                val root = target.canonicalFile
+                while (true) {
+                    val e = zis.nextEntry ?: break
+                    val out = File(root, e.name).canonicalFile
+                    if (!out.path.startsWith(root.path + File.separator)) {
+                        zis.closeEntry()
+                        continue
+                    }
+                    if (e.isDirectory) {
+                        out.mkdirs()
+                    } else {
+                        out.parentFile?.mkdirs()
+                        FileOutputStream(out).use { zis.copyTo(it) }
+                    }
                     zis.closeEntry()
-                    continue
                 }
-                if (e.isDirectory) {
-                    out.mkdirs()
-                } else {
-                    out.parentFile?.mkdirs()
-                    FileOutputStream(out).use { zis.copyTo(it) }
-                }
-                zis.closeEntry()
             }
+            null
+        } catch (t: Throwable) {
+            t.message ?: "解压失败"
         }
-        null
-    } catch (t: Throwable) {
-        t.message ?: "解压失败"
-    }
 
     private fun deleteRecursive(file: File) {
         if (file.isDirectory) file.listFiles()?.forEach { deleteRecursive(it) }

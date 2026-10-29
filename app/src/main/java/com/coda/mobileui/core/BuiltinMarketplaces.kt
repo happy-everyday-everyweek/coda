@@ -8,7 +8,6 @@ package com.coda.mobileui.core
  * source 使用内核支持的 `owner/repo` 形式；aliases 用于判断该源是否已经在插件配置中。
  */
 object BuiltinMarketplaces {
-
     data class Builtin(
         val source: String,
         val title: String,
@@ -26,28 +25,31 @@ object BuiltinMarketplaces {
     }
 
     /** Claude Code 官方插件市场：代码评审、提交工作流、插件开发工具等。 */
-    val claudeCodeOfficial = Builtin(
-        source = "anthropics/claude-code",
-        title = "Claude Code 官方市场",
-        summary = "Anthropic 官方插件：代码评审、提交工作流与插件开发工具",
-        aliases = listOf("claude-code-plugins", "anthropics/claude-code"),
-    )
+    val claudeCodeOfficial =
+        Builtin(
+            source = "anthropics/claude-code",
+            title = "Claude Code 官方市场",
+            summary = "Anthropic 官方插件：代码评审、提交工作流与插件开发工具",
+            aliases = listOf("claude-code-plugins", "anthropics/claude-code"),
+        )
 
     /** 社区综合工作流市场，插件数量最多。 */
-    val claudeCodeWorkflows = Builtin(
-        source = "wshobson/agents",
-        title = "Claude Code Workflows",
-        summary = "社区综合市场：开发、测试、安全与运维工作流插件",
-        aliases = listOf("claude-code-workflows", "wshobson/agents"),
-    )
+    val claudeCodeWorkflows =
+        Builtin(
+            source = "wshobson/agents",
+            title = "Claude Code Workflows",
+            summary = "社区综合市场：开发、测试、安全与运维工作流插件",
+            aliases = listOf("claude-code-workflows", "wshobson/agents"),
+        )
 
     /** Anthropic 官方技能市场：文档处理、示例技能与 Claude API 文档。 */
-    val anthropicSkills = Builtin(
-        source = "anthropics/skills",
-        title = "Anthropic 官方技能",
-        summary = "Anthropic 官方技能：Excel、Word、PPT、PDF 处理与 API 文档",
-        aliases = listOf("anthropic-agent-skills", "anthropics/skills"),
-    )
+    val anthropicSkills =
+        Builtin(
+            source = "anthropics/skills",
+            title = "Anthropic 官方技能",
+            summary = "Anthropic 官方技能：Excel、Word、PPT、PDF 处理与 API 文档",
+            aliases = listOf("anthropic-agent-skills", "anthropics/skills"),
+        )
 
     /** 内置的全部市场源，按推荐顺序排列。 */
     val all: List<Builtin> = listOf(claudeCodeOfficial, claudeCodeWorkflows, anthropicSkills)

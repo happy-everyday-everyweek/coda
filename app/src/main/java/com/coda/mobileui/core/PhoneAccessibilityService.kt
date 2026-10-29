@@ -27,7 +27,6 @@ import java.util.concurrent.TimeUnit
  * 所有能力仅供本机 App 内的 MCP 服务器调用（loopback + token），不导出任何对外接口。
  */
 class PhoneAccessibilityService : AccessibilityService() {
-
     companion object {
         @Volatile
         private var instanceRef: PhoneAccessibilityService? = null
@@ -36,20 +35,21 @@ class PhoneAccessibilityService : AccessibilityService() {
         fun get(): PhoneAccessibilityService? = instanceRef
 
         /** 检查无障碍服务是否已在系统设置中启用（用于界面展示）。 */
-        fun isEnabled(): Boolean {
-            return instanceRef != null
-        }
+        fun isEnabled(): Boolean = instanceRef != null
 
         /** 从系统设置读取启用状态（可跨进程重启场景）。 */
         fun isEnabledInSystem(context: android.content.Context): Boolean {
             return try {
-                val enabled = Settings.Secure.getString(
-                    context.contentResolver,
-                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                ) ?: return false
+                val enabled =
+                    Settings.Secure.getString(
+                        context.contentResolver,
+                        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                    ) ?: return false
                 val full = context.packageName + "/" + PhoneAccessibilityService::class.java.name
-                val short = context.packageName + "/." + PhoneAccessibilityService::class.java.name
-                    .removePrefix(context.packageName + ".")
+                val short =
+                    context.packageName + "/." +
+                        PhoneAccessibilityService::class.java.name
+                            .removePrefix(context.packageName + ".")
                 enabled.contains(full) || enabled.contains(short)
             } catch (_: Throwable) {
                 false
@@ -83,9 +83,14 @@ class PhoneAccessibilityService : AccessibilityService() {
      * 导出当前活动窗口的节点树。字段取模型可用性优先的短名；
      * 带深度与节点数上限，避免超大页面生成 MB 级 JSON。
      */
-    fun dumpUi(includeInvisible: Boolean = false, maxNodes: Int = 900, maxDepth: Int = 50): JSONObject {
-        val root = rootInActiveWindow
-            ?: return JSONObject().put("error", "当前没有活动窗口")
+    fun dumpUi(
+        includeInvisible: Boolean = false,
+        maxNodes: Int = 900,
+        maxDepth: Int = 50,
+    ): JSONObject {
+        val root =
+            rootInActiveWindow
+                ?: return JSONObject().put("error", "当前没有活动窗口")
         val out = JSONObject()
         out.put("package", root.packageName?.toString() ?: "")
         val counter = intArrayOf(0)
@@ -124,7 +129,10 @@ class PhoneAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun nodeToJson(node: AccessibilityNodeInfo, includeInvisible: Boolean): JSONObject? {
+    private fun nodeToJson(
+        node: AccessibilityNodeInfo,
+        includeInvisible: Boolean,
+    ): JSONObject? {
         if (!includeInvisible && !node.isVisibleToUser) return null
         val rect = Rect()
         node.getBoundsInScreen(rect)
@@ -153,13 +161,24 @@ class PhoneAccessibilityService : AccessibilityService() {
     // ------------------------------------------------------------ 手势
 
     /** 单击指定坐标。 */
-    fun tap(x: Float, y: Float): Boolean = gestureTap(x, y, 60L)
+    fun tap(
+        x: Float,
+        y: Float,
+    ): Boolean = gestureTap(x, y, 60L)
 
     /** 长按指定坐标。 */
-    fun longPress(x: Float, y: Float, durationMs: Long = 600L): Boolean = gestureTap(x, y, durationMs)
+    fun longPress(
+        x: Float,
+        y: Float,
+        durationMs: Long = 600L,
+    ): Boolean = gestureTap(x, y, durationMs)
 
-    private fun gestureTap(x: Float, y: Float, durationMs: Long): Boolean {
-        return try {
+    private fun gestureTap(
+        x: Float,
+        y: Float,
+        durationMs: Long,
+    ): Boolean =
+        try {
             val path = Path().apply { moveTo(x, y) }
             val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
             val gesture = GestureDescription.Builder().addStroke(stroke).build()
@@ -167,22 +186,27 @@ class PhoneAccessibilityService : AccessibilityService() {
         } catch (_: Throwable) {
             false
         }
-    }
 
     /** 滑动。 */
-    fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long = 300L): Boolean {
-        return try {
-            val path = Path().apply {
-                moveTo(x1, y1)
-                lineTo(x2, y2)
-            }
+    fun swipe(
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float,
+        durationMs: Long = 300L,
+    ): Boolean =
+        try {
+            val path =
+                Path().apply {
+                    moveTo(x1, y1)
+                    lineTo(x2, y2)
+                }
             val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs.coerceIn(50L, 5000L))
             val gesture = GestureDescription.Builder().addStroke(stroke).build()
             dispatchGesture(gesture, null, null)
         } catch (_: Throwable) {
             false
         }
-    }
 
     // ------------------------------------------------------------ 文本与按键
 
@@ -190,9 +214,10 @@ class PhoneAccessibilityService : AccessibilityService() {
     fun setText(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
         val target = findFocusedEditable(root) ?: findFirstEditable(root) ?: return false
-        val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-        }
+        val args =
+            Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
         return try {
             target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         } catch (_: Throwable) {
@@ -221,13 +246,14 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     /** 全局动作：back / home / recents / notifications。 */
     fun globalAction(name: String): Boolean {
-        val action = when (name.lowercase()) {
-            "back" -> GLOBAL_ACTION_BACK
-            "home" -> GLOBAL_ACTION_HOME
-            "recents" -> GLOBAL_ACTION_RECENTS
-            "notifications" -> GLOBAL_ACTION_NOTIFICATIONS
-            else -> return false
-        }
+        val action =
+            when (name.lowercase()) {
+                "back" -> GLOBAL_ACTION_BACK
+                "home" -> GLOBAL_ACTION_HOME
+                "recents" -> GLOBAL_ACTION_RECENTS
+                "notifications" -> GLOBAL_ACTION_NOTIFICATIONS
+                else -> return false
+            }
         return try {
             performGlobalAction(action)
         } catch (_: Throwable) {
@@ -242,23 +268,26 @@ class PhoneAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < 30) return null
         val latch = CountDownLatch(1)
         var result: Bitmap? = null
-        val callback = object : TakeScreenshotCallback {
-            override fun onSuccess(screenshot: ScreenshotResult) {
-                try {
-                    val buffer = screenshot.hardwareBuffer
-                    result = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
-                        ?.copy(Bitmap.Config.ARGB_8888, false)
-                    buffer.close()
-                } catch (_: Throwable) {
-                } finally {
+        val callback =
+            object : TakeScreenshotCallback {
+                override fun onSuccess(screenshot: ScreenshotResult) {
+                    try {
+                        val buffer = screenshot.hardwareBuffer
+                        result =
+                            Bitmap
+                                .wrapHardwareBuffer(buffer, screenshot.colorSpace)
+                                ?.copy(Bitmap.Config.ARGB_8888, false)
+                        buffer.close()
+                    } catch (_: Throwable) {
+                    } finally {
+                        latch.countDown()
+                    }
+                }
+
+                override fun onFailure(errorCode: Int) {
                     latch.countDown()
                 }
             }
-
-            override fun onFailure(errorCode: Int) {
-                latch.countDown()
-            }
-        }
         return try {
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback)
             latch.await(timeoutMs, TimeUnit.MILLISECONDS)

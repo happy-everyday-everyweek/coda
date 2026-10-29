@@ -14,8 +14,10 @@ import java.io.File
  * 保存后无需重启：运行时在新建会话 / 扫描目录时现读（已在冒烟环境实测）。
  */
 object AgentAssets {
-
-    enum class Kind(val label: String, val relDir: String) {
+    enum class Kind(
+        val label: String,
+        val relDir: String,
+    ) {
         SUBAGENT("子智能体", ".zcode/agents"),
         COMMAND("命令", ".zcode/commands"),
         SKILL("技能", ".zcode/skills"),
@@ -29,12 +31,18 @@ object AgentAssets {
         val body: String,
     )
 
-    fun rootDir(ctx: Context, kind: Kind): File {
+    fun rootDir(
+        ctx: Context,
+        kind: Kind,
+    ): File {
         val base = File(File(ctx.filesDir, "home"), ".zcode")
         return File(base, kind.relDir.removePrefix(".zcode/"))
     }
 
-    fun list(ctx: Context, kind: Kind): List<Item> {
+    fun list(
+        ctx: Context,
+        kind: Kind,
+    ): List<Item> {
         val dir = rootDir(ctx, kind)
         if (!dir.exists()) return emptyList()
         val out = mutableListOf<Item>()
@@ -45,8 +53,10 @@ object AgentAssets {
                     if (f.exists()) parseFile(kind, f)?.let { out += it }
                 }
             }
+
             else -> {
-                dir.listFiles()
+                dir
+                    .listFiles()
                     ?.filter { it.isFile && it.name.endsWith(".md") }
                     ?.sortedBy { it.name }
                     ?.forEach { f -> parseFile(kind, f)?.let { out += it } }
@@ -58,22 +68,27 @@ object AgentAssets {
     fun readItem(path: String): Item? {
         val f = File(path)
         if (!f.exists()) return null
-        val kind = when {
-            f.name == "SKILL.md" -> Kind.SKILL
-            f.absolutePath.contains("/.zcode/agents/") -> Kind.SUBAGENT
-            else -> Kind.COMMAND
-        }
+        val kind =
+            when {
+                f.name == "SKILL.md" -> Kind.SKILL
+                f.absolutePath.contains("/.zcode/agents/") -> Kind.SUBAGENT
+                else -> Kind.COMMAND
+            }
         return parseFile(kind, f)
     }
 
-    private fun parseFile(kind: Kind, f: File): Item? {
-        return try {
+    private fun parseFile(
+        kind: Kind,
+        f: File,
+    ): Item? =
+        try {
             val (fm, body) = splitFrontmatter(f.readText())
-            val fallback = if (kind == Kind.SKILL) {
-                f.parentFile?.name ?: f.name
-            } else {
-                f.name.removeSuffix(".md")
-            }
+            val fallback =
+                if (kind == Kind.SKILL) {
+                    f.parentFile?.name ?: f.name
+                } else {
+                    f.name.removeSuffix(".md")
+                }
             Item(
                 kind = kind,
                 name = fm["name"]?.takeIf { it.isNotEmpty() } ?: fallback,
@@ -84,7 +99,6 @@ object AgentAssets {
         } catch (_: Throwable) {
             null
         }
-    }
 
     /** 解析 `---` 前后包裹的 frontmatter；只取简单 `key: value` 行。 */
     private fun splitFrontmatter(text: String): Pair<Map<String, String>, String> {
@@ -129,14 +143,15 @@ object AgentAssets {
         if (!name.matches(Regex("[A-Za-z0-9_-]+"))) {
             return "名称只能包含字母、数字、连字符与下划线"
         }
-        val target: File = if (editingPath != null) {
-            File(editingPath)
-        } else {
-            when (kind) {
-                Kind.SKILL -> File(File(rootDir(ctx, kind), name), "SKILL.md")
-                else -> File(rootDir(ctx, kind), "$name.md")
+        val target: File =
+            if (editingPath != null) {
+                File(editingPath)
+            } else {
+                when (kind) {
+                    Kind.SKILL -> File(File(rootDir(ctx, kind), name), "SKILL.md")
+                    else -> File(rootDir(ctx, kind), "$name.md")
+                }
             }
-        }
         return try {
             target.parentFile?.mkdirs()
             val sb = StringBuilder()

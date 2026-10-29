@@ -12,7 +12,6 @@ import com.google.android.material.snackbar.Snackbar
  * 设置（一级）：分类列表，对齐桌面端的全部设置分区。
  */
 class SettingsActivity : BaseActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupEdgeToEdge()
@@ -61,7 +60,9 @@ class SettingsActivity : BaseActivity() {
                     }
                 }
 
-                else -> false
+                else -> {
+                    false
+                }
             }
         }
     }

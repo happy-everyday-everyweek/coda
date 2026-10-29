@@ -49,18 +49,23 @@ internal fun View.pressFeedback(
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 v.animate().cancel()
-                v.animate()
-                    .scaleX(pressedScale).scaleY(pressedScale)
+                v
+                    .animate()
+                    .scaleX(pressedScale)
+                    .scaleY(pressedScale)
                     .setDuration(Motion.TAP_MS)
                     .setInterpolator(Motion.standard)
                     .start()
                 // 缩放看的是整块，透明度看的是内容：卡片底色很淡时只缩不放透明度会不明显。
                 fadeContent(v, pressedAlpha, Motion.TAP_MS)
             }
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 v.animate().cancel()
-                v.animate()
-                    .scaleX(1f).scaleY(1f)
+                v
+                    .animate()
+                    .scaleX(1f)
+                    .scaleY(1f)
                     .setDuration(Motion.SETTLE_MS)
                     .setInterpolator(Motion.settle)
                     .start()
@@ -76,10 +81,16 @@ internal fun View.pressFeedback(
  *
  * 容器的 alpha 会被外部动画（切页淡入、列表重建）占用，改它容易互相打架。
  */
-private fun fadeContent(v: View, alpha: Float, duration: Long) {
+private fun fadeContent(
+    v: View,
+    alpha: Float,
+    duration: Long,
+) {
     val group = v as? ViewGroup ?: return
     for (i in 0 until group.childCount) {
-        group.getChildAt(i).animate()
+        group
+            .getChildAt(i)
+            .animate()
             .alpha(alpha)
             .setDuration(duration)
             .setInterpolator(Motion.standard)
@@ -92,7 +103,10 @@ private fun fadeContent(v: View, alpha: Float, duration: Long) {
  *
  * 用于底栏的标签数量、状态提示这类"数字变了但没有动画"的位置。
  */
-internal fun TextView.crossFadeText(newText: CharSequence, duration: Long = 110L) {
+internal fun TextView.crossFadeText(
+    newText: CharSequence,
+    duration: Long = 110L,
+) {
     if (text == newText) return
     animate().cancel()
     animate()
@@ -106,8 +120,7 @@ internal fun TextView.crossFadeText(newText: CharSequence, duration: Long = 110L
                 .setDuration(duration)
                 .setInterpolator(Motion.standard)
                 .start()
-        }
-        .start()
+        }.start()
 }
 
 /**
@@ -115,7 +128,10 @@ internal fun TextView.crossFadeText(newText: CharSequence, duration: Long = 110L
  *
  * 每帧都重新读一次当前高度不可靠（刚 addView 时还是 0），所以位移用固定 dp 值。
  */
-internal fun View.enterFrom(offsetYPx: Float, duration: Long = Motion.PANEL_MS) {
+internal fun View.enterFrom(
+    offsetYPx: Float,
+    duration: Long = Motion.PANEL_MS,
+) {
     animate().cancel()
     alpha = 0f
     translationY = offsetYPx
@@ -128,7 +144,11 @@ internal fun View.enterFrom(offsetYPx: Float, duration: Long = Motion.PANEL_MS) 
 }
 
 /** 视图淡出并轻微位移后退场，结束后执行 [after]。 */
-internal fun View.exitTo(offsetYPx: Float, duration: Long = Motion.SETTLE_MS, after: (() -> Unit)? = null) {
+internal fun View.exitTo(
+    offsetYPx: Float,
+    duration: Long = Motion.SETTLE_MS,
+    after: (() -> Unit)? = null,
+) {
     animate().cancel()
     animate()
         .alpha(0f)
@@ -144,17 +164,21 @@ internal fun View.exitTo(offsetYPx: Float, duration: Long = Motion.SETTLE_MS, af
  *
  * 结束后把高度交回 WRAP_CONTENT，避免后续内容变化被固定值锁死。
  */
-internal fun View.animateHeightTo(show: Boolean, duration: Long = Motion.PANEL_MS) {
+internal fun View.animateHeightTo(
+    show: Boolean,
+    duration: Long = Motion.PANEL_MS,
+) {
     val params = layoutParams ?: return
-    val target = if (show) {
-        measure(
-            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-        )
-        measuredHeight
-    } else {
-        0
-    }
+    val target =
+        if (show) {
+            measure(
+                View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            )
+            measuredHeight
+        } else {
+            0
+        }
     val start = measuredHeight
     if (show) {
         params.height = 0
@@ -170,20 +194,23 @@ internal fun View.animateHeightTo(show: Boolean, duration: Long = Motion.PANEL_M
             p.height = h
             layoutParams = p
         }
-        addListener(object : android.animation.AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: android.animation.Animator) {
-                val p = layoutParams ?: return
-                p.height = if (show) ViewGroup.LayoutParams.WRAP_CONTENT else 0
-                layoutParams = p
-                visibility = if (show) View.VISIBLE else View.GONE
-            }
-        })
+        addListener(
+            object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    val p = layoutParams ?: return
+                    p.height = if (show) ViewGroup.LayoutParams.WRAP_CONTENT else 0
+                    layoutParams = p
+                    visibility = if (show) View.VISIBLE else View.GONE
+                }
+            },
+        )
         start()
     }
 }
 
 /** 把一行做成可点的卡片行，并附带按下反馈。 */
-internal fun LinearLayout.asPressable(): LinearLayout = apply {
-    isClickable = true
-    pressFeedback()
-}
+internal fun LinearLayout.asPressable(): LinearLayout =
+    apply {
+        isClickable = true
+        pressFeedback()
+    }

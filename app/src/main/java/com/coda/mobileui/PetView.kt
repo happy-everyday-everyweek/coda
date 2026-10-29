@@ -23,8 +23,9 @@ import kotlin.math.min
  * 每 tick 由 PetActor 推进，渲染器只把 ActorSnapshot 画出来；快照相同就跳过重绘。
  * 没有常驻动画循环：只在下一个 tick 才 postDelayed 一次，页面不可见时停表。
  */
-class PetView(context: Context) : View(context) {
-
+class PetView(
+    context: Context,
+) : View(context) {
     var skin: PetSkin = PetSkins.resolve(context, PetSkins.defaultId)
         set(value) {
             if (field === value) return
@@ -79,7 +80,10 @@ class PetView(context: Context) : View(context) {
     // ------------------------------------------------------------ 对外
 
     /** 切状态。 */
-    fun setMood(mood: PetMood, animate: Boolean = true) {
+    fun setMood(
+        mood: PetMood,
+        animate: Boolean = true,
+    ) {
         val before = actor.mood
         actor.setMood(mood, animate)
         if (before != actor.mood) onMoodChanged?.invoke(actor.mood)
@@ -173,7 +177,13 @@ class PetView(context: Context) : View(context) {
      * 基框坐标 y 向下、地面在第 rows 行；包围盒 minY 可能为负（画到地面以上更远），
      * 也可能超过 rows（垂下的腿）。位置按 (rows - minY - height) 反推。
      */
-    private fun drawPose(canvas: Canvas, snap: ActorSnapshot, baseLeft: Float, groundY: Float, u: Float) {
+    private fun drawPose(
+        canvas: Canvas,
+        snap: ActorSnapshot,
+        baseLeft: Float,
+        groundY: Float,
+        u: Float,
+    ) {
         val grid = gridCache.getOrPut(snap.pose) { skin.gridOf(snap.pose) } ?: return
         val bmp = bitmapFor(grid, snap)
         val left = baseLeft + (snap.bodyX + grid.minX) * u
@@ -190,7 +200,10 @@ class PetView(context: Context) : View(context) {
      * 缓存键带上淡化标记：原项目里 idle 与 error 会给整个状态加一层 dim，
      * 同姿态在两种状态下颜色不同，不能共用一个位图。
      */
-    private fun bitmapFor(grid: PixelGrid, snap: ActorSnapshot): android.graphics.Bitmap {
+    private fun bitmapFor(
+        grid: PixelGrid,
+        snap: ActorSnapshot,
+    ): android.graphics.Bitmap {
         val key = snap.pose + if (snap.tintDim) "#dim" else ""
         bitmapCache[key]?.let { return it }
         val w = grid.width.coerceAtLeast(1)
@@ -212,7 +225,13 @@ class PetView(context: Context) : View(context) {
     }
 
     /** 画一个字形。x/y 是左上格，y 向下、地面在第 rows 行。 */
-    private fun drawGlyph(canvas: Canvas, d: GlyphDraw, baseLeft: Float, groundY: Float, u: Float) {
+    private fun drawGlyph(
+        canvas: Canvas,
+        d: GlyphDraw,
+        baseLeft: Float,
+        groundY: Float,
+        u: Float,
+    ) {
         val rows = skin.glyph(d.glyph)
         if (rows.isEmpty()) return
         val w = rows.first().length
@@ -253,7 +272,10 @@ class PetView(context: Context) : View(context) {
         bitmapCache.clear()
     }
 
-    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+    override fun onVisibilityChanged(
+        changedView: View,
+        visibility: Int,
+    ) {
         super.onVisibilityChanged(changedView, visibility)
         if (visibility == VISIBLE && isAttachedToWindow) {
             scheduleTick()
@@ -263,7 +285,10 @@ class PetView(context: Context) : View(context) {
     }
 
     /** 高度按基框比例算：宽度定下来一格多大就定了，控件高度 = 基框 + 上下余量。 */
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    override fun onMeasure(
+        widthMeasureSpec: Int,
+        heightMeasureSpec: Int,
+    ) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val cols = skin.cols.coerceAtLeast(1)
         val cell = (w - paddingLeft - paddingRight) / cols.toFloat()

@@ -10,8 +10,9 @@ import androidx.appcompat.app.AppCompatDelegate
  * 外观相关的项已经是真实功能：主题模式、自定义主色、自动取色、界面字号都会持久化，
  * 并在页面重建后立即生效。
  */
-class SettingsStore private constructor(context: Context) {
-
+class SettingsStore private constructor(
+    context: Context,
+) {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -59,27 +60,36 @@ class SettingsStore private constructor(context: Context) {
     var codeThemeDarkIndex: Int
         get() = prefs.getInt(KEY_CODE_THEME_DARK, 0)
         set(value) = prefs.edit().putInt(KEY_CODE_THEME_DARK, value).apply()
+
     /** 发送消息后自动滚动到底部。 */
     var chatAutoScroll: Boolean
         get() = prefs.getBoolean(KEY_CHAT_AUTO_SCROLL, true)
         set(value) = prefs.edit().putBoolean(KEY_CHAT_AUTO_SCROLL, value).apply()
+
     /** 输入框即时渲染 Markdown（粗体、标题、代码等边写边生效）。 */
     var inputMarkdownPreview: Boolean
         get() = prefs.getBoolean(KEY_INPUT_MD_PREVIEW, true)
         set(value) = prefs.edit().putBoolean(KEY_INPUT_MD_PREVIEW, value).apply()
+
     /** 默认发送模式（0=Yolo，1=Build，2=Chat）。 */
     var defaultSendMode: Int
         get() = prefs.getInt(KEY_DEFAULT_SEND_MODE, 1).coerceIn(0, 2)
         set(value) = prefs.edit().putInt(KEY_DEFAULT_SEND_MODE, value.coerceIn(0, 2)).apply()
+
     /** 斜杠命令最近使用（最多 5 个，逗号分隔存储）。 */
     var slashRecent: List<String>
-        get() = (prefs.getString(KEY_SLASH_RECENT, "") ?: "")
-            .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        get() =
+            (prefs.getString(KEY_SLASH_RECENT, "") ?: "")
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
         set(value) = prefs.edit().putString(KEY_SLASH_RECENT, value.take(5).joinToString(",")).apply()
+
     /** 记录一次斜杠命令使用。 */
     fun addSlashRecent(name: String) {
         slashRecent = listOf(name) + slashRecent.filter { it != name }
     }
+
     /** 工作区根目录；为空表示尚未选定，由默认位置接管。 */
     var workspaceRoot: String
         get() = prefs.getString(KEY_WORKSPACE_ROOT, "") ?: ""
@@ -87,11 +97,12 @@ class SettingsStore private constructor(context: Context) {
 
     /** 主题模式对应的 AppCompat 夜间模式。 */
     val nightMode: Int
-        get() = when (themeMode) {
-            MODE_LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
-            MODE_DARK -> AppCompatDelegate.MODE_NIGHT_YES
-            else -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
-        }
+        get() =
+            when (themeMode) {
+                MODE_LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
+                MODE_DARK -> AppCompatDelegate.MODE_NIGHT_YES
+                else -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+            }
 
     /** 自定义主色的十六进制文本（仅用于回显）。 */
     var customAccentHex: String
@@ -104,9 +115,10 @@ class SettingsStore private constructor(context: Context) {
     var petSkinId: String
         // 默认形象是 Clawd（原项目的默认）。旧版本存过 "coda"，那是我自造的形象、
         // 现在已不存在；读到它时回退到 Clawd，否则会取不到皮肤而整只不显示。
-        get() = (prefs.getString(KEY_PET_SKIN, "clawd") ?: "clawd").let {
-            if (it == "coda" || it.isEmpty()) "clawd" else it
-        }
+        get() =
+            (prefs.getString(KEY_PET_SKIN, "clawd") ?: "clawd").let {
+                if (it == "coda" || it.isEmpty()) "clawd" else it
+            }
         set(value) = prefs.edit().putString(KEY_PET_SKIN, value).apply()
 
     /** 宠物总开关。关掉后输入框上方不再出现，设置页里的装饰也一并隐藏。 */
@@ -134,13 +146,14 @@ class SettingsStore private constructor(context: Context) {
      */
     fun petReduceMotionEffective(ctx: Context): Boolean {
         if (petReduceMotion) return true
-        val scale = runCatching {
-            android.provider.Settings.Global.getFloat(
-                ctx.contentResolver,
-                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-                1f,
-            )
-        }.getOrDefault(1f)
+        val scale =
+            runCatching {
+                android.provider.Settings.Global.getFloat(
+                    ctx.contentResolver,
+                    android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                    1f,
+                )
+            }.getOrDefault(1f)
         return scale == 0f
     }
 
@@ -163,6 +176,7 @@ class SettingsStore private constructor(context: Context) {
 
 /** 按场景判断输入框上方要不要显示（总开关 + 场景开关同时成立才显示）。 */
     fun petComposerVisible(): Boolean = petEnabled && petInComposer
+
     /** 按场景判断某个设置页要不要那只趴着的。 */
     fun petSettingsVisible(pageKey: String): Boolean {
         if (!petEnabled) return false
@@ -170,6 +184,7 @@ class SettingsStore private constructor(context: Context) {
     }
 
     // ---------------------------------------------------------------- 实验性：Web UI
+
     /**
      * 实验性 Web UI 总开关。默认关闭；开启后由 WebUiHost 从 GitHub 拉取前端资产
      * 并在局域网内提供访问。
@@ -178,33 +193,34 @@ class SettingsStore private constructor(context: Context) {
         get() = prefs.getBoolean(KEY_WEB_UI_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_WEB_UI_ENABLED, value).apply()
 
-
     /** 当前生效的主色名称（自动取色时为系统取色）。 */
-    fun accentName(): String = when {
-        autoColor -> "自动取色"
-        customAccentHex.isNotEmpty() -> "自定义 $customAccentHex"
-        else -> ACCENT_NAMES[accentIndex.coerceIn(ACCENT_NAMES.indices)]
-    }
+    fun accentName(): String =
+        when {
+            autoColor -> "自动取色"
+            customAccentHex.isNotEmpty() -> "自定义 $customAccentHex"
+            else -> ACCENT_NAMES[accentIndex.coerceIn(ACCENT_NAMES.indices)]
+        }
 
     /** 当前应启用的图标套件：0 = 自动取色，其余 = 色板下标 + 1。 */
     val iconSlot: Int
         get() = if (autoColor) 0 else accentIndex.coerceIn(ACCENT_NAMES.indices) + 1
 
     /** 当前界面字号名称。 */
-    fun fontScaleName(): String =
-        FONT_SCALE_NAMES[fontScaleIndex.coerceIn(FONT_SCALE_NAMES.indices)]
+    fun fontScaleName(): String = FONT_SCALE_NAMES[fontScaleIndex.coerceIn(FONT_SCALE_NAMES.indices)]
 
     /** 会话最近一次被看到的时间（抽屉里的「已完成」标记据此判断未读）。 */
     fun sessionSeenAt(sessionId: String): Long = prefs.getLong(KEY_SESSION_SEEN + sessionId, 0L)
 
     /** 记录会话已被看到。 */
-    fun markSessionSeen(sessionId: String, at: Long = System.currentTimeMillis()) {
+    fun markSessionSeen(
+        sessionId: String,
+        at: Long = System.currentTimeMillis(),
+    ) {
         prefs.edit().putLong(KEY_SESSION_SEEN + sessionId, at).apply()
     }
 
     /** 当前代码字号名称。 */
-    fun codeFontSizeName(): String =
-        CODE_FONT_SIZE_NAMES[codeFontSizeIndex.coerceIn(CODE_FONT_SIZE_NAMES.indices)]
+    fun codeFontSizeName(): String = CODE_FONT_SIZE_NAMES[codeFontSizeIndex.coerceIn(CODE_FONT_SIZE_NAMES.indices)]
 
     companion object {
         private const val PREFS_NAME = "zcode_ui_settings"
@@ -238,37 +254,41 @@ class SettingsStore private constructor(context: Context) {
         const val MODE_DARK = 2
 
         /** 主题模式选项：设置键 -> 标题。 */
-        val THEME_MODES = arrayOf(
-            "theme=$MODE_SYSTEM" to "跟随系统",
-            "theme=$MODE_LIGHT" to "浅色",
-            "theme=$MODE_DARK" to "深色",
-        )
+        val THEME_MODES =
+            arrayOf(
+                "theme=$MODE_SYSTEM" to "跟随系统",
+                "theme=$MODE_LIGHT" to "浅色",
+                "theme=$MODE_DARK" to "深色",
+            )
 
-        /** 自定义主色：设置键 -> 标题，下标与 ACCENT_THEMES 对应。 */
-        /** 主色色板；顺序与图标套件一一对应。 */
+        // 自定义主色：设置键 -> 标题，下标与 ACCENT_THEMES 对应。
+
+        // 主色色板；顺序与图标套件一一对应。
         val ACCENT_NAMES = arrayOf("黑", "蓝", "紫", "绿", "琥珀", "玫红", "青", "橙")
 
-        val ACCENT_COLORS = intArrayOf(
-            0xFF1B1B1B.toInt(),
-            0xFF1D5FD0.toInt(),
-            0xFF6A4CA8.toInt(),
-            0xFF2E6B45.toInt(),
-            0xFF8A6100.toInt(),
-            0xFFB3325C.toInt(),
-            0xFF0F7B8A.toInt(),
-            0xFFB4551C.toInt(),
-        )
+        val ACCENT_COLORS =
+            intArrayOf(
+                0xFF1B1B1B.toInt(),
+                0xFF1D5FD0.toInt(),
+                0xFF6A4CA8.toInt(),
+                0xFF2E6B45.toInt(),
+                0xFF8A6100.toInt(),
+                0xFFB3325C.toInt(),
+                0xFF0F7B8A.toInt(),
+                0xFFB4551C.toInt(),
+            )
 
-        val ACCENT_THEMES = intArrayOf(
-            R.style.Theme_Coda,
-            R.style.Theme_Coda_Blue,
-            R.style.Theme_Coda_Violet,
-            R.style.Theme_Coda_Green,
-            R.style.Theme_Coda_Amber,
-            R.style.Theme_Coda_Rose,
-            R.style.Theme_Coda_Teal,
-            R.style.Theme_Coda_Orange,
-        )
+        val ACCENT_THEMES =
+            intArrayOf(
+                R.style.Theme_Coda,
+                R.style.Theme_Coda_Blue,
+                R.style.Theme_Coda_Violet,
+                R.style.Theme_Coda_Green,
+                R.style.Theme_Coda_Amber,
+                R.style.Theme_Coda_Rose,
+                R.style.Theme_Coda_Teal,
+                R.style.Theme_Coda_Orange,
+            )
 
         /**
          * 自定义颜色落到最接近的色板档位。
@@ -289,7 +309,10 @@ class SettingsStore private constructor(context: Context) {
         }
 
         /** 带权重的 RGB 距离（人眼对绿色更敏感）。 */
-        private fun colorDistance(a: Int, b: Int): Long {
+        private fun colorDistance(
+            a: Int,
+            b: Int,
+        ): Long {
             val dr = ((a shr 16 and 0xFF) - (b shr 16 and 0xFF)).toLong()
             val dg = ((a shr 8 and 0xFF) - (b shr 8 and 0xFF)).toLong()
             val db = ((a and 0xFF) - (b and 0xFF)).toLong()

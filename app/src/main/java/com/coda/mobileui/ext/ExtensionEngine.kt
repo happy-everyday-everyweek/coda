@@ -19,8 +19,9 @@ import java.io.FileOutputStream
  * 内置拓展先释放到 [builtinRoot]（随应用升级按版本刷新），用户拓展放在 [packageRoot]；
  * 两者的二进制都释放到 [runtimeRoot]，拓展包本身保持只读，卸载或重装只影响运行目录。
  */
-class ExtensionEngine private constructor(context: Context) {
-
+class ExtensionEngine private constructor(
+    context: Context,
+) {
     /** 拓展集合或启停状态变化后的回调；宿主据此重建内核运行环境。 */
     fun interface Listener {
         fun onExtensionsChanged()
@@ -113,33 +114,39 @@ class ExtensionEngine private constructor(context: Context) {
         collect(packageRoot, builtin = false)
     }
 
-    private fun collect(root: File, builtin: Boolean) {
+    private fun collect(
+        root: File,
+        builtin: Boolean,
+    ) {
         val dirs = root.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name } ?: return
         for (dir in dirs) {
             val manifestFile = File(dir, "manifest.json")
             if (!manifestFile.isFile) continue
-            val text = try {
-                manifestFile.readText()
-            } catch (_: Throwable) {
-                null
-            } ?: continue
+            val text =
+                try {
+                    manifestFile.readText()
+                } catch (_: Throwable) {
+                    null
+                } ?: continue
             val manifest = ExtensionManifest.parse(text) ?: continue
             // 内置包优先；同 id 的用户包不覆盖内置包。
             if (entries.containsKey(manifest.id)) continue
             // 分类没开放就不装载，避免把不属于任何契约的包当成可用能力。
             if (!categories.containsKey(manifest.category)) continue
 
-            val enabled = prefs.getBoolean(
-                KEY_ENABLED + manifest.id,
-                manifest.raw.optBoolean("defaultEnabled", true),
-            )
-            val entry = Entry(
-                manifest = manifest,
-                packageDir = dir,
-                runtimeDir = File(runtimeRoot, manifest.id),
-                builtin = builtin,
-                enabled = enabled,
-            )
+            val enabled =
+                prefs.getBoolean(
+                    KEY_ENABLED + manifest.id,
+                    manifest.raw.optBoolean("defaultEnabled", true),
+                )
+            val entry =
+                Entry(
+                    manifest = manifest,
+                    packageDir = dir,
+                    runtimeDir = File(runtimeRoot, manifest.id),
+                    builtin = builtin,
+                    enabled = enabled,
+                )
             if (enabled) loadEntry(entry)
             entries[manifest.id] = entry
         }
@@ -159,9 +166,10 @@ class ExtensionEngine private constructor(context: Context) {
             return
         }
         entry.runtimeDir.mkdirs()
-        val provider = category.load(
-            ExtensionLoadContext(entry.packageDir, entry.runtimeDir, entry.manifest),
-        )
+        val provider =
+            category.load(
+                ExtensionLoadContext(entry.packageDir, entry.runtimeDir, entry.manifest),
+            )
         if (provider == null) {
             entry.error = "不符合分类契约"
             return
@@ -223,7 +231,11 @@ class ExtensionEngine private constructor(context: Context) {
      * 多调用二进制（busybox、toybox 之类）靠 argv[0] 判断自己是哪个程序，同一个文件必须以多个名字出现。
      * 优先建硬链接：内容与权限跟随同一 inode，任何名字被调用都等价；硬链接不可用时退回软链接。
      */
-    private fun releaseLinks(entry: Entry, targetRelative: String, links: List<String>): Boolean {
+    private fun releaseLinks(
+        entry: Entry,
+        targetRelative: String,
+        links: List<String>,
+    ): Boolean {
         if (links.isEmpty()) return true
         val target = File(entry.runtimeDir, targetRelative)
         var ok = true
@@ -238,12 +250,13 @@ class ExtensionEngine private constructor(context: Context) {
             try {
                 linkFile.parentFile?.mkdirs()
                 linkFile.delete()
-                val hardLinked = try {
-                    Os.link(target.absolutePath, linkFile.absolutePath)
-                    true
-                } catch (_: Throwable) {
-                    false
-                }
+                val hardLinked =
+                    try {
+                        Os.link(target.absolutePath, linkFile.absolutePath)
+                        true
+                    } catch (_: Throwable) {
+                        false
+                    }
                 if (!hardLinked) Os.symlink(target.absolutePath, linkFile.absolutePath)
             } catch (_: Throwable) {
                 ok = false
@@ -258,7 +271,10 @@ class ExtensionEngine private constructor(context: Context) {
      * 拓展可以按 ABI 分层放置：`bin/sh` 的 ABI 版本是 `bin/<abi>/sh`。
      * 优先取当前设备 ABI 的那份，缺失时退回通用路径，这样一份包可以同时覆盖多种设备。
      */
-    private fun resolveSource(packageDir: File, relative: String): File? {
+    private fun resolveSource(
+        packageDir: File,
+        relative: String,
+    ): File? {
         val direct = File(packageDir, relative)
         val parent = direct.parentFile
         val name = direct.name
@@ -270,18 +286,20 @@ class ExtensionEngine private constructor(context: Context) {
     }
 
     private fun releaseBuiltinPackages() {
-        val ids = try {
-            ctx.assets.list(BUILTIN_ASSET_DIR)?.toList() ?: emptyList()
-        } catch (_: Throwable) {
-            emptyList()
-        }
+        val ids =
+            try {
+                ctx.assets.list(BUILTIN_ASSET_DIR)?.toList() ?: emptyList()
+            } catch (_: Throwable) {
+                emptyList()
+            }
         for (id in ids) {
             val assetPath = "$BUILTIN_ASSET_DIR/$id"
-            val manifestText = try {
-                ctx.assets.open("$assetPath/manifest.json").use { it.readBytes().decodeToString() }
-            } catch (_: Throwable) {
-                continue
-            }
+            val manifestText =
+                try {
+                    ctx.assets.open("$assetPath/manifest.json").use { it.readBytes().decodeToString() }
+                } catch (_: Throwable) {
+                    continue
+                }
             val version = ExtensionManifest.parse(manifestText)?.version ?: continue
             val dest = File(builtinRoot, id)
             val stamp = File(dest, ".version")
@@ -292,12 +310,16 @@ class ExtensionEngine private constructor(context: Context) {
         }
     }
 
-    private fun copyAssetDir(assetPath: String, dest: File) {
-        val children = try {
-            ctx.assets.list(assetPath)
-        } catch (_: Throwable) {
-            null
-        }
+    private fun copyAssetDir(
+        assetPath: String,
+        dest: File,
+    ) {
+        val children =
+            try {
+                ctx.assets.list(assetPath)
+            } catch (_: Throwable) {
+                null
+            }
         if (children.isNullOrEmpty()) {
             dest.parentFile?.mkdirs()
             try {
@@ -326,23 +348,27 @@ class ExtensionEngine private constructor(context: Context) {
         return entries[id]?.let { snapshot(it) }
     }
 
-    private fun snapshot(entry: Entry): Record = Record(
-        id = entry.manifest.id,
-        name = entry.manifest.name,
-        version = entry.manifest.version,
-        category = entry.manifest.category,
-        categoryTitle = categories[entry.manifest.category]?.title ?: entry.manifest.category,
-        description = entry.manifest.description,
-        builtin = entry.builtin,
-        enabled = entry.enabled,
-        available = entry.provider?.available == true,
-        error = entry.error,
-        packageDir = entry.packageDir.absolutePath,
-    )
+    private fun snapshot(entry: Entry): Record =
+        Record(
+            id = entry.manifest.id,
+            name = entry.manifest.name,
+            version = entry.manifest.version,
+            category = entry.manifest.category,
+            categoryTitle = categories[entry.manifest.category]?.title ?: entry.manifest.category,
+            description = entry.manifest.description,
+            builtin = entry.builtin,
+            enabled = entry.enabled,
+            available = entry.provider?.available == true,
+            error = entry.error,
+            packageDir = entry.packageDir.absolutePath,
+        )
 
     /** 启停拓展；状态持久化，重启后仍然生效。 */
     @Synchronized
-    fun setEnabled(id: String, enabled: Boolean): Boolean {
+    fun setEnabled(
+        id: String,
+        enabled: Boolean,
+    ): Boolean {
         ensureLoaded()
         val entry = entries[id] ?: return false
         prefs.edit().putBoolean(KEY_ENABLED + id, enabled).apply()
@@ -358,11 +384,12 @@ class ExtensionEngine private constructor(context: Context) {
         ensureLoaded()
         val manifestFile = File(sourceDir, "manifest.json")
         if (!manifestFile.isFile) return null
-        val text = try {
-            manifestFile.readText()
-        } catch (_: Throwable) {
-            null
-        } ?: return null
+        val text =
+            try {
+                manifestFile.readText()
+            } catch (_: Throwable) {
+                null
+            } ?: return null
         val manifest = ExtensionManifest.parse(text) ?: return null
         if (!categories.containsKey(manifest.category)) return null
         val dest = File(packageRoot, manifest.id)
@@ -414,8 +441,7 @@ class ExtensionEngine private constructor(context: Context) {
     }
 
     /** 便捷入口：终端分类的对外能力。 */
-    fun terminalCapability(): TerminalCapability? =
-        capability(TerminalCategory.ID) as? TerminalCapability
+    fun terminalCapability(): TerminalCapability? = capability(TerminalCategory.ID) as? TerminalCapability
 
     // ---------------------------------------------------------------- 工具
 
@@ -428,7 +454,10 @@ class ExtensionEngine private constructor(context: Context) {
         }
     }
 
-    private fun copyDir(source: File, dest: File) {
+    private fun copyDir(
+        source: File,
+        dest: File,
+    ) {
         if (source.isDirectory) {
             dest.mkdirs()
             source.listFiles()?.forEach { copyDir(it, File(dest, it.name)) }
@@ -446,7 +475,10 @@ class ExtensionEngine private constructor(context: Context) {
     }
 
     /** 判断清单里是否存在某个点路径的键（形如 `terminal.shell`）且取值非空。 */
-    private fun hasKey(obj: JSONObject, path: String): Boolean {
+    private fun hasKey(
+        obj: JSONObject,
+        path: String,
+    ): Boolean {
         val parts = path.split('.')
         var cursor: JSONObject = obj
         for ((index, part) in parts.withIndex()) {
@@ -465,7 +497,6 @@ class ExtensionEngine private constructor(context: Context) {
     }
 
     companion object {
-
         private const val PREFS = "coda_extensions"
         private const val KEY_ENABLED = "enabled_"
         private const val BUILTIN_ASSET_DIR = "extensions"

@@ -20,10 +20,10 @@ import java.util.zip.GZIPInputStream
  * 这里同时产出进容器所需的启动参数。容器内不继承宿主的 PATH 与 HOME，一律由 entry 里的
  * env -i 重新给出，避免把 Android 的目录布局带进去。
  */
-class LinuxEnv(private val ctx: Context) {
-
+class LinuxEnv(
+    private val ctx: Context,
+) {
     companion object {
-
         /** 注入内核的环境变量，与内核的终端拓展契约同名。 */
         const val ENV_SHELL = "ZCODE_TERMINAL_SHELL"
         const val ENV_DIALECT = "ZCODE_TERMINAL_DIALECT"
@@ -51,12 +51,13 @@ class LinuxEnv(private val ctx: Context) {
         private const val MINIMAL_BINDS_MARK = ".minimalbinds"
 
         /** 引导集：资产路径到运行目录相对路径。总共四个文件，约 300 KB。 */
-        private val BOOTSTRAP = listOf(
-            "$ASSET_ROOT/bin/proot" to "bin/proot",
-            "$ASSET_ROOT/bin/loader" to "bin/loader",
-            "$ASSET_ROOT/lib/libtalloc.so.2" to "lib/libtalloc.so.2",
-            "$ASSET_ROOT/lib/libandroid-shmem.so" to "lib/libandroid-shmem.so",
-        )
+        private val BOOTSTRAP =
+            listOf(
+                "$ASSET_ROOT/bin/proot" to "bin/proot",
+                "$ASSET_ROOT/bin/loader" to "bin/loader",
+                "$ASSET_ROOT/lib/libtalloc.so.2" to "lib/libtalloc.so.2",
+                "$ASSET_ROOT/lib/libandroid-shmem.so" to "lib/libandroid-shmem.so",
+            )
 
         /** 容器内的 PATH，固定值，与宿主无关。 */
         private const val GUEST_PATH =
@@ -68,19 +69,20 @@ class LinuxEnv(private val ctx: Context) {
          * Android 各版本暴露的目录并不一致，这里只登记候选，实际绑定时逐个检查是否存在，
          * 缺哪个就跳过哪个——任何一项缺失都不该让终端起不来。
          */
-        private val BIND_CANDIDATES = listOf(
-            "/dev" to null,
-            "/proc" to null,
-            "/sys" to null,
-            "/dev/pts" to null,
-            "/data/local/tmp" to null,
-            "/storage/emulated/0" to "/sdcard",
-            "/storage/emulated/0" to "/storage/emulated/0",
-            "/proc/self/fd" to "/dev/fd",
-            "/proc/self/fd/0" to "/dev/stdin",
-            "/proc/self/fd/1" to "/dev/stdout",
-            "/proc/self/fd/2" to "/dev/stderr",
-        )
+        private val BIND_CANDIDATES =
+            listOf(
+                "/dev" to null,
+                "/proc" to null,
+                "/sys" to null,
+                "/dev/pts" to null,
+                "/data/local/tmp" to null,
+                "/storage/emulated/0" to "/sdcard",
+                "/storage/emulated/0" to "/storage/emulated/0",
+                "/proc/self/fd" to "/dev/fd",
+                "/proc/self/fd/0" to "/dev/stdin",
+                "/proc/self/fd/1" to "/dev/stdout",
+                "/proc/self/fd/2" to "/dev/stderr",
+            )
 
         private const val LOCK_TIMEOUT_MS = 180_000L
         private const val PROBE_TIMEOUT_SECONDS = 20L
@@ -92,11 +94,12 @@ class LinuxEnv(private val ctx: Context) {
          * 在不同 Android 版本与权限状态下不一定能绑，任一项失败 proot 会直接起不来。
          * 完整集探测不通过时退到这一档，换掉一部分便利性保住终端可用。
          */
-        private val MINIMAL_BIND_CANDIDATES = listOf(
-            "/dev" to null,
-            "/dev/pts" to null,
-            "/proc" to null,
-        )
+        private val MINIMAL_BIND_CANDIDATES =
+            listOf(
+                "/dev" to null,
+                "/dev/pts" to null,
+                "/proc" to null,
+            )
 
         /** 权限常量：Kotlin 没有八进制字面量，这里写十进制并在注释里标出八进制。 */
         private const val MODE_EXEC = 493 // 0755
@@ -123,11 +126,12 @@ class LinuxEnv(private val ctx: Context) {
     private val loaderPath: String get() = File(binDir, "loader").absolutePath
 
     /** 环境是否已装配就绪。 */
-    fun isReady(): Boolean = try {
-        marker.isFile && rootfs.isDirectory && File(prootPath).isFile
-    } catch (_: Throwable) {
-        false
-    }
+    fun isReady(): Boolean =
+        try {
+            marker.isFile && rootfs.isDirectory && File(prootPath).isFile
+        } catch (_: Throwable) {
+            false
+        }
 
     /**
      * 装配环境；已装配且资产版本一致时直接返回。
@@ -137,10 +141,11 @@ class LinuxEnv(private val ctx: Context) {
      * 由调用方决定要不要退回其他终端。
      */
     fun ensureReady(onProgress: (String) -> Unit = {}): Boolean {
-        val wanted = assetVersion() ?: run {
-            AppLog.e("LinuxEnv", "读取不到版本资产，无法判断环境版本")
-            return false
-        }
+        val wanted =
+            assetVersion() ?: run {
+                AppLog.e("LinuxEnv", "读取不到版本资产，无法判断环境版本")
+                return false
+            }
         if (isReady() && runCatching { marker.readText().trim() }.getOrNull() == wanted) return true
         AppLog.i("LinuxEnv", "开始装配环境：wanted=$wanted，已有根文件系统=${rootfs.isDirectory}")
 
@@ -167,12 +172,13 @@ class LinuxEnv(private val ctx: Context) {
             // 分级探测：从功能最全到最保守依次试，第一档能起来就按它启动。
             // 组合是 --link2symlink 有无乘绑定集完整与否，共四档。任一档通过即可，
             // 这样宿主上某个可选绑定路径不可用也不会让整个终端消失。
-            val plan = listOf(
-                LaunchPlan(link2symlink = true, minimalBinds = false),
-                LaunchPlan(link2symlink = true, minimalBinds = true),
-                LaunchPlan(link2symlink = false, minimalBinds = false),
-                LaunchPlan(link2symlink = false, minimalBinds = true),
-            ).firstOrNull { probe(it) }
+            val plan =
+                listOf(
+                    LaunchPlan(link2symlink = true, minimalBinds = false),
+                    LaunchPlan(link2symlink = true, minimalBinds = true),
+                    LaunchPlan(link2symlink = false, minimalBinds = false),
+                    LaunchPlan(link2symlink = false, minimalBinds = true),
+                ).firstOrNull { probe(it) }
             if (plan == null) {
                 AppLog.e("LinuxEnv", "四档启动探测全部失败，环境不可用")
                 onProgress("Linux 环境自检未通过，将退回内置终端")
@@ -211,12 +217,13 @@ class LinuxEnv(private val ctx: Context) {
         val login = GitHub.loginName(ctx).orEmpty()
 
         if (!token.isNullOrEmpty()) {
-            val hosts = buildString {
-                append("github.com:\n")
-                append("    oauth_token: ").append(token).append('\n')
-                append("    git_protocol: https\n")
-                if (login.isNotEmpty()) append("    user: ").append(login).append('\n')
-            }
+            val hosts =
+                buildString {
+                    append("github.com:\n")
+                    append("    oauth_token: ").append(token).append('\n')
+                    append("    git_protocol: https\n")
+                    if (login.isNotEmpty()) append("    user: ").append(login).append('\n')
+                }
             writeFile(File(rootfs, "root/.config/gh/hosts.yml"), hosts, MODE_PRIVATE)
         } else {
             // 登出后必须把容器里的凭据一并清掉：只清应用侧的 SharedPreferences，
@@ -225,28 +232,29 @@ class LinuxEnv(private val ctx: Context) {
             runCatching { File(rootfs, "root/.config/gh/hosts.yml").delete() }
         }
 
-        val gitConfig = buildString {
-            // gh 的 credential helper 只有登录时才有意义；登出后如果不摘掉，
-            // 每次 git push/pull 都会先去调 gh auth git-credential，失败后
-            // 还可能弹出 gh 自己的交互提示，把本该干净的失败信息搅浑。
-            if (!token.isNullOrEmpty()) {
-                append("[credential \"https://github.com\"]\n")
-                append("\thelper = !gh auth git-credential\n")
-                append("[credential \"https://gist.github.com\"]\n")
-                append("\thelper = !gh auth git-credential\n")
+        val gitConfig =
+            buildString {
+                // gh 的 credential helper 只有登录时才有意义；登出后如果不摘掉，
+                // 每次 git push/pull 都会先去调 gh auth git-credential，失败后
+                // 还可能弹出 gh 自己的交互提示，把本该干净的失败信息搅浑。
+                if (!token.isNullOrEmpty()) {
+                    append("[credential \"https://github.com\"]\n")
+                    append("\thelper = !gh auth git-credential\n")
+                    append("[credential \"https://gist.github.com\"]\n")
+                    append("\thelper = !gh auth git-credential\n")
+                }
+                append("[init]\n")
+                append("\tdefaultBranch = main\n")
+                // 容器里的进程身份是伪造的 root，宿主 /sdcard 上的文件属主却是应用自身。
+                // 不开这个口子，git 会把工作区判成属主可疑：init 成功，status、rev-parse、log 全挂。
+                append("[safe]\n")
+                append("\tdirectory = *\n")
+                if (login.isNotEmpty()) {
+                    append("[user]\n")
+                    append("\tname = ").append(login).append('\n')
+                    append("\temail = ").append(login).append("@users.noreply.github.com\n")
+                }
             }
-            append("[init]\n")
-            append("\tdefaultBranch = main\n")
-            // 容器里的进程身份是伪造的 root，宿主 /sdcard 上的文件属主却是应用自身。
-            // 不开这个口子，git 会把工作区判成属主可疑：init 成功，status、rev-parse、log 全挂。
-            append("[safe]\n")
-            append("\tdirectory = *\n")
-            if (login.isNotEmpty()) {
-                append("[user]\n")
-                append("\tname = ").append(login).append('\n')
-                append("\temail = ").append(login).append("@users.noreply.github.com\n")
-            }
-        }
         writeFile(File(rootfs, "root/.gitconfig"), gitConfig, MODE_FILE)
     }
 
@@ -267,18 +275,19 @@ class LinuxEnv(private val ctx: Context) {
     /** 交给内核的环境变量补丁。 */
     fun env(): Map<String, String> {
         val prefix = JSONArray(launchPrefix())
-        val entry = JSONArray(
-            listOf(
-                "/usr/bin/env",
-                "-i",
-                "HOME=/root",
-                "SHELL=/bin/bash",
-                "TERM=xterm-256color",
-                "LANG=C.UTF-8",
-                "PATH=$GUEST_PATH",
-                "/bin/bash",
-            ),
-        )
+        val entry =
+            JSONArray(
+                listOf(
+                    "/usr/bin/env",
+                    "-i",
+                    "HOME=/root",
+                    "SHELL=/bin/bash",
+                    "TERM=xterm-256color",
+                    "LANG=C.UTF-8",
+                    "PATH=$GUEST_PATH",
+                    "/bin/bash",
+                ),
+            )
         return mapOf(
             ENV_SHELL to prootPath,
             ENV_DIALECT to "posix",
@@ -313,8 +322,10 @@ class LinuxEnv(private val ctx: Context) {
         // 原样交给容器，于是报 `env: can't execute '/data/user/0/...': No such file or directory`
         // ——因为那个路径在容器 rootfs 里根本不存在。这里按 filesDir 的两个前缀做兜底换算。
         val filesDirPath = ctx.filesDir.absolutePath
-        val altFilesDir = filesDirPath.replace("/data/user/0/", "/data/data/")
-            .let { if (it == filesDirPath) filesDirPath.replace("/data/data/", "/data/user/0/") else it }
+        val altFilesDir =
+            filesDirPath
+                .replace("/data/user/0/", "/data/data/")
+                .let { if (it == filesDirPath) filesDirPath.replace("/data/data/", "/data/user/0/") else it }
         for (prefix in listOf(filesDirPath, altFilesDir)) {
             val trimmed = prefix.trimEnd('/')
             if (!absolute.startsWith("$trimmed/")) continue
@@ -330,7 +341,10 @@ class LinuxEnv(private val ctx: Context) {
      * 进容器的开关统一走进程环境，命令行走 proot 参数加一个 env -i 的干净入口；宿主继承来的
      * LD_LIBRARY_PATH 必须清掉，否则动态加载器会先去那里找库。
      */
-    fun builder(guestArgv: List<String>, extraEnv: Map<String, String> = emptyMap()): ProcessBuilder {
+    fun builder(
+        guestArgv: List<String>,
+        extraEnv: Map<String, String> = emptyMap(),
+    ): ProcessBuilder {
         // 每次起进程前确保容器内 DNS 可用。这一步是必要的，不是保险：
         // `env -i` 会清空宿主环境，Go 静态二进制默认用纯 Go 解析器读
         // /etc/resolv.conf，而 rootfs 里那份通常断链或为空。后果是
@@ -370,9 +384,10 @@ class LinuxEnv(private val ctx: Context) {
      */
     private fun ensureResolvConf() {
         val target = File(rootfs, "etc/resolv.conf")
-        val existing = runCatching {
-            if (target.isFile) target.readText() else ""
-        }.getOrDefault("")
+        val existing =
+            runCatching {
+                if (target.isFile) target.readText() else ""
+            }.getOrDefault("")
         if (existing.lineSequence().any { it.trim().startsWith("nameserver ") }) return
         val servers = currentDnsServers()
         if (servers.isEmpty()) {
@@ -393,55 +408,73 @@ class LinuxEnv(private val ctx: Context) {
 
     /** 当前生效网络的 DNS 地址；取不到时回落到公共 DNS。 */
     private fun currentDnsServers(): List<String> {
-        val fromSystem: List<String> = runCatching {
-            val cm = ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
-                as android.net.ConnectivityManager
-            cm.allNetworks.flatMap { net ->
-                cm.getLinkProperties(net)?.dnsServers?.mapNotNull { it.hostAddress } ?: listOf()
-            }
-        }.getOrDefault(listOf())
+        val fromSystem: List<String> =
+            runCatching {
+                val cm =
+                    ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                        as android.net.ConnectivityManager
+                cm.allNetworks.flatMap { net ->
+                    cm.getLinkProperties(net)?.dnsServers?.mapNotNull { it.hostAddress } ?: listOf()
+                }
+            }.getOrDefault(listOf())
         val usable = fromSystem.filter { it.isNotBlank() }.distinct()
         // IPv6 链路本地地址在 proot 内不一定可达，优先用 IPv4。
         val ipv4 = usable.filter { !it.contains(':') }
-        return if (ipv4.isNotEmpty()) ipv4 else if (usable.isNotEmpty()) usable
-        else listOf("223.5.5.5", "119.29.29.29")
+        return if (ipv4.isNotEmpty()) {
+            ipv4
+        } else if (usable.isNotEmpty()) {
+            usable
+        } else {
+            listOf("223.5.5.5", "119.29.29.29")
+        }
     }
 
     /** 一次容器内命令的执行结果。 */
-    data class ShellResult(val ok: Boolean, val code: Int, val output: String)
+    data class ShellResult(
+        val ok: Boolean,
+        val code: Int,
+        val output: String,
+    )
 
     /** 容器内跑一条命令并读回合并后的输出；调用方负责放到后台线程。 */
-    fun exec(guestArgv: List<String>, timeoutMs: Long = 60_000L): ShellResult = try {
-        val process = builder(guestArgv).redirectErrorStream(true).start()
-        // 读流必须放后台：readBytes 会阻塞到进程退出才返回，若在主流程先读，
-        // waitFor(timeout) 永远轮不到执行，超时判断形同虚设——命令一旦挂起
-        // （网络黑洞、等待认证输入），调用线程就永久卡死。与 probe() 同一套模式。
-        val outHolder = arrayOf("")
-        val reader = Thread {
-            outHolder[0] = runCatching {
-                process.inputStream.use { String(it.readBytes(), Charsets.UTF_8) }
-            }.getOrDefault("")
-        }.apply { isDaemon = true }
-        reader.start()
-        val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-        if (!finished) {
-            process.destroy()
-            AppLog.w("LinuxEnv", "exec 超时（${timeoutMs}ms）：${guestArgv.firstOrNull()}")
+    fun exec(
+        guestArgv: List<String>,
+        timeoutMs: Long = 60_000L,
+    ): ShellResult =
+        try {
+            val process = builder(guestArgv).redirectErrorStream(true).start()
+            // 读流必须放后台：readBytes 会阻塞到进程退出才返回，若在主流程先读，
+            // waitFor(timeout) 永远轮不到执行，超时判断形同虚设——命令一旦挂起
+            // （网络黑洞、等待认证输入），调用线程就永久卡死。与 probe() 同一套模式。
+            val outHolder = arrayOf("")
+            val reader =
+                Thread {
+                    outHolder[0] =
+                        runCatching {
+                            process.inputStream.use { String(it.readBytes(), Charsets.UTF_8) }
+                        }.getOrDefault("")
+                }.apply { isDaemon = true }
+            reader.start()
+            val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!finished) {
+                process.destroy()
+                AppLog.w("LinuxEnv", "exec 超时（${timeoutMs}ms）：${guestArgv.firstOrNull()}")
+            }
+            runCatching { reader.join(500) }
+            val code = if (finished) process.exitValue() else -1
+            ShellResult(code == 0, code, outHolder[0])
+        } catch (t: Throwable) {
+            ShellResult(false, -1, t.message ?: "执行失败")
         }
-        runCatching { reader.join(500) }
-        val code = if (finished) process.exitValue() else -1
-        ShellResult(code == 0, code, outHolder[0])
-    } catch (t: Throwable) {
-        ShellResult(false, -1, t.message ?: "执行失败")
-    }
 
     // ---------------------------------------------------------------- 装配
 
-    private fun assetVersion(): String? = try {
-        ctx.assets.open(VERSION_ASSET).use { it.readBytes().decodeToString().trim() }
-    } catch (_: Throwable) {
-        null
-    }
+    private fun assetVersion(): String? =
+        try {
+            ctx.assets.open(VERSION_ASSET).use { it.readBytes().decodeToString().trim() }
+        } catch (_: Throwable) {
+            null
+        }
 
     private fun releaseBootstrap() {
         for ((asset, relative) in BOOTSTRAP) {
@@ -487,11 +520,12 @@ class LinuxEnv(private val ctx: Context) {
      */
     private fun openRootfsArchive(): InputStream {
         for (asset in ROOTFS_ASSETS) {
-            val raw = try {
-                ctx.assets.open(asset)
-            } catch (_: Throwable) {
-                continue
-            }
+            val raw =
+                try {
+                    ctx.assets.open(asset)
+                } catch (_: Throwable) {
+                    continue
+                }
             val buffered = BufferedInputStream(raw, 1 shl 16)
             buffered.mark(2)
             val first = buffered.read()
@@ -507,7 +541,10 @@ class LinuxEnv(private val ctx: Context) {
     }
 
     /** 精简 ustar 解包器：归档只含常规文件、目录与符号链接，不带 pax 扩展头。 */
-    private fun untar(input: InputStream, dest: File) {
+    private fun untar(
+        input: InputStream,
+        dest: File,
+    ) {
         val header = ByteArray(512)
         val buffer = ByteArray(1 shl 16)
         while (true) {
@@ -524,21 +561,26 @@ class LinuxEnv(private val ctx: Context) {
             val relative = full.removePrefix("./").trimStart('/')
             val isRegular = type == '0' || type == '\u0000' || type == '7'
 
-            val target = if (relative.isEmpty() || relative.split('/').contains("..")) {
-                null
-            } else {
-                File(dest, relative)
-            }
+            val target =
+                if (relative.isEmpty() || relative.split('/').contains("..")) {
+                    null
+                } else {
+                    File(dest, relative)
+                }
 
             var consumed = false
             if (target != null) {
                 when {
-                    type == '5' -> target.mkdirs()
+                    type == '5' -> {
+                        target.mkdirs()
+                    }
+
                     type == '2' -> {
                         target.parentFile?.mkdirs()
                         target.delete()
                         runCatching { Os.symlink(linkName, target.absolutePath) }
                     }
+
                     isRegular -> {
                         target.parentFile?.mkdirs()
                         FileOutputStream(target).use { out ->
@@ -557,7 +599,10 @@ class LinuxEnv(private val ctx: Context) {
         }
     }
 
-    private fun readBlock(input: InputStream, buffer: ByteArray): Boolean {
+    private fun readBlock(
+        input: InputStream,
+        buffer: ByteArray,
+    ): Boolean {
         var offset = 0
         while (offset < buffer.size) {
             val read = input.read(buffer, offset, buffer.size - offset)
@@ -567,14 +612,22 @@ class LinuxEnv(private val ctx: Context) {
         return true
     }
 
-    private fun readString(header: ByteArray, offset: Int, length: Int): String {
+    private fun readString(
+        header: ByteArray,
+        offset: Int,
+        length: Int,
+    ): String {
         var end = offset
         val limit = offset + length
         while (end < limit && header[end] != 0.toByte()) end++
         return String(header, offset, end - offset, Charsets.UTF_8).trim()
     }
 
-    private fun readOctal(header: ByteArray, offset: Int, length: Int): Long {
+    private fun readOctal(
+        header: ByteArray,
+        offset: Int,
+        length: Int,
+    ): Long {
         var value = 0L
         var started = false
         var index = offset
@@ -593,7 +646,12 @@ class LinuxEnv(private val ctx: Context) {
         return value
     }
 
-    private fun copyExactly(input: InputStream, out: OutputStream, size: Long, buffer: ByteArray) {
+    private fun copyExactly(
+        input: InputStream,
+        out: OutputStream,
+        size: Long,
+        buffer: ByteArray,
+    ) {
         var remaining = size
         while (remaining > 0) {
             val chunk = minOf(remaining, buffer.size.toLong()).toInt()
@@ -604,7 +662,11 @@ class LinuxEnv(private val ctx: Context) {
         }
     }
 
-    private fun skipExactly(input: InputStream, size: Long, buffer: ByteArray) {
+    private fun skipExactly(
+        input: InputStream,
+        size: Long,
+        buffer: ByteArray,
+    ) {
         var remaining = size
         while (remaining > 0) {
             val chunk = minOf(remaining, buffer.size.toLong()).toInt()
@@ -617,7 +679,10 @@ class LinuxEnv(private val ctx: Context) {
     // ---------------------------------------------------------------- 探测
 
     /** 一类启动组合：是否带 --link2symlink、绑定集用完整还是最小。 */
-    private data class LaunchPlan(val link2symlink: Boolean, val minimalBinds: Boolean)
+    private data class LaunchPlan(
+        val link2symlink: Boolean,
+        val minimalBinds: Boolean,
+    )
 
     /**
      * 用真实 proot 启动一次容器做自检。
@@ -658,11 +723,13 @@ class LinuxEnv(private val ctx: Context) {
             // 读流必须在 waitFor 之前：如果先 waitFor，进程写满管道缓冲就会互相等死。
             // 但读流本身会阻塞到进程关闭输出，所以这里用后台线程读，主线程负责超时判定。
             val outHolder = arrayOf("")
-            val reader = Thread {
-                outHolder[0] = runCatching {
-                    process.inputStream.readBytes().decodeToString()
-                }.getOrDefault("")
-            }.apply { isDaemon = true }
+            val reader =
+                Thread {
+                    outHolder[0] =
+                        runCatching {
+                            process.inputStream.readBytes().decodeToString()
+                        }.getOrDefault("")
+                }.apply { isDaemon = true }
             reader.start()
             if (!process.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroy()
@@ -716,7 +783,11 @@ class LinuxEnv(private val ctx: Context) {
 
     // ---------------------------------------------------------------- 工具
 
-    private fun writeFile(file: File, text: String, mode: Int) {
+    private fun writeFile(
+        file: File,
+        text: String,
+        mode: Int,
+    ) {
         file.parentFile?.mkdirs()
         file.writeText(text)
         runCatching { Os.chmod(file.absolutePath, mode) }

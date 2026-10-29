@@ -8,13 +8,13 @@ import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.HooksCore
+import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.PhoneAccessibilityService
 import com.coda.mobileui.core.PhoneControl
+import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.core.UpdateChecker
 import com.coda.mobileui.core.WebUiHost
 import com.coda.mobileui.core.ZController
-import com.coda.mobileui.core.OAuthProviders
-import com.coda.mobileui.core.ProviderStore
 import org.json.JSONObject
 import java.io.File
 import java.util.Locale
@@ -22,7 +22,9 @@ import java.util.Locale
 /** 设置行类型。key 非空表示该行接入真实交互。 */
 sealed class SettingRow {
     /** 分组标题。 */
-    data class Header(val title: String) : SettingRow()
+    data class Header(
+        val title: String,
+    ) : SettingRow()
 
     /** 一级分类入口。 */
     data class Category(
@@ -33,7 +35,11 @@ sealed class SettingRow {
     ) : SettingRow()
 
     /** 值行（值为副标题）；key 形如 theme=1，或普通标识。 */
-    data class Value(val title: String, val value: String, val key: String = "") : SettingRow()
+    data class Value(
+        val title: String,
+        val value: String,
+        val key: String = "",
+    ) : SettingRow()
 
     /** 开关行。 */
     data class Toggle(
@@ -44,7 +50,11 @@ sealed class SettingRow {
     ) : SettingRow()
 
     /** 单选项行。 */
-    data class Radio(val title: String, val checked: Boolean, val key: String = "") : SettingRow()
+    data class Radio(
+        val title: String,
+        val checked: Boolean,
+        val key: String = "",
+    ) : SettingRow()
 
     /**
      * 自定义视图行。
@@ -60,6 +70,7 @@ sealed class SettingRow {
         companion object {
             /** 活跃度热力图。数据是 usage/stats 的原始返回体。 */
             const val KIND_HEATMAP = "heatmap"
+
             /** 宠物站台：趴着的那只宠物，画在第一张卡片上方。 */
             const val KIND_PET_STAGE = "petStage"
         }
@@ -67,7 +78,10 @@ sealed class SettingRow {
 }
 
 /** 二级页面定义。 */
-data class SettingsPage(val title: String, val rows: List<SettingRow>)
+data class SettingsPage(
+    val title: String,
+    val rows: List<SettingRow>,
+)
 
 /**
  * 设置数据。
@@ -76,98 +90,101 @@ data class SettingsPage(val title: String, val rows: List<SettingRow>)
  * 外观页已接入真实设置（主题模式、主色、自动取色、界面字号、代码显示）。
  */
 object SettingsData {
-
-    val home: List<SettingRow> = listOf(
-        SettingRow.Header("基础设置"),
-        SettingRow.Category("system", "系统", "运行状态、存储与日志", R.drawable.ic_settings),
-        SettingRow.Category("general", "通用", "界面语言与交互行为", R.drawable.ic_chat),
-        SettingRow.Category("appearance", "外观", "主题、主色、界面字号与代码显示", R.drawable.ic_sun),
-        SettingRow.Category("providers", "模型设置", "管理自定义模型供应商", R.drawable.ic_logo_spark),
-        SettingRow.Category("browser", "浏览器控制", "内置浏览器与浏览器数据", R.drawable.ic_globe),
-        SettingRow.Category("computer", "手机控制", "Agent 操作本机屏幕，需开启无障碍服务", R.drawable.ic_monitor),
-        SettingRow.Category("integrations", "集成", "云服务与第三方平台连接", R.drawable.ic_integrations),
-        SettingRow.Header("Agent 能力"),
-        SettingRow.Category("subagents", "子智能体", "管理用户级子智能体 Markdown 文件", R.drawable.ic_hierarchy),
-        SettingRow.Category("plugins", "插件", "启用或停用已安装的插件", R.drawable.ic_layers),
-        SettingRow.Category("mcp", "MCP 服务器", "管理 Agent 使用的 MCP 服务器配置", R.drawable.ic_server),
-        SettingRow.Category("skills", "技能", "管理项目级与用户级技能", R.drawable.ic_zap),
-        SettingRow.Category("commands", "命令", "管理 .md 命令文件", R.drawable.ic_terminal),
-        SettingRow.Category("automations", "定时任务", "按计划自动运行任务", R.drawable.ic_clock),
-        SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
-        // 实验性功能：默认全部关闭，开启即代表用户知情尝试。Web UI 的前端资产
-        // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
-        SettingRow.Header("实验性功能"),
-        SettingRow.Category("webui", "Web UI", "局域网网页端，运行时从 GitHub 拉取", R.drawable.ic_globe),
-        SettingRow.Category("pet", "宠物", "形象、提示方式与动态效果", R.drawable.ic_logo_spark),
-        SettingRow.Header("数据与统计"),
-        SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
-        // 日志是诊断入口，和"使用统计"同属"看清应用在做什么"这一类，归到数据与统计下。
-        SettingRow.Category("logs", "日志", "运行日志，可查看、复制与导出", R.drawable.ic_file),
-        SettingRow.Category("about", "关于", "版本、开源许可与项目主页", R.drawable.ic_info),
-    )
+    val home: List<SettingRow> =
+        listOf(
+            SettingRow.Header("基础设置"),
+            SettingRow.Category("system", "系统", "运行状态、存储与日志", R.drawable.ic_settings),
+            SettingRow.Category("general", "通用", "界面语言与交互行为", R.drawable.ic_chat),
+            SettingRow.Category("appearance", "外观", "主题、主色、界面字号与代码显示", R.drawable.ic_sun),
+            SettingRow.Category("providers", "模型设置", "管理自定义模型供应商", R.drawable.ic_logo_spark),
+            SettingRow.Category("browser", "浏览器控制", "内置浏览器与浏览器数据", R.drawable.ic_globe),
+            SettingRow.Category("computer", "手机控制", "Agent 操作本机屏幕，需开启无障碍服务", R.drawable.ic_monitor),
+            SettingRow.Category("integrations", "集成", "云服务与第三方平台连接", R.drawable.ic_integrations),
+            SettingRow.Header("Agent 能力"),
+            SettingRow.Category("subagents", "子智能体", "管理用户级子智能体 Markdown 文件", R.drawable.ic_hierarchy),
+            SettingRow.Category("plugins", "插件", "启用或停用已安装的插件", R.drawable.ic_layers),
+            SettingRow.Category("mcp", "MCP 服务器", "管理 Agent 使用的 MCP 服务器配置", R.drawable.ic_server),
+            SettingRow.Category("skills", "技能", "管理项目级与用户级技能", R.drawable.ic_zap),
+            SettingRow.Category("commands", "命令", "管理 .md 命令文件", R.drawable.ic_terminal),
+            SettingRow.Category("automations", "定时任务", "按计划自动运行任务", R.drawable.ic_clock),
+            SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
+            // 实验性功能：默认全部关闭，开启即代表用户知情尝试。Web UI 的前端资产
+            // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
+            SettingRow.Header("实验性功能"),
+            SettingRow.Category("webui", "Web UI", "局域网网页端，运行时从 GitHub 拉取", R.drawable.ic_globe),
+            SettingRow.Category("pet", "宠物", "形象、提示方式与动态效果", R.drawable.ic_logo_spark),
+            SettingRow.Header("数据与统计"),
+            SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
+            // 日志是诊断入口，和"使用统计"同属"看清应用在做什么"这一类，归到数据与统计下。
+            SettingRow.Category("logs", "日志", "运行日志，可查看、复制与导出", R.drawable.ic_file),
+            SettingRow.Category("about", "关于", "版本、开源许可与项目主页", R.drawable.ic_info),
+        )
 
     /** 通用页：界面语言与交互行为。 */
-    fun general(store: SettingsStore): SettingsPage = SettingsPage(
-        "通用",
-        listOf(
-            SettingRow.Header("语言"),
-            SettingRow.Value("界面语言", Locale.getDefault().displayName),
-            SettingRow.Header("交互"),
-            SettingRow.Value(
-                "默认发送模式",
-                when (store.defaultSendMode) {
-                    0 -> "Yolo"
-                    2 -> "Chat"
-                    else -> "Build"
-                },
-                "chat_default_send_mode",
+    fun general(store: SettingsStore): SettingsPage =
+        SettingsPage(
+            "通用",
+            listOf(
+                SettingRow.Header("语言"),
+                SettingRow.Value("界面语言", Locale.getDefault().displayName),
+                SettingRow.Header("交互"),
+                SettingRow.Value(
+                    "默认发送模式",
+                    when (store.defaultSendMode) {
+                        0 -> "Yolo"
+                        2 -> "Chat"
+                        else -> "Build"
+                    },
+                    "chat_default_send_mode",
+                ),
+                SettingRow.Toggle(
+                    "发送后自动滚动到底部",
+                    "关闭后发送与生成过程中不再自动滚动",
+                    store.chatAutoScroll,
+                    "chat_auto_scroll",
+                ),
+                SettingRow.Toggle(
+                    "输入框即时渲染 Markdown",
+                    "边写边看到粗体、标题、代码的最终形态；关闭则为纯文本",
+                    store.inputMarkdownPreview,
+                    "input_md_preview",
+                ),
             ),
-            SettingRow.Toggle(
-                "发送后自动滚动到底部",
-                "关闭后发送与生成过程中不再自动滚动",
-                store.chatAutoScroll,
-                "chat_auto_scroll",
-            ),
-            SettingRow.Toggle(
-                "输入框即时渲染 Markdown",
-                "边写边看到粗体、标题、代码的最终形态；关闭则为纯文本",
-                store.inputMarkdownPreview,
-                "input_md_preview",
-            ),
-        ),
-    )
+        )
+
     /**
      * 外观页：全部是真实生效的设置。
      * 主题模式、主色、自动取色、界面字号会立即应用并持久化；代码显示项会被保存。
      */
-    fun appearance(store: SettingsStore): SettingsPage = SettingsPage(
-        "外观",
-        listOf(
-            // 这一行只在「其它设置页」开关打开时才有内容；关掉时高度为 0。
-            // 放在最前面，是为了让它趴在第一张卡片的留白里，而不是压住正文。
-            SettingRow.Custom(kind = SettingRow.Custom.KIND_PET_STAGE, key = "appearance"),
-            SettingRow.Header("主题"),
-            SettingRow.Radio("跟随系统", store.themeMode == SettingsStore.MODE_SYSTEM, "theme=${SettingsStore.MODE_SYSTEM}"),
-            SettingRow.Radio("浅色", store.themeMode == SettingsStore.MODE_LIGHT, "theme=${SettingsStore.MODE_LIGHT}"),
-            SettingRow.Radio("深色", store.themeMode == SettingsStore.MODE_DARK, "theme=${SettingsStore.MODE_DARK}"),
-            SettingRow.Header("主题色"),
-            SettingRow.Toggle(
-                "自动取色",
-                "跟随系统壁纸取色；系统不支持时使用下面的主色",
-                store.autoColor,
-                "auto_color",
+    fun appearance(store: SettingsStore): SettingsPage =
+        SettingsPage(
+            "外观",
+            listOf(
+                // 这一行只在「其它设置页」开关打开时才有内容；关掉时高度为 0。
+                // 放在最前面，是为了让它趴在第一张卡片的留白里，而不是压住正文。
+                SettingRow.Custom(kind = SettingRow.Custom.KIND_PET_STAGE, key = "appearance"),
+                SettingRow.Header("主题"),
+                SettingRow.Radio("跟随系统", store.themeMode == SettingsStore.MODE_SYSTEM, "theme=${SettingsStore.MODE_SYSTEM}"),
+                SettingRow.Radio("浅色", store.themeMode == SettingsStore.MODE_LIGHT, "theme=${SettingsStore.MODE_LIGHT}"),
+                SettingRow.Radio("深色", store.themeMode == SettingsStore.MODE_DARK, "theme=${SettingsStore.MODE_DARK}"),
+                SettingRow.Header("主题色"),
+                SettingRow.Toggle(
+                    "自动取色",
+                    "跟随系统壁纸取色；系统不支持时使用下面的主色",
+                    store.autoColor,
+                    "auto_color",
+                ),
+                SettingRow.Value("主色", store.accentName(), "accent"),
+                SettingRow.Header("界面"),
+                SettingRow.Value("界面字号", store.fontScaleName(), "font_scale"),
+                SettingRow.Header("代码设置"),
+                SettingRow.Value("浅色代码主题", SettingsStore.codeThemeName(store.codeThemeLightIndex), "code_theme_light"),
+                SettingRow.Value("深色代码主题", SettingsStore.codeThemeName(store.codeThemeDarkIndex), "code_theme_dark"),
+                SettingRow.Value("代码字号", store.codeFontSizeName(), "code_font_size"),
+                SettingRow.Toggle("显示行号", "在代码内容和差异视图中显示行号", store.showLineNumbers, "code_line_numbers"),
+                SettingRow.Toggle("长行自动换行", "代码内容过长时自动换行", store.wrapLongLines, "code_wrap"),
             ),
-            SettingRow.Value("主色", store.accentName(), "accent"),
-            SettingRow.Header("界面"),
-            SettingRow.Value("界面字号", store.fontScaleName(), "font_scale"),
-            SettingRow.Header("代码设置"),
-            SettingRow.Value("浅色代码主题", SettingsStore.codeThemeName(store.codeThemeLightIndex), "code_theme_light"),
-            SettingRow.Value("深色代码主题", SettingsStore.codeThemeName(store.codeThemeDarkIndex), "code_theme_dark"),
-            SettingRow.Value("代码字号", store.codeFontSizeName(), "code_font_size"),
-            SettingRow.Toggle("显示行号", "在代码内容和差异视图中显示行号", store.showLineNumbers, "code_line_numbers"),
-            SettingRow.Toggle("长行自动换行", "代码内容过长时自动换行", store.wrapLongLines, "code_wrap"),
-        ),
-    )
+        )
 
     /** 模型设置页：读取真实的供应商配置（provider_config.json），支持增删改。 */
     fun providers(ctx: Context): SettingsPage {
@@ -178,22 +195,24 @@ object SettingsData {
 
         // 第一层只放两类模型的入口。以后再加模型类型（图像、向量、重排…）
         // 就在这一层加一行，点进去是同一个「某类模型的供应商列表」页。
-        rows += SettingRow.Category(
-            "providers_llm",
-            "LLM 模型",
-            "${llm.size} 个供应商 · 对话与补全" + if (llm.any { it.isOAuthManaged }) "，含 OAuth" else "",
-            R.drawable.ic_chat,
-        )
-        rows += SettingRow.Category(
-            "providers_asr",
-            "ASR 模型",
-            if (asr.isEmpty()) {
-                "未配置 · 语音转文字"
-            } else {
-                "${asr.size} 个供应商 · 语音转文字"
-            },
-            R.drawable.ic_mic,
-        )
+        rows +=
+            SettingRow.Category(
+                "providers_llm",
+                "LLM 模型",
+                "${llm.size} 个供应商 · 对话与补全" + if (llm.any { it.isOAuthManaged }) "，含 OAuth" else "",
+                R.drawable.ic_chat,
+            )
+        rows +=
+            SettingRow.Category(
+                "providers_asr",
+                "ASR 模型",
+                if (asr.isEmpty()) {
+                    "未配置 · 语音转文字"
+                } else {
+                    "${asr.size} 个供应商 · 语音转文字"
+                },
+                R.drawable.ic_mic,
+            )
         return SettingsPage("模型设置", rows)
     }
 
@@ -204,40 +223,52 @@ object SettingsData {
      * （数量随用户添加情况变化）。OAuth 添加的供应商点进去直接回到它自己的
      * 管理页，而不是显示一堆手填字段——那些字段对它没有意义。
      */
-    fun providersOfKind(ctx: Context, kind: ProviderStore.ProviderKind): SettingsPage {
+    fun providersOfKind(
+        ctx: Context,
+        kind: ProviderStore.ProviderKind,
+    ): SettingsPage {
         val list = ProviderStore.load(ctx).filter { it.kind == kind }
         val rows = mutableListOf<SettingRow>()
         val addKey = if (kind == ProviderStore.ProviderKind.ASR) "providers_add_asr" else "providers_add"
-        rows += SettingRow.Value(
-            "添加供应商",
-            when (kind) {
-                ProviderStore.ProviderKind.ASR -> "OpenAI 兼容的语音转写端点"
-                else -> "OpenAI / Anthropic 通用格式，或 OAuth 授权"
-            },
-            addKey,
-        )
+        rows +=
+            SettingRow.Value(
+                "添加供应商",
+                when (kind) {
+                    ProviderStore.ProviderKind.ASR -> "OpenAI 兼容的语音转写端点"
+                    else -> "OpenAI / Anthropic 通用格式，或 OAuth 授权"
+                },
+                addKey,
+            )
         if (list.isEmpty()) {
             rows += SettingRow.Value("尚未添加", "点上面一行开始添加")
         } else {
             rows += SettingRow.Header("已添加")
             list.forEach { p ->
-                rows += SettingRow.Value(
-                    p.name,
-                    when {
-                        // 内置实现不需要端点与密钥，标明「免配置」，
-                        // 点进去是测试页而不是编辑表单。
-                        ProviderStore.isBuiltin(p) ->
-                            "内置 · 免密钥 · ${if (AsrTester.realtimeSupported(p)) "支持实时" else "仅一次性"}"
-                        p.isOAuthManaged -> "${p.vendorOrChannel()} · OAuth 授权"
-                        else -> "${p.models.size} 个模型 · ${p.baseUrl}"
-                    },
-                    // 内置的进自测页；OAuth 的进平台管理页；手填的进编辑页。
-                    when {
-                        ProviderStore.isBuiltin(p) -> "providers_test:${p.id}"
-                        p.isOAuthManaged -> "providers_oauth_open:${p.id}"
-                        else -> "providers_edit:${p.id}"
-                    },
-                )
+                rows +=
+                    SettingRow.Value(
+                        p.name,
+                        when {
+                            // 内置实现不需要端点与密钥，标明「免配置」，
+                            // 点进去是测试页而不是编辑表单。
+                            ProviderStore.isBuiltin(p) -> {
+                                "内置 · 免密钥 · ${if (AsrTester.realtimeSupported(p)) "支持实时" else "仅一次性"}"
+                            }
+
+                            p.isOAuthManaged -> {
+                                "${p.vendorOrChannel()} · OAuth 授权"
+                            }
+
+                            else -> {
+                                "${p.models.size} 个模型 · ${p.baseUrl}"
+                            }
+                        },
+                        // 内置的进自测页；OAuth 的进平台管理页；手填的进编辑页。
+                        when {
+                            ProviderStore.isBuiltin(p) -> "providers_test:${p.id}"
+                            p.isOAuthManaged -> "providers_oauth_open:${p.id}"
+                            else -> "providers_edit:${p.id}"
+                        },
+                    )
             }
         }
         // OAuth 的入口不在这里：它属于「添加供应商」那一步（半屏第一屏选类型），
@@ -246,23 +277,23 @@ object SettingsData {
     }
 
     /** OAuth 供应商显示的平台归属（腾讯 / GitHub 等）。 */
-    private fun ProviderStore.Provider.vendorOrChannel(): String =
-        OAuthProviders.all.firstOrNull { it.id == id }?.vendor ?: "OAuth"
+    private fun ProviderStore.Provider.vendorOrChannel(): String = OAuthProviders.all.firstOrNull { it.id == id }?.vendor ?: "OAuth"
 
     /** 子智能体页：用户级 agents 目录的真实文件。 */
-    fun subagents(ctx: Context): SettingsPage =
-        agentAssetsPage(ctx, AgentAssets.Kind.SUBAGENT, "子智能体")
+    fun subagents(ctx: Context): SettingsPage = agentAssetsPage(ctx, AgentAssets.Kind.SUBAGENT, "子智能体")
 
     /** 技能页：用户级 skills 目录的真实技能。 */
-    fun skills(ctx: Context): SettingsPage =
-        agentAssetsPage(ctx, AgentAssets.Kind.SKILL, "技能")
+    fun skills(ctx: Context): SettingsPage = agentAssetsPage(ctx, AgentAssets.Kind.SKILL, "技能")
 
     /** 命令页：用户级 commands 目录的真实命令。 */
-    fun commands(ctx: Context): SettingsPage =
-        agentAssetsPage(ctx, AgentAssets.Kind.COMMAND, "命令")
+    fun commands(ctx: Context): SettingsPage = agentAssetsPage(ctx, AgentAssets.Kind.COMMAND, "命令")
 
     /** 子智能体 / 技能 / 命令共用同一套文件管理页面（存储格式与桌面端一致）。 */
-    private fun agentAssetsPage(ctx: Context, kind: AgentAssets.Kind, title: String): SettingsPage {
+    private fun agentAssetsPage(
+        ctx: Context,
+        kind: AgentAssets.Kind,
+        title: String,
+    ): SettingsPage {
         val items = AgentAssets.list(ctx, kind)
         val rows = mutableListOf<SettingRow>()
         rows += SettingRow.Header("已保存")
@@ -270,11 +301,12 @@ object SettingsData {
             rows += SettingRow.Value("暂无$title", "点此新建", "assets_new:${kind.name}")
         } else {
             items.forEach { item ->
-                rows += SettingRow.Value(
-                    item.name,
-                    item.description.ifEmpty { item.path },
-                    "assets_edit:${kind.name}:${item.path}",
-                )
+                rows +=
+                    SettingRow.Value(
+                        item.name,
+                        item.description.ifEmpty { item.path },
+                        "assets_edit:${kind.name}:${item.path}",
+                    )
             }
         }
         rows += SettingRow.Value("新建$title", "创建一个新的${title}定义文件", "assets_new:${kind.name}")
@@ -284,13 +316,18 @@ object SettingsData {
     }
 
     /** 使用统计页：数据来自运行时 usage/stats（界面层异步加载后传入）。 */
-    fun usage(ctx: Context, range: String, data: JSONObject?): SettingsPage {
+    fun usage(
+        ctx: Context,
+        range: String,
+        data: JSONObject?,
+    ): SettingsPage {
         val rows = mutableListOf<SettingRow>()
-        val rangeLabel = when (range) {
-            "30d" -> "近 30 日"
-            "all" -> "全部时间"
-            else -> "近 7 日"
-        }
+        val rangeLabel =
+            when (range) {
+                "30d" -> "近 30 日"
+                "all" -> "全部时间"
+                else -> "近 7 日"
+            }
         rows += SettingRow.Header("统计范围")
         rows += SettingRow.Value("时间范围", rangeLabel, "usage_range")
         if (data == null) {
@@ -311,61 +348,71 @@ object SettingsData {
         }
         rows += SettingRow.Header("用量概览")
         rows += SettingRow.Value("总 Token", CodaExtras.formatCount(s.optLong("totalTokens")))
-        rows += SettingRow.Value(
-            "输入 / 输出",
-            CodaExtras.formatCount(s.optLong("inputTokens")) + " / " +
-                CodaExtras.formatCount(s.optLong("outputTokens")),
-        )
-        rows += SettingRow.Value(
-            "缓存命中率",
-            "${(s.optDouble("cacheHitRate", 0.0) * 100).toInt()}%",
-        )
+        rows +=
+            SettingRow.Value(
+                "输入 / 输出",
+                CodaExtras.formatCount(s.optLong("inputTokens")) + " / " +
+                    CodaExtras.formatCount(s.optLong("outputTokens")),
+            )
+        rows +=
+            SettingRow.Value(
+                "缓存命中率",
+                "${(s.optDouble("cacheHitRate", 0.0) * 100).toInt()}%",
+            )
         s.optJSONObject("favoriteModel")?.let { fm ->
             val model = fm.optString("modelId")
             if (model.isNotEmpty()) {
-                rows += SettingRow.Value(
-                    "最常用模型",
-                    "$model · ${(fm.optDouble("share", 0.0) * 100).toInt()}%",
-                )
+                rows +=
+                    SettingRow.Value(
+                        "最常用模型",
+                        "$model · ${(fm.optDouble("share", 0.0) * 100).toInt()}%",
+                    )
             }
         }
         rows += SettingRow.Header("会话与工具")
-        rows += SettingRow.Value(
-            "会话 / 回合",
-            "${s.optInt("totalSessions")} / ${s.optInt("totalTurns")}",
-        )
+        rows +=
+            SettingRow.Value(
+                "会话 / 回合",
+                "${s.optInt("totalSessions")} / ${s.optInt("totalTurns")}",
+            )
         rows += SettingRow.Value("工具调用", "${s.optInt("toolCallCount")} 次")
-        rows += SettingRow.Value(
-            "平均首字 / 回合时长",
-            "${s.optLong("avgTimeToFirstTokenMs")} / ${s.optLong("avgTurnDurationMs")} ms",
-        )
+        rows +=
+            SettingRow.Value(
+                "平均首字 / 回合时长",
+                "${s.optLong("avgTimeToFirstTokenMs")} / ${s.optLong("avgTurnDurationMs")} ms",
+            )
         rows += SettingRow.Header("活跃度")
         // 热力图用内核算好的按日数据，一格一天，颜色越深当天用量越大。
         rows += SettingRow.Custom(SettingRow.Custom.KIND_HEATMAP, data)
-        rows += SettingRow.Value(
-            "活跃天数",
-            "${s.optInt("activeDays")} 天 · 当前连续 ${s.optInt("currentStreakDays")} 天",
-        )
+        rows +=
+            SettingRow.Value(
+                "活跃天数",
+                "${s.optInt("activeDays")} 天 · 当前连续 ${s.optInt("currentStreakDays")} 天",
+            )
         rows += SettingRow.Value("最长连续", "${s.optInt("longestStreakDays")} 天")
-        rows += SettingRow.Value(
-            "单日峰值",
-            CodaExtras.formatCount(s.optLong("peakDayTokens")) + " Token",
-        )
+        rows +=
+            SettingRow.Value(
+                "单日峰值",
+                CodaExtras.formatCount(s.optLong("peakDayTokens")) + " Token",
+            )
 
         // 模型用量：各模型占比，按 token 从多到少。原页面只显示最常用的一个。
         val models = data.optJSONArray("models")
         if (models != null && models.length() > 0) {
             rows += SettingRow.Header("模型用量")
-            val list = (0 until models.length()).mapNotNull { i -> models.optJSONObject(i) }
-                .sortedByDescending { it.optLong("totalTokens", 0) }
+            val list =
+                (0 until models.length())
+                    .mapNotNull { i -> models.optJSONObject(i) }
+                    .sortedByDescending { it.optLong("totalTokens", 0) }
             for (m in list.take(6)) {
                 val id = m.optString("modelId").ifEmpty { "未知模型" }
                 val share = (m.optDouble("share", 0.0) * 100).toInt()
-                rows += SettingRow.Value(
-                    id,
-                    "${CodaExtras.formatCount(m.optLong("totalTokens"))} Token · $share%" +
-                        " · ${m.optInt("requestCount")} 次",
-                )
+                rows +=
+                    SettingRow.Value(
+                        id,
+                        "${CodaExtras.formatCount(m.optLong("totalTokens"))} Token · $share%" +
+                            " · ${m.optInt("requestCount")} 次",
+                    )
             }
         }
 
@@ -373,18 +420,21 @@ object SettingsData {
         val tools = data.optJSONArray("tools")
         if (tools != null && tools.length() > 0) {
             rows += SettingRow.Header("工具用量")
-            val list = (0 until tools.length()).mapNotNull { i -> tools.optJSONObject(i) }
-                .sortedByDescending { it.optInt("callCount", 0) }
+            val list =
+                (0 until tools.length())
+                    .mapNotNull { i -> tools.optJSONObject(i) }
+                    .sortedByDescending { it.optInt("callCount", 0) }
             for (t in list.take(6)) {
                 val name = t.optString("toolName").ifEmpty { t.optString("name") }
                 if (name.isEmpty()) continue
                 val calls = t.optInt("callCount")
                 val errors = t.optInt("errorCount")
                 val rate = (t.optDouble("errorRate", 0.0) * 100).toInt()
-                rows += SettingRow.Value(
-                    name,
-                    if (errors > 0) "$calls 次 · 失败 $errors 次（$rate%）" else "$calls 次",
-                )
+                rows +=
+                    SettingRow.Value(
+                        name,
+                        if (errors > 0) "$calls 次 · 失败 $errors 次（$rate%）" else "$calls 次",
+                    )
             }
         }
 
@@ -393,18 +443,21 @@ object SettingsData {
     }
 
     /** 集成页：第三方连接入口。 */
-    fun integrations(ctx: Context): SettingsPage = SettingsPage(
-        "集成",
-        listOf(
-            SettingRow.Header("第三方"),
-            SettingRow.Value("云服务", "GitHub 等云平台账号连接", "integrations_cloud"),
-        ),
-    )
+    fun integrations(ctx: Context): SettingsPage =
+        SettingsPage(
+            "集成",
+            listOf(
+                SettingRow.Header("第三方"),
+                SettingRow.Value("云服务", "GitHub 等云平台账号连接", "integrations_cloud"),
+            ),
+        )
 
     /** 云服务页：提供商的连接状态与添加入口。 */
     fun cloud(ctx: Context): SettingsPage {
         val rows = mutableListOf<SettingRow>()
-        val login = com.coda.mobileui.core.GitHub.loginName(ctx)
+        val login =
+            com.coda.mobileui.core.GitHub
+                .loginName(ctx)
         rows += SettingRow.Header("云服务提供商")
         if (login != null) {
             rows += SettingRow.Value("GitHub", "已连接：@$login · 点击管理", "cloud_github")
@@ -418,7 +471,9 @@ object SettingsData {
     /** GitHub 页：未登录显示登录入口；已登录显示账号与浏览入口。 */
     fun github(ctx: Context): SettingsPage {
         val rows = mutableListOf<SettingRow>()
-        val login = com.coda.mobileui.core.GitHub.loginName(ctx)
+        val login =
+            com.coda.mobileui.core.GitHub
+                .loginName(ctx)
         if (login == null) {
             rows += SettingRow.Header("GitHub 集成")
             rows += SettingRow.Value("使用 GitHub 登录", "设备码授权：App 显示代码，浏览器输入即可", "github_login")
@@ -433,8 +488,12 @@ object SettingsData {
         }
         return SettingsPage("GitHub", rows)
     }
+
     /** 插件页：数据来自运行时 plugins/overview（界面层异步加载后传入）。 */
-    fun plugins(ctx: Context, data: JSONObject?): SettingsPage {
+    fun plugins(
+        ctx: Context,
+        data: JSONObject?,
+    ): SettingsPage {
         val rows = mutableListOf<SettingRow>()
         val ov = CodaExtras.parsePluginsOverview(data)
         if (ov == null) {
@@ -473,15 +532,16 @@ object SettingsData {
         }
         rows += SettingRow.Header("插件市场")
         rows += SettingRow.Value("浏览插件市场", "打开全页查看市场源与可用插件", "plugins_market")
-        rows += SettingRow.Value(
-            "已配置的插件市场源",
-            if (ov.marketplaces.isEmpty()) {
-                "尚未配置，点开后可以新增"
-            } else {
-                "${ov.marketplaces.size} 个源 · 点开后可以管理或新增"
-            },
-            "plugins_market_sources",
-        )
+        rows +=
+            SettingRow.Value(
+                "已配置的插件市场源",
+                if (ov.marketplaces.isEmpty()) {
+                    "尚未配置，点开后可以新增"
+                } else {
+                    "${ov.marketplaces.size} 个源 · 点开后可以管理或新增"
+                },
+                "plugins_market_sources",
+            )
         val pending = BuiltinMarketplaces.all.filterNot { it.isConfigured(ov.marketplaces) }
         if (pending.isNotEmpty()) {
             rows += SettingRow.Header("推荐市场源")
@@ -494,7 +554,10 @@ object SettingsData {
     }
 
     /** 插件市场全页：市场源列表、可用插件安装与索引刷新。 */
-    fun pluginMarket(ctx: Context, data: JSONObject?): SettingsPage {
+    fun pluginMarket(
+        ctx: Context,
+        data: JSONObject?,
+    ): SettingsPage {
         val rows = mutableListOf<SettingRow>()
         val ov = CodaExtras.parsePluginsOverview(data)
         if (ov == null) {
@@ -507,12 +570,13 @@ object SettingsData {
             rows += SettingRow.Value("尚未配置市场源", "在插件页的「已配置的插件市场源」中新增")
         } else {
             ov.marketplaces.forEach { m ->
-                val detail = buildString {
-                    append(m.pluginCount).append(" 个插件")
-                    if (m.isOfficial) append(" · 官方")
-                    m.lastUpdated?.let { append(" · 更新于 ").append(it) }
-                    m.refreshFailure?.let { append(" · 刷新失败：").append(it) }
-                }
+                val detail =
+                    buildString {
+                        append(m.pluginCount).append(" 个插件")
+                        if (m.isOfficial) append(" · 官方")
+                        m.lastUpdated?.let { append(" · 更新于 ").append(it) }
+                        m.refreshFailure?.let { append(" · 刷新失败：").append(it) }
+                    }
                 rows += SettingRow.Value(m.name, detail)
             }
         }
@@ -523,11 +587,12 @@ object SettingsData {
             rows += SettingRow.Value("没有可用插件", "先添加市场源，再更新索引")
         } else {
             ov.available.forEach { p ->
-                val detail = buildString {
-                    append(p.marketplace)
-                    p.version?.let { append(" · v").append(it) }
-                    if (p.installed) append(" · 已安装")
-                }
+                val detail =
+                    buildString {
+                        append(p.marketplace)
+                        p.version?.let { append(" · v").append(it) }
+                        if (p.installed) append(" · 已安装")
+                    }
                 rows += SettingRow.Value(p.name, detail, "market_install:${p.name}|${p.marketplace}")
             }
         }
@@ -542,7 +607,10 @@ object SettingsData {
     }
 
     /** MCP 服务器页：数据来自运行时 mcp/list（界面层异步加载后传入）。 */
-    fun mcp(ctx: Context, data: JSONObject?): SettingsPage {
+    fun mcp(
+        ctx: Context,
+        data: JSONObject?,
+    ): SettingsPage {
         val rows = mutableListOf<SettingRow>()
         rows += SettingRow.Header("已配置服务器")
         if (data == null) {
@@ -554,12 +622,13 @@ object SettingsData {
             rows += SettingRow.Value("未配置 MCP 服务器", "配置后在此查看连接状态")
         } else {
             items.forEach { m ->
-                val detail = buildString {
-                    append(CodaExtras.mcpStatusLabel(m.status))
-                    append(" · ").append(m.transport)
-                    if (m.toolCount > 0) append(" · ").append(m.toolCount).append(" 工具")
-                    m.error?.let { append(" · ").append(it.take(60)) }
-                }
+                val detail =
+                    buildString {
+                        append(CodaExtras.mcpStatusLabel(m.status))
+                        append(" · ").append(m.transport)
+                        if (m.toolCount > 0) append(" · ").append(m.toolCount).append(" 工具")
+                        m.error?.let { append(" · ").append(it.take(60)) }
+                    }
                 rows += SettingRow.Value(m.name, detail)
             }
         }
@@ -577,26 +646,28 @@ object SettingsData {
             rows += SettingRow.Value("暂无定时任务", "在对话中让 Agent 创建，例如：每天早上 9 点总结待办")
         } else {
             items.forEach { a ->
-                val detail = buildString {
-                    append(a.cron)
-                    append(" · ")
-                    append(
-                        when {
-                            a.lifecycle == "completed" -> "已完成"
-                            !a.enabled -> "已停用"
-                            else -> "启用中"
-                        },
+                val detail =
+                    buildString {
+                        append(a.cron)
+                        append(" · ")
+                        append(
+                            when {
+                                a.lifecycle == "completed" -> "已完成"
+                                !a.enabled -> "已停用"
+                                else -> "启用中"
+                            },
+                        )
+                        if (!a.recurring) append(" · 一次性")
+                        append(" · 已运行 ").append(a.runCount).append(" 次")
+                        a.nextRunAt?.let { append(" · 下次 ").append(CodaExtras.formatTs(it)) }
+                        if (a.lastError != null) append(" · 上次失败")
+                    }
+                rows +=
+                    SettingRow.Value(
+                        a.title.ifEmpty { "（未命名任务）" },
+                        detail,
+                        "automation_edit:${a.id}",
                     )
-                    if (!a.recurring) append(" · 一次性")
-                    append(" · 已运行 ").append(a.runCount).append(" 次")
-                    a.nextRunAt?.let { append(" · 下次 ").append(CodaExtras.formatTs(it)) }
-                    if (a.lastError != null) append(" · 上次失败")
-                }
-                rows += SettingRow.Value(
-                    a.title.ifEmpty { "（未命名任务）" },
-                    detail,
-                    "automation_edit:${a.id}",
-                )
             }
         }
         rows += SettingRow.Value("刷新", "重新读取任务列表", "extras_refresh:automations")
@@ -604,7 +675,10 @@ object SettingsData {
     }
 
     /** 钩子页：读取工作区与用户级钩子配置；条目可查看、信任或删除。 */
-    fun hooks(ctx: Context, workspacePath: String?): SettingsPage {
+    fun hooks(
+        ctx: Context,
+        workspacePath: String?,
+    ): SettingsPage {
         val home = File(ctx.filesDir, "home")
         val rows = mutableListOf<SettingRow>()
         val wp = workspacePath
@@ -619,17 +693,19 @@ object SettingsData {
             rows += SettingRow.Value("未配置", "点击下方「添加钩子」在工作区配置中新建")
         } else {
             snap.entries.forEach { e ->
-                val trust = when {
-                    e.declarationDigest in trusted -> "已信任"
-                    e.source.editable -> "未信任"
-                    else -> "只读来源"
-                }
-                val detail = buildString {
-                    append(HooksCore.EVENT_LABELS[e.event] ?: e.event)
-                    if (e.matcher != null) append(" · ").append(e.matcher)
-                    append(" · ").append(trust)
-                    if (e.command.isNotEmpty()) append(" · ").append(e.command.take(50))
-                }
+                val trust =
+                    when {
+                        e.declarationDigest in trusted -> "已信任"
+                        e.source.editable -> "未信任"
+                        else -> "只读来源"
+                    }
+                val detail =
+                    buildString {
+                        append(HooksCore.EVENT_LABELS[e.event] ?: e.event)
+                        if (e.matcher != null) append(" · ").append(e.matcher)
+                        append(" · ").append(trust)
+                        if (e.command.isNotEmpty()) append(" · ").append(e.command.take(50))
+                    }
                 rows += SettingRow.Value(e.event, detail, "hooks_edit:${e.declarationDigest.take(16)}")
             }
         }
@@ -638,11 +714,12 @@ object SettingsData {
             rows += SettingRow.Value("未配置", "用户级配置位于 HOME/.zcode/cli/config.json")
         } else {
             snap.userEntries.forEach { e ->
-                val detail = buildString {
-                    append(HooksCore.EVENT_LABELS[e.event] ?: e.event)
-                    if (e.matcher != null) append(" · ").append(e.matcher)
-                    if (e.command.isNotEmpty()) append(" · ").append(e.command.take(50))
-                }
+                val detail =
+                    buildString {
+                        append(HooksCore.EVENT_LABELS[e.event] ?: e.event)
+                        if (e.matcher != null) append(" · ").append(e.matcher)
+                        if (e.command.isNotEmpty()) append(" · ").append(e.command.take(50))
+                    }
                 rows += SettingRow.Value(e.event, detail, "hooks_edit:${e.declarationDigest.take(16)}")
             }
         }
@@ -658,31 +735,36 @@ object SettingsData {
         val accEnabled =
             PhoneAccessibilityService.isEnabledInSystem(ctx) || PhoneAccessibilityService.isEnabled()
         rows += SettingRow.Header("手机控制")
-        rows += SettingRow.Toggle(
-            "启用手机控制",
-            "让 Agent 通过无障碍服务操作本机屏幕：读取界面、点击、输入、滑动、截图",
-            enabled,
-            "phone_control_enable",
-        )
-        rows += SettingRow.Value(
-            "无障碍授权",
-            if (accEnabled) "已授权" else "未授权 · 点击前往系统设置开启「Coda 手机控制」",
-            "phone_control_accessibility",
-        )
+        rows +=
+            SettingRow.Toggle(
+                "启用手机控制",
+                "让 Agent 通过无障碍服务操作本机屏幕：读取界面、点击、输入、滑动、截图",
+                enabled,
+                "phone_control_enable",
+            )
+        rows +=
+            SettingRow.Value(
+                "无障碍授权",
+                if (accEnabled) "已授权" else "未授权 · 点击前往系统设置开启「Coda 手机控制」",
+                "phone_control_accessibility",
+            )
         rows += SettingRow.Value("服务状态", PhoneControl.statusText(ctx))
         rows += SettingRow.Header("可用工具")
-        rows += SettingRow.Value(
-            "工具列表",
-            "dump_ui / screenshot / tap / long_press / swipe / tap_element / type_text / press_key / open_app / wait",
-        )
-        rows += SettingRow.Value(
-            "调用方式",
-            "在对话中直接说，例如：帮我打开设置，找到电池，看看还剩多少电",
-        )
-        rows += SettingRow.Value(
-            "安全说明",
-            "仅本机回环访问 + 随机令牌；默认关闭，随时可停",
-        )
+        rows +=
+            SettingRow.Value(
+                "工具列表",
+                "dump_ui / screenshot / tap / long_press / swipe / tap_element / type_text / press_key / open_app / wait",
+            )
+        rows +=
+            SettingRow.Value(
+                "调用方式",
+                "在对话中直接说，例如：帮我打开设置，找到电池，看看还剩多少电",
+            )
+        rows +=
+            SettingRow.Value(
+                "安全说明",
+                "仅本机回环访问 + 随机令牌；默认关闭，随时可停",
+            )
         if (enabled) {
             rows += SettingRow.Value("重新同步配置", "重新写入内核 MCP 配置", "phone_control_sync")
         }
@@ -694,11 +776,12 @@ object SettingsData {
         val rows = mutableListOf<SettingRow>()
         val ctrl = ZController.get(ctx)
         rows += SettingRow.Header("运行状态")
-        val coreState = when {
-            ctrl.runtime.isRunning -> "运行中"
-            ctrl.runtime.isStarting -> "启动中…"
-            else -> "已停止"
-        }
+        val coreState =
+            when {
+                ctrl.runtime.isRunning -> "运行中"
+                ctrl.runtime.isStarting -> "启动中…"
+                else -> "已停止"
+            }
         rows += SettingRow.Value("核心状态", coreState)
         rows += SettingRow.Value("重启核心", "重新启动运行时；供应商等配置变更后生效", "system_restart")
         rows += SettingRow.Header("存储与日志")
@@ -709,48 +792,52 @@ object SettingsData {
     }
 
     /** 关于页：版本、开源许可与项目信息（作为设置一级界面）。 */
-    fun about(ctx: Context): SettingsPage = SettingsPage(
-        "关于",
-        listOf(
-            SettingRow.Header("应用"),
-            // 点版本号即检查更新：不额外占一行，符合「关于页看版本」的常见直觉。
-            SettingRow.Value(
-                "版本",
-                "${appVersion(ctx)}（${UpdateChecker.channelLabel}）",
-                "check_update",
+    fun about(ctx: Context): SettingsPage =
+        SettingsPage(
+            "关于",
+            listOf(
+                SettingRow.Header("应用"),
+                // 点版本号即检查更新：不额外占一行，符合「关于页看版本」的常见直觉。
+                SettingRow.Value(
+                    "版本",
+                    "${appVersion(ctx)}（${UpdateChecker.channelLabel}）",
+                    "check_update",
+                ),
+                SettingRow.Value("构建号", appBuild(ctx)),
+                SettingRow.Value("包名", "com.coda.mobileui"),
+                SettingRow.Header("开源许可"),
+                SettingRow.Value("Coda 许可", "AGPL-3.0"),
+                SettingRow.Value("内置内核", "来自 zCode 开源项目，Apache-2.0 许可", "system_license"),
+                SettingRow.Header("项目"),
+                SettingRow.Value("项目主页", "github.com/happy-everyday-everyweek/coda", "system_github"),
+                SettingRow.Value("分支说明", "开发在 dev 分支，main 分支只保留说明", ""),
             ),
-            SettingRow.Value("构建号", appBuild(ctx)),
-            SettingRow.Value("包名", "com.coda.mobileui"),
-            SettingRow.Header("开源许可"),
-            SettingRow.Value("Coda 许可", "AGPL-3.0"),
-            SettingRow.Value("内置内核", "来自 zCode 开源项目，Apache-2.0 许可", "system_license"),
-            SettingRow.Header("项目"),
-            SettingRow.Value("项目主页", "github.com/happy-everyday-everyweek/coda", "system_github"),
-            SettingRow.Value("分支说明", "开发在 dev 分支，main 分支只保留说明", ""),
-        ),
-    )
+        )
 
-    private fun appVersion(ctx: Context): String = try {
-        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "—"
-    } catch (_: Throwable) {
-        "—"
-    }
-
-    private fun appBuild(ctx: Context): String = try {
-        val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
-        // longVersionCode 是 API 28 才有的，minSdk 是 26。
-        // 直接调会在 Android 8.0/8.1 上抛 NoSuchMethodError；
-        // 这里退回旧字段，两条路都不会崩。
-        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            info.longVersionCode
-        } else {
-            @Suppress("DEPRECATION")
-            info.versionCode.toLong()
+    private fun appVersion(ctx: Context): String =
+        try {
+            ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "—"
+        } catch (_: Throwable) {
+            "—"
         }
-        code.toString()
-    } catch (_: Throwable) {
-        "—"
-    }
+
+    private fun appBuild(ctx: Context): String =
+        try {
+            val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+            // longVersionCode 是 API 28 才有的，minSdk 是 26。
+            // 直接调会在 Android 8.0/8.1 上抛 NoSuchMethodError；
+            // 这里退回旧字段，两条路都不会崩。
+            val code =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.versionCode.toLong()
+                }
+            code.toString()
+        } catch (_: Throwable) {
+            "—"
+        }
 
     /** 浏览器控制页：开关、引擎状态与数据清理，均由 BrowserControl 提供真实状态。 */
     fun browser(ctx: Context): SettingsPage {
@@ -772,7 +859,10 @@ object SettingsData {
      * filesDir/webui/dist/，再由内置 HTTP 服务承载。这一页只编排状态展示与入口，
      * 动作处理在 SettingsDetailActivity（webui_download / webui_start / webui_stop）。
      */
-    fun webUi(store: SettingsStore, ctx: Context): SettingsPage {
+    fun webUi(
+        store: SettingsStore,
+        ctx: Context,
+    ): SettingsPage {
         val downloaded = WebUiHost.isDownloaded(ctx)
         val version = WebUiHost.downloadedVersion(ctx)
         val running = WebUiHost.isRunning()
@@ -823,6 +913,7 @@ object SettingsData {
         rows.add(SettingRow.Value("安全边界", "无鉴权：请勿在公共 Wi-Fi 等不受信网络开启"))
         return SettingsPage("Web UI", rows)
     }
+
     /**
      * 宠物设置页（总入口）。
      *
@@ -830,8 +921,13 @@ object SettingsData {
      * 形象、出现位置、行为。这样以后加新能力（提醒、语气、与其他应用联动）
      * 只需要加一个分类，不会把这一页堆成一大坨。
      */
-    fun pet(store: SettingsStore, ctx: Context): SettingsPage {
-        val skins = com.coda.mobileui.core.PetSkins.all(ctx)
+    fun pet(
+        store: SettingsStore,
+        ctx: Context,
+    ): SettingsPage {
+        val skins =
+            com.coda.mobileui.core.PetSkins
+                .all(ctx)
         val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.first()
         val rows = mutableListOf<SettingRow>()
         // 顶部留一块给趴着的宠物本体，由设置页自己往里画。
@@ -866,8 +962,13 @@ object SettingsData {
     }
 
     /** 宠物 → 形象。 */
-    fun petAppearance(store: SettingsStore, ctx: Context): SettingsPage {
-        val skins = com.coda.mobileui.core.PetSkins.all(ctx)
+    fun petAppearance(
+        store: SettingsStore,
+        ctx: Context,
+    ): SettingsPage {
+        val skins =
+            com.coda.mobileui.core.PetSkins
+                .all(ctx)
         val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.first()
         val rows = mutableListOf<SettingRow>()
         rows.add(SettingRow.Header("形象"))
@@ -881,40 +982,43 @@ object SettingsData {
     }
 
     /** 宠物 → 出现位置。 */
-    fun petPlaces(store: SettingsStore): SettingsPage = SettingsPage(
-        "出现位置",
-        listOf(
-            SettingRow.Header("会话页"),
-            SettingRow.Toggle("输入框上方", "会话页输入框上方的提示条", store.petInComposer, "pet_in_composer"),
-            SettingRow.Header("设置页"),
-            SettingRow.Toggle("宠物设置页", "也就是宠物页顶部趴着的那只", store.petInSettings, "pet_in_settings"),
-            SettingRow.Toggle(
-                "其它设置页",
-                "外观、使用统计等页面顶部；默认关闭，避免到处都有它",
-                store.petInOtherSettings,
-                "pet_in_other_settings",
+    fun petPlaces(store: SettingsStore): SettingsPage =
+        SettingsPage(
+            "出现位置",
+            listOf(
+                SettingRow.Header("会话页"),
+                SettingRow.Toggle("输入框上方", "会话页输入框上方的提示条", store.petInComposer, "pet_in_composer"),
+                SettingRow.Header("设置页"),
+                SettingRow.Toggle("宠物设置页", "也就是宠物页顶部趴着的那只", store.petInSettings, "pet_in_settings"),
+                SettingRow.Toggle(
+                    "其它设置页",
+                    "外观、使用统计等页面顶部；默认关闭，避免到处都有它",
+                    store.petInOtherSettings,
+                    "pet_in_other_settings",
+                ),
             ),
-        ),
-    )
+        )
 
     /** 宠物 → 行为。 */
-    fun petBehavior(store: SettingsStore): SettingsPage = SettingsPage(
-        "行为",
-        listOf(
-            SettingRow.Header("显示方式"),
-            SettingRow.Toggle("只显示气泡", "隐藏宠物本体，只保留提示文字", store.petBubbleOnly, "pet_bubble_only"),
-            SettingRow.Toggle(
-                "减少动态效果",
-                "只换表情，不播放逐格动画；系统开了移除动画时强制生效",
-                store.petReduceMotion,
-                "pet_reduce_motion",
+    fun petBehavior(store: SettingsStore): SettingsPage =
+        SettingsPage(
+            "行为",
+            listOf(
+                SettingRow.Header("显示方式"),
+                SettingRow.Toggle("只显示气泡", "隐藏宠物本体，只保留提示文字", store.petBubbleOnly, "pet_bubble_only"),
+                SettingRow.Toggle(
+                    "减少动态效果",
+                    "只换表情，不播放逐格动画；系统开了移除动画时强制生效",
+                    store.petReduceMotion,
+                    "pet_reduce_motion",
+                ),
             ),
-        ),
-    )
+        )
 
-    val pages: Map<String, SettingsPage> = mapOf(
-        "logs" to logsPage(),
-    )
+    val pages: Map<String, SettingsPage> =
+        mapOf(
+            "logs" to logsPage(),
+        )
 
     /**
      * 日志页。
@@ -923,12 +1027,17 @@ object SettingsData {
      * 由 SettingsDetailActivity 处理（它拿着 Activity 上下文才能做剪贴板与文件写入）。
      */
     private fun logsPage(): SettingsPage {
-        val dir = com.coda.mobileui.core.AppLog.dir()
-        val file = com.coda.mobileui.core.AppLog.currentFile()
+        val dir =
+            com.coda.mobileui.core.AppLog
+                .dir()
+        val file =
+            com.coda.mobileui.core.AppLog
+                .currentFile()
         val size = file?.let { if (it.isFile) it.length() else 0L } ?: 0L
-        val lines = file?.takeIf { it.isFile }?.let {
-            runCatching { it.readLines().size }.getOrDefault(0)
-        } ?: 0
+        val lines =
+            file?.takeIf { it.isFile }?.let {
+                runCatching { it.readLines().size }.getOrDefault(0)
+            } ?: 0
         return SettingsPage(
             "日志",
             listOf(
@@ -950,9 +1059,10 @@ object SettingsData {
         )
     }
 
-    private fun readable(bytes: Long): String = when {
-        bytes >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
-        bytes >= 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
-        else -> "$bytes B"
-    }
+    private fun readable(bytes: Long): String =
+        when {
+            bytes >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
+            bytes >= 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+            else -> "$bytes B"
+        }
 }

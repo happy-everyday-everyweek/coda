@@ -27,7 +27,6 @@ class FilesPage(
     host: WorkspaceActivity,
     private val saved: JSONObject,
 ) : WorkspacePage(host) {
-
     override val kind: String = WorkspaceTabs.FILES
     override val title: String = "文件"
 
@@ -179,9 +178,10 @@ class FilesPage(
             ),
         )
         listColumn.addView(groupSpacing())
-        val children = runCatching {
-            current.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-        }.getOrNull()
+        val children =
+            runCatching {
+                current.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+            }.getOrNull()
         if (children == null) {
             listColumn.addView(hint("无法读取此目录"))
             listColumn.addView(tail())
@@ -205,7 +205,8 @@ class FilesPage(
         // 这里让列表落定后轻微淡入：从旧目录到新目录能看出"翻页"了。
         listColumn.alpha = 0f
         listColumn.translationY = dp(8f).toFloat()
-        listColumn.animate()
+        listColumn
+            .animate()
             .alpha(1f)
             .translationY(0f)
             .setDuration(Motion.PANEL_MS)
@@ -274,7 +275,8 @@ class FilesPage(
         listColumn.addView(tail())
         listColumn.alpha = 0f
         listColumn.translationY = dp(8f).toFloat()
-        listColumn.animate()
+        listColumn
+            .animate()
             .alpha(1f)
             .translationY(0f)
             .setDuration(Motion.PANEL_MS)
@@ -283,17 +285,22 @@ class FilesPage(
     }
 
     /** 压缩包内的一行：目录直接进入，文件点了看内容（与目录页点文件的行为一致）。 */
-    private fun archiveEntryRow(pack: File, entry: ArchiveKit.Entry): View {
-        val detail = if (entry.isDir) {
-            "目录 · ${timeFormat.format(Date(entry.modifiedAt))}"
-        } else {
-            val ratio = if (entry.compressedSize > 0 && entry.size > 0) {
-                " · 压缩后 ${readableSize(entry.compressedSize)}"
+    private fun archiveEntryRow(
+        pack: File,
+        entry: ArchiveKit.Entry,
+    ): View {
+        val detail =
+            if (entry.isDir) {
+                "目录 · ${timeFormat.format(Date(entry.modifiedAt))}"
             } else {
-                ""
+                val ratio =
+                    if (entry.compressedSize > 0 && entry.size > 0) {
+                        " · 压缩后 ${readableSize(entry.compressedSize)}"
+                    } else {
+                        ""
+                    }
+                "${readableSize(entry.size)}$ratio"
             }
-            "${readableSize(entry.size)}$ratio"
-        }
         return cardRow(
             if (entry.isDir) R.drawable.ic_folder else fileIcon(entry.name),
             entry.name,
@@ -312,7 +319,10 @@ class FilesPage(
     }
 
     /** 进入一个压缩包：清掉编辑态，切到包内渲染。 */
-    private fun enterArchive(pack: File, kind: ArchiveKit.Kind = ArchiveKit.kindOf(pack)) {
+    private fun enterArchive(
+        pack: File,
+        kind: ArchiveKit.Kind = ArchiveKit.kindOf(pack),
+    ) {
         archive = pack
         archiveKind = kind
         archivePath = ""
@@ -332,7 +342,10 @@ class FilesPage(
      * 包内条目是只读的：编辑器照常用来阅读与搜索，但"保存"写不回压缩包，
      * 因此打开时把 editing 置空（保存会提示没有可写目标），避免误以为改了原包。
      */
-    private fun openArchiveFile(pack: File, entry: ArchiveKit.Entry) {
+    private fun openArchiveFile(
+        pack: File,
+        entry: ArchiveKit.Entry,
+    ) {
         if (entry.size > MAX_EDIT_BYTES) {
             toast("文件过大，未打开")
             return
@@ -357,7 +370,10 @@ class FilesPage(
      * 把 [editing] 置空是关键——saveEditor 找不到目标文件就不会真的写盘，
      * 这样在压缩包内"编辑"不会变成一次无提示的失败。
      */
-    private fun openReadOnlyText(name: String, content: String) {
+    private fun openReadOnlyText(
+        name: String,
+        content: String,
+    ) {
         // 先把编辑目标清空：编辑器只用于阅读，保存动作没有可写目标，不会误改原包。
         editing = null
         originalText = content
@@ -389,9 +405,10 @@ class FilesPage(
                     extractZip(pack, target)
                 } else {
                     target.mkdirs()
-                    val r = host.env.exec(
-                        listOf("tar", "-xf", pack.absolutePath, "-C", target.absolutePath),
-                    )
+                    val r =
+                        host.env.exec(
+                            listOf("tar", "-xf", pack.absolutePath, "-C", target.absolutePath),
+                        )
                     r.ok
                 }
             },
@@ -413,29 +430,33 @@ class FilesPage(
      * 只按条目名拼接目标路径，并对结果做一次"必须落在目标目录内"的校验：
      * 压缩包里可以写 `../../etc/x` 这种名字，不校验就等于允许写到任意位置。
      */
-    private fun extractZip(pack: File, target: File): Boolean = runCatching {
-        java.util.zip.ZipFile(pack).use { zf ->
-            val root = target.canonicalFile
-            val entries = zf.entries()
-            while (entries.hasMoreElements()) {
-                val e = entries.nextElement()
-                val out = File(root, e.name).canonicalFile
-                if (!out.path.startsWith(root.path + File.separator) && out.path != root.path) {
-                    // 越界条目直接跳过，不中断整个解压
-                    continue
-                }
-                if (e.isDirectory) {
-                    out.mkdirs()
-                } else {
-                    out.parentFile?.mkdirs()
-                    zf.getInputStream(e).use { input ->
-                        out.outputStream().use { output -> input.copyTo(output) }
+    private fun extractZip(
+        pack: File,
+        target: File,
+    ): Boolean =
+        runCatching {
+            java.util.zip.ZipFile(pack).use { zf ->
+                val root = target.canonicalFile
+                val entries = zf.entries()
+                while (entries.hasMoreElements()) {
+                    val e = entries.nextElement()
+                    val out = File(root, e.name).canonicalFile
+                    if (!out.path.startsWith(root.path + File.separator) && out.path != root.path) {
+                        // 越界条目直接跳过，不中断整个解压
+                        continue
+                    }
+                    if (e.isDirectory) {
+                        out.mkdirs()
+                    } else {
+                        out.parentFile?.mkdirs()
+                        zf.getInputStream(e).use { input ->
+                            out.outputStream().use { output -> input.copyTo(output) }
+                        }
                     }
                 }
             }
-        }
-        true
-    }.getOrDefault(false)
+            true
+        }.getOrDefault(false)
 
     private fun pathCard(): View {
         val count = runCatching { current.list()?.size ?: 0 }.getOrDefault(0)
@@ -447,19 +468,24 @@ class FilesPage(
         )
     }
 
-    private fun entryRow(file: File, isDir: Boolean): View {
-        val icon = when {
-            isDir -> R.drawable.ic_folder
-            ArchiveKit.isArchive(file) -> R.drawable.ic_archive
-            else -> fileIcon(file.name)
-        }
+    private fun entryRow(
+        file: File,
+        isDir: Boolean,
+    ): View {
+        val icon =
+            when {
+                isDir -> R.drawable.ic_folder
+                ArchiveKit.isArchive(file) -> R.drawable.ic_archive
+                else -> fileIcon(file.name)
+            }
         val trailing = if (isDir) null else readableSize(file.length())
-        val detail = if (isDir) {
-            val count = runCatching { file.list()?.size ?: 0 }.getOrDefault(0)
-            "$count 项 · ${timeFormat.format(Date(file.lastModified()))}"
-        } else {
-            "${readableSize(file.length())} · ${timeFormat.format(Date(file.lastModified()))}"
-        }
+        val detail =
+            if (isDir) {
+                val count = runCatching { file.list()?.size ?: 0 }.getOrDefault(0)
+                "$count 项 · ${timeFormat.format(Date(file.lastModified()))}"
+            } else {
+                "${readableSize(file.length())} · ${timeFormat.format(Date(file.lastModified()))}"
+            }
         return cardRow(
             icon,
             file.name,
@@ -469,8 +495,10 @@ class FilesPage(
             click = {
                 when {
                     isDir -> open(file)
+
                     // 压缩包点开＝进目录：与文件夹同一种交互，不弹菜单也不跳编辑器
                     ArchiveKit.isArchive(file) -> enterArchive(file)
+
                     else -> openFileSmart(file)
                 }
             },
@@ -482,8 +510,10 @@ class FilesPage(
         val lower = name.lowercase()
         return when {
             lower.endsWith(".md") || lower.endsWith(".txt") -> R.drawable.ic_file
+
             lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
                 lower.endsWith(".webp") || lower.endsWith(".gif") -> R.drawable.ic_file
+
             else -> R.drawable.ic_file
         }
     }
@@ -497,50 +527,69 @@ class FilesPage(
             column.removeAllViews()
             if (!isDir && ArchiveKit.isArchive(file)) {
                 // 压缩包：打开（浏览）与解压是两个最常用的动作，放最上面
-                column.addView(actionRowInSheet("打开压缩包", R.drawable.ic_folder) {
-                    sheet.dismiss()
-                    enterArchive(file)
-                })
-                column.addView(actionRowInSheet("解压到当前目录", R.drawable.ic_file_add) {
-                    sheet.dismiss()
-                    extractHere(file)
-                })
+                column.addView(
+                    actionRowInSheet("打开压缩包", R.drawable.ic_folder) {
+                        sheet.dismiss()
+                        enterArchive(file)
+                    },
+                )
+                column.addView(
+                    actionRowInSheet("解压到当前目录", R.drawable.ic_file_add) {
+                        sheet.dismiss()
+                        extractHere(file)
+                    },
+                )
             }
             if (!isDir && !ArchiveKit.isArchive(file)) {
-                column.addView(actionRowInSheet("打开", R.drawable.ic_file) {
-                    sheet.dismiss()
-                    openFile(file)
-                })
+                column.addView(
+                    actionRowInSheet("打开", R.drawable.ic_file) {
+                        sheet.dismiss()
+                        openFile(file)
+                    },
+                )
             }
-            column.addView(actionRowInSheet("重命名", R.drawable.ic_edit) {
-                sheet.dismiss()
-                rename(file)
-            })
-            column.addView(actionRowInSheet("移动到", R.drawable.ic_folder) {
-                sheet.dismiss()
-                move(file)
-            })
-            column.addView(actionRowInSheet("删除", R.drawable.ic_trash) {
-                sheet.dismiss()
-                confirmDelete(file)
-            })
+            column.addView(
+                actionRowInSheet("重命名", R.drawable.ic_edit) {
+                    sheet.dismiss()
+                    rename(file)
+                },
+            )
+            column.addView(
+                actionRowInSheet("移动到", R.drawable.ic_folder) {
+                    sheet.dismiss()
+                    move(file)
+                },
+            )
+            column.addView(
+                actionRowInSheet("删除", R.drawable.ic_trash) {
+                    sheet.dismiss()
+                    confirmDelete(file)
+                },
+            )
         }
         sheet.show()
     }
 
-    private fun actionRowInSheet(text: String, iconRes: Int, click: () -> Unit): View {
-        val row = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12f), 0, dp(12f))
-            isClickable = true
-            setOnClickListener { click() }
-        }
-        row.addView(ImageView(host).apply {
-            setImageResource(iconRes)
-            setColorFilter(onSurfaceVariant)
-            layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
-        })
+    private fun actionRowInSheet(
+        text: String,
+        iconRes: Int,
+        click: () -> Unit,
+    ): View {
+        val row =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12f), 0, dp(12f))
+                isClickable = true
+                setOnClickListener { click() }
+            }
+        row.addView(
+            ImageView(host).apply {
+                setImageResource(iconRes)
+                setColorFilter(onSurfaceVariant)
+                layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
+            },
+        )
         row.addView(label(text, 15f, onSurface))
         row.pressFeedback(pressedAlpha = 0.6f)
         return row
@@ -583,11 +632,13 @@ class FilesPage(
         val sheet = sheet().title("删除").subtitle(file.name)
         sheet.content { column ->
             column.addView(label("删除后无法恢复。", 13f, onSurfaceVariant))
-            column.addView(label(file.absolutePath, 12f, onSurfaceVariant).apply {
-                setPadding(0, dp(6f), 0, 0)
-                ellipsize = TextUtils.TruncateAt.MIDDLE
-                maxLines = 2
-            })
+            column.addView(
+                label(file.absolutePath, 12f, onSurfaceVariant).apply {
+                    setPadding(0, dp(6f), 0, 0)
+                    ellipsize = TextUtils.TruncateAt.MIDDLE
+                    maxLines = 2
+                },
+            )
         }
         sheet.primaryAction("删除") {
             val ok = runCatching { deleteRecursive(file) }.getOrDefault(false)
@@ -612,10 +663,11 @@ class FilesPage(
                 toast("同名条目已存在")
                 return@inputSheet
             }
-            val ok = runCatching {
-                target.parentFile?.mkdirs()
-                target.createNewFile()
-            }.getOrDefault(false)
+            val ok =
+                runCatching {
+                    target.parentFile?.mkdirs()
+                    target.createNewFile()
+                }.getOrDefault(false)
             if (ok) {
                 renderList()
                 openFile(target)
@@ -633,16 +685,23 @@ class FilesPage(
         }
     }
 
-    private fun inputSheet(caption: String, initial: String, onDone: (String) -> Unit) {
+    private fun inputSheet(
+        caption: String,
+        initial: String,
+        onDone: (String) -> Unit,
+    ) {
         val sheet = sheet().title(caption)
-        val input = EditText(host).apply {
-            setText(initial)
-            setSelection(text.length)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setSingleLine()
-            setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
-            background = androidx.core.content.ContextCompat.getDrawable(host, R.drawable.bg_tool_card)
-        }
+        val input =
+            EditText(host).apply {
+                setText(initial)
+                setSelection(text.length)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setSingleLine()
+                setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
+                background =
+                    androidx.core.content.ContextCompat
+                        .getDrawable(host, R.drawable.bg_tool_card)
+            }
         sheet.content { column ->
             column.removeAllViews()
             column.addView(input)
@@ -663,60 +722,73 @@ class FilesPage(
     // -------------------------------------------------------------- 文本编辑
 
     private fun buildEditor(): View {
-        editor = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(surface)
-            visibility = View.GONE
-        }
-        val header = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8f), dp(12f), dp(12f), dp(8f))
-        }
-        header.addView(ImageView(host).apply {
-            setImageResource(R.drawable.ic_arrow_back)
-            setColorFilter(onSurface)
-            val size = dp(36f)
-            layoutParams = LinearLayout.LayoutParams(size, size).apply { rightMargin = dp(6f) }
-            setPadding(dp(8f), dp(8f), dp(8f), dp(8f))
-            background = androidx.core.content.ContextCompat.getDrawable(host, R.drawable.bg_pill)
-            setOnClickListener { closeEditor() }
-        })
-        editorTitle = label("", 15f, onSurface).apply {
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-            layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
-        }
+        editor =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(surface)
+                visibility = View.GONE
+            }
+        val header =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8f), dp(12f), dp(12f), dp(8f))
+            }
+        header.addView(
+            ImageView(host).apply {
+                setImageResource(R.drawable.ic_arrow_back)
+                setColorFilter(onSurface)
+                val size = dp(36f)
+                layoutParams = LinearLayout.LayoutParams(size, size).apply { rightMargin = dp(6f) }
+                setPadding(dp(8f), dp(8f), dp(8f), dp(8f))
+                background =
+                    androidx.core.content.ContextCompat
+                        .getDrawable(host, R.drawable.bg_pill)
+                setOnClickListener { closeEditor() }
+            },
+        )
+        editorTitle =
+            label("", 15f, onSurface).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.MIDDLE
+                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+            }
         header.addView(editorTitle)
         header.addView(editorChip("转到行") { gotoLine() })
         header.addView(editorChip("换行") { toggleWrap() })
-        val save = label("保存", 14f, primary).apply {
-            setTextColor(primary)
-            setPadding(dp(12f), dp(7f), dp(12f), dp(7f))
-            background = androidx.core.content.ContextCompat.getDrawable(host, R.drawable.bg_pill)
-            isClickable = true
-            setOnClickListener { saveEditor() }
-        }
+        val save =
+            label("保存", 14f, primary).apply {
+                setTextColor(primary)
+                setPadding(dp(12f), dp(7f), dp(12f), dp(7f))
+                background =
+                    androidx.core.content.ContextCompat
+                        .getDrawable(host, R.drawable.bg_pill)
+                isClickable = true
+                setOnClickListener { saveEditor() }
+            }
         header.addView(save)
         editor.addView(header)
 
         // 编辑区：行号槽 + 文本。行号槽放在一个横向滚动的容器里，不随正文横向滚动，
         // 这样横向拖正文时行号始终可见。
-        val body = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
-        }
-        editorGutter = android.widget.HorizontalScrollView(host).apply {
-            isHorizontalScrollBarEnabled = false
-            setBackgroundColor(surface)
-            layoutParams = LinearLayout.LayoutParams(WRAP, MATCH)
-        }
-        editorGutterText = TextView(host).apply {
-            typeface = Typeface.MONOSPACE
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            setTextColor(onSurfaceVariant)
-            setPadding(dp(12f), dp(6f), dp(10f), dp(14f))
-        }
+        val body =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+            }
+        editorGutter =
+            android.widget.HorizontalScrollView(host).apply {
+                isHorizontalScrollBarEnabled = false
+                setBackgroundColor(surface)
+                layoutParams = LinearLayout.LayoutParams(WRAP, MATCH)
+            }
+        editorGutterText =
+            TextView(host).apply {
+                typeface = Typeface.MONOSPACE
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextColor(onSurfaceVariant)
+                setPadding(dp(12f), dp(6f), dp(10f), dp(14f))
+            }
         editorGutter.addView(
             editorGutterText,
             android.widget.FrameLayout.LayoutParams(WRAP, MATCH),
@@ -727,36 +799,52 @@ class FilesPage(
         // 触摸，事件穿透到下层 EditText）。旧结构把指引作为横向 LinearLayout 的
         // 子 View 且宽 MATCH，把输入框挤成 0 宽——不能点、不能输入、不能滚动，
         // 指引自己还从左到右画满整屏竖线，空文件里尤为刺眼。
-        editorGuide = IndentGuideView(host).apply {
-            guideColor = tintAlpha(color(com.google.android.material.R.attr.colorOnSurfaceVariant), 0.18f)
-        }
+        editorGuide =
+            IndentGuideView(host).apply {
+                guideColor = tintAlpha(color(com.google.android.material.R.attr.colorOnSurfaceVariant), 0.18f)
+            }
         val editorCanvas = android.widget.FrameLayout(host)
-        editorInput = EditorInput(host).apply {
-            typeface = Typeface.MONOSPACE
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            setTextColor(onSurface)
-            setBackgroundColor(0x00000000)
-            gravity = Gravity.TOP or Gravity.START
-            inputType = InputType.TYPE_CLASS_TEXT or
-                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            setPadding(dp(6f), dp(6f), dp(14f), dp(14f))
-            isVerticalScrollBarEnabled = true
-            layoutParams = android.widget.FrameLayout.LayoutParams(MATCH, MATCH)
-            onCaretLine = { refreshEditorChrome() }
-            setOnKeyListener { view, code, event -> handleEditorKey(view, code, event) }
-            addTextChangedListener(object : android.text.TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) = Unit
-                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {
-                    // 改动后立刻重画脏标记、行号与光标位置，高亮交给节流令牌合并。
-                    refreshDirty()
-                    refreshEditorChrome()
-                    host.scheduleHighlight(highlightTick)
-                }
-                override fun afterTextChanged(s: android.text.Editable?) = Unit
-            })
-            setOnScrollChangeListener { _, _, _, _, _ -> editorGutter.scrollTo(0, 0) }
-        }
+        editorInput =
+            EditorInput(host).apply {
+                typeface = Typeface.MONOSPACE
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextColor(onSurface)
+                setBackgroundColor(0x00000000)
+                gravity = Gravity.TOP or Gravity.START
+                inputType = InputType.TYPE_CLASS_TEXT or
+                    InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                    InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                setPadding(dp(6f), dp(6f), dp(14f), dp(14f))
+                isVerticalScrollBarEnabled = true
+                layoutParams = android.widget.FrameLayout.LayoutParams(MATCH, MATCH)
+                onCaretLine = { refreshEditorChrome() }
+                setOnKeyListener { view, code, event -> handleEditorKey(view, code, event) }
+                addTextChangedListener(
+                    object : android.text.TextWatcher {
+                        override fun beforeTextChanged(
+                            s: CharSequence?,
+                            st: Int,
+                            c: Int,
+                            a: Int,
+                        ) = Unit
+
+                        override fun onTextChanged(
+                            s: CharSequence?,
+                            st: Int,
+                            b: Int,
+                            c: Int,
+                        ) {
+                            // 改动后立刻重画脏标记、行号与光标位置，高亮交给节流令牌合并。
+                            refreshDirty()
+                            refreshEditorChrome()
+                            host.scheduleHighlight(highlightTick)
+                        }
+
+                        override fun afterTextChanged(s: android.text.Editable?) = Unit
+                    },
+                )
+                setOnScrollChangeListener { _, _, _, _, _ -> editorGutter.scrollTo(0, 0) }
+            }
         editorCanvas.addView(editorInput)
         editorCanvas.addView(
             editorGuide,
@@ -765,9 +853,10 @@ class FilesPage(
         body.addView(editorCanvas, LinearLayout.LayoutParams(0, MATCH, 1f))
         editor.addView(body)
 
-        editorStatus = label("", 12f, onSurfaceVariant).apply {
-            setPadding(dp(16f), dp(6f), dp(16f), dp(12f))
-        }
+        editorStatus =
+            label("", 12f, onSurfaceVariant).apply {
+                setPadding(dp(16f), dp(6f), dp(16f), dp(12f))
+            }
         editor.addView(editorStatus)
         return editor
     }
@@ -778,24 +867,32 @@ class FilesPage(
      * 光标移动、点击落点、选区变化最后都会走到 onSelectionChanged，这里记下插入点所在行，
      * 交给外面重画左侧行号与当前行底，避免每处输入路径各自提示一次。
      */
-    private class EditorInput(context: android.content.Context) :
-        androidx.appcompat.widget.AppCompatEditText(context) {
+    private class EditorInput(
+        context: android.content.Context,
+    ) : androidx.appcompat.widget.AppCompatEditText(context) {
         var onCaretLine: (() -> Unit)? = null
 
-        override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+        override fun onSelectionChanged(
+            selStart: Int,
+            selEnd: Int,
+        ) {
             super.onSelectionChanged(selStart, selEnd)
             onCaretLine?.invoke()
         }
     }
+
 /**
      * 缩进参考线：按制表宽度画竖线，让深层嵌套与 VS Code 一样有"对齐感"。
      *
      * 只画到内容的最大缩进级别：旧版 while(x < width) 会把竖线画满整个视图宽，
      * 空文件也一整屏，越看越像渲染事故。级别由外面按文本统计后塞进来，<=0 不画。
      */
-    private class IndentGuideView(context: android.content.Context) : View(context) {
+    private class IndentGuideView(
+        context: android.content.Context,
+    ) : View(context) {
         /** 每级的像素宽度；<=0 表示这一帧还没量到字宽，直接不画。 */
         var stepPx: Float = 0f
+
         /** 画几级竖线；0 表示内容无缩进，一条也不画。 */
         var levels: Int = 0
         var guideColor: Int = android.graphics.Color.GRAY
@@ -803,10 +900,11 @@ class FilesPage(
         override fun onDraw(canvas: android.graphics.Canvas) {
             super.onDraw(canvas)
             if (stepPx <= 0f || levels <= 0) return
-            val paint = android.graphics.Paint().apply {
-                color = guideColor
-                strokeWidth = 1f
-            }
+            val paint =
+                android.graphics.Paint().apply {
+                    color = guideColor
+                    strokeWidth = 1f
+                }
             var level = 0
             var x = stepPx
             while (level < levels && x < width) {
@@ -816,13 +914,16 @@ class FilesPage(
             }
         }
     }
+
     /**
      * 当前行底：从行首铺到行尾的半透明色块，随主题。
      *
      * 用 BackgroundColorSpan 而不是 ReplacementSpan：后者会接管整段绘制，连带吞掉这一行
      * 的语法着色。范围铺到行尾，因此行尾空白也会被盖住，视觉上仍是整行。
      */
-    private class CurrentLineSpan(color: Int) : android.text.style.BackgroundColorSpan(color)
+    private class CurrentLineSpan(
+        color: Int,
+    ) : android.text.style.BackgroundColorSpan(color)
 
     /** 行号槽的一行：当前行用主题色加粗，其余用弱化色。 */
     private fun gutterMarkup(): android.text.SpannableString {
@@ -897,7 +998,10 @@ class FilesPage(
     private val currentLineTint: Int
         get() = tintAlpha(color(androidx.appcompat.R.attr.colorPrimary), 0.10f)
 
-    private fun tintAlpha(color: Int, alpha: Float): Int {
+    private fun tintAlpha(
+        color: Int,
+        alpha: Float,
+    ): Int {
         val a = (255 * alpha).toInt().coerceIn(0, 255)
         return (color and 0x00FFFFFF) or (a shl 24)
     }
@@ -929,7 +1033,10 @@ class FilesPage(
     }
 
     /** 文本内最深一层的缩进级数；缩进单位长度非法时恒为 0。 */
-    private fun maxIndentLevels(text: String, unit: String): Int {
+    private fun maxIndentLevels(
+        text: String,
+        unit: String,
+    ): Int {
         if (unit.isEmpty()) return 0
         var max = 0
         for (line in text.lineSequence()) {
@@ -987,7 +1094,11 @@ class FilesPage(
      * 输入左括号/引号时补上右边并让光标停在中间；回车时沿用当前行缩进，行尾是
      * 开括号或冒号时再进一级。只在这两种情形返回 true，其余按键交回输入法。
      */
-    private fun handleEditorKey(view: android.view.View, code: Int, event: android.view.KeyEvent): Boolean {
+    private fun handleEditorKey(
+        view: android.view.View,
+        code: Int,
+        event: android.view.KeyEvent,
+    ): Boolean {
         if (event.action != android.view.KeyEvent.ACTION_DOWN) return false
         if (suppressEdits || editing == null) return false
         val text = editorInput.text ?: return false
@@ -1030,44 +1141,57 @@ class FilesPage(
     private var enterActionExtra = 0
 
     /** 回车：返回是否已自行插入，并把多加的缩进量记在 [enterActionExtra]。 */
-    private fun insertSmartNewline(text: android.text.Editable, caret: Int): Boolean {
+    private fun insertSmartNewline(
+        text: android.text.Editable,
+        caret: Int,
+    ): Boolean {
         val before = text.subSequence(0, caret).toString()
         val lineStart = before.lastIndexOf('\n') + 1
         val currentLine = before.substring(lineStart)
-        val indent = buildString {
-            for (c in currentLine) {
-                if (c == ' ' || c == '\t') append(c) else break
+        val indent =
+            buildString {
+                for (c in currentLine) {
+                    if (c == ' ' || c == '\t') append(c) else break
+                }
             }
-        }
         val trimmed = currentLine.trimEnd()
-        val deepens = trimmed.endsWith("{") || trimmed.endsWith("(") ||
-            trimmed.endsWith("[") || trimmed.endsWith(":")
+        val deepens =
+            trimmed.endsWith("{") || trimmed.endsWith("(") ||
+                trimmed.endsWith("[") || trimmed.endsWith(":")
         val extra = if (deepens) indentUnit else ""
         enterActionExtra = indent.length + extra.length
         text.insert(caret, "\n" + indent + extra)
         return true
     }
 
-    private fun closerFor(open: Char): Char? = when (open) {
-        '(' -> ')'
-        '[' -> ']'
-        '{' -> '}'
-        '"' -> '"'
-        '\'' -> '\''
-        else -> null
-    }
+    private fun closerFor(open: Char): Char? =
+        when (open) {
+            '(' -> ')'
+            '[' -> ']'
+            '{' -> '}'
+            '"' -> '"'
+            '\'' -> '\''
+            else -> null
+        }
 
-    private fun isMatchingPair(open: Char, close: Char): Boolean = closerFor(open) == close
+    private fun isMatchingPair(
+        open: Char,
+        close: Char,
+    ): Boolean = closerFor(open) == close
 
     /** 编辑器头部的文字按钮。 */
-    private fun editorChip(text: String, click: () -> Unit): TextView = label(text, 13f, onSurfaceVariant).apply {
-        setTextColor(onSurfaceVariant)
-        setPadding(dp(10f), dp(7f), dp(10f), dp(7f))
-        layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = dp(6f) }
-        isClickable = true
-        setOnClickListener { click() }
-        pressFeedback(pressedScale = 0.94f, pressedAlpha = 0.6f)
-    }
+    private fun editorChip(
+        text: String,
+        click: () -> Unit,
+    ): TextView =
+        label(text, 13f, onSurfaceVariant).apply {
+            setTextColor(onSurfaceVariant)
+            setPadding(dp(10f), dp(7f), dp(10f), dp(7f))
+            layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = dp(6f) }
+            isClickable = true
+            setOnClickListener { click() }
+            pressFeedback(pressedScale = 0.94f, pressedAlpha = 0.6f)
+        }
 
     // -------------------------------------------------------------- 高亮与编辑增强
 
@@ -1075,14 +1199,15 @@ class FilesPage(
     private fun rulesFor(file: File): LanguageRules? = CodeHighlighter.detect(file.name)
 
     /** 从主题属性取高亮配色，深浅模式各自成立，不写死颜色。 */
-    private fun palette(): CodePalette = CodePalette(
-        comment = color(com.google.android.material.R.attr.colorOnSurfaceVariant),
-        keyword = color(androidx.appcompat.R.attr.colorPrimary),
-        type = color(com.google.android.material.R.attr.colorTertiary),
-        string = color(com.google.android.material.R.attr.colorSecondary),
-        number = color(com.google.android.material.R.attr.colorOnSurface),
-        function = color(com.google.android.material.R.attr.colorOnSurface),
-    )
+    private fun palette(): CodePalette =
+        CodePalette(
+            comment = color(com.google.android.material.R.attr.colorOnSurfaceVariant),
+            keyword = color(androidx.appcompat.R.attr.colorPrimary),
+            type = color(com.google.android.material.R.attr.colorTertiary),
+            string = color(com.google.android.material.R.attr.colorSecondary),
+            number = color(com.google.android.material.R.attr.colorOnSurface),
+            function = color(com.google.android.material.R.attr.colorOnSurface),
+        )
 
     /** 节流后的整篇重扫；文本没到上限时就地更新 span，不重建文本。 */
     private fun runHighlight() {
@@ -1112,23 +1237,24 @@ class FilesPage(
         }
         val column = caret - lineStart + 1
         val language = editorRules?.name
-        editorStatus.text = buildString {
-            append(file.absolutePath)
-            append(" · ")
-            append(readableSize(file.length()))
-            append(" · ")
-            append(editorInput.lineCount)
-            append(" 行")
-            append(" · Ln ")
-            append(line)
-            append(", Col ")
-            append(column)
-            if (language != null) {
+        editorStatus.text =
+            buildString {
+                append(file.absolutePath)
                 append(" · ")
-                append(language)
+                append(readableSize(file.length()))
+                append(" · ")
+                append(editorInput.lineCount)
+                append(" 行")
+                append(" · Ln ")
+                append(line)
+                append(", Col ")
+                append(column)
+                if (language != null) {
+                    append(" · ")
+                    append(language)
+                }
+                if (wrapEnabled) append(" · 自动换行")
             }
-            if (wrapEnabled) append(" · 自动换行")
-        }
     }
 
     /** 转到指定行（1 起），把光标与选区落在该行行首。 */
@@ -1155,11 +1281,12 @@ class FilesPage(
         wrapEnabled = !wrapEnabled
         val wrap = wrapEnabled
         val flags = editorInput.inputType
-        editorInput.inputType = if (wrap) {
-            flags or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        } else {
-            flags and InputType.TYPE_TEXT_FLAG_MULTI_LINE.inv()
-        }
+        editorInput.inputType =
+            if (wrap) {
+                flags or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            } else {
+                flags and InputType.TYPE_TEXT_FLAG_MULTI_LINE.inv()
+            }
         editorInput.setHorizontallyScrolling(!wrap)
         editorInput.setSingleLine(false)
         editorInput.requestLayout()
@@ -1217,13 +1344,14 @@ class FilesPage(
      * 同时统计不可打印控制字符比例，超过 10% 也判为二进制。
      */
     private fun isProbablyText(file: File): Boolean {
-        val probe = runCatching {
-            java.io.FileInputStream(file).use { input ->
-                val buf = ByteArray(4096)
-                val n = input.read(buf)
-                if (n <= 0) ByteArray(0) else buf.copyOf(n)
-            }
-        }.getOrNull() ?: return false
+        val probe =
+            runCatching {
+                java.io.FileInputStream(file).use { input ->
+                    val buf = ByteArray(4096)
+                    val n = input.read(buf)
+                    if (n <= 0) ByteArray(0) else buf.copyOf(n)
+                }
+            }.getOrNull() ?: return false
         if (probe.isEmpty()) return true
         var suspicious = 0
         for (b in probe) {
@@ -1266,19 +1394,21 @@ class FilesPage(
     private fun openWithSystem(file: File): Boolean {
         val uri = runCatching { WorkspaceFiles.uriFor(host, file) }.getOrNull() ?: return false
         val mime = mimeOf(file)
-        val view = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mime)
-            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+        val view =
+            android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
         if (hasHandler(view)) {
             runCatching { host.startActivity(view) }.onSuccess { return true }
         }
         // 没有明确的查看者时，再试一次"发送/分享"，很多文件管理器只注册了 SEND。
-        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-            type = mime
-            putExtra(android.content.Intent.EXTRA_STREAM, uri)
-            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+        val send =
+            android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
         if (!hasHandler(send)) return false
         return runCatching {
             host.startActivity(android.content.Intent.createChooser(send, file.name))
@@ -1307,12 +1437,19 @@ class FilesPage(
     private fun mimeOf(file: File): String {
         val ext = file.extension.lowercase()
         if (ext.isEmpty()) return "application/octet-stream"
-        val fromMap = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+        val fromMap =
+            android.webkit.MimeTypeMap
+                .getSingleton()
+                .getMimeTypeFromExtension(ext)
         return fromMap ?: "application/octet-stream"
     }
 
     /** 读回文本内容；失败时走 onFail，不会静默。 */
-    private fun readInto(file: File, onFail: (String) -> Unit, done: (String) -> Unit) {
+    private fun readInto(
+        file: File,
+        onFail: (String) -> Unit,
+        done: (String) -> Unit,
+    ) {
         host.background(
             work = {
                 runCatching { file.readText() }
@@ -1325,7 +1462,10 @@ class FilesPage(
         )
     }
 
-    private fun showEditor(file: File, content: String) {
+    private fun showEditor(
+        file: File,
+        content: String,
+    ) {
         editing = file
         originalText = content
         dirty = false
@@ -1393,17 +1533,24 @@ class FilesPage(
         renderList()
     }
 
-    private fun showInfo(file: File, note: String) {
+    private fun showInfo(
+        file: File,
+        note: String,
+    ) {
         val sheet = sheet().title(file.name).subtitle(file.absolutePath)
         sheet.content { column ->
             column.removeAllViews()
             column.addView(label(note, 13f, onSurfaceVariant))
-            column.addView(label("大小 ${readableSize(file.length())}", 12f, onSurfaceVariant).apply {
-                setPadding(0, dp(8f), 0, 0)
-            })
-            column.addView(label("修改时间 ${timeFormat.format(Date(file.lastModified()))}", 12f, onSurfaceVariant).apply {
-                setPadding(0, dp(2f), 0, 0)
-            })
+            column.addView(
+                label("大小 ${readableSize(file.length())}", 12f, onSurfaceVariant).apply {
+                    setPadding(0, dp(8f), 0, 0)
+                },
+            )
+            column.addView(
+                label("修改时间 ${timeFormat.format(Date(file.lastModified()))}", 12f, onSurfaceVariant).apply {
+                    setPadding(0, dp(2f), 0, 0)
+                },
+            )
         }
         sheet.primaryAction("以文本打开") {
             sheet.dismiss()
@@ -1415,22 +1562,29 @@ class FilesPage(
 
     // ---------------------------------------------------------------- 工具
 
-    private fun readableSize(bytes: Long): String = when {
-        bytes < 1024 -> "$bytes B"
-        bytes < 1024 * 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
-        bytes < 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
-        else -> String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
-    }
+    private fun readableSize(bytes: Long): String =
+        when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+            bytes < 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
+            else -> String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
+        }
 
-    private fun hint(text: String): TextView = label(text, 13f, onSurfaceVariant).apply {
-        setPadding(dp(32f), dp(2f), dp(16f), dp(10f))
-    }
+    private fun hint(text: String): TextView =
+        label(text, 13f, onSurfaceVariant).apply {
+            setPadding(dp(32f), dp(2f), dp(16f), dp(10f))
+        }
 
     private fun toast(text: String) {
-        android.widget.Toast.makeText(host, text, android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast
+            .makeText(host, text, android.widget.Toast.LENGTH_SHORT)
+            .show()
     }
 
-    private data class Read(val text: String?, val note: String)
+    private data class Read(
+        val text: String?,
+        val note: String,
+    )
 
     private companion object {
         const val MAX_EDIT_BYTES = 2L * 1024 * 1024

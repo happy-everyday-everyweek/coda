@@ -22,7 +22,6 @@ data class ExtensionManifest(
     /** 原始清单，供各分类读取自己的专属段。 */
     val raw: JSONObject,
 ) {
-
     /**
      * 一个随拓展分发的文件。
      *
@@ -53,7 +52,6 @@ data class ExtensionManifest(
     }
 
     companion object {
-
         /** 释放权限：0755（Kotlin 不支持八进制字面量，写成十进制 493）。 */
         const val MODE_EXECUTABLE = 493
 
@@ -67,11 +65,12 @@ data class ExtensionManifest(
 
         /** 解析清单；id 或分类缺失即视为非法清单。 */
         fun parse(text: String): ExtensionManifest? {
-            val obj = try {
-                JSONObject(text)
-            } catch (_: Throwable) {
-                return null
-            }
+            val obj =
+                try {
+                    JSONObject(text)
+                } catch (_: Throwable) {
+                    return null
+                }
             val id = obj.optString("id", "").trim()
             val category = obj.optString("category", "").trim()
             if (!isValidId(id) || category.isEmpty()) return null
@@ -94,13 +93,17 @@ data class ExtensionManifest(
                     is JSONObject -> {
                         val path = item.optString("path", "").trim()
                         if (path.isEmpty()) continue
-                        out += Binary(
-                            path = path,
-                            mode = parseMode(item.optString("mode", ""), MODE_EXECUTABLE),
-                            links = parseLinks(item.optJSONArray("links")),
-                        )
+                        out +=
+                            Binary(
+                                path = path,
+                                mode = parseMode(item.optString("mode", ""), MODE_EXECUTABLE),
+                                links = parseLinks(item.optJSONArray("links")),
+                            )
                     }
-                    is String -> if (item.isNotBlank()) out += Binary(item.trim(), MODE_EXECUTABLE)
+
+                    is String -> {
+                        if (item.isNotBlank()) out += Binary(item.trim(), MODE_EXECUTABLE)
+                    }
                 }
             }
             return out
@@ -118,7 +121,10 @@ data class ExtensionManifest(
         }
 
         /** 权限按八进制文本解析（清单里写 `"0755"`）；非法时回退到默认值。 */
-        private fun parseMode(text: String, fallback: Int): Int {
+        private fun parseMode(
+            text: String,
+            fallback: Int,
+        ): Int {
             val raw = text.trim().removePrefix("0o").removePrefix("0O")
             if (raw.isEmpty()) return fallback
             return raw.toIntOrNull(8) ?: fallback

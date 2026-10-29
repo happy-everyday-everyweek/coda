@@ -20,7 +20,6 @@ import java.io.File
  * ```
  */
 object TerminalCategory : ExtensionCategory {
-
     const val ID = "terminal"
 
     /** 注入内核的 shell 可执行路径。 */
@@ -59,8 +58,9 @@ object TerminalCategory : ExtensionCategory {
     override fun capability(providers: List<ExtensionProvider>): ExtensionCapability? {
         // 终端能力是"一份"：多个终端拓展共存时取发现顺序里最靠前的可用者，
         // 其余拓展仍然装载，只是不参与这份对外能力。
-        val primary = providers.filterIsInstance<TerminalProvider>().firstOrNull { it.available }
-            ?: return null
+        val primary =
+            providers.filterIsInstance<TerminalProvider>().firstOrNull { it.available }
+                ?: return null
         return TerminalCapabilityImpl(
             shellPath = primary.shellPath,
             dialect = primary.dialect,
@@ -69,7 +69,10 @@ object TerminalCategory : ExtensionCategory {
         )
     }
 
-    private fun readStringList(section: JSONObject, key: String): List<String> {
+    private fun readStringList(
+        section: JSONObject,
+        key: String,
+    ): List<String> {
         val arr = section.optJSONArray(key) ?: return emptyList()
         val out = mutableListOf<String>()
         for (i in 0 until arr.length()) {
@@ -82,7 +85,6 @@ object TerminalCategory : ExtensionCategory {
 
 /** 终端拓展须实现的接口：给宿主一个可执行的 shell，以及配套的环境说明。 */
 interface TerminalProvider : ExtensionProvider {
-
     /** shell 可执行文件的绝对路径。 */
     val shellPath: String
 
@@ -98,7 +100,6 @@ interface TerminalProvider : ExtensionProvider {
 
 /** 终端分类的对外能力。 */
 interface TerminalCapability : ExtensionCapability {
-
     val shellPath: String
 
     val dialect: String
@@ -109,11 +110,12 @@ interface TerminalCapability : ExtensionCapability {
 
     /** 宿主注入内核的环境变量补丁。 */
     fun env(): Map<String, String> {
-        val out = mutableMapOf(
-            TerminalCategory.ENV_SHELL to shellPath,
-            TerminalCategory.ENV_DIALECT to dialect,
-            TerminalCategory.ENV_LOGIN to if (loginShell) "1" else "0",
-        )
+        val out =
+            mutableMapOf(
+                TerminalCategory.ENV_SHELL to shellPath,
+                TerminalCategory.ENV_DIALECT to dialect,
+                TerminalCategory.ENV_LOGIN to if (loginShell) "1" else "0",
+            )
         if (pathEntries.isNotEmpty()) {
             out[TerminalCategory.ENV_PATH] = pathEntries.joinToString(File.pathSeparator)
         }
@@ -138,7 +140,6 @@ private class TerminalProviderImpl(
     private val pathEntrySpecs: List<String>,
     override val loginShell: Boolean,
 ) : TerminalProvider {
-
     override var available: Boolean = false
         private set
 
@@ -162,7 +163,10 @@ private class TerminalProviderImpl(
     }
 
     /** 绝对路径直接用（系统 shell、系统工具目录），相对路径一律按运行目录解析。 */
-    private fun resolveFile(spec: String, requireExecutable: Boolean): File? {
+    private fun resolveFile(
+        spec: String,
+        requireExecutable: Boolean,
+    ): File? {
         val file = if (spec.startsWith("/")) File(spec) else File(runtimeDir, spec)
         if (!file.isFile) return null
         if (requireExecutable && !file.canExecute()) return null

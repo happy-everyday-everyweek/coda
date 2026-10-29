@@ -26,13 +26,15 @@ import java.security.MessageDigest
  * 面对一个无法自愈的失败。
  */
 object AssetFetcher {
-
     /** 日志标签。 */
     private const val TAG = "AssetFetcher"
 
     /** 下载进度回调：当前、总量（字节）。 */
     fun interface Progress {
-        fun onBytes(done: Long, total: Long)
+        fun onBytes(
+            done: Long,
+            total: Long,
+        )
     }
 
     /**
@@ -99,15 +101,16 @@ object AssetFetcher {
 // 合并统计会互相污染，所以按当前网络取对应那本账。
         val net = MirrorScoreboard.currentNet(ctx)
         val history = MirrorScoreboard.load(ctx, net)
-        val ranked = GhMirrors.rank(
-            probeUrl = spec.remoteUrl,
-            mirrors = GhMirrors.DEFAULT,
-            // 体积决定要不要测速：小文件不值当（见 SPEEDTEST_MIN_BYTES），
-            // 但小文件更要靠历史成绩排序，否则只能按写死的清单顺序盲试。
-            bytes = spec.size,
-            history = history,
-            onLog = onLog,
-        )
+        val ranked =
+            GhMirrors.rank(
+                probeUrl = spec.remoteUrl,
+                mirrors = GhMirrors.DEFAULT,
+                // 体积决定要不要测速：小文件不值当（见 SPEEDTEST_MIN_BYTES），
+                // 但小文件更要靠历史成绩排序，否则只能按写死的清单顺序盲试。
+                bytes = spec.size,
+                history = history,
+                onLog = onLog,
+            )
         onLog("网络环境：${netLabel(net)}")
         val errors = StringBuilder()
         for (m in ranked) {
@@ -119,8 +122,12 @@ object AssetFetcher {
             if (got && verify(tmp, spec)) {
                 if (tmp.renameTo(target)) {
                     MirrorScoreboard.record(
-                        ctx, net, m.id, MirrorScoreboard.Outcome.VERIFIED,
-                        bytes = tmp.length(), elapsedMs = cost,
+                        ctx,
+                        net,
+                        m.id,
+                        MirrorScoreboard.Outcome.VERIFIED,
+                        bytes = tmp.length(),
+                        elapsedMs = cost,
                     )
                     onLog("完成（${m.id}）：${target.name}")
                     AppLog.i(TAG, "资产就位 ${target.name} 来源=${m.id} 体积=${target.length()}")
@@ -130,13 +137,21 @@ object AssetFetcher {
                 // 大小对、内容不对：镜像返回了被改写的内容。换源重试，这是唯一可靠的应对。
                 // 记账要单独记成 HASH_FAILED：它比「连不上」更该被拉黑。
                 MirrorScoreboard.record(
-                    ctx, net, m.id, MirrorScoreboard.Outcome.HASH_FAILED, elapsedMs = cost,
+                    ctx,
+                    net,
+                    m.id,
+                    MirrorScoreboard.Outcome.HASH_FAILED,
+                    elapsedMs = cost,
                 )
                 onLog("${m.id} 内容校验不通过，换源")
                 errors.append(m.id).append(":hash ")
             } else {
                 MirrorScoreboard.record(
-                    ctx, net, m.id, MirrorScoreboard.Outcome.FAILED, elapsedMs = cost,
+                    ctx,
+                    net,
+                    m.id,
+                    MirrorScoreboard.Outcome.FAILED,
+                    elapsedMs = cost,
                 )
                 errors.append(m.id).append(":fail ")
             }
@@ -151,14 +166,18 @@ object AssetFetcher {
     // ---------- 校验 ----------
 
     /** 网络类型的中文表述，用于界面日志。 */
-    fun netLabel(net: MirrorScoreboard.Net): String = when (net) {
-        MirrorScoreboard.Net.WIFI -> "Wi-Fi"
-        MirrorScoreboard.Net.CELLULAR -> "移动数据"
-        MirrorScoreboard.Net.OTHER -> "其他网络"
-    }
+    fun netLabel(net: MirrorScoreboard.Net): String =
+        when (net) {
+            MirrorScoreboard.Net.WIFI -> "Wi-Fi"
+            MirrorScoreboard.Net.CELLULAR -> "移动数据"
+            MirrorScoreboard.Net.OTHER -> "其他网络"
+        }
 
     /** 按 spec 校验文件；spec 没给 sha256 也没有 size 时退化为「文件非空」。 */
-    fun verify(file: File, spec: Spec): Boolean {
+    fun verify(
+        file: File,
+        spec: Spec,
+    ): Boolean {
         if (!file.isFile) return false
         if (spec.size > 0 && file.length() != spec.size) return false
         val want = spec.sha256?.trim()?.lowercase()
@@ -167,30 +186,38 @@ object AssetFetcher {
         return got.equals(want, ignoreCase = true)
     }
 
-    fun sha256(file: File): String? = runCatching {
-        val md = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buf = ByteArray(256 * 1024)
-            while (true) {
-                val n = input.read(buf)
-                if (n <= 0) break
-                md.update(buf, 0, n)
+    fun sha256(file: File): String? =
+        runCatching {
+            val md = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buf = ByteArray(256 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    md.update(buf, 0, n)
+                }
             }
-        }
-        md.digest().joinToString("") { "%02x".format(it) }
-    }.getOrNull()
+            md.digest().joinToString("") { "%02x".format(it) }
+        }.getOrNull()
 
     // ---------- assets ----------
 
-    fun assetExists(ctx: Context, path: String): Boolean =
-        runCatching { ctx.assets.open(path).use { true } }.getOrDefault(false)
+    fun assetExists(
+        ctx: Context,
+        path: String,
+    ): Boolean = runCatching { ctx.assets.open(path).use { true } }.getOrDefault(false)
 
-    private fun extractAsset(ctx: Context, path: String, out: File): Boolean = runCatching {
-        ctx.assets.open(path).use { input ->
-            FileOutputStream(out).use { o -> input.copyTo(o, 256 * 1024) }
-        }
-        true
-    }.getOrDefault(false)
+    private fun extractAsset(
+        ctx: Context,
+        path: String,
+        out: File,
+    ): Boolean =
+        runCatching {
+            ctx.assets.open(path).use { input ->
+                FileOutputStream(out).use { o -> input.copyTo(o, 256 * 1024) }
+            }
+            true
+        }.getOrDefault(false)
 
     // ---------- 下载 ----------
 
@@ -200,45 +227,57 @@ object AssetFetcher {
      * 只负责「把字节搬下来」，内容是否可信交给 [verify]。HTTP 非 2xx、字节数
      * 与 spec.size 不符（且 size 已给出）都直接判失败，省掉一次无意义的哈希。
      */
-    private fun download(url: String, out: File, spec: Spec, onProgress: Progress?): Boolean = try {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            connectTimeout = 20_000
-            readTimeout = 120_000
-            setRequestProperty("User-Agent", "Coda-Android")
-            setRequestProperty("Accept", "*/*")
-        }
+    private fun download(
+        url: String,
+        out: File,
+        spec: Spec,
+        onProgress: Progress?,
+    ): Boolean =
         try {
-            if (conn.responseCode !in 200..299) {
-                // 状态码一定要留下：401/403 是镜像拒绝，404 是文件不存在，
-                // 502/503 是镜像自己挂了。三种应对完全不同，只记「失败」等于没记。
-                AppLog.w(TAG, "下载失败 $url → HTTP ${conn.responseCode}")
-                conn.errorStream?.close()
-                false
-            } else {
-                val total = conn.contentLengthLong.takeIf { it > 0 } ?: spec.size
-                FileOutputStream(out).use { o ->
-                    conn.inputStream.use { input -> copy(input, o, total, onProgress) }
+            val conn =
+                (URL(url).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = true
+                    connectTimeout = 20_000
+                    readTimeout = 120_000
+                    setRequestProperty("User-Agent", "Coda-Android")
+                    setRequestProperty("Accept", "*/*")
                 }
-                if (spec.size > 0 && out.length() != spec.size) {
-                    AppLog.w(TAG, "下载完成但长度不符 $url 期望=${spec.size} 实际=${out.length()}")
+            try {
+                if (conn.responseCode !in 200..299) {
+                    // 状态码一定要留下：401/403 是镜像拒绝，404 是文件不存在，
+                    // 502/503 是镜像自己挂了。三种应对完全不同，只记「失败」等于没记。
+                    AppLog.w(TAG, "下载失败 $url → HTTP ${conn.responseCode}")
+                    conn.errorStream?.close()
                     false
                 } else {
-                    true
+                    val total = conn.contentLengthLong.takeIf { it > 0 } ?: spec.size
+                    FileOutputStream(out).use { o ->
+                        conn.inputStream.use { input -> copy(input, o, total, onProgress) }
+                    }
+                    if (spec.size > 0 && out.length() != spec.size) {
+                        AppLog.w(TAG, "下载完成但长度不符 $url 期望=${spec.size} 实际=${out.length()}")
+                        false
+                    } else {
+                        true
+                    }
                 }
+            } finally {
+                conn.disconnect()
             }
-        } finally {
-            conn.disconnect()
+        } catch (t: Throwable) {
+            // 这里以前是 `catch (_: Throwable)`，异常被完全吞掉：
+            // 连接重置、TLS 失败、磁盘写满全都不留痕迹，事后完全查不出为什么失败。
+            AppLog.w(TAG, "下载异常 $url：${t.javaClass.simpleName}: ${t.message}")
+            runCatching { out.delete() }
+            false
         }
-    } catch (t: Throwable) {
-        // 这里以前是 `catch (_: Throwable)`，异常被完全吞掉：
-        // 连接重置、TLS 失败、磁盘写满全都不留痕迹，事后完全查不出为什么失败。
-        AppLog.w(TAG, "下载异常 $url：${t.javaClass.simpleName}: ${t.message}")
-        runCatching { out.delete() }
-        false
-    }
 
-    private fun copy(input: InputStream, out: FileOutputStream, total: Long, p: Progress?) {
+    private fun copy(
+        input: InputStream,
+        out: FileOutputStream,
+        total: Long,
+        p: Progress?,
+    ) {
         val buf = ByteArray(256 * 1024)
         var done = 0L
         var lastReport = 0L

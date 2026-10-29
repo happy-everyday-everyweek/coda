@@ -20,9 +20,12 @@ import java.util.Locale
  */
 class OverviewPage(
     host: WorkspaceActivity,
-    private val saved: JSONObject,
+    // 由 WorkspaceActivity 传入用于恢复页面状态；本页目前不读它，
+    // 但构造签名要与其余工作区页面保持一致，不能删。
+    // 不写成 private val：那样会变成未使用的私有属性，而这里只需要
+    // 接收构造参数即可。
+    saved: JSONObject,
 ) : WorkspacePage(host) {
-
     private data class Snapshot(
         val repo: Boolean,
         val branch: String,
@@ -39,11 +42,12 @@ class OverviewPage(
 
     private val controller get() = ZController.get(host)
 
-    private val stateListener = object : ZController.Listener {
-        override fun onStateChanged() {
-            render()
+    private val stateListener =
+        object : ZController.Listener {
+            override fun onStateChanged() {
+                render()
+            }
         }
-    }
 
     override fun build(): View {
         val scroll = scrolling()
@@ -141,11 +145,12 @@ class OverviewPage(
 
     private fun locationCard(): View {
         val current = snapshot
-        val detail = when {
-            current == null -> "读取中…"
-            current.repo -> "${current.branch} · ${current.summary}"
-            else -> "当前目录不是 Git 仓库"
-        }
+        val detail =
+            when {
+                current == null -> "读取中…"
+                current.repo -> "${current.branch} · ${current.summary}"
+                else -> "当前目录不是 Git 仓库"
+            }
         return infoCard(
             R.drawable.ic_folder,
             host.root.name.ifEmpty { host.root.absolutePath },
@@ -160,17 +165,19 @@ class OverviewPage(
             body.addView(hint("没有进行中的任务"))
             return
         }
-        val rows = todos.map { todo ->
-            val icon = when (todo.status) {
-                "completed", "done" -> R.drawable.ic_state_done
-                "in_progress", "running" -> R.drawable.ic_state_current
-                "failed", "error" -> R.drawable.ic_state_error
-                else -> R.drawable.ic_state_pending
+        val rows =
+            todos.map { todo ->
+                val icon =
+                    when (todo.status) {
+                        "completed", "done" -> R.drawable.ic_state_done
+                        "in_progress", "running" -> R.drawable.ic_state_current
+                        "failed", "error" -> R.drawable.ic_state_error
+                        else -> R.drawable.ic_state_pending
+                    }
+                cardRow(icon, todo.content, null, null, 56) {
+                    host.openPage(WorkspaceTabs.TERMINAL)
+                }
             }
-            cardRow(icon, todo.content, null, null, 56) {
-                host.openPage(WorkspaceTabs.TERMINAL)
-            }
-        }
         body.addViews(cardGroup(rows))
     }
 
@@ -181,19 +188,21 @@ class OverviewPage(
             return
         }
         val formatter = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-        val rows = list.map { commit ->
-            val detail = commit.hash.take(8) + " · " + commit.author +
-                if (commit.refs.isEmpty()) "" else " · " + commit.refs
-            cardRow(
-                R.drawable.ic_commit,
-                commit.subject.ifEmpty { commit.hash.take(7) },
-                detail,
-                formatter.format(Date(commit.time * 1000L)),
-                64,
-            ) {
-                showCommit(commit)
+        val rows =
+            list.map { commit ->
+                val detail =
+                    commit.hash.take(8) + " · " + commit.author +
+                        if (commit.refs.isEmpty()) "" else " · " + commit.refs
+                cardRow(
+                    R.drawable.ic_commit,
+                    commit.subject.ifEmpty { commit.hash.take(7) },
+                    detail,
+                    formatter.format(Date(commit.time * 1000L)),
+                    64,
+                ) {
+                    showCommit(commit)
+                }
             }
-        }
         body.addViews(cardGroup(rows))
     }
 
@@ -211,7 +220,8 @@ class OverviewPage(
     }
 
     /** 分组内的空态提示：与卡片同一档留白，不抢视线。 */
-    private fun hint(text: String): TextView = label(text, 13f, onSurfaceVariant).apply {
-        setPadding(dp(32f), dp(2f), dp(16f), dp(10f))
-    }
+    private fun hint(text: String): TextView =
+        label(text, 13f, onSurfaceVariant).apply {
+            setPadding(dp(32f), dp(2f), dp(16f), dp(10f))
+        }
 }

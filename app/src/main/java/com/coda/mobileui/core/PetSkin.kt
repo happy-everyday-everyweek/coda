@@ -5,21 +5,25 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
-/**
- * 宠物皮肤的数据模型。
- *
- * 字段与 critter（https://github.com/Brayn-Studio/critter，MIT）的 manifest schema 2 完全对齐，
- * 目的就是能把它的五个形象原样拿过来用，不再自造一套。几处必须照抄的语义：
- *
- * 网格固定 18×10，row height 是地面；部件的 at 可以取负值（抬手、垂腿会画到基框外）。
- * 姿态的像素包围盒才是实际绘制范围，所以渲染不能把像素裁在 18×10 里。
- * clip key 是 [pose, ticks] 或 [pose, ticks, dx, dy] 或 [pose, ticks, dx, dy, effect]。
- * dy 为正表示向上抬起（截图里 y 向下，绘制时要翻过来）。
- * Span 既可以是数字，也可以是 [min, max] 表示随机区间。
- */
+//
+// 宠物皮肤的数据模型。
+//
+// 字段与 critter（https://github.com/Brayn-Studio/critter，MIT）的 manifest schema 2 完全对齐，
+// 目的就是能把它的五个形象原样拿过来用，不再自造一套。几处必须照抄的语义：
+//
+// 网格固定 18×10，row height 是地面；部件的 at 可以取负值（抬手、垂腿会画到基框外）。
+// 姿态的像素包围盒才是实际绘制范围，所以渲染不能把像素裁在 18×10 里。
+// clip key 是 [pose, ticks] 或 [pose, ticks, dx, dy] 或 [pose, ticks, dx, dy, effect]。
+// dy 为正表示向上抬起（截图里 y 向下，绘制时要翻过来）。
+// Span 既可以是数字，也可以是 [min, max] 表示随机区间。
+//
 
-/** 部件：字符网格，左上角在基框坐标 [x, y]，可负。 */
-class PetPart(val x: Int, val y: Int, val rows: List<String>)
+// 部件：字符网格，左上角在基框坐标 [x, y]，可负。
+class PetPart(
+    val x: Int,
+    val y: Int,
+    val rows: List<String>,
+)
 
 /** 动画的一帧。effect 在这一帧开始时触发一次。 */
 class PetFrame(
@@ -31,16 +35,23 @@ class PetFrame(
 )
 
 /** 数字或 [min, max] 区间（min < max 时均匀随机）。 */
-class Span(val min: Double, val max: Double) {
+class Span(
+    val min: Double,
+    val max: Double,
+) {
     val isRange: Boolean get() = max > min
-    fun sample(rng: java.util.Random): Double =
-        if (!isRange) min else min + rng.nextDouble() * (max - min)
+
+    fun sample(rng: java.util.Random): Double = if (!isRange) min else min + rng.nextDouble() * (max - min)
 
     fun sampleInt(rng: java.util.Random): Int = sample(rng).roundToInt()
 
     companion object {
         fun of(v: Double) = Span(v, v)
-        fun of(a: Double, b: Double) = Span(minOf(a, b), maxOf(a, b))
+
+        fun of(
+            a: Double,
+            b: Double,
+        ) = Span(minOf(a, b), maxOf(a, b))
     }
 }
 
@@ -61,7 +72,10 @@ class ParticleSpec(
 )
 
 /** 特效：每次触发时全部 particles，或按次数轮换 cycle 里的某一组。 */
-class EffectSpec(val particles: List<ParticleSpec>, val cycle: List<List<ParticleSpec>>)
+class EffectSpec(
+    val particles: List<ParticleSpec>,
+    val cycle: List<List<ParticleSpec>>,
+)
 
 /** 头顶挂件：转圈（frames+periodMs）或静止字形（glyph），可带上下浮动与闪烁。 */
 class AccessorySpec(
@@ -77,16 +91,32 @@ class AccessorySpec(
 )
 
 /** 有抽签权重的片段。 */
-class WeightedClip(val clip: String, val weight: Int)
+class WeightedClip(
+    val clip: String,
+    val weight: Int,
+)
 
 /** 随机小动作：每 every 个 tick 抽一次，权重 pick。 */
-class FidgetSpec(val everyMin: Int, val everyMax: Int, val pick: List<WeightedClip>)
+class FidgetSpec(
+    val everyMin: Int,
+    val everyMax: Int,
+    val pick: List<WeightedClip>,
+)
 
 /** 睡着：空闲 after 个 tick 后睡着，doze 过渡，loop 循环，wake 醒来。 */
-class SleepSpec(val after: Int, val doze: String, val loop: String, val wake: String, val still: String)
+class SleepSpec(
+    val after: Int,
+    val doze: String,
+    val loop: String,
+    val wake: String,
+    val still: String,
+)
 
 /** 等太久不耐烦：after 个 tick 后换成 loop。 */
-class ImpatientSpec(val after: Int, val loop: String)
+class ImpatientSpec(
+    val after: Int,
+    val loop: String,
+)
 
 /** 头顶常驻标记（等确认时的 !）。x 是基框列，hopEvery 是跳动周期。 */
 class BadgeSpec(
@@ -98,7 +128,12 @@ class BadgeSpec(
 )
 
 /** running 状态的工作变体：一个变体有自己的循环、进出场片段与道具。 */
-class VariantSpec(val loop: String, val enter: String?, val exit: String?, val prop: String?)
+class VariantSpec(
+    val loop: String,
+    val enter: String?,
+    val exit: String?,
+    val prop: String?,
+)
 
 /** 某个状态自己的目光姿态（做完了开花时眼睛仍跟着看）。 */
 class GazePoses(
@@ -158,24 +193,30 @@ class PetInteractions(
     val lookDown: String,
     val lookCenter: String,
 ) {
-    fun lookFor(zone: GazeZone?): String? = when (zone) {
-        GazeZone.LEFT -> lookLeft
-        GazeZone.RIGHT -> lookRight
-        GazeZone.UP -> lookUp
-        GazeZone.DOWN -> lookDown
-        GazeZone.CENTER -> lookCenter
-        null -> null
-    }
+    fun lookFor(zone: GazeZone?): String? =
+        when (zone) {
+            GazeZone.LEFT -> lookLeft
+            GazeZone.RIGHT -> lookRight
+            GazeZone.UP -> lookUp
+            GazeZone.DOWN -> lookDown
+            GazeZone.CENTER -> lookCenter
+            null -> null
+        }
 }
 
 /** 道具（抛接的球）。 */
-class PropSpec(val glyph: String, val colors: List<String>)
+class PropSpec(
+    val glyph: String,
+    val colors: List<String>,
+)
 
 /** 目光方向。 */
 enum class GazeZone { LEFT, RIGHT, UP, DOWN, CENTER }
 
 /** 宠物状态。与原项目一致：idle / running / waiting / done / error。 */
-enum class PetMood(val key: String) {
+enum class PetMood(
+    val key: String,
+) {
     IDLE("idle"),
     RUNNING("running"),
     WAITING("waiting"),
@@ -204,8 +245,7 @@ class PetSkin(
 ) {
     fun clip(name: String?): List<PetFrame> = if (name == null) emptyList() else clips[name] ?: emptyList()
 
-    fun state(mood: PetMood): PetStateSpec =
-        states[mood.key] ?: states.values.firstOrNull() ?: DEFAULT_STATE
+    fun state(mood: PetMood): PetStateSpec = states[mood.key] ?: states.values.firstOrNull() ?: DEFAULT_STATE
 
     fun glyph(name: String?): List<String> = if (name == null) emptyList() else glyphs[name] ?: emptyList()
 
@@ -236,30 +276,48 @@ class PetSkin(
         val maxX = pixels.values.maxOf { row -> row.keys.max() }
         val minY = pixels.keys.min()
         val maxY = pixels.keys.max()
-        val rowsOut = (minY..maxY).map { y ->
-            val row = pixels[y]
-            (minX..maxX).joinToString("") { x -> row?.get(x)?.toString() ?: "." }
-        }
+        val rowsOut =
+            (minY..maxY).map { y ->
+                val row = pixels[y]
+                (minX..maxX).joinToString("") { x -> row?.get(x)?.toString() ?: "." }
+            }
         return PixelGrid(minX, minY, maxX - minX + 1, maxY - minY + 1, rowsOut)
     }
 
     /** 调色板解析成 ARGB；dim 为原项目里状态级的淡化（混向中灰并降透明度）。 */
-    fun resolveColor(hex: String, dim: Boolean, dimStrength: Double = 1.0): Int {
+    fun resolveColor(
+        hex: String,
+        dim: Boolean,
+        dimStrength: Double = 1.0,
+    ): Int {
         val v = runCatching { Color.parseColor(hex) }.getOrDefault(Color.GRAY)
         if (!dim) return v
         val s = dimStrength.coerceIn(0.0, 1.0)
         val grey = 0.5 * s
+
         fun mix(c: Int): Int = (c * (1 - grey) + 127.5 * grey).roundToInt().coerceIn(0, 255)
         val a = (255 * (1 - 0.15 * s)).roundToInt().coerceIn(0, 255)
         return Color.argb(a, mix(Color.red(v)), mix(Color.green(v)), mix(Color.blue(v)))
     }
 
     companion object {
-        private val DEFAULT_STATE = PetStateSpec(
-            enter = null, loop = null, tintDim = false, accessory = null,
-            still = "base", stillDy = 0, seen = null, fidget = null, sleep = null,
-            impatient = null, badge = null, variants = emptyMap(), defaultVariant = null, gaze = null,
-        )
+        private val DEFAULT_STATE =
+            PetStateSpec(
+                enter = null,
+                loop = null,
+                tintDim = false,
+                accessory = null,
+                still = "base",
+                stillDy = 0,
+                seen = null,
+                fidget = null,
+                sleep = null,
+                impatient = null,
+                badge = null,
+                variants = emptyMap(),
+                defaultVariant = null,
+                gaze = null,
+            )
 
         private fun JSONArray?.strList(): List<String> {
             if (this == null) return emptyList()
@@ -289,11 +347,12 @@ class PetSkin(
                 o.keys().forEach { k ->
                     val item = o.optJSONObject(k) ?: return@forEach
                     val at = item.optJSONArray("at")
-                    parts[k] = PetPart(
-                        at?.optInt(0) ?: 0,
-                        at?.optInt(1) ?: 0,
-                        item.optJSONArray("rows").strList(),
-                    )
+                    parts[k] =
+                        PetPart(
+                            at?.optInt(0) ?: 0,
+                            at?.optInt(1) ?: 0,
+                            item.optJSONArray("rows").strList(),
+                        )
                 }
             }
             val poses = LinkedHashMap<String, List<String>>()
@@ -330,39 +389,43 @@ class PetSkin(
             root.optJSONObject("effects")?.let { o ->
                 o.keys().forEach { k ->
                     val item = o.optJSONObject(k) ?: return@forEach
-                    effects[k] = EffectSpec(
-                        particles = parseParticles(item.optJSONArray("particles")),
-                        cycle = (0 until (item.optJSONArray("cycle")?.length() ?: 0)).map { i ->
-                            parseParticles(item.optJSONArray("cycle")?.optJSONArray(i))
-                        },
-                    )
+                    effects[k] =
+                        EffectSpec(
+                            particles = parseParticles(item.optJSONArray("particles")),
+                            cycle =
+                                (0 until (item.optJSONArray("cycle")?.length() ?: 0)).map { i ->
+                                    parseParticles(item.optJSONArray("cycle")?.optJSONArray(i))
+                                },
+                        )
                 }
             }
             val accessories = LinkedHashMap<String, AccessorySpec>()
             root.optJSONObject("accessories")?.let { o ->
                 o.keys().forEach { k ->
                     val item = o.optJSONObject(k) ?: return@forEach
-                    accessories[k] = AccessorySpec(
-                        glyph = item.optString("glyph").takeIf { it.isNotEmpty() },
-                        frames = item.optJSONArray("frames")?.strList()?.takeIf { it.isNotEmpty() },
-                        color = item.optString("color", "#FFFFFF"),
-                        periodMs = item.optInt("periodMs", 0).takeIf { it > 0 },
-                        box = item.optInt("box", 0).takeIf { it > 0 },
-                        reduced = item.optString("reduced").takeIf { it.isNotEmpty() },
-                        bobEvery = item.optInt("bobEvery", 0).takeIf { it > 0 },
-                        twinkleEvery = item.optInt("twinkleEvery", 0).takeIf { it > 0 },
-                        twinkle = item.optString("twinkle").takeIf { it.isNotEmpty() },
-                    )
+                    accessories[k] =
+                        AccessorySpec(
+                            glyph = item.optString("glyph").takeIf { it.isNotEmpty() },
+                            frames = item.optJSONArray("frames")?.strList()?.takeIf { it.isNotEmpty() },
+                            color = item.optString("color", "#FFFFFF"),
+                            periodMs = item.optInt("periodMs", 0).takeIf { it > 0 },
+                            box = item.optInt("box", 0).takeIf { it > 0 },
+                            reduced = item.optString("reduced").takeIf { it.isNotEmpty() },
+                            bobEvery = item.optInt("bobEvery", 0).takeIf { it > 0 },
+                            twinkleEvery = item.optInt("twinkleEvery", 0).takeIf { it > 0 },
+                            twinkle = item.optString("twinkle").takeIf { it.isNotEmpty() },
+                        )
                 }
             }
             val props = LinkedHashMap<String, PropSpec>()
             root.optJSONObject("props")?.let { o ->
                 o.keys().forEach { k ->
                     val item = o.optJSONObject(k) ?: return@forEach
-                    props[k] = PropSpec(
-                        item.optString("glyph", "dot"),
-                        item.optJSONArray("colors")?.strList().orEmpty(),
-                    )
+                    props[k] =
+                        PropSpec(
+                            item.optString("glyph", "dot"),
+                            item.optJSONArray("colors")?.strList().orEmpty(),
+                        )
                 }
             }
             val states = LinkedHashMap<String, PetStateSpec>()
@@ -373,12 +436,13 @@ class PetSkin(
                     item.optJSONObject("variants")?.let { v ->
                         v.keys().forEach { vk ->
                             val vi = v.optJSONObject(vk) ?: return@forEach
-                            variants[vk] = VariantSpec(
-                                loop = vi.optString("loop"),
-                                enter = vi.optString("enter").takeIf { it.isNotEmpty() },
-                                exit = vi.optString("exit").takeIf { it.isNotEmpty() },
-                                prop = vi.optString("prop").takeIf { it.isNotEmpty() },
-                            )
+                            variants[vk] =
+                                VariantSpec(
+                                    loop = vi.optString("loop"),
+                                    enter = vi.optString("enter").takeIf { it.isNotEmpty() },
+                                    exit = vi.optString("exit").takeIf { it.isNotEmpty() },
+                                    prop = vi.optString("prop").takeIf { it.isNotEmpty() },
+                                )
                         }
                     }
                     var fidget: FidgetSpec? = null
@@ -396,86 +460,92 @@ class PetSkin(
                     }
                     var sleep: SleepSpec? = null
                     item.optJSONObject("sleep")?.let { s ->
-                        sleep = SleepSpec(
-                            after = s.optInt("after", 2000).coerceAtLeast(1),
-                            doze = s.optString("doze", "doze"),
-                            loop = s.optString("loop", "sleep"),
-                            wake = s.optString("wake", "wake"),
-                            still = s.optString("still", "shut"),
-                        )
+                        sleep =
+                            SleepSpec(
+                                after = s.optInt("after", 2000).coerceAtLeast(1),
+                                doze = s.optString("doze", "doze"),
+                                loop = s.optString("loop", "sleep"),
+                                wake = s.optString("wake", "wake"),
+                                still = s.optString("still", "shut"),
+                            )
                     }
                     var impatient: ImpatientSpec? = null
                     item.optJSONObject("impatient")?.let { s ->
-                        impatient = ImpatientSpec(
-                            after = s.optInt("after", 500).coerceAtLeast(1),
-                            loop = s.optString("loop"),
-                        )
+                        impatient =
+                            ImpatientSpec(
+                                after = s.optInt("after", 500).coerceAtLeast(1),
+                                loop = s.optString("loop"),
+                            )
                     }
                     var badge: BadgeSpec? = null
                     item.optJSONObject("badge")?.let { b ->
-                        badge = BadgeSpec(
-                            glyph = b.optString("glyph", "bang"),
-                            color = b.optString("color", "#FF9F0A"),
-                            x = b.optInt("x", 16),
-                            hopEvery = b.optInt("hopEvery", 20),
-                            impatientHopEvery = b.optInt("impatientHopEvery", 8),
-                        )
+                        badge =
+                            BadgeSpec(
+                                glyph = b.optString("glyph", "bang"),
+                                color = b.optString("color", "#FF9F0A"),
+                                x = b.optInt("x", 16),
+                                hopEvery = b.optInt("hopEvery", 20),
+                                impatientHopEvery = b.optInt("impatientHopEvery", 8),
+                            )
                     }
                     var gaze: GazePoses? = null
                     item.optJSONObject("gaze")?.let { g ->
-                        gaze = GazePoses(
-                            left = g.optString("left"),
-                            right = g.optString("right"),
-                            up = g.optString("up"),
-                            down = g.optString("down"),
-                            center = g.optString("center"),
-                        )
+                        gaze =
+                            GazePoses(
+                                left = g.optString("left"),
+                                right = g.optString("right"),
+                                up = g.optString("up"),
+                                down = g.optString("down"),
+                                center = g.optString("center"),
+                            )
                     }
-                    states[k] = PetStateSpec(
-                        enter = item.optString("enter").takeIf { it.isNotEmpty() },
-                        loop = item.optString("loop").takeIf { it.isNotEmpty() },
-                        tintDim = item.optString("tint") == "dim",
-                        accessory = item.optString("accessory").takeIf { it.isNotEmpty() },
-                        still = item.optString("still", "base"),
-                        stillDy = item.optInt("stillDy", 0),
-                        seen = item.optString("seen").takeIf { it.isNotEmpty() },
-                        fidget = fidget,
-                        sleep = sleep,
-                        impatient = impatient,
-                        badge = badge,
-                        variants = variants,
-                        defaultVariant = item.optString("defaultVariant").takeIf { it.isNotEmpty() },
-                        gaze = gaze,
-                    )
+                    states[k] =
+                        PetStateSpec(
+                            enter = item.optString("enter").takeIf { it.isNotEmpty() },
+                            loop = item.optString("loop").takeIf { it.isNotEmpty() },
+                            tintDim = item.optString("tint") == "dim",
+                            accessory = item.optString("accessory").takeIf { it.isNotEmpty() },
+                            still = item.optString("still", "base"),
+                            stillDy = item.optInt("stillDy", 0),
+                            seen = item.optString("seen").takeIf { it.isNotEmpty() },
+                            fidget = fidget,
+                            sleep = sleep,
+                            impatient = impatient,
+                            badge = badge,
+                            variants = variants,
+                            defaultVariant = item.optString("defaultVariant").takeIf { it.isNotEmpty() },
+                            gaze = gaze,
+                        )
                 }
             }
             val ix = root.optJSONObject("interactions")
-            val interactions = PetInteractions(
-                notice = ix?.optString("notice", "notice") ?: "notice",
-                pet = ix?.optString("pet", "pet") ?: "pet",
-                petEnd = ix?.optString("petEnd", "pet_end") ?: "pet_end",
-                press = ix?.optString("press", "press") ?: "press",
-                boopEnd = ix?.optString("boopEnd", "boop_end") ?: "boop_end",
-                held = ix?.optString("held", "held") ?: "held",
-                heldStill = ix?.optString("heldStill", "held_a") ?: "held_a",
-                drop = ix?.optString("drop", "drop") ?: "drop",
-                blink = ix?.optString("blink", "blink") ?: "blink",
-                join = ix?.optString("join", "emerge") ?: "emerge",
-                leave = ix?.optString("leave", "goodbye") ?: "goodbye",
-                appear = ix?.optString("appear", "pop_up") ?: "pop_up",
-                vanish = ix?.optString("vanish", "burrow") ?: "burrow",
-                hop = ix?.optString("hop", "air") ?: "air",
-                land = ix?.optString("land", "base") ?: "base",
-                blinkPose = ix?.optString("blinkPose", "shut") ?: "shut",
-                landDust = ix?.optString("landDust", "dust_small") ?: "dust_small",
-                walkLeft = ix?.optJSONArray("walkLeft")?.strList() ?: listOf("walk_l_a", "walk_l_b"),
-                walkRight = ix?.optJSONArray("walkRight")?.strList() ?: listOf("walk_r_a", "walk_r_b"),
-                lookLeft = ix?.optString("lookLeft", "look_l") ?: "look_l",
-                lookRight = ix?.optString("lookRight", "look_r") ?: "look_r",
-                lookUp = ix?.optString("lookUp", "look_up") ?: "look_up",
-                lookDown = ix?.optString("lookDown", "look_down") ?: "look_down",
-                lookCenter = ix?.optString("lookCenter", "base") ?: "base",
-            )
+            val interactions =
+                PetInteractions(
+                    notice = ix?.optString("notice", "notice") ?: "notice",
+                    pet = ix?.optString("pet", "pet") ?: "pet",
+                    petEnd = ix?.optString("petEnd", "pet_end") ?: "pet_end",
+                    press = ix?.optString("press", "press") ?: "press",
+                    boopEnd = ix?.optString("boopEnd", "boop_end") ?: "boop_end",
+                    held = ix?.optString("held", "held") ?: "held",
+                    heldStill = ix?.optString("heldStill", "held_a") ?: "held_a",
+                    drop = ix?.optString("drop", "drop") ?: "drop",
+                    blink = ix?.optString("blink", "blink") ?: "blink",
+                    join = ix?.optString("join", "emerge") ?: "emerge",
+                    leave = ix?.optString("leave", "goodbye") ?: "goodbye",
+                    appear = ix?.optString("appear", "pop_up") ?: "pop_up",
+                    vanish = ix?.optString("vanish", "burrow") ?: "burrow",
+                    hop = ix?.optString("hop", "air") ?: "air",
+                    land = ix?.optString("land", "base") ?: "base",
+                    blinkPose = ix?.optString("blinkPose", "shut") ?: "shut",
+                    landDust = ix?.optString("landDust", "dust_small") ?: "dust_small",
+                    walkLeft = ix?.optJSONArray("walkLeft")?.strList() ?: listOf("walk_l_a", "walk_l_b"),
+                    walkRight = ix?.optJSONArray("walkRight")?.strList() ?: listOf("walk_r_a", "walk_r_b"),
+                    lookLeft = ix?.optString("lookLeft", "look_l") ?: "look_l",
+                    lookRight = ix?.optString("lookRight", "look_r") ?: "look_r",
+                    lookUp = ix?.optString("lookUp", "look_up") ?: "look_up",
+                    lookDown = ix?.optString("lookDown", "look_down") ?: "look_down",
+                    lookCenter = ix?.optString("lookCenter", "base") ?: "base",
+                )
             val grid = root.optJSONArray("grid")
             if (poses.isEmpty()) throw IllegalArgumentException("poses 为空")
             return PetSkin(
@@ -535,7 +605,10 @@ class PixelGrid(
     val height: Int,
     val rows: List<String>,
 ) {
-    fun charAt(x: Int, y: Int): Char? {
+    fun charAt(
+        x: Int,
+        y: Int,
+    ): Char? {
         if (x < minX || x >= minX + width || y < minY || y >= minY + height) return null
         val ch = rows[y - minY][x - minX]
         return if (ch == '.') null else ch

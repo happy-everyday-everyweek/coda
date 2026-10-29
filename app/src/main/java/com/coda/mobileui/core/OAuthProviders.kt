@@ -11,7 +11,6 @@ package com.coda.mobileui.core
  * [sha] 指向仓库里该 arm64 压缩包的 blob，用来按内容校验下载结果。
  */
 object OAuthProviders {
-
     /** 登录时客户端需要呈现什么。 */
     enum class Flow {
         /** 需要用户拿手机扫二维码（面板内直接渲染链接）。 */
@@ -51,104 +50,105 @@ object OAuthProviders {
      *
      * 版本与校验值来自仓库 release-assets 的实际产物，升级插件时同步改这四条路径类字段。
      */
-    val all: List<Provider> = listOf(
-        Provider(
-            id = "workbuddy",
-            name = "CodeBuddy",
-            vendor = "腾讯",
-            pluginId = "workbuddy-provider",
-            version = "0.16.5",
-            asset = "workbuddy-provider_0.16.5_linux_arm64.zip",
-            sha = "e2338e74e291fdb920e91bd167cdd1b54d823de9",
-            size = 2_952_859L,
-            flow = Flow.QRCODE,
-            note = "国内版与国际版统一入口，签到、积分与故障转移由插件负责",
-        ),
-        Provider(
-            id = "workbuddy-ai",
-            name = "WorkBuddy AI",
-            vendor = "腾讯国际版",
-            pluginId = "workbuddy-ai-provider",
-            version = "0.1.17",
-            asset = "workbuddy-ai-provider_0.1.17_linux_arm64.zip",
-            sha = "6196f12201eacc397debbd299dc554a36e826836",
-            size = 2_938_717L,
-            flow = Flow.QRCODE,
-            note = "独立国际站点，扫码登录",
-        ),
-        Provider(
-            id = "copilot",
-            name = "GitHub Copilot",
-            vendor = "GitHub",
-            pluginId = "copilot-provider",
-            version = "0.1.9",
-            asset = "copilot-provider_0.1.9_linux_arm64.zip",
-            sha = "c7df4b4d05535694c34cd949b614ea9f1e2bba89",
-            size = 2_889_990L,
-            flow = Flow.DEVICE_CODE,
-            note = "设备码授权，无需密码，订阅额度直连",
-        ),
-        Provider(
-            id = "zcode",
-            name = "ZCode",
-            vendor = "智谱 BigModel",
-            pluginId = "zcode-provider",
-            version = "0.1.32",
-            asset = "zcode-provider_0.1.32_linux_arm64.zip",
-            sha = "19cbd1fb033d1be17834e52132ea821278bc0224",
-            size = 2_999_216L,
-            flow = Flow.LINK,
-            note = "Coding Plan 订阅，授权后按 Anthropic 协议转出",
-        ),
-        Provider(
-            id = "qoderwork",
-            name = "QoderWork",
-            vendor = "阿里 Qoder 国内版",
-            pluginId = "qoderwork-provider",
-            version = "0.9.44",
-            asset = "qoderwork-provider_0.9.44_linux_arm64.zip",
-            sha = "3833af8962b5ba375991c2e91d6f48c8507e91c4",
-            size = 2_928_644L,
-            flow = Flow.LINK,
-            note = "设备授权，登录后自动领取试用",
-        ),
-        Provider(
-            id = "qoder-ai",
-            name = "Qoder AI",
-            vendor = "阿里 Qoder 国际版",
-            pluginId = "qoder-ai-provider",
-            version = "0.1.24",
-            asset = "qoder-ai-provider_0.1.24_linux_arm64.zip",
-            sha = "d0292b18c08547e14fa5f27e5fe17d790606853c",
-            size = 2_961_918L,
-            flow = Flow.LINK,
-            note = "设备授权，含每日签到",
-        ),
-        Provider(
-            id = "traework",
-            name = "TRAE SOLO",
-            vendor = "字节跳动",
-            pluginId = "traework-provider",
-            version = "0.2.14",
-            asset = "traework-provider_0.2.14_linux_arm64.zip",
-            sha = "c0168e303e6377b1c9dade7d31f93cc89573fa44",
-            size = 2_961_476L,
-            flow = Flow.LINK,
-            note = "浏览器授权，无需安装桌面端",
-        ),
-        Provider(
-            id = "cursor",
-            name = "Cursor",
-            vendor = "Cursor",
-            pluginId = "cursor-provider",
-            version = "0.1.6",
-            asset = "cursor-provider_0.1.6_linux_arm64.zip",
-            sha = "62d98969793db0c398febbe5ad49f41b2f633ecc",
-            size = 3_598_253L,
-            flow = Flow.LINK,
-            note = "会话凭据授权，走 Connect-RPC 转译",
-        ),
-    )
+    val all: List<Provider> =
+        listOf(
+            Provider(
+                id = "workbuddy",
+                name = "CodeBuddy",
+                vendor = "腾讯",
+                pluginId = "workbuddy-provider",
+                version = "0.16.5",
+                asset = "workbuddy-provider_0.16.5_linux_arm64.zip",
+                sha = "e2338e74e291fdb920e91bd167cdd1b54d823de9",
+                size = 2_952_859L,
+                flow = Flow.QRCODE,
+                note = "国内版与国际版统一入口，签到、积分与故障转移由插件负责",
+            ),
+            Provider(
+                id = "workbuddy-ai",
+                name = "WorkBuddy AI",
+                vendor = "腾讯国际版",
+                pluginId = "workbuddy-ai-provider",
+                version = "0.1.17",
+                asset = "workbuddy-ai-provider_0.1.17_linux_arm64.zip",
+                sha = "6196f12201eacc397debbd299dc554a36e826836",
+                size = 2_938_717L,
+                flow = Flow.QRCODE,
+                note = "独立国际站点，扫码登录",
+            ),
+            Provider(
+                id = "copilot",
+                name = "GitHub Copilot",
+                vendor = "GitHub",
+                pluginId = "copilot-provider",
+                version = "0.1.9",
+                asset = "copilot-provider_0.1.9_linux_arm64.zip",
+                sha = "c7df4b4d05535694c34cd949b614ea9f1e2bba89",
+                size = 2_889_990L,
+                flow = Flow.DEVICE_CODE,
+                note = "设备码授权，无需密码，订阅额度直连",
+            ),
+            Provider(
+                id = "zcode",
+                name = "ZCode",
+                vendor = "智谱 BigModel",
+                pluginId = "zcode-provider",
+                version = "0.1.32",
+                asset = "zcode-provider_0.1.32_linux_arm64.zip",
+                sha = "19cbd1fb033d1be17834e52132ea821278bc0224",
+                size = 2_999_216L,
+                flow = Flow.LINK,
+                note = "Coding Plan 订阅，授权后按 Anthropic 协议转出",
+            ),
+            Provider(
+                id = "qoderwork",
+                name = "QoderWork",
+                vendor = "阿里 Qoder 国内版",
+                pluginId = "qoderwork-provider",
+                version = "0.9.44",
+                asset = "qoderwork-provider_0.9.44_linux_arm64.zip",
+                sha = "3833af8962b5ba375991c2e91d6f48c8507e91c4",
+                size = 2_928_644L,
+                flow = Flow.LINK,
+                note = "设备授权，登录后自动领取试用",
+            ),
+            Provider(
+                id = "qoder-ai",
+                name = "Qoder AI",
+                vendor = "阿里 Qoder 国际版",
+                pluginId = "qoder-ai-provider",
+                version = "0.1.24",
+                asset = "qoder-ai-provider_0.1.24_linux_arm64.zip",
+                sha = "d0292b18c08547e14fa5f27e5fe17d790606853c",
+                size = 2_961_918L,
+                flow = Flow.LINK,
+                note = "设备授权，含每日签到",
+            ),
+            Provider(
+                id = "traework",
+                name = "TRAE SOLO",
+                vendor = "字节跳动",
+                pluginId = "traework-provider",
+                version = "0.2.14",
+                asset = "traework-provider_0.2.14_linux_arm64.zip",
+                sha = "c0168e303e6377b1c9dade7d31f93cc89573fa44",
+                size = 2_961_476L,
+                flow = Flow.LINK,
+                note = "浏览器授权，无需安装桌面端",
+            ),
+            Provider(
+                id = "cursor",
+                name = "Cursor",
+                vendor = "Cursor",
+                pluginId = "cursor-provider",
+                version = "0.1.6",
+                asset = "cursor-provider_0.1.6_linux_arm64.zip",
+                sha = "62d98969793db0c398febbe5ad49f41b2f633ecc",
+                size = 3_598_253L,
+                flow = Flow.LINK,
+                note = "会话凭据授权，走 Connect-RPC 转译",
+            ),
+        )
 
     fun byId(id: String): Provider? = all.firstOrNull { it.id == id }
 
@@ -197,6 +197,5 @@ object OAuthProviders {
      *
      * 前缀取插件标识去掉 `-provider` 后缀，和插件自己生成的模型名保持一致。
      */
-    fun modelPrefix(provider: Provider): String =
-        provider.pluginId.removeSuffix("-provider") + "-"
+    fun modelPrefix(provider: Provider): String = provider.pluginId.removeSuffix("-provider") + "-"
 }

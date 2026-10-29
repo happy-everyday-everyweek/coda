@@ -32,7 +32,6 @@ import java.io.File
  * 让坏源有机会恢复（镜像确实会修好、也会新挂）。
  */
 object MirrorScoreboard {
-
     private const val TAG = "MirrorScore"
     private const val FILE_NAME = "mirror_scores.json"
 
@@ -71,15 +70,16 @@ object MirrorScoreboard {
      * 多网络场景下取值不准）。拿不到就归 OTHER——宁可少用历史，
      * 也不要把 Wi-Fi 的成绩当成流量的。
      */
-    fun currentNet(ctx: Context): Net = runCatching {
-        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return Net.OTHER
-        when {
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Net.WIFI
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> Net.CELLULAR
-            else -> Net.OTHER
-        }
-    }.getOrDefault(Net.OTHER)
+    fun currentNet(ctx: Context): Net =
+        runCatching {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return Net.OTHER
+            when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Net.WIFI
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> Net.CELLULAR
+                else -> Net.OTHER
+            }
+        }.getOrDefault(Net.OTHER)
 
     // ------------------------------------------------------------ 读写
 
@@ -90,39 +90,44 @@ object MirrorScoreboard {
      *
      * 读失败一律当空表：账本只是加速用的，坏了不该让下载流程失败。
      */
-    fun load(ctx: Context, net: Net): Map<String, Stat> = runCatching {
-        val f = fileOf(ctx)
-        // 注意：这里不能用裸 return（会从 runCatching 的 lambda 非局部返回，
-        // 语义上能过编译但可读性差且容易在后续改动里出错），改成 if/else 求值。
-        if (!f.isFile) {
-            emptyMap()
-        } else {
-            val root = JSONObject(f.readText())
-            val bucket = root.optJSONObject(bucketKey(net))
-            if (bucket == null) {
+    fun load(
+        ctx: Context,
+        net: Net,
+    ): Map<String, Stat> =
+        runCatching {
+            val f = fileOf(ctx)
+            // 注意：这里不能用裸 return（会从 runCatching 的 lambda 非局部返回，
+            // 语义上能过编译但可读性差且容易在后续改动里出错），改成 if/else 求值。
+            if (!f.isFile) {
                 emptyMap()
             } else {
-                val out = HashMap<String, Stat>(bucket.length())
-                val keys = bucket.keys()
-                while (keys.hasNext()) {
-                    val id = keys.next()
-                    val o = bucket.optJSONObject(id) ?: continue
-                    out[id] = Stat(
-                        id = id,
-                        verified = o.optInt("verified", 0),
-                        hashFailed = o.optInt("hashFailed", 0),
-                        failed = o.optInt("failed", 0),
-                        okBytes = o.optLong("okBytes", 0),
-                        okMs = o.optLong("okMs", 0),
-                    )
+                val root = JSONObject(f.readText())
+                val bucket = root.optJSONObject(bucketKey(net))
+                if (bucket == null) {
+                    emptyMap()
+                } else {
+                    val out = HashMap<String, Stat>(bucket.length())
+                    val keys = bucket.keys()
+                    while (keys.hasNext()) {
+                        val id = keys.next()
+                        val o = bucket.optJSONObject(id) ?: continue
+                        out[id] =
+                            Stat(
+                                id = id,
+                                verified = o.optInt("verified", 0),
+                                hashFailed = o.optInt("hashFailed", 0),
+                                failed = o.optInt("failed", 0),
+                                okBytes = o.optLong("okBytes", 0),
+                                okMs = o.optLong("okMs", 0),
+                            )
+                    }
+                    out
                 }
-                out
             }
+        }.getOrElse {
+            AppLog.w(TAG, "读取镜像账本失败，按空账本处理：${it.javaClass.simpleName}: ${it.message}")
+            emptyMap()
         }
-    }.getOrElse {
-        AppLog.w(TAG, "读取镜像账本失败，按空账本处理：${it.javaClass.simpleName}: ${it.message}")
-        emptyMap()
-    }
 
     /** 把一条结果合并进账本并落盘。写失败只记日志，不影响下载结果。 */
     fun record(
@@ -139,34 +144,44 @@ object MirrorScoreboard {
         // 表现是「明明下载成功过，账本里却没几条」。
         runCatching {
             synchronized(lock) {
-            val f = fileOf(ctx)
-            val root = if (f.isFile) runCatching { JSONObject(f.readText()) }.getOrNull()
-                ?: JSONObject() else JSONObject()
-            val key = bucketKey(net)
-            val bucket = root.optJSONObject(key) ?: JSONObject().also { root.put(key, it) }
-            val old = bucket.optJSONObject(id)
-            val next = JSONObject().apply {
-                put("verified", old?.optInt("verified", 0) ?: 0)
-                put("hashFailed", old?.optInt("hashFailed", 0) ?: 0)
-                put("failed", old?.optInt("failed", 0) ?: 0)
-                put("okBytes", old?.optLong("okBytes", 0) ?: 0L)
-                put("okMs", old?.optLong("okMs", 0) ?: 0L)
-                when (outcome) {
-                    Outcome.VERIFIED -> {
-                        put("verified", (old?.optInt("verified", 0) ?: 0) + 1)
-                        // 只有成功样本才计入速度，失败的耗时不代表带宽。
-                        if (bytes > 0 && elapsedMs > 0) {
-                            put("okBytes", (old?.optLong("okBytes", 0) ?: 0L) + bytes)
-                            put("okMs", (old?.optLong("okMs", 0) ?: 0L) + elapsedMs)
+                val f = fileOf(ctx)
+                val root =
+                    if (f.isFile) {
+                        runCatching { JSONObject(f.readText()) }.getOrNull()
+                            ?: JSONObject()
+                    } else {
+                        JSONObject()
+                    }
+                val key = bucketKey(net)
+                val bucket = root.optJSONObject(key) ?: JSONObject().also { root.put(key, it) }
+                val old = bucket.optJSONObject(id)
+                val next =
+                    JSONObject().apply {
+                        put("verified", old?.optInt("verified", 0) ?: 0)
+                        put("hashFailed", old?.optInt("hashFailed", 0) ?: 0)
+                        put("failed", old?.optInt("failed", 0) ?: 0)
+                        put("okBytes", old?.optLong("okBytes", 0) ?: 0L)
+                        put("okMs", old?.optLong("okMs", 0) ?: 0L)
+                        when (outcome) {
+                            Outcome.VERIFIED -> {
+                                put("verified", (old?.optInt("verified", 0) ?: 0) + 1)
+                                // 只有成功样本才计入速度，失败的耗时不代表带宽。
+                                if (bytes > 0 && elapsedMs > 0) {
+                                    put("okBytes", (old?.optLong("okBytes", 0) ?: 0L) + bytes)
+                                    put("okMs", (old?.optLong("okMs", 0) ?: 0L) + elapsedMs)
+                                }
+                            }
+
+                            Outcome.HASH_FAILED -> {
+                                put("hashFailed", (old?.optInt("hashFailed", 0) ?: 0) + 1)
+                            }
+
+                            Outcome.FAILED -> {
+                                put("failed", (old?.optInt("failed", 0) ?: 0) + 1)
+                            }
                         }
                     }
-                    Outcome.HASH_FAILED ->
-                        put("hashFailed", (old?.optInt("hashFailed", 0) ?: 0) + 1)
-                    Outcome.FAILED ->
-                        put("failed", (old?.optInt("failed", 0) ?: 0) + 1)
-                }
-            }
-            bucket.put(id, next)
+                bucket.put(id, next)
                 f.writeText(root.toString())
                 AppLog.i(
                     TAG,
@@ -180,11 +195,12 @@ object MirrorScoreboard {
         }
     }
 
-    private fun bucketKey(net: Net): String = when (net) {
-        Net.WIFI -> "wifi"
-        Net.CELLULAR -> "cellular"
-        Net.OTHER -> "other"
-    }
+    private fun bucketKey(net: Net): String =
+        when (net) {
+            Net.WIFI -> "wifi"
+            Net.CELLULAR -> "cellular"
+            Net.OTHER -> "other"
+        }
 
     /** 一次下载的结论。 */
     enum class Outcome { VERIFIED, HASH_FAILED, FAILED }

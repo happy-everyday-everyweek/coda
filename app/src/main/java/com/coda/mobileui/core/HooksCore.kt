@@ -13,26 +13,27 @@ import java.security.MessageDigest
  * 信任摘要算法（复刻内核 workspace-hook-digest）：JSON.stringify 后的 sha256 十六进制。
  */
 object HooksCore {
+    val EVENT_NAMES =
+        listOf(
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PermissionRequest",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Stop",
+        )
 
-    val EVENT_NAMES = listOf(
-        "SessionStart",
-        "UserPromptSubmit",
-        "PreToolUse",
-        "PermissionRequest",
-        "PostToolUse",
-        "PostToolUseFailure",
-        "Stop",
-    )
-
-    val EVENT_LABELS: Map<String, String> = mapOf(
-        "SessionStart" to "会话开始",
-        "UserPromptSubmit" to "提交消息",
-        "PreToolUse" to "工具调用前",
-        "PermissionRequest" to "权限请求",
-        "PostToolUse" to "工具调用后",
-        "PostToolUseFailure" to "工具调用失败",
-        "Stop" to "回合结束",
-    )
+    val EVENT_LABELS: Map<String, String> =
+        mapOf(
+            "SessionStart" to "会话开始",
+            "UserPromptSubmit" to "提交消息",
+            "PreToolUse" to "工具调用前",
+            "PermissionRequest" to "权限请求",
+            "PostToolUse" to "工具调用后",
+            "PostToolUseFailure" to "工具调用失败",
+            "Stop" to "回合结束",
+        )
 
     // ------------------------------------------------------------ 数据结构
 
@@ -46,7 +47,11 @@ object HooksCore {
         val hooks: JSONObject,
     )
 
-    class RuntimeRoot(val enabled: Boolean, val timeoutMs: Long, val maxOutputBytes: Long)
+    class RuntimeRoot(
+        val enabled: Boolean,
+        val timeoutMs: Long,
+        val maxOutputBytes: Long,
+    )
 
     class HookEntry(
         val source: HookSource,
@@ -78,7 +83,10 @@ object HooksCore {
 
     // ------------------------------------------------------------ 发现
 
-    fun discover(workspacePath: String, home: File): Snapshot {
+    fun discover(
+        workspacePath: String,
+        home: File,
+    ): Snapshot {
         val wp = normalize(workspacePath)
         val errors = mutableListOf<String>()
         val projectSources = mutableListOf<HookSource>()
@@ -92,12 +100,13 @@ object HooksCore {
             if (!seen.add(path)) continue
             val f = File(path)
             if (!f.exists()) continue
-            val parsed = try {
-                JSONObject(f.readText())
-            } catch (e: Throwable) {
-                errors += "无法读取 $path"
-                continue
-            }
+            val parsed =
+                try {
+                    JSONObject(f.readText())
+                } catch (_: Throwable) {
+                    errors += "无法读取 $path"
+                    continue
+                }
             val hooksRaw = parsed.opt("hooks") ?: continue
             val hooks = parseHooksConfig(hooksRaw)
             if (hooks == null) {
@@ -105,20 +114,22 @@ object HooksCore {
                 continue
             }
             val rel = relativePath(wp, path)
-            val kind = when {
-                explicit -> "explicit"
-                File(path).name == "zcode.json" -> "zcode.json"
-                else -> ".zcode/config.json"
-            }
-            projectSources += HookSource(
-                canonicalPath = path,
-                relPath = rel.ifEmpty { File(path).name },
-                discoveryOrder = projectSources.size,
-                configFileKind = kind,
-                explicit = explicit,
-                editable = File(path).absolutePath == File(File(wp, ".zcode"), "config.json").absolutePath,
-                hooks = hooks,
-            )
+            val kind =
+                when {
+                    explicit -> "explicit"
+                    File(path).name == "zcode.json" -> "zcode.json"
+                    else -> ".zcode/config.json"
+                }
+            projectSources +=
+                HookSource(
+                    canonicalPath = path,
+                    relPath = rel.ifEmpty { File(path).name },
+                    discoveryOrder = projectSources.size,
+                    configFileKind = kind,
+                    explicit = explicit,
+                    editable = File(path).absolutePath == File(File(wp, ".zcode"), "config.json").absolutePath,
+                    hooks = hooks,
+                )
         }
 
         var userSource: HookSource? = null
@@ -129,15 +140,16 @@ object HooksCore {
                 val hooksRaw = parsed.opt("hooks")
                 val hooks = if (hooksRaw != null) parseHooksConfig(hooksRaw) else null
                 if (hooks != null) {
-                    userSource = HookSource(
-                        canonicalPath = userFile.absolutePath,
-                        relPath = userFile.name,
-                        discoveryOrder = 0,
-                        configFileKind = "explicit",
-                        explicit = true,
-                        editable = true,
-                        hooks = hooks,
-                    )
+                    userSource =
+                        HookSource(
+                            canonicalPath = userFile.absolutePath,
+                            relPath = userFile.name,
+                            discoveryOrder = 0,
+                            configFileKind = "explicit",
+                            explicit = true,
+                            editable = true,
+                            hooks = hooks,
+                        )
                 }
             } catch (_: Throwable) {
             }
@@ -149,11 +161,12 @@ object HooksCore {
         val userEntries = mutableListOf<HookEntry>()
         if (userSource != null) userEntries += buildEntries(userSource, runtimeRoot)
 
-        val bundleDigest = if (entries.isEmpty()) {
-            null
-        } else {
-            sha256(jsStringify(bundlePayload(projectSources, entries)))
-        }
+        val bundleDigest =
+            if (entries.isEmpty()) {
+                null
+            } else {
+                sha256(jsStringify(bundlePayload(projectSources, entries)))
+            }
 
         return Snapshot(
             workspacePath = wp,
@@ -175,13 +188,13 @@ object HooksCore {
         declarationDigest: String,
         cb: (Boolean, String?) -> Unit,
     ) {
-        val params = JSONObject()
-            .put(
-                "workspace",
-                JSONObject().put("workspacePath", workspacePath).put("workspaceKey", workspacePath),
-            )
-            .put("bundleDigest", bundleDigest)
-            .put("hookDeclarationDigest", declarationDigest)
+        val params =
+            JSONObject()
+                .put(
+                    "workspace",
+                    JSONObject().put("workspacePath", workspacePath).put("workspaceKey", workspacePath),
+                ).put("bundleDigest", bundleDigest)
+                .put("hookDeclarationDigest", declarationDigest)
         rt.call("workspace/hooks/trustGrant", params) { ok, body ->
             if (!ok) {
                 cb(false, body.optString("message").ifEmpty { "请求失败" })
@@ -193,7 +206,10 @@ object HooksCore {
     }
 
     /** 读取已信任摘要集合（trust store）。 */
-    fun readTrustedDigests(workspaceKey: String, home: File): Set<String> {
+    fun readTrustedDigests(
+        workspaceKey: String,
+        home: File,
+    ): Set<String> {
         return try {
             val trustFile = trustStoreFile(home)
             if (!trustFile.exists()) return emptySet()
@@ -214,41 +230,54 @@ object HooksCore {
     }
 
     private fun trustStoreFile(home: File): File {
-        val configured = try {
-            val cfg = File(home, ".zcode/cli/config.json")
-            if (cfg.exists()) {
-                JSONObject(cfg.readText()).optJSONObject("storage")?.optString("dir")?.trim().orEmpty()
-            } else {
+        val configured =
+            try {
+                val cfg = File(home, ".zcode/cli/config.json")
+                if (cfg.exists()) {
+                    JSONObject(cfg.readText())
+                        .optJSONObject("storage")
+                        ?.optString("dir")
+                        ?.trim()
+                        .orEmpty()
+                } else {
+                    ""
+                }
+            } catch (_: Throwable) {
                 ""
             }
-        } catch (_: Throwable) {
-            ""
-        }
-        val storageRoot = when {
-            configured.isEmpty() -> File(home, ".zcode")
-            configured.startsWith("~/") -> File(home, configured.substring(2))
-            configured.startsWith("/") -> File(configured)
-            else -> File(home, configured)
-        }
+        val storageRoot =
+            when {
+                configured.isEmpty() -> File(home, ".zcode")
+                configured.startsWith("~/") -> File(home, configured.substring(2))
+                configured.startsWith("/") -> File(configured)
+                else -> File(home, configured)
+            }
         return File(storageRoot, "security/workspace-hook-trust-v1.json")
     }
 
     // ------------------------------------------------------------ 编辑（仅工作区 .zcode/config.json）
 
     /** 添加一个 command 钩子；返回 null 表示成功。 */
-    fun addHook(workspacePath: String, event: String, matcher: String?, command: String, timeoutMs: Long?): String? {
+    fun addHook(
+        workspacePath: String,
+        event: String,
+        matcher: String?,
+        command: String,
+        timeoutMs: Long?,
+    ): String? {
         if (!EVENT_NAMES.contains(event)) return "无效的事件: $event"
         if (command.isBlank()) return "命令不能为空"
         val f = File(File(workspacePath, ".zcode"), "config.json")
-        val root = if (f.exists()) {
-            try {
-                JSONObject(f.readText())
-            } catch (_: Throwable) {
-                return "现有配置 JSON 解析失败"
+        val root =
+            if (f.exists()) {
+                try {
+                    JSONObject(f.readText())
+                } catch (_: Throwable) {
+                    return "现有配置 JSON 解析失败"
+                }
+            } else {
+                JSONObject()
             }
-        } else {
-            JSONObject()
-        }
         val hooks = root.optJSONObject("hooks") ?: JSONObject().also { root.put("hooks", it) }
         val events = hooks.optJSONObject("events") ?: JSONObject().also { hooks.put("events", it) }
         val arr = events.optJSONArray(event) ?: JSONArray().also { events.put(event, it) }
@@ -279,14 +308,20 @@ object HooksCore {
     }
 
     /** 删除工作区源中的一个钩子（按来源文件与索引定位）；返回 null 表示成功。 */
-    fun removeHook(sourcePath: String, event: String, matcherIndex: Int, hookIndex: Int): String? {
+    fun removeHook(
+        sourcePath: String,
+        event: String,
+        matcherIndex: Int,
+        hookIndex: Int,
+    ): String? {
         val f = File(sourcePath)
         if (!f.exists()) return "文件不存在"
-        val root = try {
-            JSONObject(f.readText())
-        } catch (_: Throwable) {
-            return "JSON 解析失败"
-        }
+        val root =
+            try {
+                JSONObject(f.readText())
+            } catch (_: Throwable) {
+                return "JSON 解析失败"
+            }
         val hooks = root.optJSONObject("hooks") ?: return "没有 hooks 段"
         val events = hooks.optJSONObject("events") ?: return "没有 events 段"
         val arr = events.optJSONArray(event) ?: return "事件不存在"
@@ -328,7 +363,10 @@ object HooksCore {
         return listOf(start)
     }
 
-    private fun relativePath(base: String, target: String): String {
+    private fun relativePath(
+        base: String,
+        target: String,
+    ): String {
         val b = normalize(base).split('/').filter { it.isNotEmpty() }
         val t = normalize(target).split('/').filter { it.isNotEmpty() }
         var i = 0
@@ -359,7 +397,10 @@ object HooksCore {
         return o
     }
 
-    private fun resolveRuntimeRoot(userHooks: JSONObject?, sources: List<HookSource>): RuntimeRoot {
+    private fun resolveRuntimeRoot(
+        userHooks: JSONObject?,
+        sources: List<HookSource>,
+    ): RuntimeRoot {
         var enabled = false
         var timeoutMs = 60_000L
         var maxOutputBytes = 32_768L
@@ -377,7 +418,10 @@ object HooksCore {
         return RuntimeRoot(enabled, Math.max(1L, timeoutMs), Math.max(1L, maxOutputBytes))
     }
 
-    private fun buildEntries(source: HookSource, rr: RuntimeRoot): List<HookEntry> {
+    private fun buildEntries(
+        source: HookSource,
+        rr: RuntimeRoot,
+    ): List<HookEntry> {
         val out = mutableListOf<HookEntry>()
         val events = source.hooks.optJSONObject("events") ?: return out
         val sourceRootEnabled = source.hooks.optBoolean("enabled", true)
@@ -390,23 +434,25 @@ object HooksCore {
                 for (hi in 0 until hs.length()) {
                     val h = hs.optJSONObject(hi) ?: continue
                     val declarationEnabled = h.optBoolean("enabled", true)
-                    val digest = sha256(
-                        jsStringify(
-                            declarationPayload(source, event, matcher, mi, hi, h, rr),
-                        ),
-                    )
-                    out += HookEntry(
-                        source = source,
-                        event = event,
-                        matcher = matcher,
-                        matcherIndex = mi,
-                        hookIndex = hi,
-                        hook = h,
-                        sourceRootEnabled = sourceRootEnabled,
-                        declarationEnabled = declarationEnabled,
-                        runtimeHooksEnabled = rr.enabled,
-                        declarationDigest = digest,
-                    )
+                    val digest =
+                        sha256(
+                            jsStringify(
+                                declarationPayload(source, event, matcher, mi, hi, h, rr),
+                            ),
+                        )
+                    out +=
+                        HookEntry(
+                            source = source,
+                            event = event,
+                            matcher = matcher,
+                            matcherIndex = mi,
+                            hookIndex = hi,
+                            hook = h,
+                            sourceRootEnabled = sourceRootEnabled,
+                            declarationEnabled = declarationEnabled,
+                            runtimeHooksEnabled = rr.enabled,
+                            declarationDigest = digest,
+                        )
                 }
             }
         }
@@ -421,35 +467,36 @@ object HooksCore {
         hookIndex: Int,
         hook: JSONObject,
         rr: RuntimeRoot,
-    ): List<Any?> = listOf(
-        "workspace-hook-declaration",
-        1,
-        source.relPath,
-        source.discoveryOrder,
-        event,
-        matcher,
-        matcherIndex,
-        hookIndex,
-        executionPayload(hook),
-        resolveTimeoutMs(hook, rr.timeoutMs),
-        rr.maxOutputBytes,
-    )
+    ): List<Any?> =
+        listOf(
+            "workspace-hook-declaration",
+            1,
+            source.relPath,
+            source.discoveryOrder,
+            event,
+            matcher,
+            matcherIndex,
+            hookIndex,
+            executionPayload(hook),
+            resolveTimeoutMs(hook, rr.timeoutMs),
+            rr.maxOutputBytes,
+        )
 
-    private fun executionPayload(hook: JSONObject): List<Any?> {
-        return if (hook.optString("type") == "process") {
+    private fun executionPayload(hook: JSONObject): List<Any?> =
+        if (hook.optString("type") == "process") {
             listOf("process", hook.optString("command"), argsList(hook))
         } else {
             val shellRaw = if (hook.has("shell")) hook.get("shell") else null
-            val shellPayload: List<Any?> = when {
-                hook.isNull("shell") || shellRaw == null -> listOf("unset")
-                shellRaw == true -> listOf("true")
-                shellRaw is String -> listOf("string", shellRaw)
-                else -> listOf("unset")
-            }
+            val shellPayload: List<Any?> =
+                when {
+                    hook.isNull("shell") || shellRaw == null -> listOf("unset")
+                    shellRaw == true -> listOf("true")
+                    shellRaw is String -> listOf("string", shellRaw)
+                    else -> listOf("unset")
+                }
             val async = hook.has("async") && !hook.isNull("async") && hook.optBoolean("async")
             listOf("command", hook.optString("command"), async, shellPayload)
         }
-    }
 
     private fun argsList(hook: JSONObject): List<String> {
         val a = hook.optJSONArray("args") ?: return emptyList()
@@ -458,85 +505,128 @@ object HooksCore {
         return out
     }
 
-    private fun resolveTimeoutMs(hook: JSONObject, defaultMs: Long): Long {
+    private fun resolveTimeoutMs(
+        hook: JSONObject,
+        defaultMs: Long,
+    ): Long {
         val direct = if (hook.has("timeoutMs") && !hook.isNull("timeoutMs")) hook.get("timeoutMs") else null
-        val raw: Double = when {
-            direct is Number -> direct.toDouble()
-            hook.optString("type") == "command" && hook.has("timeout") && !hook.isNull("timeout") &&
-                hook.get("timeout") is Number -> (hook.get("timeout") as Number).toDouble() * 1000.0
-            else -> defaultMs.toDouble()
-        }
+        val raw: Double =
+            when {
+                direct is Number -> direct.toDouble()
+
+                hook.optString("type") == "command" && hook.has("timeout") && !hook.isNull("timeout") &&
+                    hook.get("timeout") is Number -> (hook.get("timeout") as Number).toDouble() * 1000.0
+
+                else -> defaultMs.toDouble()
+            }
         return Math.max(1L, Math.round(raw))
     }
 
-    private fun bundlePayload(sources: List<HookSource>, entries: List<HookEntry>): List<Any?> = listOf(
-        "workspace-hook-bundle",
-        1,
-        sources.map { s ->
-            listOf<Any?>(
-                s.relPath,
-                s.discoveryOrder,
-                s.configFileKind,
-                s.explicit,
-                optValue(s.hooks, "enabled"),
-                optValue(s.hooks, "timeoutMs"),
-                optValue(s.hooks, "maxOutputBytes"),
-            )
-        },
-        entries.map { e ->
-            listOf<Any?>(
-                e.declarationDigest,
-                e.sourceRootEnabled,
-                e.declarationEnabled,
-                e.runtimeHooksEnabled,
-                e.configuredEnabled,
-            )
-        },
-    )
+    private fun bundlePayload(
+        sources: List<HookSource>,
+        entries: List<HookEntry>,
+    ): List<Any?> =
+        listOf(
+            "workspace-hook-bundle",
+            1,
+            sources.map { s ->
+                listOf<Any?>(
+                    s.relPath,
+                    s.discoveryOrder,
+                    s.configFileKind,
+                    s.explicit,
+                    optValue(s.hooks, "enabled"),
+                    optValue(s.hooks, "timeoutMs"),
+                    optValue(s.hooks, "maxOutputBytes"),
+                )
+            },
+            entries.map { e ->
+                listOf<Any?>(
+                    e.declarationDigest,
+                    e.sourceRootEnabled,
+                    e.declarationEnabled,
+                    e.runtimeHooksEnabled,
+                    e.configuredEnabled,
+                )
+            },
+        )
 
-    private fun optValue(o: JSONObject, key: String): List<Any?> {
+    private fun optValue(
+        o: JSONObject,
+        key: String,
+    ): List<Any?> {
         if (!o.has(key) || o.isNull(key)) return listOf("unset")
         val v = o.get(key)
         return when (v) {
-            is Boolean -> listOf("set", v)
+            is Boolean -> {
+                listOf("set", v)
+            }
+
             is Number -> {
                 val d = v.toDouble()
                 val l = d.toLong()
                 if (d == l.toDouble()) listOf("set", l) else listOf("set", d)
             }
-            else -> listOf("set", v.toString())
+
+            else -> {
+                listOf("set", v.toString())
+            }
         }
     }
 
     // ------------------------------------------------------------ JS 兼容序列化与摘要
 
     /** 复刻 JSON.stringify 的确定性输出（本场景全部为字符串/数字/布尔/null/数组）。 */
-    private fun jsStringify(v: Any?): String = when (v) {
-        null -> "null"
-        is String -> jsQuote(v)
-        is Boolean -> if (v) "true" else "false"
-        is Int -> v.toString()
-        is Long -> v.toString()
-        is Double -> if (v == Math.floor(v) && !v.isInfinite()) v.toLong().toString() else v.toString()
-        is List<*> -> v.joinToString(",", "[", "]") { jsStringify(it) }
-        else -> jsQuote(v.toString())
-    }
+    private fun jsStringify(v: Any?): String =
+        when (v) {
+            null -> "null"
+            is String -> jsQuote(v)
+            is Boolean -> if (v) "true" else "false"
+            is Int -> v.toString()
+            is Long -> v.toString()
+            is Double -> if (v == Math.floor(v) && !v.isInfinite()) v.toLong().toString() else v.toString()
+            is List<*> -> v.joinToString(",", "[", "]") { jsStringify(it) }
+            else -> jsQuote(v.toString())
+        }
 
     private fun jsQuote(s: String): String {
         val sb = StringBuilder("\"")
         for (ch in s) {
             when (ch) {
-                '"' -> sb.append("\\\"")
-                '\\' -> sb.append("\\\\")
-                '\n' -> sb.append("\\n")
-                '\r' -> sb.append("\\r")
-                '\t' -> sb.append("\\t")
-                '\b' -> sb.append("\\b")
-                '\u000C' -> sb.append("\\f")
-                else -> if (ch < ' ') {
-                    sb.append("\\u").append(String.format("%04x", ch.code))
-                } else {
-                    sb.append(ch)
+                '"' -> {
+                    sb.append("\\\"")
+                }
+
+                '\\' -> {
+                    sb.append("\\\\")
+                }
+
+                '\n' -> {
+                    sb.append("\\n")
+                }
+
+                '\r' -> {
+                    sb.append("\\r")
+                }
+
+                '\t' -> {
+                    sb.append("\\t")
+                }
+
+                '\b' -> {
+                    sb.append("\\b")
+                }
+
+                '\u000C' -> {
+                    sb.append("\\f")
+                }
+
+                else -> {
+                    if (ch < ' ') {
+                        sb.append("\\u").append(String.format("%04x", ch.code))
+                    } else {
+                        sb.append(ch)
+                    }
                 }
             }
         }

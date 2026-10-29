@@ -16,7 +16,12 @@ import java.io.File
  * 只列目录，不做任何写入，避免误选到不可写的位置。
  */
 object DirectoryPicker {
-    fun show(activity: Activity, caption: String, startAt: File, onPicked: (File) -> Unit) {
+    fun show(
+        activity: Activity,
+        caption: String,
+        startAt: File,
+        onPicked: (File) -> Unit,
+    ) {
         val sheet = CodaSheet(activity)
         bind(sheet, activity, caption, startAt, onPicked)
         sheet.show()
@@ -52,8 +57,7 @@ object DirectoryPicker {
     /** 记录每个宿主当前所在目录：就地换页时目录内导航要能就地刷新。 */
     private val currentDir = HashMap<CodaSheet, File>()
 
-    private fun currentDirOf(startAt: File): File =
-        if (startAt.isDirectory) startAt else startAt.parentFile ?: File("/")
+    private fun currentDirOf(startAt: File): File = if (startAt.isDirectory) startAt else startAt.parentFile ?: File("/")
 
     private fun bind(
         sheet: CodaSheet,
@@ -88,44 +92,60 @@ object DirectoryPicker {
             col.addView(pathLabel(activity, current))
             val parent = current.parentFile
             if (parent != null) {
-                col.addView(entry(activity, "上一级", true) {
-                    currentDir[sheet] = parent
-                    sheet.refreshContent { refreshed -> render(refreshed) }
-                })
+                col.addView(
+                    entry(activity, "上一级", true) {
+                        currentDir[sheet] = parent
+                        sheet.refreshContent { refreshed -> render(refreshed) }
+                    },
+                )
             }
-            val children = current.listFiles()
-                ?.filter { it.isDirectory && !it.name.startsWith(".") }
-                ?.sortedBy { it.name.lowercase() }
-                ?: emptyList()
+            val children =
+                current
+                    .listFiles()
+                    ?.filter { it.isDirectory && !it.name.startsWith(".") }
+                    ?.sortedBy { it.name.lowercase() }
+                    ?: emptyList()
             if (children.isEmpty()) {
                 col.addView(entry(activity, "此目录下没有子目录", false) {})
             }
             for (dir in children) {
-                col.addView(entry(activity, dir.name, true) {
-                    currentDir[sheet] = dir
-                    sheet.refreshContent { refreshed -> render(refreshed) }
-                })
+                col.addView(
+                    entry(activity, dir.name, true) {
+                        currentDir[sheet] = dir
+                        sheet.refreshContent { refreshed -> render(refreshed) }
+                    },
+                )
             }
         }
         render(column)
     }
 
-    private fun pathLabel(activity: Activity, path: File): TextView = TextView(activity).apply {
-        text = path.absolutePath
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-        maxLines = 2
-        ellipsize = TextUtils.TruncateAt.MIDDLE
-        setPadding(0, 0, 0, 8)
-    }
-
-    private fun entry(activity: Activity, name: String, enabled: Boolean, click: () -> Unit): View {
-        val row = TextView(activity).apply {
-            text = name
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 14, 0, 14)
-            alpha = if (enabled) 1f else 0.5f
+    private fun pathLabel(
+        activity: Activity,
+        path: File,
+    ): TextView =
+        TextView(activity).apply {
+            text = path.absolutePath
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.MIDDLE
+            setPadding(0, 0, 0, 8)
         }
+
+    private fun entry(
+        activity: Activity,
+        name: String,
+        enabled: Boolean,
+        click: () -> Unit,
+    ): View {
+        val row =
+            TextView(activity).apply {
+                text = name
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 14, 0, 14)
+                alpha = if (enabled) 1f else 0.5f
+            }
         if (enabled) row.setOnClickListener { click() }
         return row
     }

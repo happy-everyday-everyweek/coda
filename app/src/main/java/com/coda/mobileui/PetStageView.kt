@@ -13,8 +13,9 @@ import com.coda.mobileui.core.PetSkins
  * 它趴在第一张卡片上边缘：先把头发那块画成卡片顶部的圆角，再让宠物压在边缘上。
  * 关掉宠物、或者勾了"只显示气泡"时，这块整体让位，不占高度也不留空白。
  */
-class PetStageView(context: Context) : LinearLayout(context) {
-
+class PetStageView(
+    context: Context,
+) : LinearLayout(context) {
     private val pet = PetView(context)
     private val hint = android.widget.TextView(context)
 
@@ -47,7 +48,10 @@ class PetStageView(context: Context) : LinearLayout(context) {
      * 形象取设置里选的那份；主题色直接用当前 Activity 的 colorPrimary，
      * 所以换主色或开自动取色之后，这只小家伙会跟着变。
      */
-    fun bind(ctx: Context, pageKey: String = "pet") {
+    fun bind(
+        ctx: Context,
+        pageKey: String = "pet",
+    ) {
         val store = SettingsStore.get(ctx)
         // 先按页面判断该不该出现：总开关、该页场景开关、以及"只显示气泡"三者都得成立
         if (!store.petSettingsVisible(pageKey) || store.petBubbleOnly) {

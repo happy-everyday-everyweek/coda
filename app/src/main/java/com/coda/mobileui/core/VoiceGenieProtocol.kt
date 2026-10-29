@@ -15,12 +15,13 @@ import org.json.JSONObject
  *          6=status_text、7=payload、8=data、9=seq_id、10=session_id、11=log_id
  */
 object VoiceGenieProtocol {
-
     /** namespace 固定值，两端的请求与期望响应都用它。 */
     const val NAMESPACE = "VoiceGenie"
 
     /** 信封不合法、字段被截断、字符串不是 UTF-8 等都用这个。 */
-    class ProtocolError(message: String) : Exception(message)
+    class ProtocolError(
+        message: String,
+    ) : Exception(message)
 
     fun varint(value: Long): ByteArray {
         if (value < 0) throw ProtocolError("varint 只能编码非负整数")
@@ -34,7 +35,10 @@ object VoiceGenieProtocol {
         return out.toByteArray()
     }
 
-    private fun fieldBytes(field: Int, data: ByteArray): ByteArray {
+    private fun fieldBytes(
+        field: Int,
+        data: ByteArray,
+    ): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         out.write(varint(((field shl 3) or 2).toLong()))
         out.write(varint(data.size.toLong()))
@@ -42,10 +46,15 @@ object VoiceGenieProtocol {
         return out.toByteArray()
     }
 
-    private fun fieldText(field: Int, text: String): ByteArray =
-        fieldBytes(field, text.toByteArray(Charsets.UTF_8))
+    private fun fieldText(
+        field: Int,
+        text: String,
+    ): ByteArray = fieldBytes(field, text.toByteArray(Charsets.UTF_8))
 
-    private fun fieldInt(field: Int, value: Long): ByteArray {
+    private fun fieldInt(
+        field: Int,
+        value: Long,
+    ): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         out.write(varint((field shl 3).toLong()))
         out.write(varint(value))
@@ -78,7 +87,10 @@ object VoiceGenieProtocol {
     }
 
     /** 解一帧响应。文本帧按 JSON，二进制帧按信封。 */
-    fun decodeResponse(data: ByteArray, isText: Boolean): JSONObject {
+    fun decodeResponse(
+        data: ByteArray,
+        isText: Boolean,
+    ): JSONObject {
         if (isText) {
             val text = data.toString(Charsets.UTF_8)
             return try {
@@ -87,11 +99,20 @@ object VoiceGenieProtocol {
                 throw ProtocolError("响应不是有效 JSON：${e.message}")
             }
         }
-        val names = mapOf(
-            1 to "task_id", 2 to "message_id", 3 to "namespace", 4 to "event",
-            5 to "status_code", 6 to "status_text", 7 to "payload", 8 to "data",
-            9 to "seq_id", 10 to "session_id", 11 to "log_id",
-        )
+        val names =
+            mapOf(
+                1 to "task_id",
+                2 to "message_id",
+                3 to "namespace",
+                4 to "event",
+                5 to "status_code",
+                6 to "status_text",
+                7 to "payload",
+                8 to "data",
+                9 to "seq_id",
+                10 to "session_id",
+                11 to "log_id",
+            )
         val integerFields = setOf(5, 9)
         val result = JSONObject()
         var offset = 0
@@ -118,7 +139,10 @@ object VoiceGenieProtocol {
             var intValue = 0L
             var bytesValue: ByteArray? = null
             when (wire) {
-                0 -> intValue = readVarint()
+                0 -> {
+                    intValue = readVarint()
+                }
+
                 1, 5 -> {
                     val len = if (wire == 1) 8 else 4
                     val end = offset + len
@@ -126,6 +150,7 @@ object VoiceGenieProtocol {
                     bytesValue = data.copyOfRange(offset, end)
                     offset = end
                 }
+
                 2 -> {
                     val len = readVarint().toInt()
                     val end = offset + len
@@ -133,7 +158,10 @@ object VoiceGenieProtocol {
                     bytesValue = data.copyOfRange(offset, end)
                     offset = end
                 }
-                else -> throw ProtocolError("不支持的 protobuf wire type: $wire")
+
+                else -> {
+                    throw ProtocolError("不支持的 protobuf wire type: $wire")
+                }
             }
             val name = names[number] ?: continue
             val expectedWire = if (number in integerFields) 0 else 2

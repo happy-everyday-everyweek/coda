@@ -22,12 +22,12 @@ import com.coda.mobileui.core.PetSkins
  * 之前这里是"有事才出现、没事就收起"，与用户要的"Pet 是常驻核心功能"不符，
  * 也正是"任何界面都看不见"的直接原因之一。
  */
-class PetBar(context: Context) : LinearLayout(context) {
-
+class PetBar(
+    context: Context,
+) : LinearLayout(context) {
     private val pet = PetView(context)
     private val bubble = TextView(context)
     private val row = LinearLayout(context)
-    private var anim: ValueAnimator? = null
 
     /** 展开与收起时回调，方便外面把上下间距一起收掉。 */
     var onShownChanged: ((Boolean) -> Unit)? = null
@@ -76,7 +76,13 @@ class PetBar(context: Context) : LinearLayout(context) {
      * 原项目的五个形象各有自己的调色板，颜色全写在 manifest 里，所以这里不再注入主题色；
      * 保留签名只是为了少改调用点。
      */
-    fun applySkin(ctx: Context, skinId: String, accent: Int = 0, accentLight: Int = 0, accentSoft: Int = 0) {
+    fun applySkin(
+        ctx: Context,
+        skinId: String,
+        accent: Int = 0,
+        accentLight: Int = 0,
+        accentSoft: Int = 0,
+    ) {
         pet.skin = PetSkins.resolve(ctx, skinId)
     }
 
@@ -120,11 +126,12 @@ class PetBar(context: Context) : LinearLayout(context) {
             if (!shown) return@post
             val parent = parent as? View
             val available = (parent?.width ?: 0) - paddingStart - paddingEnd
-            val widthSpec = if (available > 0) {
-                MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST)
-            } else {
-                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
-            }
+            val widthSpec =
+                if (available > 0) {
+                    MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST)
+                } else {
+                    MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+                }
             measure(widthSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
             layoutParams.height = LayoutParams.WRAP_CONTENT
             requestLayout()
@@ -164,12 +171,13 @@ class PetBar(context: Context) : LinearLayout(context) {
 
     private fun clearTextLater(delayMs: Long) {
         pendingDismiss?.let { removeCallbacks(it) }
-        val r = Runnable {
-            pendingDismiss = null
-            // 只清文字，宠物继续；它自己会从 done/error 回到空闲
-            clearBubble()
-            onShownChanged?.invoke(false)
-        }
+        val r =
+            Runnable {
+                pendingDismiss = null
+                // 只清文字，宠物继续；它自己会从 done/error 回到空闲
+                clearBubble()
+                onShownChanged?.invoke(false)
+            }
         pendingDismiss = r
         postDelayed(r, delayMs)
     }
@@ -183,7 +191,11 @@ class PetBar(context: Context) : LinearLayout(context) {
 
     // ---------------------------------------------------------------- 内部
 
-    private fun show(text: String, mood: PetMood, tint: Int?) {
+    private fun show(
+        text: String,
+        mood: PetMood,
+        tint: Int?,
+    ) {
         pendingDismiss?.let { removeCallbacks(it) }
         pendingDismiss = null
         bubble.text = text
@@ -209,75 +221,21 @@ class PetBar(context: Context) : LinearLayout(context) {
         // 文字的生灭由 show* / clearTextLater 管，否则刚写的句子会被立刻抹掉。
     }
 
-    /**
-     * 收起（target = 0）或展开到内容高。
-     *
-     * 高度在收起态是 0、在展开态是 WRAP_CONTENT，两者都不是固定像素，
-     * 所以不能拿当前 height 和目标做相等判断，直接按方向走。
-     */
-    private fun animateHeight(target: Int, end: (() -> Unit)? = null) {
-        anim?.cancel()
-        if (target == 0) {
-            // 收起：从当前实际高度动画到 0
-            val from = height.coerceAtLeast(0)
-            if (from <= 0) {
-                layoutParams.height = 0
-                requestLayout()
-                end?.invoke()
-                return
+    private fun pill(tint: Int?): GradientDrawable =
+        GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat()
+            if (tint == null) {
+                setColor(
+                    resolveColor(
+                        com.google.android.material.R.attr.colorSurfaceContainerHigh,
+                        0x33808080,
+                    ),
+                )
+            } else {
+                // 提示色做半透明底，不抢正文
+                setColor((tint and 0x00FFFFFF) or 0x33000000)
             }
-            anim = ValueAnimator.ofInt(from, 0).apply {
-                duration = 180
-                interpolator = DecelerateInterpolator()
-                addUpdateListener { animation ->
-                    layoutParams.height = animation.animatedValue as Int
-                    requestLayout()
-                }
-                addListener(object : android.animation.AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: android.animation.Animator) {
-                        layoutParams.height = 0
-                        requestLayout()
-                        end?.invoke()
-                    }
-                })
-                start()
-            }
-            return
         }
-        // 展开：从当前高度动画到测量出来的内容高，结束后交给 WRAP_CONTENT
-        val from = height.coerceAtLeast(0)
-        anim = ValueAnimator.ofInt(from, target).apply {
-            duration = 180
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { animation ->
-                layoutParams.height = animation.animatedValue as Int
-                requestLayout()
-            }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    layoutParams.height = LayoutParams.WRAP_CONTENT
-                    requestLayout()
-                    end?.invoke()
-                }
-            })
-            start()
-        }
-    }
-
-    private fun pill(tint: Int?): GradientDrawable = GradientDrawable().apply {
-        cornerRadius = dp(14).toFloat()
-        if (tint == null) {
-            setColor(
-                resolveColor(
-                    com.google.android.material.R.attr.colorSurfaceContainerHigh,
-                    0x33808080,
-                ),
-            )
-        } else {
-            // 提示色做半透明底，不抢正文
-            setColor((tint and 0x00FFFFFF) or 0x33000000)
-        }
-    }
 
     private fun blendOnSurface(tint: Int): Int {
         val onSurface = resolveColor(com.google.android.material.R.attr.colorOnSurface, Color.BLACK)
@@ -287,7 +245,11 @@ class PetBar(context: Context) : LinearLayout(context) {
         return blend(base, tint, if (dark) 0.22f else 0.30f)
     }
 
-    private fun blend(a: Int, b: Int, ratio: Float): Int {
+    private fun blend(
+        a: Int,
+        b: Int,
+        ratio: Float,
+    ): Int {
         val r = (Color.red(a) * (1 - ratio) + Color.red(b) * ratio).toInt()
         val g = (Color.green(a) * (1 - ratio) + Color.green(b) * ratio).toInt()
         val bl = (Color.blue(a) * (1 - ratio) + Color.blue(b) * ratio).toInt()
@@ -300,7 +262,10 @@ class PetBar(context: Context) : LinearLayout(context) {
             android.content.res.Configuration.UI_MODE_NIGHT_YES
     }
 
-    private fun resolveColor(attr: Int, fallback: Int): Int {
+    private fun resolveColor(
+        attr: Int,
+        fallback: Int,
+    ): Int {
         val tv = android.util.TypedValue()
         val ta = context.obtainStyledAttributes(tv.data, intArrayOf(attr))
         return try {
@@ -313,7 +278,10 @@ class PetBar(context: Context) : LinearLayout(context) {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     /** 塞进容器时用，初始高度为 0（收起态）。 */
-    fun attachTo(parent: ViewGroup, index: Int = -1) {
+    fun attachTo(
+        parent: ViewGroup,
+        index: Int = -1,
+    ) {
         host = parent
         parent.visibility = View.GONE
         val lp = LayoutParams(LayoutParams.MATCH_PARENT, 0)

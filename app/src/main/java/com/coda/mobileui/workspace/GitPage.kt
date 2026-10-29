@@ -25,9 +25,12 @@ import java.util.Locale
  */
 class GitPage(
     host: WorkspaceActivity,
-    private val saved: JSONObject,
+    // 由 WorkspaceActivity 传入用于恢复页面状态；本页目前不读它，
+    // 但构造签名要与其余工作区页面保持一致，不能删。
+    // 不写成 private val：那样会变成未使用的私有属性，而这里只需要
+    // 接收构造参数即可。
+    saved: JSONObject,
 ) : WorkspacePage(host) {
-
     override val kind: String = WorkspaceTabs.GIT
     override val title: String = "Git"
 
@@ -50,14 +53,16 @@ class GitPage(
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
     override fun build(): View {
-        content = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(surface)
-        }
-        graph = GitGraphView(host).apply {
-            layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
-            onPick = { showCommit(it) }
-        }
+        content =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(surface)
+            }
+        graph =
+            GitGraphView(host).apply {
+                layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+                onPick = { showCommit(it) }
+            }
         render()
         return content
     }
@@ -70,8 +75,7 @@ class GitPage(
 
     override fun saveState(): JSONObject = JSONObject()
 
-    override fun menuItems(): List<String> =
-        listOf("刷新", "提交变更", "分支管理", "拉取", "推送")
+    override fun menuItems(): List<String> = listOf("刷新", "提交变更", "分支管理", "拉取", "推送")
 
     override fun onMenuItem(label: String) {
         when (label) {
@@ -149,10 +153,11 @@ class GitPage(
     }
 
     private fun statusCard(current: Snapshot?): View {
-        val title = when {
-            current == null -> "读取中…"
-            else -> current.branch.ifEmpty { "无分支" }
-        }
+        val title =
+            when {
+                current == null -> "读取中…"
+                else -> current.branch.ifEmpty { "无分支" }
+            }
         val lines = ArrayList<String>(2)
         lines.add(
             when {
@@ -193,12 +198,13 @@ class GitPage(
     }
 
     private fun placeholder(current: Snapshot?): View {
-        val box = LinearLayout(host).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(24f), dp(48f), dp(24f), dp(24f))
-            layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
-        }
+        val box =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(24f), dp(48f), dp(24f), dp(24f))
+                layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+            }
         box.addView(
             label(
                 if (current == null) "正在读取仓库" else "这个目录还不是仓库，初始化后就能看到提交图",
@@ -225,9 +231,11 @@ class GitPage(
                 return@content
             }
             for (line in current.changes) {
-                column.addView(monoLabel(line, 12f, onSurfaceVariant).apply {
-                    setPadding(0, dp(3f), 0, dp(3f))
-                })
+                column.addView(
+                    monoLabel(line, 12f, onSurfaceVariant).apply {
+                        setPadding(0, dp(3f), 0, dp(3f))
+                    },
+                )
             }
         }
         if (current.repo) {
@@ -247,9 +255,14 @@ class GitPage(
             return
         }
         when {
-            current.changes.isEmpty() -> toast("没有可提交的变更")
-            else -> inputSheet("提交变更", "更新") { message ->
-                operate("提交") { Git.commitAll(host.env, host.root, message) }
+            current.changes.isEmpty() -> {
+                toast("没有可提交的变更")
+            }
+
+            else -> {
+                inputSheet("提交变更", "更新") { message ->
+                    operate("提交") { Git.commitAll(host.env, host.root, message) }
+                }
             }
         }
     }
@@ -284,57 +297,77 @@ class GitPage(
         sheet.show()
     }
 
-    private fun headerRow(text: String): View = label(text, 12f, onSurfaceVariant).apply {
-        letterSpacing = 0.06f
-        setPadding(0, dp(14f), 0, dp(4f))
-    }
-
-    private fun branchRow(name: String, isCurrent: Boolean, isRemote: Boolean): View {
-        val row = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12f), 0, dp(12f))
-            isClickable = true
-            setOnClickListener { showBranchActions(name, isCurrent, isRemote) }
-            pressFeedback(pressedAlpha = 0.6f)
+    private fun headerRow(text: String): View =
+        label(text, 12f, onSurfaceVariant).apply {
+            letterSpacing = 0.06f
+            setPadding(0, dp(14f), 0, dp(4f))
         }
-        row.addView(ImageView(host).apply {
-            setImageResource(R.drawable.ic_branch)
-            setColorFilter(if (isCurrent) primary else onSurfaceVariant)
-            layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
-        })
-        row.addView(label(name, 15f, if (isCurrent) primary else onSurface).apply {
-            layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-        })
+
+    private fun branchRow(
+        name: String,
+        isCurrent: Boolean,
+        isRemote: Boolean,
+    ): View {
+        val row =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12f), 0, dp(12f))
+                isClickable = true
+                setOnClickListener { showBranchActions(name, isCurrent, isRemote) }
+                pressFeedback(pressedAlpha = 0.6f)
+            }
+        row.addView(
+            ImageView(host).apply {
+                setImageResource(R.drawable.ic_branch)
+                setColorFilter(if (isCurrent) primary else onSurfaceVariant)
+                layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
+            },
+        )
+        row.addView(
+            label(name, 15f, if (isCurrent) primary else onSurface).apply {
+                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.MIDDLE
+            },
+        )
         if (isCurrent) {
             row.addView(label("当前", 12f, onSurfaceVariant))
         }
         return row
     }
 
-    private fun showBranchActions(name: String, isCurrent: Boolean, isRemote: Boolean) {
+    private fun showBranchActions(
+        name: String,
+        isCurrent: Boolean,
+        isRemote: Boolean,
+    ) {
         val sheet = sheet().title(name)
         sheet.content { column ->
             column.removeAllViews()
             if (!isCurrent) {
-                column.addView(actionRowInSheet("检出", R.drawable.ic_branch) {
-                    sheet.dismiss()
-                    operate("检出") { Git.checkout(host.env, host.root, name) }
-                })
-                if (!isRemote) {
-                    column.addView(actionRowInSheet("合并到当前分支", R.drawable.ic_commit) {
+                column.addView(
+                    actionRowInSheet("检出", R.drawable.ic_branch) {
                         sheet.dismiss()
-                        mergeBranch(name)
-                    })
+                        operate("检出") { Git.checkout(host.env, host.root, name) }
+                    },
+                )
+                if (!isRemote) {
+                    column.addView(
+                        actionRowInSheet("合并到当前分支", R.drawable.ic_commit) {
+                            sheet.dismiss()
+                            mergeBranch(name)
+                        },
+                    )
                 }
             }
             if (!isCurrent && !isRemote) {
-                column.addView(actionRowInSheet("删除", R.drawable.ic_trash) {
-                    sheet.dismiss()
-                    deleteBranch(name)
-                })
+                column.addView(
+                    actionRowInSheet("删除", R.drawable.ic_trash) {
+                        sheet.dismiss()
+                        deleteBranch(name)
+                    },
+                )
             }
         }
         sheet.show()
@@ -379,34 +412,47 @@ class GitPage(
                 column.addView(label(commit.refs, 12f, primary).apply { setPadding(0, dp(4f), 0, 0) })
             }
             if (commit.parents.isNotEmpty()) {
-                column.addView(label("父提交 " + commit.parents.joinToString(" ") { it.take(7) }, 12f, onSurfaceVariant).apply {
-                    setPadding(0, dp(4f), 0, 0)
-                })
+                column.addView(
+                    label("父提交 " + commit.parents.joinToString(" ") { it.take(7) }, 12f, onSurfaceVariant).apply {
+                        setPadding(0, dp(4f), 0, 0)
+                    },
+                )
             }
-            column.addView(actionRowInSheet("查看提交详情", R.drawable.ic_commit) {
-                showCommitDetail(commit, sheet)
-            })
-            column.addView(actionRowInSheet("从此刻建分支", R.drawable.ic_branch) {
-                sheet.dismiss()
-                inputSheet("从此刻建分支", "branch-" + commit.hash.take(6)) { name ->
-                    operate("新建分支") { Git.createBranch(host.env, host.root, name, commit.hash) }
-                }
-            })
-            if (commit.hash != snapshot?.commits?.firstOrNull()?.hash) {
-                column.addView(actionRowInSheet("合并到当前分支", R.drawable.ic_commit) {
+            column.addView(
+                actionRowInSheet("查看提交详情", R.drawable.ic_commit) {
+                    showCommitDetail(commit, sheet)
+                },
+            )
+            column.addView(
+                actionRowInSheet("从此刻建分支", R.drawable.ic_branch) {
                     sheet.dismiss()
-                    mergeBranch(commit.hash)
-                })
+                    inputSheet("从此刻建分支", "branch-" + commit.hash.take(6)) { name ->
+                        operate("新建分支") { Git.createBranch(host.env, host.root, name, commit.hash) }
+                    }
+                },
+            )
+            if (commit.hash != snapshot?.commits?.firstOrNull()?.hash) {
+                column.addView(
+                    actionRowInSheet("合并到当前分支", R.drawable.ic_commit) {
+                        sheet.dismiss()
+                        mergeBranch(commit.hash)
+                    },
+                )
             }
-            column.addView(actionRowInSheet("检出此提交", R.drawable.ic_branch) {
-                sheet.dismiss()
-                operate("检出") { Git.checkout(host.env, host.root, commit.hash) }
-            })
+            column.addView(
+                actionRowInSheet("检出此提交", R.drawable.ic_branch) {
+                    sheet.dismiss()
+                    operate("检出") { Git.checkout(host.env, host.root, commit.hash) }
+                },
+            )
         }
         sheet.show()
     }
 
-    private fun showCommitDetail(commit: Git.Commit, into: CodaSheet? = null) {
+    private fun showCommitDetail(
+        commit: Git.Commit,
+        into: CodaSheet? = null,
+    ) {
         // 从提交卡片点进来时就地换页：先把标题与"加载中"推进去，结果回来再刷新内容。
         if (into != null) {
             into.navigate {
@@ -440,7 +486,10 @@ class GitPage(
 
     // ---------------------------------------------------------------- 执行
 
-    private fun operate(label: String, action: () -> Git.Result) {
+    private fun operate(
+        label: String,
+        action: () -> Git.Result,
+    ) {
         busy = true
         host.background(
             work = action,
@@ -457,7 +506,11 @@ class GitPage(
         )
     }
 
-    private fun showResult(label: String, result: Git.Result, offerForce: String? = null) {
+    private fun showResult(
+        label: String,
+        result: Git.Result,
+        offerForce: String? = null,
+    ) {
         if (result.ok && offerForce == null) {
             toast("$label 完成")
             return
@@ -468,9 +521,11 @@ class GitPage(
             val text = result.output.ifEmpty { if (result.ok) "完成" else "没有输出" }
             column.addView(monoLabel(text, 12f, onSurfaceVariant))
             if (offerForce != null && text.contains("CONFLICT")) {
-                column.addView(label("合并存在冲突，可以中止这次合并。", 13f, onSurfaceVariant).apply {
-                    setPadding(0, dp(10f), 0, 0)
-                })
+                column.addView(
+                    label("合并存在冲突，可以中止这次合并。", 13f, onSurfaceVariant).apply {
+                        setPadding(0, dp(10f), 0, 0)
+                    },
+                )
             }
         }
         if (offerForce != null) {
@@ -516,34 +571,48 @@ class GitPage(
 
     // ---------------------------------------------------------------- 工具
 
-    private fun actionRowInSheet(text: String, iconRes: Int, click: () -> Unit): View {
-        val row = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12f), 0, dp(12f))
-            isClickable = true
-            setOnClickListener { click() }
-        }
-        row.addView(ImageView(host).apply {
-            setImageResource(iconRes)
-            setColorFilter(onSurfaceVariant)
-            layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
-        })
+    private fun actionRowInSheet(
+        text: String,
+        iconRes: Int,
+        click: () -> Unit,
+    ): View {
+        val row =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12f), 0, dp(12f))
+                isClickable = true
+                setOnClickListener { click() }
+            }
+        row.addView(
+            ImageView(host).apply {
+                setImageResource(iconRes)
+                setColorFilter(onSurfaceVariant)
+                layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
+            },
+        )
         row.addView(label(text, 15f, onSurface))
         row.pressFeedback(pressedAlpha = 0.6f)
         return row
     }
 
-    private fun inputSheet(caption: String, initial: String, onDone: (String) -> Unit) {
+    private fun inputSheet(
+        caption: String,
+        initial: String,
+        onDone: (String) -> Unit,
+    ) {
         val sheet = sheet().title(caption)
-        val input = EditText(host).apply {
-            setText(initial)
-            setSelection(text.length)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setSingleLine()
-            setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
-            background = androidx.core.content.ContextCompat.getDrawable(host, R.drawable.bg_tool_card)
-        }
+        val input =
+            EditText(host).apply {
+                setText(initial)
+                setSelection(text.length)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setSingleLine()
+                setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
+                background =
+                    androidx.core.content.ContextCompat
+                        .getDrawable(host, R.drawable.bg_tool_card)
+            }
         sheet.content { column ->
             column.removeAllViews()
             column.addView(input)
@@ -562,6 +631,8 @@ class GitPage(
     }
 
     private fun toast(text: String) {
-        android.widget.Toast.makeText(host, text, android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast
+            .makeText(host, text, android.widget.Toast.LENGTH_SHORT)
+            .show()
     }
 }

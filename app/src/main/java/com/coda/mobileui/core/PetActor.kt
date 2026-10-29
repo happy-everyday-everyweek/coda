@@ -5,7 +5,13 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /** 要画的一个字形：x/y 是它在基框坐标里的左上格（y 向下，地面 = 第 rows 行）。 */
-class GlyphDraw(val glyph: String, val color: String, val x: Int, val y: Int, val alpha: Double)
+class GlyphDraw(
+    val glyph: String,
+    val color: String,
+    val x: Int,
+    val y: Int,
+    val alpha: Double,
+)
 
 /** 一个 tick 的完整绘制指令；相等的快照画出完全一样的画面，可直接跳过重绘。 */
 class ActorSnapshot(
@@ -75,14 +81,18 @@ private class Particle(
  *
  * 不是线程安全的，只在一个线程（主线程）上使用。
  */
-class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
-
+class PetActor(
+    var skin: PetSkin,
+    seed: Long = System.nanoTime(),
+) {
     private val rng = Random(seed)
 
     /** 减少动态效果：不播进场、不播粒子，姿态直接落到 still。 */
     var reduceMotion: Boolean = false
+
     /** 隐藏时不画，也不让小动作把时钟弄醒。 */
     var hidden: Boolean = false
+
     /** 目光方向，由外部根据指针位置设置。 */
     var gaze: GazeZone? = null
 
@@ -158,7 +168,10 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
         start(clip, name)
     }
 
-    private fun start(clip: List<PetFrame>, name: String?) {
+    private fun start(
+        clip: List<PetFrame>,
+        name: String?,
+    ) {
         current = clip
         currentName = name
         currentIndex = 0
@@ -185,7 +198,10 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
         particles.addAll(spawn(spec, turn))
     }
 
-    private fun spawn(spec: EffectSpec, cycleIndex: Int): List<Particle> {
+    private fun spawn(
+        spec: EffectSpec,
+        cycleIndex: Int,
+    ): List<Particle> {
         val group = ArrayList<ParticleSpec>(spec.particles)
         if (spec.cycle.isNotEmpty()) group.addAll(spec.cycle[cycleIndex % spec.cycle.size])
         val out = ArrayList<Particle>()
@@ -221,7 +237,10 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
      * 与原项目一致：先播旧变体的退出（只有 running → 别的状态才有），再播新状态的进场。
      * 减少动态效果时两端都不播，直接落到 still。
      */
-    fun setMood(next: PetMood, animate: Boolean = true) {
+    fun setMood(
+        next: PetMood,
+        animate: Boolean = true,
+    ) {
         if (next == mood && currentName != null) return
         val st = skin.state(next)
         mood = next
@@ -244,11 +263,12 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
             onceActive = false
             return
         }
-        val enter = if (next == PetMood.RUNNING) {
-            variantSpec(variant)?.enter ?: st.enter
-        } else {
-            st.enter
-        }
+        val enter =
+            if (next == PetMood.RUNNING) {
+                variantSpec(variant)?.enter ?: st.enter
+            } else {
+                st.enter
+            }
         if (enter != null) {
             badgeVisible = true
             badgeAge = 0
@@ -265,11 +285,12 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
     /** 记录会话正在做哪类事；传 null 用默认变体。运行中会做防抖。 */
     fun setActivity(activity: String?) {
         val running = skin.state(PetMood.RUNNING)
-        val v = if (activity != null && running.variants.containsKey(activity)) {
-            activity
-        } else {
-            running.defaultVariant ?: ""
-        }
+        val v =
+            if (activity != null && running.variants.containsKey(activity)) {
+                activity
+            } else {
+                running.defaultVariant ?: ""
+            }
         if (v == desiredVariant) return
         desiredVariant = v
         desiredTicks = 0
@@ -281,13 +302,19 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
         asleepStill = null
         idleTicks = 0
         setLoop(stateLoopName())
-        skin.state(mood).sleep?.wake?.let { play(it) }
+        skin
+            .state(mood)
+            .sleep
+            ?.wake
+            ?.let { play(it) }
     }
 
     /** 点击逗一下：播一次 pet 片段。 */
     fun pet() {
         wake()
-        skin.interactions.pet.takeIf { it.isNotEmpty() }?.let { play(it) }
+        skin.interactions.pet
+            .takeIf { it.isNotEmpty() }
+            ?.let { play(it) }
     }
 
     // ------------------------------------------------------------ 推进
@@ -381,10 +408,11 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
     private var pendingEnter: String? = null
 
     private fun advanceKey() {
-        val key = current.getOrNull(currentIndex) ?: run {
-            if (onceActive) finishOnce()
-            return
-        }
+        val key =
+            current.getOrNull(currentIndex) ?: run {
+                if (onceActive) finishOnce()
+                return
+            }
         keyTicks++
         if (keyTicks < key.ticks) return
         keyTicks = 0
@@ -430,10 +458,15 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
         }
         val markers = !hidden
         val markerOk = markers && !asleep && dy > -6 && dy < 7
-        val particleDraws = if (hidden) emptyList() else particles.map { p ->
-            val d = p.draw()
-            GlyphDraw(d.glyph, d.color, d.x + dx, d.y, d.alpha)
-        }
+        val particleDraws =
+            if (hidden) {
+                emptyList()
+            } else {
+                particles.map { p ->
+                    val d = p.draw()
+                    GlyphDraw(d.glyph, d.color, d.x + dx, d.y, d.alpha)
+                }
+            }
         return ActorSnapshot(
             visible = !hidden,
             pose = pose,
@@ -459,11 +492,12 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
         val top: Int
         val frames = spec.frames
         if (frames != null && frames.isNotEmpty()) {
-            glyph = if (reduceMotion) {
-                spec.reduced ?: frames[0]
-            } else {
-                frames[spinnerFrame(spec, frames)]
-            }
+            glyph =
+                if (reduceMotion) {
+                    spec.reduced ?: frames[0]
+                } else {
+                    frames[spinnerFrame(spec, frames)]
+                }
             val h = glyphHeight(glyph)
             val box = spec.box ?: h
             top = -2 - box + ((box - h) / 2.0).toInt()
@@ -515,7 +549,10 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
         }
     }
 
-    private fun spinnerFrame(spec: AccessorySpec, frames: List<String>): Int {
+    private fun spinnerFrame(
+        spec: AccessorySpec,
+        frames: List<String>,
+    ): Int {
         val period = spec.periodMs ?: return 0
         if (period <= 0) return 0
         val t = clock.toDouble() * skin.tickMs
@@ -531,12 +568,13 @@ class PetActor(var skin: PetSkin, seed: Long = System.nanoTime()) {
     }
 
     /** 离地越高影子越小；贴地时没有影子。 */
-    private fun shadowWidth(air: Int): Int = when {
-        air <= 0 -> 0
-        air <= 2 -> 10
-        air <= 5 -> 6
-        else -> 2
-    }
+    private fun shadowWidth(air: Int): Int =
+        when {
+            air <= 0 -> 0
+            air <= 2 -> 10
+            air <= 5 -> 6
+            else -> 2
+        }
 
     companion object {
         private const val VARIANT_SETTLE_TICKS = 20

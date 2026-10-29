@@ -33,7 +33,6 @@ import java.net.URL
  * versionCode 单调递增，是覆盖安装的硬依据。
  */
 object UpdateChecker {
-
     /** dev 渠道固定 tag，由 dev-prerelease.yml 维护，永远只有这一个。 */
     private const val DEV_TAG = "dev-latest"
 
@@ -107,13 +106,17 @@ object UpdateChecker {
      * 正式版用户能看到 dev 的新构建，dev 用户也能在下一个正式版发布后回到正式版。
      * 只有各看各的，装过 dev 就永远回不去。
      */
-    fun check(ctx: Context, onLog: (String) -> Unit = {}): Result {
-        val headers = mapOf(
-            "User-Agent" to "Coda-Android",
-            "Accept" to "*/*",
-            // 清单可能被中间代理缓存，带 no-cache 让每次都问源站。
-            "Cache-Control" to "no-cache",
-        )
+    fun check(
+        ctx: Context,
+        onLog: (String) -> Unit = {},
+    ): Result {
+        val headers =
+            mapOf(
+                "User-Agent" to "Coda-Android",
+                "Accept" to "*/*",
+                // 清单可能被中间代理缓存，带 no-cache 让每次都问源站。
+                "Cache-Control" to "no-cache",
+            )
 
         // 两个渠道都取。任一拿不到都不影响另一个——单渠道坏掉时仍能更新。
         onLog("查询版本清单（dev 与 release 两个渠道）")
@@ -153,7 +156,10 @@ object UpdateChecker {
      * 与它不一致说明被放错了位置（例如 update-dev.json 传到了正式 Release），
      * 一律丢弃，避免把 dev 包当成正式版发给用户。
      */
-    fun parseManifest(json: JSONObject, expectedChannel: String): Result? {
+    fun parseManifest(
+        json: JSONObject,
+        expectedChannel: String,
+    ): Result? {
         val versionCode = json.optInt("versionCode", 0)
         val apkUrl = json.optString("apkUrl")
         if (versionCode <= 0 || apkUrl.isEmpty()) return null
@@ -202,21 +208,22 @@ object UpdateChecker {
         // 有了 ctx 就能查账本；没有就退化为纯 ping 排序（历史为空）。
         val net = ctx?.let { MirrorScoreboard.currentNet(it) } ?: MirrorScoreboard.Net.OTHER
         val history = ctx?.let { MirrorScoreboard.load(it, net) } ?: emptyMap()
-        val ranked = GhMirrors.rank(
-            probeUrl = url,
-            // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速。
-            // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
-            // 但这种场景恰恰最需要历史成绩：几 KB 的文件卡在慢源上，
-            // 用户要等几分钟，而 ping 只看握手完全反映不出来。
-            bytes = 1,
-            history = history,
-            onLog = { msg ->
-                // 两处都要：AppLog 供事后排查，onLog 供界面实时显示。
-                // 用 i() 不用 d()：minLevel 默认 INFO，d() 在正式包里会被丢弃。
-                AppLog.i(TAG, msg)
-                onLog(msg)
-            },
-        )
+        val ranked =
+            GhMirrors.rank(
+                probeUrl = url,
+                // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速。
+                // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
+                // 但这种场景恰恰最需要历史成绩：几 KB 的文件卡在慢源上，
+                // 用户要等几分钟，而 ping 只看握手完全反映不出来。
+                bytes = 1,
+                history = history,
+                onLog = { msg ->
+                    // 两处都要：AppLog 供事后排查，onLog 供界面实时显示。
+                    // 用 i() 不用 d()：minLevel 默认 INFO，d() 在正式包里会被丢弃。
+                    AppLog.i(TAG, msg)
+                    onLog(msg)
+                },
+            )
         for (mirror in ranked) {
             val t0 = System.currentTimeMillis()
             val json = fetchJson(GhMirrors.wrap(mirror.prefix, url), headers)
@@ -224,7 +231,11 @@ object UpdateChecker {
             if (json != null) {
                 ctx?.let {
                     MirrorScoreboard.record(
-                        it, net, mirror.id, MirrorScoreboard.Outcome.VERIFIED, elapsedMs = cost,
+                        it,
+                        net,
+                        mirror.id,
+                        MirrorScoreboard.Outcome.VERIFIED,
+                        elapsedMs = cost,
                     )
                 }
                 AppLog.i(TAG, "清单取自 ${mirror.id}")
@@ -232,7 +243,11 @@ object UpdateChecker {
             }
             ctx?.let {
                 MirrorScoreboard.record(
-                    it, net, mirror.id, MirrorScoreboard.Outcome.FAILED, elapsedMs = cost,
+                    it,
+                    net,
+                    mirror.id,
+                    MirrorScoreboard.Outcome.FAILED,
+                    elapsedMs = cost,
                 )
             }
             AppLog.i(TAG, "源 ${mirror.id} 失败，试下一个")
@@ -242,26 +257,31 @@ object UpdateChecker {
     }
 
     /** 对单个 URL 取 JSON；内容不是合法 JSON 也视为失败（镜像的错误页是 HTML）。 */
-    private fun fetchJson(fullUrl: String, headers: Map<String, String>): JSONObject? = try {
-        val conn = (URL(fullUrl).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            connectTimeout = 8_000
-            readTimeout = 12_000
-            headers.forEach { (k, v) -> setRequestProperty(k, v) }
-        }
+    private fun fetchJson(
+        fullUrl: String,
+        headers: Map<String, String>,
+    ): JSONObject? =
         try {
-            if (conn.responseCode !in 200..299) {
-                conn.errorStream?.close()
-                null
-            } else {
-                val text = conn.inputStream.bufferedReader().use { it.readText() }
-                // 镜像返回的 HTML 错误页同样会走到这里，JSONObject 会抛异常。
-                runCatching { JSONObject(text) }.getOrNull()
+            val conn =
+                (URL(fullUrl).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
+                    instanceFollowRedirects = true
+                    connectTimeout = 8_000
+                    readTimeout = 12_000
+                    headers.forEach { (k, v) -> setRequestProperty(k, v) }
+                }
+            try {
+                if (conn.responseCode !in 200..299) {
+                    conn.errorStream?.close()
+                    null
+                } else {
+                    val text = conn.inputStream.bufferedReader().use { it.readText() }
+                    // 镜像返回的 HTML 错误页同样会走到这里，JSONObject 会抛异常。
+                    runCatching { JSONObject(text) }.getOrNull()
+                }
+            } finally {
+                conn.disconnect()
             }
-        } finally {
-            conn.disconnect()
+        } catch (_: Throwable) {
+            null
         }
-    } catch (_: Throwable) {
-        null
-    }
 }

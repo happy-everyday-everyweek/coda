@@ -38,7 +38,6 @@ class OAuthSheet(
     /** 账号成功落盘后回调，用来让上游列表刷新。 */
     private val onAdded: (() -> Unit)? = null,
 ) {
-
     private val sheet = CodaSheet(host)
 
     /**
@@ -67,8 +66,10 @@ class OAuthSheet(
 
     private fun dp(v: Float): Int = (v * host.resources.displayMetrics.density + 0.5f).toInt()
 
-    private fun color(attr: Int, fallback: Int): Int =
-        MaterialColors.getColor(host.window.decorView, attr, fallback)
+    private fun color(
+        attr: Int,
+        fallback: Int,
+    ): Int = MaterialColors.getColor(host.window.decorView, attr, fallback)
 
     private val onSurface: Int
         get() = color(com.google.android.material.R.attr.colorOnSurface, Color.WHITE)
@@ -169,46 +170,64 @@ class OAuthSheet(
             val rows = mutableListOf<SettingRow>()
             // 这一行直接用当前站点当主标题：原来「登录站点」是标题、站点名是副标题，
             // 副标题比标题更有信息量，反过来显示更省一行。
-            rows += SettingRow.Value(
-                if (realm == "global") "国际版（workbuddy.ai）" else "国内版（copilot.tencent.com）",
-                "",
-                "pick_realm",
-            )
+            rows +=
+                SettingRow.Value(
+                    if (realm == "global") "国际版（workbuddy.ai）" else "国内版（copilot.tencent.com）",
+                    "",
+                    "pick_realm",
+                )
             // 已在 CodaSheet 内容区里，留白由 CodaSheet 统一负责，这里不再叠加。
             SettingsViewBuilder.render(
-                host, group, rows,
+                host,
+                group,
+                rows,
                 horizontalInsetPx = 0,
-                listener = object : SettingsActionListener {
-                override fun onRadioSelect(key: String) = Unit
-                override fun onToggleChange(key: String, checked: Boolean) = Unit
-                override fun onValueClick(key: String) {
-                    if (key != "pick_realm") return
-                    val options = listOf("国内版（copilot.tencent.com）", "国际版（workbuddy.ai）")
-                    val sheet2 = CodaSheet(host).title("登录站点")
-                    sheet2.content { col2 ->
-                        val g2 = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
-                        col2.addView(g2)
-                        val r2 = listOf(
-                            SettingRow.Value(options[0], if (realm == "cn") "当前" else "", "realm_cn"),
-                            SettingRow.Value(options[1], if (realm == "global") "当前" else "", "realm_global"),
-                        )
-                        SettingsViewBuilder.render(
-                            host, g2, r2,
-                            horizontalInsetPx = 0,
-                            listener = object : SettingsActionListener {
-                            override fun onRadioSelect(key: String) = Unit
-                            override fun onToggleChange(key: String, checked: Boolean) = Unit
-                            override fun onValueClick(key: String) {
-                                realm = if (key == "realm_global") "global" else "cn"
-                                sheet2.dismiss()
-                                sheet.refreshContent { col -> renderDisclaimer(col) }
+                listener =
+                    object : SettingsActionListener {
+                        override fun onRadioSelect(key: String) = Unit
+
+                        override fun onToggleChange(
+                            key: String,
+                            checked: Boolean,
+                        ) = Unit
+
+                        override fun onValueClick(key: String) {
+                            if (key != "pick_realm") return
+                            val options = listOf("国内版（copilot.tencent.com）", "国际版（workbuddy.ai）")
+                            val sheet2 = CodaSheet(host).title("登录站点")
+                            sheet2.content { col2 ->
+                                val g2 = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
+                                col2.addView(g2)
+                                val r2 =
+                                    listOf(
+                                        SettingRow.Value(options[0], if (realm == "cn") "当前" else "", "realm_cn"),
+                                        SettingRow.Value(options[1], if (realm == "global") "当前" else "", "realm_global"),
+                                    )
+                                SettingsViewBuilder.render(
+                                    host,
+                                    g2,
+                                    r2,
+                                    horizontalInsetPx = 0,
+                                    listener =
+                                        object : SettingsActionListener {
+                                            override fun onRadioSelect(key: String) = Unit
+
+                                            override fun onToggleChange(
+                                                key: String,
+                                                checked: Boolean,
+                                            ) = Unit
+
+                                            override fun onValueClick(key: String) {
+                                                realm = if (key == "realm_global") "global" else "cn"
+                                                sheet2.dismiss()
+                                                sheet.refreshContent { col -> renderDisclaimer(col) }
+                                            }
+                                        },
+                                )
                             }
-                        },
-                        )
-                    }
-                    sheet2.show()
-                }
-            },
+                            sheet2.show()
+                        }
+                    },
             )
         }
     }
@@ -228,10 +247,11 @@ class OAuthSheet(
         Thread {
             // 把最后一条进度记下来：失败时它就是真实原因，不能再盖成一句笼统的提示。
             val lastStep = arrayOf("")
-            val ok = OAuthLogin.prepare(host, provider) { text ->
-                lastStep[0] = text
-                main.post { progressPanel?.append(text) }
-            }
+            val ok =
+                OAuthLogin.prepare(host, provider) { text ->
+                    lastStep[0] = text
+                    main.post { progressPanel?.append(text) }
+                }
             main.post {
                 val p = progressPanel
                 if (!ok) {
@@ -255,11 +275,12 @@ class OAuthSheet(
                         if (started == null) {
                             // 不再只说「请重试」：panelJson 里已经把状态码、响应体、
                             // 或者「字段缺失」这类具体原因记进 lastBeginError。
-                            val text = if (reason.isNullOrEmpty()) {
-                                "无法发起授权，请重试"
-                            } else {
-                                "无法发起授权：$reason"
-                            }
+                            val text =
+                                if (reason.isNullOrEmpty()) {
+                                    "无法发起授权，请重试"
+                                } else {
+                                    "无法发起授权：$reason"
+                                }
                             p?.finish()
                             p?.append(text, emphasis = true)
                             AppLog.d("OAuthSheet", "begin failed: $reason provider=${provider.id} realm=$realm")
@@ -278,7 +299,10 @@ class OAuthSheet(
     }
 
     /** 设备码流程显示短码；其余流程显示授权地址，都可在应用内打开。 */
-    private fun showAuthorize(column: LinearLayout, session: OAuthLogin.Session) {
+    private fun showAuthorize(
+        column: LinearLayout,
+        session: OAuthLogin.Session,
+    ) {
         if (session.userCode.isNotEmpty()) {
             column.addView(
                 TextView(host).apply {
@@ -322,7 +346,10 @@ class OAuthSheet(
      * 连续添加多个账号才不会被互相顶掉。
      */
     @SuppressLint("SetJavaScriptEnabled")
-    private fun openInWebView(column: LinearLayout, url: String) {
+    private fun openInWebView(
+        column: LinearLayout,
+        url: String,
+    ) {
         runCatching {
             CookieManager.getInstance().removeAllCookies(null)
             CookieManager.getInstance().flush()
@@ -336,119 +363,125 @@ class OAuthSheet(
         // 全在 WebView 内部完成。外层卡片是 ScrollView，竖直手势会被它先截走，页面
         // 就滚不动了——这里声明"别拦截我"，WebView 自己滚；同时意味着卡片拖拽在
         // WebView 区域失效（授权期间不需要拖卡片，可接受）。
-        val view = WebView(host).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            CookieManager.getInstance().setAcceptCookie(true)
-            // 授权页一律用桌面端 UA。
-            //
-            // 这些 OAuth 授权页都是为桌面浏览器设计的：TRAE 的链接里甚至写死了
-            // x_device_type=windows、x_app_type=stable（照抄 Electron 客户端）。
-            // 用 WebView 默认的移动端 UA 时，页面会按移动端渲染，与服务端认定的
-            // 设备类型对不上，登录控件、跳转行为都可能跟着变。
-            // 统一成桌面 Chrome，所有供应商共用一套预期。
-            settings.userAgentString = DESKTOP_UA
-            // 授权页里的跳转会带相对路径（Location: /v0/resource/...），
-            // 默认 WebViewClient 同样会按 file:// 解析。这里统一补成网关绝对地址；
-            // 指向外部站点的（https://accounts.google.com 等）原样放行。
-            webChromeClient = object : WebChromeClient() {
-                /**
-                 * TRAE 那一步有概率不是普通导航，而是 window.open 弹新窗口。
-                 * 那种情况不会走 shouldOverrideUrlLoading，等于拦不到回调，
-                 * 用户最终停在一个「网页无法加载」的空白页上。
-                 *
-                 * 这里真正接管新窗口：创建一个临时 WebView 并通过 WebViewTransport
-                 * 交给系统，让新窗口的内容落在它里面；再用 WebViewClient 把该
-                 * 临时 WebView 的每次导航转回主 WebView（主 WebView 有回调拦截）。
-                 */
-                override fun onCreateWindow(
-                    view: WebView?,
-                    isDialog: Boolean,
-                    isUserGesture: Boolean,
-                    resultMsg: android.os.Message?,
-                ): Boolean {
-                    val main = view ?: return false
-                    val transport = (resultMsg?.obj as? WebView.WebViewTransport) ?: return false
-                    val popup = WebView(main.context).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        // 与主 WebView 保持同一套 UA，否则同一流程里两段页面
-                        // 会被识别成不同设备，跳转行为可能对不上。
-                        settings.userAgentString = DESKTOP_UA
-                        // 新窗口里的页面同样要能拿到登录态，Cookie 走全局同一份。
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(
-                                v: WebView?,
-                                request: WebResourceRequest?,
-                            ): Boolean {
-                                val target = request?.url?.toString() ?: return false
-                                AppLog.i("OAuthSheet", "新窗口导航转交主窗口：$target")
-                                // 主 WebView 的 shouldOverrideUrlLoading 会做回调识别，
-                                // 所以这里只要把地址交给它就够了，不在弹窗里自行处理。
-                                main.loadUrl(target)
+        val view =
+            WebView(host).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                CookieManager.getInstance().setAcceptCookie(true)
+                // 授权页一律用桌面端 UA。
+                //
+                // 这些 OAuth 授权页都是为桌面浏览器设计的：TRAE 的链接里甚至写死了
+                // x_device_type=windows、x_app_type=stable（照抄 Electron 客户端）。
+                // 用 WebView 默认的移动端 UA 时，页面会按移动端渲染，与服务端认定的
+                // 设备类型对不上，登录控件、跳转行为都可能跟着变。
+                // 统一成桌面 Chrome，所有供应商共用一套预期。
+                settings.userAgentString = DESKTOP_UA
+                // 授权页里的跳转会带相对路径（Location: /v0/resource/...），
+                // 默认 WebViewClient 同样会按 file:// 解析。这里统一补成网关绝对地址；
+                // 指向外部站点的（https://accounts.google.com 等）原样放行。
+                webChromeClient =
+                    object : WebChromeClient() {
+                        /**
+                         * TRAE 那一步有概率不是普通导航，而是 window.open 弹新窗口。
+                         * 那种情况不会走 shouldOverrideUrlLoading，等于拦不到回调，
+                         * 用户最终停在一个「网页无法加载」的空白页上。
+                         *
+                         * 这里真正接管新窗口：创建一个临时 WebView 并通过 WebViewTransport
+                         * 交给系统，让新窗口的内容落在它里面；再用 WebViewClient 把该
+                         * 临时 WebView 的每次导航转回主 WebView（主 WebView 有回调拦截）。
+                         */
+                        override fun onCreateWindow(
+                            view: WebView?,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: android.os.Message?,
+                        ): Boolean {
+                            val main = view ?: return false
+                            val transport = (resultMsg?.obj as? WebView.WebViewTransport) ?: return false
+                            val popup =
+                                WebView(main.context).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    // 与主 WebView 保持同一套 UA，否则同一流程里两段页面
+                                    // 会被识别成不同设备，跳转行为可能对不上。
+                                    settings.userAgentString = DESKTOP_UA
+                                    // 新窗口里的页面同样要能拿到登录态，Cookie 走全局同一份。
+                                    CookieManager.getInstance().setAcceptCookie(true)
+                                    webViewClient =
+                                        object : WebViewClient() {
+                                            override fun shouldOverrideUrlLoading(
+                                                v: WebView?,
+                                                request: WebResourceRequest?,
+                                            ): Boolean {
+                                                val target = request?.url?.toString() ?: return false
+                                                AppLog.i("OAuthSheet", "新窗口导航转交主窗口：$target")
+                                                // 主 WebView 的 shouldOverrideUrlLoading 会做回调识别，
+                                                // 所以这里只要把地址交给它就够了，不在弹窗里自行处理。
+                                                main.loadUrl(target)
+                                                return true
+                                            }
+                                        }
+                                    webChromeClient =
+                                        object : WebChromeClient() {
+                                            override fun onCloseWindow(window: WebView?) {
+                                                runCatching { window?.destroy() }
+                                            }
+                                        }
+                                }
+                            transport.webView = popup
+                            resultMsg?.sendToTarget()
+                            AppLog.i("OAuthSheet", "已接管新窗口，导航将转交主 WebView 处理")
+                            return true
+                        }
+                    }
+                webViewClient =
+                    object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            v: WebView?,
+                            request: WebResourceRequest?,
+                        ): Boolean {
+                            val next = request?.url?.toString() ?: return false
+                            // TRAE 的授权页不是标准 OAuth 重定向：登录完成后会把浏览器
+                            // 送到 http://127.0.0.1:<port>/authorize?isRedirect=true
+                            //   &authCodeInfo={...}&userInfo={...}，而这个地址没人监听，
+                            // 真机上就是「网页无法加载」。授权码其实就在这串 URL 里，
+                            // 所以这里截住它，改跳插件自己的 bridge 页把 URL 交回去——
+                            // 等同于用户手动「复制地址栏、粘回面板」，只是不用他动手。
+                            if (isTraeBounce(next)) {
+                                val handled = handoffTraeBounce(v, next)
+                                if (handled) return true
+                            }
+                            val absolute = resolveAuthUrl(next)
+                            if (absolute != next) {
+                                AppLog.i("OAuthSheet", "相对跳转补全：$next -> $absolute")
+                                v?.loadUrl(absolute)
                                 return true
                             }
-                        }
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onCloseWindow(window: WebView?) {
-                                runCatching { window?.destroy() }
-                            }
+                            return false
                         }
                     }
-                    transport.webView = popup
-                    resultMsg?.sendToTarget()
-                    AppLog.i("OAuthSheet", "已接管新窗口，导航将转交主 WebView 处理")
-                    return true
+                // 授权页常有移动版样式，但也有一些只适配桌面：按视口宽自排、过宽可横向
+                // 滚动，而不是压缩到看不清。
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
+                // 高度给足：卡片态 340dp 预览太小，全屏后也只占一小块。这里直接按
+                // 屏幕高给（外层 ScrollView 会兜底裁剪），两种停靠态下都能完整浏览。
+                val screenH = host.resources.displayMetrics.heightPixels
+                layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, screenH)
+                setOnTouchListener { v, _ ->
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    false
                 }
+                // 上游给的可能是相对路径（/v0/resource/plugins/xxx/browser-login?state=...）。
+                // WebView 在没有 baseUrl 的情况下会把以 / 开头的路径当成 file 路径，
+                // 于是变成 file:///v0/resource/... 并且把查询串里的 ? 编成 %3F，
+                // 页面自然打不开（真机上表现为「网页无法加载」）。
+                // 这里统一补成网关的绝对地址；已经是 http(s) 的原样用，
+                // 不能重复拼前缀。
+                val full = resolveAuthUrl(url)
+                AppLog.i("OAuthSheet", "授权页加载：$full")
+                loadUrl(full)
             }
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(
-                    v: WebView?,
-                    request: WebResourceRequest?,
-                ): Boolean {
-                    val next = request?.url?.toString() ?: return false
-                    // TRAE 的授权页不是标准 OAuth 重定向：登录完成后会把浏览器
-                    // 送到 http://127.0.0.1:<port>/authorize?isRedirect=true
-                    //   &authCodeInfo={...}&userInfo={...}，而这个地址没人监听，
-                    // 真机上就是「网页无法加载」。授权码其实就在这串 URL 里，
-                    // 所以这里截住它，改跳插件自己的 bridge 页把 URL 交回去——
-                    // 等同于用户手动「复制地址栏、粘回面板」，只是不用他动手。
-                    if (isTraeBounce(next)) {
-                        val handled = handoffTraeBounce(v, next)
-                        if (handled) return true
-                    }
-                    val absolute = resolveAuthUrl(next)
-                    if (absolute != next) {
-                        AppLog.i("OAuthSheet", "相对跳转补全：$next -> $absolute")
-                        v?.loadUrl(absolute)
-                        return true
-                    }
-                    return false
-                }
-            }
-            // 授权页常有移动版样式，但也有一些只适配桌面：按视口宽自排、过宽可横向
-            // 滚动，而不是压缩到看不清。
-            settings.loadWithOverviewMode = true
-            settings.useWideViewPort = true
-            // 高度给足：卡片态 340dp 预览太小，全屏后也只占一小块。这里直接按
-            // 屏幕高给（外层 ScrollView 会兜底裁剪），两种停靠态下都能完整浏览。
-            val screenH = host.resources.displayMetrics.heightPixels
-            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, screenH)
-            setOnTouchListener { v, _ ->
-                v.parent?.requestDisallowInterceptTouchEvent(true)
-                false
-            }
-            // 上游给的可能是相对路径（/v0/resource/plugins/xxx/browser-login?state=...）。
-            // WebView 在没有 baseUrl 的情况下会把以 / 开头的路径当成 file 路径，
-            // 于是变成 file:///v0/resource/... 并且把查询串里的 ? 编成 %3F，
-            // 页面自然打不开（真机上表现为「网页无法加载」）。
-            // 这里统一补成网关的绝对地址；已经是 http(s) 的原样用，
-            // 不能重复拼前缀。
-            val full = resolveAuthUrl(url)
-            AppLog.i("OAuthSheet", "授权页加载：$full")
-            loadUrl(full)
-        }
         webView = view
         column.addView(view)
     }
@@ -485,7 +518,10 @@ class OAuthSheet(
      *
      * @return true 表示已经接管这次导航，调用方不应再让 WebView 去访问原地址。
      */
-    private fun handoffTraeBounce(view: WebView?, bounced: String): Boolean {
+    private fun handoffTraeBounce(
+        view: WebView?,
+        bounced: String,
+    ): Boolean {
         val state = session?.state.orEmpty()
         if (state.isEmpty()) {
             AppLog.w("OAuthSheet", "TRAE 回调到达但本地没有 state，无法交回 bridge")
@@ -493,9 +529,10 @@ class OAuthSheet(
         }
         val encodedState = android.net.Uri.encode(state)
         val encodedUrl = android.net.Uri.encode(bounced)
-        val bridge = ProxyHost.baseUrl().trimEnd('/') +
-            "/v0/resource/plugins/${provider.pluginId}/browser-login/bridge" +
-            "?state=$encodedState&url=$encodedUrl"
+        val bridge =
+            ProxyHost.baseUrl().trimEnd('/') +
+                "/v0/resource/plugins/${provider.pluginId}/browser-login/bridge" +
+                "?state=$encodedState&url=$encodedUrl"
         AppLog.i(
             "OAuthSheet",
             "TRAE 回调已截获，改交 bridge 页（state=${state.take(8)}…，回调长度=${bounced.length}）",
@@ -535,11 +572,12 @@ class OAuthSheet(
     private fun renderConfirm(column: LinearLayout) {
         column.removeAllViews()
         column.addView(paragraph("授权成功", "正在确认账号可用的模型…"))
-        val status = TextView(host).apply {
-            text = "读取模型清单…"
-            textSize = 13f
-            setTextColor(onSurfaceVariant)
-        }
+        val status =
+            TextView(host).apply {
+                text = "读取模型清单…"
+                textSize = 13f
+                setTextColor(onSurfaceVariant)
+            }
         statusText = status
         column.addView(status)
 
@@ -547,11 +585,12 @@ class OAuthSheet(
             val list = OAuthLogin.models(host)
             main.post {
                 models = list
-                status.text = if (list.isEmpty()) {
-                    "网关暂未返回模型，账号已登录，之后可在模型设置里刷新"
-                } else {
-                    "可用模型 ${list.size} 个"
-                }
+                status.text =
+                    if (list.isEmpty()) {
+                        "网关暂未返回模型，账号已登录，之后可在模型设置里刷新"
+                    } else {
+                        "可用模型 ${list.size} 个"
+                    }
                 if (list.isNotEmpty()) {
                     column.addView(
                         TextView(host).apply {
@@ -609,40 +648,41 @@ class OAuthSheet(
         if (polling) return
         polling = true
         val startedAt = System.currentTimeMillis()
-        val tick = object : Runnable {
-            override fun run() {
-                val current = session ?: return
-                // 插件的登录会话默认 5 分钟过期，过期后 poll 会一直回 wait。
-                // 客户端必须自己收口，否则界面会永远停在"等待授权"。
-                if (System.currentTimeMillis() - startedAt > SESSION_TIMEOUT_MS) {
-                    polling = false
-                    statusText?.text = "授权超时，请重新发起登录"
-                    return
-                }
-                Thread {
-                    val result = OAuthLogin.poll(host, current)
-                    main.post {
-                        when (result) {
-                            is OAuthLogin.Result.Ready -> {
-                                polling = false
-                                authorized = true
-                                statusText?.text = "已授权"
-                                sheet.primaryAction("继续") { self -> onPrimary(self) }
-                            }
+        val tick =
+            object : Runnable {
+                override fun run() {
+                    val current = session ?: return
+                    // 插件的登录会话默认 5 分钟过期，过期后 poll 会一直回 wait。
+                    // 客户端必须自己收口，否则界面会永远停在"等待授权"。
+                    if (System.currentTimeMillis() - startedAt > SESSION_TIMEOUT_MS) {
+                        polling = false
+                        statusText?.text = "授权超时，请重新发起登录"
+                        return
+                    }
+                    Thread {
+                        val result = OAuthLogin.poll(host, current)
+                        main.post {
+                            when (result) {
+                                is OAuthLogin.Result.Ready -> {
+                                    polling = false
+                                    authorized = true
+                                    statusText?.text = "已授权"
+                                    sheet.primaryAction("继续") { self -> onPrimary(self) }
+                                }
 
-                            is OAuthLogin.Result.Failed -> {
-                                polling = false
-                                statusText?.text = result.message
-                            }
+                                is OAuthLogin.Result.Failed -> {
+                                    polling = false
+                                    statusText?.text = result.message
+                                }
 
-                            is OAuthLogin.Result.Pending -> {
-                                if (polling) main.postDelayed(this, POLL_INTERVAL_MS)
+                                is OAuthLogin.Result.Pending -> {
+                                    if (polling) main.postDelayed(this, POLL_INTERVAL_MS)
+                                }
                             }
                         }
-                    }
-                }.apply { isDaemon = true }.start()
+                    }.apply { isDaemon = true }.start()
+                }
             }
-        }
         main.postDelayed(tick, POLL_INTERVAL_MS)
     }
 
@@ -667,49 +707,59 @@ class OAuthSheet(
 
     // ---------------------------------------------------------------- 小部件
 
-    private fun paragraph(title: String, body: String): View = LinearLayout(host).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(0, 0, 0, dp(14f))
-        addView(
-            TextView(host).apply {
-                text = title
-                textSize = 14f
-                setTextColor(onSurface)
-                typeface = Typeface.DEFAULT_BOLD
-            },
-        )
-        addView(
-            TextView(host).apply {
-                text = body
-                textSize = 13f
-                setTextColor(onSurfaceVariant)
-                setPadding(0, dp(4f), 0, 0)
-                setLineSpacing(dp(3f).toFloat(), 1f)
-            },
-        )
-    }
-
-    private fun hint(text: String): View = TextView(host).apply {
-        this.text = text
-        textSize = 12f
-        setTextColor(onSurfaceVariant)
-        gravity = Gravity.CENTER
-        setPadding(0, dp(6f), 0, dp(6f))
-    }
-
-    private fun button(text: String, click: () -> Unit): View = TextView(host).apply {
-        this.text = text
-        textSize = 14f
-        gravity = Gravity.CENTER
-        setTextColor(primary)
-        background = GradientDrawable().apply {
-            cornerRadius = dp(22f).toFloat()
-            setStroke(dp(1f), primary)
+    private fun paragraph(
+        title: String,
+        body: String,
+    ): View =
+        LinearLayout(host).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, dp(14f))
+            addView(
+                TextView(host).apply {
+                    text = title
+                    textSize = 14f
+                    setTextColor(onSurface)
+                    typeface = Typeface.DEFAULT_BOLD
+                },
+            )
+            addView(
+                TextView(host).apply {
+                    text = body
+                    textSize = 13f
+                    setTextColor(onSurfaceVariant)
+                    setPadding(0, dp(4f), 0, 0)
+                    setLineSpacing(dp(3f).toFloat(), 1f)
+                },
+            )
         }
-        setPadding(dp(14f), dp(11f), dp(14f), dp(11f))
-        setOnClickListener { click() }
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(8f) }
-    }
+
+    private fun hint(text: String): View =
+        TextView(host).apply {
+            this.text = text
+            textSize = 12f
+            setTextColor(onSurfaceVariant)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(6f), 0, dp(6f))
+        }
+
+    private fun button(
+        text: String,
+        click: () -> Unit,
+    ): View =
+        TextView(host).apply {
+            this.text = text
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(primary)
+            background =
+                GradientDrawable().apply {
+                    cornerRadius = dp(22f).toFloat()
+                    setStroke(dp(1f), primary)
+                }
+            setPadding(dp(14f), dp(11f), dp(14f), dp(11f))
+            setOnClickListener { click() }
+            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(8f) }
+        }
 
     private companion object {
         const val POLL_INTERVAL_MS = 2_000L

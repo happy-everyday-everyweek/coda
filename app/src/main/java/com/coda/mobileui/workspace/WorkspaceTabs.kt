@@ -7,11 +7,14 @@ import java.io.File
 import java.util.UUID
 
 /** 一个标签页：种类固定，状态由各页面自行给出。 */
-data class WorkspaceTab(val id: String, val kind: String, var state: JSONObject)
+data class WorkspaceTab(
+    val id: String,
+    val kind: String,
+    var state: JSONObject,
+)
 
 /** 标签页集合的落点与读写。 */
 object WorkspaceTabs {
-
     const val OVERVIEW = "overview"
     const val FILES = "files"
     const val GIT = "git"
@@ -19,14 +22,20 @@ object WorkspaceTabs {
 
     private const val VERSION = 1
 
-    fun newId(): String = UUID.randomUUID().toString().replace("-", "").take(10)
+    fun newId(): String =
+        UUID
+            .randomUUID()
+            .toString()
+            .replace("-", "")
+            .take(10)
 
-    fun label(kind: String): String = when (kind) {
-        FILES -> "文件"
-        GIT -> "Git"
-        TERMINAL -> "终端"
-        else -> "概览"
-    }
+    fun label(kind: String): String =
+        when (kind) {
+            FILES -> "文件"
+            GIT -> "Git"
+            TERMINAL -> "终端"
+            else -> "概览"
+        }
 
     /** 读回上次的标签页集合与当前标签；没有记录时返回空集合。 */
     fun load(root: File): Pair<MutableList<WorkspaceTab>, String?> {
@@ -51,7 +60,11 @@ object WorkspaceTabs {
     }
 
     /** 写回落盘；失败不抛出，标签页状态丢失不应影响正在进行的操作。 */
-    fun save(root: File, tabs: List<WorkspaceTab>, active: String?) {
+    fun save(
+        root: File,
+        tabs: List<WorkspaceTab>,
+        active: String?,
+    ) {
         val array = JSONArray()
         for (tab in tabs) {
             array.put(
@@ -61,10 +74,11 @@ object WorkspaceTabs {
                     .put("state", tab.state),
             )
         }
-        val payload = JSONObject()
-            .put("version", VERSION)
-            .put("root", root.absolutePath)
-            .put("tabs", array)
+        val payload =
+            JSONObject()
+                .put("version", VERSION)
+                .put("root", root.absolutePath)
+                .put("tabs", array)
         if (active != null) payload.put("active", active)
         try {
             Workspaces.ensureState(root)

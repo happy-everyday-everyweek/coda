@@ -11,7 +11,6 @@ import java.io.File
  * [STATE_DIR] 里，与文件放在一起，换设备时只要带上这个目录就能恢复。
  */
 object Workspaces {
-
     /** 工作区元数据目录名。 */
     const val STATE_DIR = ".coda"
 
@@ -34,7 +33,10 @@ object Workspaces {
     }
 
     /** 选定工作区根目录。 */
-    fun select(ctx: Context, path: String) {
+    fun select(
+        ctx: Context,
+        path: String,
+    ) {
         SettingsStore.get(ctx).workspaceRoot = File(path).absolutePath
     }
 
@@ -58,9 +60,10 @@ object Workspaces {
         return if (usable(brand)) brand else null
     }
 
-    private fun usable(dir: File): Boolean = try {
-        dir.isDirectory || dir.mkdirs()
-    } catch (_: Throwable) {
-        false
-    }
+    private fun usable(dir: File): Boolean =
+        try {
+            dir.isDirectory || dir.mkdirs()
+        } catch (_: Throwable) {
+            false
+        }
 }

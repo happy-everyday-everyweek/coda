@@ -21,7 +21,6 @@ import org.json.JSONObject
  * 不必再写一平台一套分支。
  */
 object OAuthActions {
-
     /**
      * 一个动作。
      *
@@ -59,115 +58,116 @@ object OAuthActions {
      * 顺序即界面顺序：先做日常该做的（签到、领奖励），再做维护类（刷新、续期），
      * 最后是破坏性的（停用、删除）。
      */
-    val all: List<Action> = listOf(
-        // ---- 日常 ----
-        Action(
-            id = "checkin",
-            title = "签到",
-            note = "领取当天的每日额度",
-            path = "/checkin",
-            scope = Scope.ACCOUNT,
-        ),
-        Action(
-            id = "growth",
-            title = "领取成长奖励",
-            note = "成长中心的旅行、任务、连签、兑换、抽奖",
-            path = "/growth",
-            scope = Scope.ACCOUNT,
-        ),
-        Action(
-            id = "claim",
-            title = "领取活动奖励",
-            note = "领取该平台当前可领的活动与权益",
-            path = "/claim",
-            scope = Scope.ACCOUNT,
-        ),
-        Action(
-            id = "claim-pro",
-            title = "领取专业版权益",
-            note = "Qoder 系的专业版体验与权益领取",
-            path = "/claim-pro",
-            scope = Scope.ACCOUNT,
-        ),
-        Action(
-            id = "trial",
-            title = "领取专家加油包",
-            note = "国际版账号的一次性试用额度",
-            path = "/trial",
-            scope = Scope.ACCOUNT,
-        ),
-        // ---- 维护 ----
-        Action(
-            id = "refresh",
-            title = "刷新额度",
-            note = "向服务端重新取一次余额",
-            path = "/refresh",
-            scope = Scope.PLATFORM,
-        ),
-        Action(
-            id = "select",
-            title = "设为当前路由",
-            note = "网关优先用这个账号承接请求",
-            path = "/select",
-            scope = Scope.ACCOUNT,
-        ),
-        Action(
-            id = "test-active",
-            title = "测试连通",
-            note = "发一次真实请求验证账号可用",
-            path = "/test-active",
-            scope = Scope.ACCOUNT,
-        ),
-        Action(
-            id = "keepalive",
-            title = "续期令牌",
-            note = "凭据过期时手动刷新一次",
-            path = "/keepalive",
-            scope = Scope.ACCOUNT,
-        ),
-        Action(
-            id = "clear-cooldown",
-            title = "清除冷却",
-            note = "让被限流的账号立刻重新参与调度",
-            path = "/clear-cooldown",
-            scope = Scope.ACCOUNT,
-            confirm = true,
-        ),
-        Action(
-            id = "unfreeze",
-            title = "解冻账号",
-            note = "解除上游的风控冻结状态",
-            path = "/unfreeze",
-            scope = Scope.ACCOUNT,
-            confirm = true,
-        ),
-        // ---- 状态 ----
-        Action(
-            id = "enable",
-            title = "启用账号",
-            note = "恢复该账号参与请求调度",
-            path = "/enable",
-            scope = Scope.ACCOUNT,
-        ),
-        Action(
-            id = "disable",
-            title = "停用账号",
-            note = "暂停使用该账号，凭据保留",
-            path = "/disable",
-            scope = Scope.ACCOUNT,
-            confirm = true,
-        ),
-        // ---- 破坏性 ----
-        Action(
-            id = "delete",
-            title = "删除账号",
-            note = "连同本地凭据一并删除，需要重新授权",
-            path = "/delete",
-            scope = Scope.ACCOUNT,
-            confirm = true,
-            danger = true,
-        ),
-    )
+    val all: List<Action> =
+        listOf(
+            // ---- 日常 ----
+            Action(
+                id = "checkin",
+                title = "签到",
+                note = "领取当天的每日额度",
+                path = "/checkin",
+                scope = Scope.ACCOUNT,
+            ),
+            Action(
+                id = "growth",
+                title = "领取成长奖励",
+                note = "成长中心的旅行、任务、连签、兑换、抽奖",
+                path = "/growth",
+                scope = Scope.ACCOUNT,
+            ),
+            Action(
+                id = "claim",
+                title = "领取活动奖励",
+                note = "领取该平台当前可领的活动与权益",
+                path = "/claim",
+                scope = Scope.ACCOUNT,
+            ),
+            Action(
+                id = "claim-pro",
+                title = "领取专业版权益",
+                note = "Qoder 系的专业版体验与权益领取",
+                path = "/claim-pro",
+                scope = Scope.ACCOUNT,
+            ),
+            Action(
+                id = "trial",
+                title = "领取专家加油包",
+                note = "国际版账号的一次性试用额度",
+                path = "/trial",
+                scope = Scope.ACCOUNT,
+            ),
+            // ---- 维护 ----
+            Action(
+                id = "refresh",
+                title = "刷新额度",
+                note = "向服务端重新取一次余额",
+                path = "/refresh",
+                scope = Scope.PLATFORM,
+            ),
+            Action(
+                id = "select",
+                title = "设为当前路由",
+                note = "网关优先用这个账号承接请求",
+                path = "/select",
+                scope = Scope.ACCOUNT,
+            ),
+            Action(
+                id = "test-active",
+                title = "测试连通",
+                note = "发一次真实请求验证账号可用",
+                path = "/test-active",
+                scope = Scope.ACCOUNT,
+            ),
+            Action(
+                id = "keepalive",
+                title = "续期令牌",
+                note = "凭据过期时手动刷新一次",
+                path = "/keepalive",
+                scope = Scope.ACCOUNT,
+            ),
+            Action(
+                id = "clear-cooldown",
+                title = "清除冷却",
+                note = "让被限流的账号立刻重新参与调度",
+                path = "/clear-cooldown",
+                scope = Scope.ACCOUNT,
+                confirm = true,
+            ),
+            Action(
+                id = "unfreeze",
+                title = "解冻账号",
+                note = "解除上游的风控冻结状态",
+                path = "/unfreeze",
+                scope = Scope.ACCOUNT,
+                confirm = true,
+            ),
+            // ---- 状态 ----
+            Action(
+                id = "enable",
+                title = "启用账号",
+                note = "恢复该账号参与请求调度",
+                path = "/enable",
+                scope = Scope.ACCOUNT,
+            ),
+            Action(
+                id = "disable",
+                title = "停用账号",
+                note = "暂停使用该账号，凭据保留",
+                path = "/disable",
+                scope = Scope.ACCOUNT,
+                confirm = true,
+            ),
+            // ---- 破坏性 ----
+            Action(
+                id = "delete",
+                title = "删除账号",
+                note = "连同本地凭据一并删除，需要重新授权",
+                path = "/delete",
+                scope = Scope.ACCOUNT,
+                confirm = true,
+                danger = true,
+            ),
+        )
 
     /** 按 id 取。 */
     fun byId(id: String): Action? = all.firstOrNull { it.id == id }
@@ -220,14 +220,18 @@ object OAuthActions {
             body.put("auth_index", authIndex)
         }
         val path = "/v0/management/plugins/${provider.pluginId}${action.path}"
-        val raw = if (action.method == "GET") {
-            ProxyHost.managementJson(ctx, buildString {
-                append(path)
-                if (body.length() > 0) append("?auth_index=").append(android.net.Uri.encode(authIndex))
-            })
-        } else {
-            ProxyHost.managementJson(ctx, path, "POST", body.toString())
-        } ?: return OAuthAccounts.Outcome(false, "无法连接网关")
+        val raw =
+            if (action.method == "GET") {
+                ProxyHost.managementJson(
+                    ctx,
+                    buildString {
+                        append(path)
+                        if (body.length() > 0) append("?auth_index=").append(android.net.Uri.encode(authIndex))
+                    },
+                )
+            } else {
+                ProxyHost.managementJson(ctx, path, "POST", body.toString())
+            } ?: return OAuthAccounts.Outcome(false, "无法连接网关")
 
         val payload = raw.optJSONObject("data") ?: raw
         payload.optString("error").takeIf { it.isNotEmpty() }?.let {
@@ -241,11 +245,12 @@ object OAuthActions {
     }
 
     /** 把插件返回的英文说明压成中文；认不出的原样带出，至少不丢信息。 */
-    private fun describe(raw: String): String = when {
-        raw.contains("no matching account") -> "没有找到该账号，可能已失效"
-        raw.contains("already") && raw.contains("check") -> "今天已经签过了"
-        raw.contains("not found") -> "该动作在当前插件版本里不可用"
-        raw.contains("unauthorized") || raw.contains("invalid") -> "凭据已失效，需要重新授权"
-        else -> raw
-    }
+    private fun describe(raw: String): String =
+        when {
+            raw.contains("no matching account") -> "没有找到该账号，可能已失效"
+            raw.contains("already") && raw.contains("check") -> "今天已经签过了"
+            raw.contains("not found") -> "该动作在当前插件版本里不可用"
+            raw.contains("unauthorized") || raw.contains("invalid") -> "凭据已失效，需要重新授权"
+            else -> raw
+        }
 }

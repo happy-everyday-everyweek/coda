@@ -27,11 +27,11 @@ import com.coda.mobileui.CodaSheet
 import com.coda.mobileui.R
 import com.coda.mobileui.applyBottomInsetWithIme
 import com.coda.mobileui.applyTopSystemBarInset
-import com.coda.mobileui.padForBottomSafeInset
-import com.coda.mobileui.topSafeInsetPx
 import com.coda.mobileui.core.LinuxEnv
 import com.coda.mobileui.core.Workspaces
+import com.coda.mobileui.padForBottomSafeInset
 import com.coda.mobileui.setupEdgeToEdge
+import com.coda.mobileui.topSafeInsetPx
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
@@ -42,7 +42,6 @@ import java.util.concurrent.Executors
  * 页面内容由各标签自行渲染，容器负责装配、切换、历史前进后退与状态存取。
  */
 class WorkspaceActivity : BaseActivity() {
-
     companion object {
         /** 终端底栏的沉浸配色：只有终端页用，进入终端时底栏整条转黑。 */
         private val terminalBarBackground = 0xFF000000.toInt()
@@ -66,7 +65,10 @@ class WorkspaceActivity : BaseActivity() {
         fun intent(context: Context): Intent = Intent(context, WorkspaceActivity::class.java)
     }
 
-    private data class OpenTab(val data: WorkspaceTab, val page: WorkspacePage)
+    private data class OpenTab(
+        val data: WorkspaceTab,
+        val page: WorkspacePage,
+    )
 
     /** 工作台当前的根目录。 */
     lateinit var root: File
@@ -165,7 +167,11 @@ class WorkspaceActivity : BaseActivity() {
     fun activePage(): WorkspacePage? = tabs.firstOrNull { it.data.id == activeId }?.page
 
     /** 后台执行并回到主线程交付结果；异常只记录，不打断界面。 */
-    fun <T> background(work: () -> T, then: (T) -> Unit, onError: (() -> Unit)? = null) {
+    fun <T> background(
+        work: () -> T,
+        then: (T) -> Unit,
+        onError: (() -> Unit)? = null,
+    ) {
         worker.execute {
             val outcome = runCatching(work)
             main.post {
@@ -199,8 +205,9 @@ class WorkspaceActivity : BaseActivity() {
         envWaiters += then
         showStatus("正在准备环境")
         worker.execute {
-            val ok = runCatching { env.ensureReady { text -> main.post { showStatus(text) } } }
-                .getOrDefault(false)
+            val ok =
+                runCatching { env.ensureReady { text -> main.post { showStatus(text) } } }
+                    .getOrDefault(false)
             main.post {
                 envState = if (ok) 2 else -1
                 hideStatus()
@@ -268,35 +275,41 @@ class WorkspaceActivity : BaseActivity() {
         }
         // 已经被手指拖了一段，剩余距离按比例缩短时长，避免松手后还要等满时长
         val remaining = 1f - from.toFloat() / screenWidth
-        val anim = ValueAnimator.ofInt(from, screenWidth).apply {
-            duration = (ENTER_EXPAND_DURATION_MS * remaining).toLong().coerceAtLeast(90L)
-            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
-            addUpdateListener { a ->
-                container.layoutParams = container.layoutParams.apply {
-                    this.width = a.animatedValue as Int
+        val anim =
+            ValueAnimator.ofInt(from, screenWidth).apply {
+                duration = (ENTER_EXPAND_DURATION_MS * remaining).toLong().coerceAtLeast(90L)
+                interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+                addUpdateListener { a ->
+                    container.layoutParams =
+                        container.layoutParams.apply {
+                            this.width = a.animatedValue as Int
+                        }
+                    container.requestLayout()
                 }
-                container.requestLayout()
             }
-        }
-        anim.addListener(object : android.animation.AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: android.animation.Animator) {
-                // 展开到位后把宽度交回匹配父布局，避免旋转或分屏后尺寸被固定值锁死。
-                container.layoutParams = container.layoutParams.apply { width = MATCH }
-                container.requestLayout()
-                startWidthFraction = 0f
-            }
-        })
+        anim.addListener(
+            object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    // 展开到位后把宽度交回匹配父布局，避免旋转或分屏后尺寸被固定值锁死。
+                    container.layoutParams = container.layoutParams.apply { width = MATCH }
+                    container.requestLayout()
+                    startWidthFraction = 0f
+                }
+            },
+        )
         anim.start()
     }
 
     private fun buildContainer(): View {
-        container = FrameLayout(this).apply {
-            // 底色由 applyChromePalette 按当前页面决定，这里先不留默认色。
-        }
+        container =
+            FrameLayout(this).apply {
+                // 底色由 applyChromePalette 按当前页面决定，这里先不留默认色。
+            }
 
-        pageHost = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
-        }
+        pageHost =
+            FrameLayout(this).apply {
+                layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
+            }
         // 状态栏避让。不能用 applyTopSystemBarInset：沉浸式下 WindowInsets 会返回 0，
         // 那样页面内容会顶到屏幕最上面、被状态栏与挖孔压住（这是工作区之前的实际情况）。
         // 这里改用固定高度（状态栏与挖孔取较大者），与聊天页顶栏同一套口径。
@@ -304,10 +317,11 @@ class WorkspaceActivity : BaseActivity() {
         pageHost.setPadding(0, topSafeInsetPx(), 0, 0)
         container.addView(pageHost)
 
-        val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM)
-        }
+        val bottom =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM)
+            }
         dividerLine = line()
         bottom.addView(dividerLine)
         bottom.addView(toolRow())
@@ -317,26 +331,30 @@ class WorkspaceActivity : BaseActivity() {
         container.addView(bottom)
         applyChromePalette()
 
-        statusView = TextView(this).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setTextColor(onSurfaceVariant)
-            setPadding(dp(16f), dp(8f), dp(16f), dp(8f))
-            background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_tool_card)
-            visibility = View.GONE
-            layoutParams = FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-                .apply { topMargin = dp(16f) }
-        }
+        statusView =
+            TextView(this).apply {
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextColor(onSurfaceVariant)
+                setPadding(dp(16f), dp(8f), dp(16f), dp(8f))
+                background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_tool_card)
+                visibility = View.GONE
+                layoutParams =
+                    FrameLayout
+                        .LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+                        .apply { topMargin = dp(16f) }
+            }
         container.addView(statusView)
         container.applyBottomInsetWithIme()
         return container
     }
 
     private fun toolRow(): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(MATCH, dp(52f))
-        }
+        val row =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(MATCH, dp(52f))
+            }
         backButton = toolButton(R.drawable.ic_arrow_back) { if (history.isNotEmpty()) stepBack() }
         aheadButton = toolButton(R.drawable.ic_arrow_forward) { if (ahead.isNotEmpty()) stepAhead() }
         row.addView(slot(backButton))
@@ -344,18 +362,19 @@ class WorkspaceActivity : BaseActivity() {
         val addButton = toolButton(R.drawable.ic_add) { showNewTabSheet() }
         val moreButton = toolButton(R.drawable.ic_more_vert) { showMenu() }
         row.addView(slot(addButton))
-        countButton = TextView(this).apply {
-            text = "1"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            gravity = Gravity.CENTER
-            isClickable = true
-            setOnClickListener { toggleOverview() }
-            setOnLongClickListener {
-                activeId?.let { showTabActions(it) }
-                true
+        countButton =
+            TextView(this).apply {
+                text = "1"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                gravity = Gravity.CENTER
+                isClickable = true
+                setOnClickListener { toggleOverview() }
+                setOnLongClickListener {
+                    activeId?.let { showTabActions(it) }
+                    true
+                }
+                layoutParams = FrameLayout.LayoutParams(dp(40f), dp(28f), Gravity.CENTER)
             }
-            layoutParams = FrameLayout.LayoutParams(dp(40f), dp(28f), Gravity.CENTER)
-        }
         row.addView(slot(countButton))
         row.addView(slot(moreButton))
         // 只登记底栏自己的按钮：toolButton 也被标签总览的头部用到，在那里换色会把
@@ -383,38 +402,57 @@ class WorkspaceActivity : BaseActivity() {
         for (button in toolButtons) button.setColorFilter(foreground)
     }
 
-    private fun slot(child: View): View = FrameLayout(this).apply {
-        layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
-        addView(child)
-    }
-
-    private fun toolButton(iconRes: Int, click: () -> Unit): ImageButton = ImageButton(this).apply {
-        setImageResource(iconRes)
-        // 默认按主题前景着色：底栏会在切页时再覆盖，标签总览头部的图标则用这个默认值。
-        setColorFilter(onSurface)
-        background = null
-        scaleType = ImageView.ScaleType.CENTER_INSIDE
-        val size = dp(40f)
-        layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
-        setPadding(dp(9f), dp(9f), dp(9f), dp(9f))
-        setOnClickListener { click() }
-        // 底栏图标很密，按下只做轻微缩放、不做透明度：缩放在 40dp 的方块里最清楚。
-        setOnTouchListener { v, ev ->
-            when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN ->
-                    v.animate().scaleX(0.88f).scaleY(0.88f)
-                        .setDuration(Motion.TAP_MS).setInterpolator(Motion.standard).start()
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                    v.animate().scaleX(1f).scaleY(1f)
-                        .setDuration(Motion.SETTLE_MS).setInterpolator(Motion.settle).start()
-            }
-            false
+    private fun slot(child: View): View =
+        FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
+            addView(child)
         }
-    }
 
-    private fun line(): View = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(MATCH, dp(0.7f))
-    }
+    private fun toolButton(
+        iconRes: Int,
+        click: () -> Unit,
+    ): ImageButton =
+        ImageButton(this).apply {
+            setImageResource(iconRes)
+            // 默认按主题前景着色：底栏会在切页时再覆盖，标签总览头部的图标则用这个默认值。
+            setColorFilter(onSurface)
+            background = null
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            val size = dp(40f)
+            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
+            setPadding(dp(9f), dp(9f), dp(9f), dp(9f))
+            setOnClickListener { click() }
+            // 底栏图标很密，按下只做轻微缩放、不做透明度：缩放在 40dp 的方块里最清楚。
+            setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v
+                            .animate()
+                            .scaleX(0.88f)
+                            .scaleY(0.88f)
+                            .setDuration(Motion.TAP_MS)
+                            .setInterpolator(Motion.standard)
+                            .start()
+                    }
+
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v
+                            .animate()
+                            .scaleX(1f)
+                            .scaleY(1f)
+                            .setDuration(Motion.SETTLE_MS)
+                            .setInterpolator(Motion.settle)
+                            .start()
+                    }
+                }
+                false
+            }
+        }
+
+    private fun line(): View =
+        View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(MATCH, dp(0.7f))
+        }
 
     private fun pill(fill: Int): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
@@ -444,14 +482,18 @@ class WorkspaceActivity : BaseActivity() {
         return OpenTab(data, page)
     }
 
-    private fun createPage(data: WorkspaceTab): WorkspacePage = when (data.kind) {
-        WorkspaceTabs.FILES -> FilesPage(this, data.state)
-        WorkspaceTabs.GIT -> GitPage(this, data.state)
-        WorkspaceTabs.TERMINAL -> TerminalPage(this, data.state)
-        else -> OverviewPage(this, data.state)
-    }
+    private fun createPage(data: WorkspaceTab): WorkspacePage =
+        when (data.kind) {
+            WorkspaceTabs.FILES -> FilesPage(this, data.state)
+            WorkspaceTabs.GIT -> GitPage(this, data.state)
+            WorkspaceTabs.TERMINAL -> TerminalPage(this, data.state)
+            else -> OverviewPage(this, data.state)
+        }
 
-    private fun createTab(kind: String, state: JSONObject?) {
+    private fun createTab(
+        kind: String,
+        state: JSONObject?,
+    ) {
         val entry = attach(WorkspaceTab(WorkspaceTabs.newId(), kind, state ?: JSONObject()))
         tabs += entry
         selectTab(entry.data.id)
@@ -481,9 +523,12 @@ class WorkspaceActivity : BaseActivity() {
             next.page.view.visibility = View.VISIBLE
             // 轻量淡入：切页时给一次明确的"内容换了"的反馈，不做位移动画以免与
             // 各页自身的滚动位置打架。
-            next.page.view.animate().cancel()
+            next.page.view
+                .animate()
+                .cancel()
             next.page.view.alpha = 0f
-            next.page.view.animate()
+            next.page.view
+                .animate()
                 .alpha(1f)
                 .setDuration(Motion.SETTLE_MS)
                 .setInterpolator(Motion.standard)
@@ -514,7 +559,9 @@ class WorkspaceActivity : BaseActivity() {
         val index = tabs.indexOfFirst { it.data.id == id }
         if (index < 0) return
         val entry = tabs.removeAt(index)
-        entry.page.view.animate().cancel()
+        entry.page.view
+            .animate()
+            .cancel()
         pageHost.removeView(entry.page.view)
         entry.page.onClosed()
         history.remove(id)
@@ -560,10 +607,14 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     /** 底栏图标的状态切换：透明度过渡，避免一下子跳过去。 */
-    private fun fadeToolButton(button: ImageButton, target: Float) {
+    private fun fadeToolButton(
+        button: ImageButton,
+        target: Float,
+    ) {
         if (button.alpha == target) return
         button.animate().cancel()
-        button.animate()
+        button
+            .animate()
             .alpha(target)
             .setDuration(Motion.SETTLE_MS)
             .setInterpolator(Motion.standard)
@@ -582,61 +633,71 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun showOverview() {
-        val scrim = FrameLayout(this).apply {
-            setBackgroundColor(0x99000000.toInt())
-            layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
-            alpha = 0f
-            setOnClickListener { hideOverview() }
-        }
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(surface)
-            layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
-            isClickable = true
-        }
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            // 概览是覆盖整屏的面板，标题栏必须自己让开状态栏与挖孔
-            setPadding(dp(16f), dp(14f) + topSafeInsetPx(), dp(10f), dp(8f))
-        }
-        header.addView(TextView(this).apply {
-            text = "标签页"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            setTextColor(onSurface)
-            layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
-        })
+        val scrim =
+            FrameLayout(this).apply {
+                setBackgroundColor(0x99000000.toInt())
+                layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
+                alpha = 0f
+                setOnClickListener { hideOverview() }
+            }
+        val panel =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(surface)
+                layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
+                isClickable = true
+            }
+        val header =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                // 概览是覆盖整屏的面板，标题栏必须自己让开状态栏与挖孔
+                setPadding(dp(16f), dp(14f) + topSafeInsetPx(), dp(10f), dp(8f))
+            }
+        header.addView(
+            TextView(this).apply {
+                text = "标签页"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setTextColor(onSurface)
+                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+            },
+        )
         header.addView(toolButton(R.drawable.ic_close_lucide) { hideOverview() })
         panel.addView(header)
 
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
-        }
-        val grid = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12f), 0, dp(12f), dp(16f))
-        }
+        val scroll =
+            ScrollView(this).apply {
+                isFillViewport = true
+                layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+            }
+        val grid =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12f), 0, dp(12f), dp(16f))
+            }
         overviewGrid = grid
         scroll.addView(grid, ViewGroup.LayoutParams(MATCH, WRAP))
         panel.addView(scroll)
 
-        val footer = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-            setPadding(0, dp(8f), 0, dp(20f))
-        }
-        footer.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_add)
-            setColorFilter(onPrimary)
-            background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_circle_button)
-            val size = dp(52f)
-            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
-            setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
-            setOnClickListener {
-                hideOverview()
-                showNewTabSheet()
+        val footer =
+            FrameLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+                setPadding(0, dp(8f), 0, dp(20f))
             }
-        })
+        footer.addView(
+            ImageView(this).apply {
+                setImageResource(R.drawable.ic_add)
+                setColorFilter(onPrimary)
+                background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_circle_button)
+                val size = dp(52f)
+                layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
+                setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
+                setOnClickListener {
+                    hideOverview()
+                    showNewTabSheet()
+                }
+            },
+        )
         panel.addView(footer)
 
         fillGrid()
@@ -645,8 +706,14 @@ class WorkspaceActivity : BaseActivity() {
         overview = scrim
         // 遮罩淡入 + 面板轻微上移，给"管理页被拉起"的方向感。
         panel.translationY = dp(24f).toFloat()
-        scrim.animate().alpha(1f).setDuration(Motion.SETTLE_MS).setInterpolator(Motion.standard).start()
-        panel.animate()
+        scrim
+            .animate()
+            .alpha(1f)
+            .setDuration(Motion.SETTLE_MS)
+            .setInterpolator(Motion.standard)
+            .start()
+        panel
+            .animate()
             .translationY(0f)
             .setDuration(Motion.PANEL_MS)
             .setInterpolator(Motion.standard)
@@ -661,9 +728,10 @@ class WorkspaceActivity : BaseActivity() {
         while (index < tabs.size) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             for (slot in 0 until 2) {
-                val params = LinearLayout.LayoutParams(0, WRAP, 1f).apply {
-                    if (slot == 0) rightMargin = dp(5f) else leftMargin = dp(5f)
-                }
+                val params =
+                    LinearLayout.LayoutParams(0, WRAP, 1f).apply {
+                        if (slot == 0) rightMargin = dp(5f) else leftMargin = dp(5f)
+                    }
                 val entry = tabs.getOrNull(index + slot)
                 if (entry == null) {
                     row.addView(View(this), params)
@@ -679,7 +747,8 @@ class WorkspaceActivity : BaseActivity() {
             // 每行晚 24ms 出来，读起来是"卡片一张张落位"。
             row.alpha = 0f
             row.translationY = dp(10f).toFloat()
-            row.animate()
+            row
+                .animate()
                 .alpha(1f)
                 .translationY(0f)
                 .setStartDelay((rowIndex * 24L).coerceAtMost(180L))
@@ -693,74 +762,99 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun tabCard(entry: OpenTab): View {
         val selected = entry.data.id == activeId
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14f), dp(12f), dp(10f), dp(14f))
-            background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_tab_card)
-            isClickable = true
-            setOnClickListener {
-                selectTab(entry.data.id)
-                hideOverview()
+        val card =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14f), dp(12f), dp(10f), dp(14f))
+                background = ContextCompat.getDrawable(this@WorkspaceActivity, R.drawable.bg_tab_card)
+                isClickable = true
+                setOnClickListener {
+                    selectTab(entry.data.id)
+                    hideOverview()
+                }
             }
-        }
         // 按下轻微缩放：卡片是管理页里唯一的可点对象，给一次即时反馈。
         // 返回 false 让点击与关闭按钮继续照常派发。
         card.setOnTouchListener { v, ev ->
             when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN ->
-                    v.animate().scaleX(0.97f).scaleY(0.97f)
-                        .setDuration(Motion.TAP_MS).setInterpolator(Motion.standard).start()
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                    v.animate().scaleX(1f).scaleY(1f)
-                        .setDuration(Motion.SETTLE_MS).setInterpolator(Motion.settle).start()
+                MotionEvent.ACTION_DOWN -> {
+                    v
+                        .animate()
+                        .scaleX(0.97f)
+                        .scaleY(0.97f)
+                        .setDuration(Motion.TAP_MS)
+                        .setInterpolator(Motion.standard)
+                        .start()
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v
+                        .animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setDuration(Motion.SETTLE_MS)
+                        .setInterpolator(Motion.settle)
+                        .start()
+                }
             }
             false
         }
-        val head = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        head.addView(ImageView(this).apply {
-            setImageResource(iconFor(entry.data.kind))
-            setColorFilter(if (selected) primary else onSurfaceVariant)
-            layoutParams = LinearLayout.LayoutParams(dp(18f), dp(18f)).apply { rightMargin = dp(8f) }
-        })
-        head.addView(TextView(this).apply {
-            text = WorkspaceTabs.label(entry.data.kind)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setTextColor(if (selected) primary else onSurface)
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
-        })
-        head.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_close_lucide)
-            setColorFilter(onSurfaceVariant)
-            val size = dp(30f)
-            layoutParams = LinearLayout.LayoutParams(size, size)
-            setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
-            setOnClickListener {
-                // 先让这张卡缩一下再真正关掉，避免网格里"凭空少一格"
-                card.animate()
-                    .scaleX(0.92f).scaleY(0.92f)
-                    .alpha(0f)
-                    .setDuration(Motion.SETTLE_MS)
-                    .setInterpolator(Motion.standard)
-                    .withEndAction { closeTab(entry.data.id) }
-                    .start()
+        val head =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
             }
-        })
+        head.addView(
+            ImageView(this).apply {
+                setImageResource(iconFor(entry.data.kind))
+                setColorFilter(if (selected) primary else onSurfaceVariant)
+                layoutParams = LinearLayout.LayoutParams(dp(18f), dp(18f)).apply { rightMargin = dp(8f) }
+            },
+        )
+        head.addView(
+            TextView(this).apply {
+                text = WorkspaceTabs.label(entry.data.kind)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextColor(if (selected) primary else onSurface)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+            },
+        )
+        head.addView(
+            ImageView(this).apply {
+                setImageResource(R.drawable.ic_close_lucide)
+                setColorFilter(onSurfaceVariant)
+                val size = dp(30f)
+                layoutParams = LinearLayout.LayoutParams(size, size)
+                setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
+                setOnClickListener {
+                    // 先让这张卡缩一下再真正关掉，避免网格里"凭空少一格"
+                    card
+                        .animate()
+                        .scaleX(0.92f)
+                        .scaleY(0.92f)
+                        .alpha(0f)
+                        .setDuration(Motion.SETTLE_MS)
+                        .setInterpolator(Motion.standard)
+                        .withEndAction { closeTab(entry.data.id) }
+                        .start()
+                }
+            },
+        )
         card.addView(head)
         val detail = entry.page.subtitle()
-        card.addView(TextView(this).apply {
-            text = if (detail.isNullOrEmpty()) entry.page.title else detail
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTextColor(onSurfaceVariant)
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-            setPadding(0, dp(8f), 0, 0)
-            minLines = 2
-        })
+        card.addView(
+            TextView(this).apply {
+                text = if (detail.isNullOrEmpty()) entry.page.title else detail
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(onSurfaceVariant)
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.MIDDLE
+                setPadding(0, dp(8f), 0, 0)
+                minLines = 2
+            },
+        )
         return card
     }
 
@@ -769,14 +863,14 @@ class WorkspaceActivity : BaseActivity() {
         overview = null
         overviewGrid = null
         // 淡出后再摘除；期间新开的遮罩以 alpha 动画覆盖，不做等待。
-        view.animate()
+        view
+            .animate()
             .alpha(0f)
             .setDuration(Motion.SETTLE_MS)
             .setInterpolator(Motion.standard)
             .withEndAction {
                 if (view.parent === container) container.removeView(view)
-            }
-            .start()
+            }.start()
         view.isClickable = false
     }
 
@@ -788,15 +882,17 @@ class WorkspaceActivity : BaseActivity() {
      * [into] 非空表示就地换页（从标签菜单点"新建标签页"进来），复用那张卡片。
      */
     private fun showNewTabSheet(into: CodaSheet? = null) {
-        val kinds = listOf(
-            WorkspaceTabs.OVERVIEW,
-            WorkspaceTabs.FILES,
-            WorkspaceTabs.GIT,
-            WorkspaceTabs.TERMINAL,
-        )
+        val kinds =
+            listOf(
+                WorkspaceTabs.OVERVIEW,
+                WorkspaceTabs.FILES,
+                WorkspaceTabs.GIT,
+                WorkspaceTabs.TERMINAL,
+            )
         // 真正承载这一页的卡片：就地换页时是宿主，否则是稍后新建的那张。
         // 用一个容器持有，闭包在构建时就能拿到正确的引用。
         val holder = arrayOfNulls<CodaSheet>(1)
+
         fun fill(column: LinearLayout) {
             column.removeAllViews()
             for (kind in kinds) {
@@ -823,23 +919,33 @@ class WorkspaceActivity : BaseActivity() {
         sheet.show()
     }
 
-    private fun showTabActions(id: String, into: CodaSheet? = null) {
+    private fun showTabActions(
+        id: String,
+        into: CodaSheet? = null,
+    ) {
         val label = tabs.firstOrNull { it.data.id == id }?.let { WorkspaceTabs.label(it.data.kind) } ?: "标签"
         // 菜单页就地换到"标签操作"时，宿主是那张已经打开的卡；否则自己新建一张。
         val holder = arrayOfNulls<CodaSheet>(1)
+
         fun fill(column: LinearLayout) {
             column.removeAllViews()
-            column.addView(sheetRow(R.drawable.ic_close_lucide, "关闭标签", null) {
-                holder[0]?.dismiss()
-                closeTab(id)
-            })
-            column.addView(sheetRow(R.drawable.ic_close_lucide, "关闭其他标签", null) {
-                holder[0]?.dismiss()
-                closeOthers(id)
-            })
-            column.addView(sheetRow(R.drawable.ic_add, "新建标签页", null) {
-                holder[0]?.let { showNewTabSheet(it) }
-            })
+            column.addView(
+                sheetRow(R.drawable.ic_close_lucide, "关闭标签", null) {
+                    holder[0]?.dismiss()
+                    closeTab(id)
+                },
+            )
+            column.addView(
+                sheetRow(R.drawable.ic_close_lucide, "关闭其他标签", null) {
+                    holder[0]?.dismiss()
+                    closeOthers(id)
+                },
+            )
+            column.addView(
+                sheetRow(R.drawable.ic_add, "新建标签页", null) {
+                    holder[0]?.let { showNewTabSheet(it) }
+                },
+            )
         }
         if (into != null) {
             holder[0] = into
@@ -856,35 +962,46 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun showMenu() {
-        val items = listOf(
-            "新建标签页",
-            "标签总览",
-            "切换工作区目录",
-            "刷新当前标签",
-            "关闭当前标签",
-            "关闭其他标签",
-            "关闭全部标签",
-        )
+        val items =
+            listOf(
+                "新建标签页",
+                "标签总览",
+                "切换工作区目录",
+                "刷新当前标签",
+                "关闭当前标签",
+                "关闭其他标签",
+                "关闭全部标签",
+            )
         val sheet = CodaSheet(this).title(root.name.ifEmpty { "工作区" }).subtitle(root.absolutePath)
-sheet.content { column ->
+        sheet.content { column ->
             column.removeAllViews()
-            for (item in items) column.addView(sheetRow(null, item, null) {
-                when (item) {
-                    // 这两项原本"关掉菜单再开新卡"，改成同一张卡就地换页
-                    "新建标签页" -> showNewTabSheet(sheet)
-                    "切换工作区目录" -> pickRoot(sheet)
-                    else -> {
-                        sheet.dismiss()
+            for (item in items) {
+                column.addView(
+                    sheetRow(null, item, null) {
                         when (item) {
-                            "标签总览" -> showOverview()
-                            "刷新当前标签" -> refreshActivePage()
-                            "关闭当前标签" -> activeId?.let { closeTab(it) }
-                            "关闭其他标签" -> activeId?.let { closeOthers(it) }
-                            "关闭全部标签" -> closeAll()
+                            // 这两项原本"关掉菜单再开新卡"，改成同一张卡就地换页
+                            "新建标签页" -> {
+                                showNewTabSheet(sheet)
+                            }
+
+                            "切换工作区目录" -> {
+                                pickRoot(sheet)
+                            }
+
+                            else -> {
+                                sheet.dismiss()
+                                when (item) {
+                                    "标签总览" -> showOverview()
+                                    "刷新当前标签" -> refreshActivePage()
+                                    "关闭当前标签" -> activeId?.let { closeTab(it) }
+                                    "关闭其他标签" -> activeId?.let { closeOthers(it) }
+                                    "关闭全部标签" -> closeAll()
+                                }
+                            }
                         }
-                    }
-                }
-            })
+                    },
+                )
+            }
         }
         sheet.show()
     }
@@ -896,19 +1013,20 @@ sheet.content { column ->
         // 先轻微压暗再回亮，给一次"确实刷新了"的确认感。
         val view = page.view
         view.animate().cancel()
-        view.animate()
+        view
+            .animate()
             .alpha(0.55f)
             .setDuration(Motion.TAP_MS)
             .setInterpolator(Motion.standard)
             .withEndAction {
                 page.onMenuItem("刷新")
-                view.animate()
+                view
+                    .animate()
                     .alpha(1f)
                     .setDuration(Motion.PANEL_MS)
                     .setInterpolator(Motion.standard)
                     .start()
-            }
-            .start()
+            }.start()
     }
 
     /** 选择工作区目录；[into] 非空时就地换页，不再关菜单另开一张。 */
@@ -920,56 +1038,71 @@ sheet.content { column ->
         }
     }
 
-    private fun sheetRow(iconRes: Int?, text: String, detail: String?, click: () -> Unit): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12f), 0, dp(12f))
-            isClickable = true
-            setOnClickListener { click() }
-            pressFeedback(pressedAlpha = 0.6f)
-        }
+    private fun sheetRow(
+        iconRes: Int?,
+        text: String,
+        detail: String?,
+        click: () -> Unit,
+    ): View {
+        val row =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12f), 0, dp(12f))
+                isClickable = true
+                setOnClickListener { click() }
+                pressFeedback(pressedAlpha = 0.6f)
+            }
         if (iconRes != null) {
-            row.addView(ImageView(this).apply {
-                setImageResource(iconRes)
-                setColorFilter(onSurfaceVariant)
-                layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
-            })
+            row.addView(
+                ImageView(this).apply {
+                    setImageResource(iconRes)
+                    setColorFilter(onSurfaceVariant)
+                    layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
+                },
+            )
         }
-        val texts = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
-        }
-        texts.addView(TextView(this).apply {
-            this.text = text
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setTextColor(onSurface)
-        })
+        val texts =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+            }
+        texts.addView(
+            TextView(this).apply {
+                this.text = text
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextColor(onSurface)
+            },
+        )
         if (!detail.isNullOrEmpty()) {
-            texts.addView(TextView(this).apply {
-                this.text = detail
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setTextColor(onSurfaceVariant)
-                setPadding(0, dp(2f), 0, 0)
-            })
+            texts.addView(
+                TextView(this).apply {
+                    this.text = detail
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextColor(onSurfaceVariant)
+                    setPadding(0, dp(2f), 0, 0)
+                },
+            )
         }
         row.addView(texts)
         return row
     }
 
-    private fun describeKind(kind: String): String = when (kind) {
-        WorkspaceTabs.FILES -> "浏览、编辑与管理文件"
-        WorkspaceTabs.GIT -> "提交图与分支操作"
-        WorkspaceTabs.TERMINAL -> "在当前目录下执行命令"
-        else -> "任务与提交概览"
-    }
+    private fun describeKind(kind: String): String =
+        when (kind) {
+            WorkspaceTabs.FILES -> "浏览、编辑与管理文件"
+            WorkspaceTabs.GIT -> "提交图与分支操作"
+            WorkspaceTabs.TERMINAL -> "在当前目录下执行命令"
+            else -> "任务与提交概览"
+        }
 
-    private fun iconFor(kind: String): Int = when (kind) {
-        WorkspaceTabs.FILES -> R.drawable.ic_folder
-        WorkspaceTabs.GIT -> R.drawable.ic_branch
-        WorkspaceTabs.TERMINAL -> R.drawable.ic_terminal
-        else -> R.drawable.ic_chart
-    }
+    private fun iconFor(kind: String): Int =
+        when (kind) {
+            WorkspaceTabs.FILES -> R.drawable.ic_folder
+            WorkspaceTabs.GIT -> R.drawable.ic_branch
+            WorkspaceTabs.TERMINAL -> R.drawable.ic_terminal
+            else -> R.drawable.ic_chart
+        }
 
     // ---------------------------------------------------------------- 手势
 
@@ -990,20 +1123,22 @@ sheet.content { column ->
                 swipeArmed = false
             }
 
-            MotionEvent.ACTION_CANCEL -> swipeArmed = false
+            MotionEvent.ACTION_CANCEL -> {
+                swipeArmed = false
+            }
         }
         return super.dispatchTouchEvent(ev)
     }
 
     private fun slideOut() {
-        container.animate()
+        container
+            .animate()
             .translationX(container.width.toFloat())
             .setDuration(180)
             .withEndAction {
                 container.translationX = 0f
                 finish()
-            }
-            .start()
+            }.start()
     }
 
     // ---------------------------------------------------------------- 工具

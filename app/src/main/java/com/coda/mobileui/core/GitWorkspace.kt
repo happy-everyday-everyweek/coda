@@ -10,7 +10,6 @@ import java.io.File
  * 目录不在 Git 仓库里时返回 null，调用方按「无仓库」处理。
  */
 object GitWorkspace {
-
     data class Info(
         val root: String,
         val branch: String?,
@@ -61,11 +60,13 @@ object GitWorkspace {
             if (dot.isDirectory) return dot
             if (dot.isFile) {
                 val text = runCatching { dot.readText() }.getOrNull() ?: return null
-                val target = text.lineSequence()
-                    .firstOrNull { it.trim().startsWith("gitdir:") }
-                    ?.substringAfter("gitdir:")
-                    ?.trim()
-                    ?: return null
+                val target =
+                    text
+                        .lineSequence()
+                        .firstOrNull { it.trim().startsWith("gitdir:") }
+                        ?.substringAfter("gitdir:")
+                        ?.trim()
+                        ?: return null
                 val resolved = File(target)
                 return if (resolved.isAbsolute) resolved else File(cur, target)
             }
@@ -105,11 +106,12 @@ object GitWorkspace {
     fun parseOwnerRepo(url: String?): Pair<String, String>? {
         val cleaned = url?.trim()?.removeSuffix("/")?.removeSuffix(".git") ?: return null
         if (cleaned.isEmpty()) return null
-        val path = when {
-            cleaned.contains("://") -> cleaned.substringAfter("://").substringAfter('/', "")
-            cleaned.contains('@') && cleaned.contains(':') -> cleaned.substringAfter(':')
-            else -> return null
-        }
+        val path =
+            when {
+                cleaned.contains("://") -> cleaned.substringAfter("://").substringAfter('/', "")
+                cleaned.contains('@') && cleaned.contains(':') -> cleaned.substringAfter(':')
+                else -> return null
+            }
         val parts = path.split('/').filter { it.isNotEmpty() }
         if (parts.size < 2) return null
         return parts[parts.size - 2] to parts[parts.size - 1]
