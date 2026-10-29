@@ -61,7 +61,7 @@ run_detekt() {
     local out="$REPORT_DIR/detekt.txt"
     ( cd "$ROOT" && java -jar "$DETEKT_JAR" \
         --input app/src/main/java \
-        --build-upon-default-config \
+        --config detekt.yml \
         --max-issues 0 \
         --report "txt:$out" \
         --parallel ) > /dev/null 2>&1
