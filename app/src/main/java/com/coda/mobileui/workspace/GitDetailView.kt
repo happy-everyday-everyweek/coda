@@ -18,6 +18,7 @@ import com.coda.mobileui.R
 import com.coda.mobileui.SettingRow
 import com.coda.mobileui.SettingsActionListener
 import com.coda.mobileui.SettingsViewBuilder
+import com.google.android.material.card.MaterialCardView
 
 /**
  * Git 标签页内部的下一级容器。
@@ -146,15 +147,9 @@ internal class GitDetailView(
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setSingleLine()
                 setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
-                setBackgroundResource(R.drawable.bg_tool_card)
-                layoutParams =
-                    LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                        leftMargin = margin
-                        rightMargin = margin
-                        topMargin = dp(4f)
-                    }
+                background = null
             }
-        container.addView(edit)
+        container.addView(card(edit))
         onRowClick = { key -> if (key == "confirm") onConfirm(edit.text.toString().trim()) }
         container.addView(space())
         SettingsViewBuilder.render(
@@ -165,20 +160,38 @@ internal class GitDetailView(
         )
     }
 
-    private fun codeBlock(text: String): TextView =
-        TextView(activity).apply {
-            this.text = text.ifEmpty { "没有内容" }
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            typeface = Typeface.MONOSPACE
-            setTextColor(colorOf(com.google.android.material.R.attr.colorOnSurfaceVariant))
-            setPadding(margin, margin, margin, margin)
-            setBackgroundResource(R.drawable.bg_tool_card)
+    private fun codeBlock(text: String): View {
+        val body =
+            TextView(activity).apply {
+                this.text = text.ifEmpty { "没有内容" }
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                typeface = Typeface.MONOSPACE
+                setTextColor(colorOf(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                setPadding(margin, margin, margin, margin)
+            }
+        return card(body)
+    }
+
+    /**
+     * 与设置页同形的卡片：底色 surfaceContainerLow、圆角 settings_card_corner、
+     * 零描边零阴影、左右外距 settings_card_margin。diff、git show 的文本与输入框
+     * 都装进这张卡里，和列表行是同一套外观。
+     */
+    private fun card(content: View): MaterialCardView {
+        val corner = resources.getDimension(R.dimen.settings_card_corner)
+        return MaterialCardView(activity).apply {
             layoutParams =
                 LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     leftMargin = margin
                     rightMargin = margin
                 }
+            setCardBackgroundColor(colorOf(com.google.android.material.R.attr.colorSurfaceContainerLow))
+            cardElevation = 0f
+            strokeWidth = 0
+            radius = corner
+            addView(content, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
+    }
 
     private fun hint(text: String): TextView =
         TextView(activity).apply {
