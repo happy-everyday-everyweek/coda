@@ -223,13 +223,24 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     /** 切到某个种类的标签；已存在则直接切过去，否则新建。 */
-    fun openPage(kind: String) {
-        val existing = tabs.firstOrNull { it.data.kind == kind }
-        if (existing != null) {
-            selectTab(existing.data.id)
-        } else {
-            createTab(kind, null)
-        }
+    fun openPage(kind: String) = openPage(kind, null)
+
+    /**
+     * 打开一个带参数的页面（Git 的下一级都是这种）。
+     *
+     * 同一个 kind 下可能有多个实例（不同分支、不同提交），用 state.key 区分；
+     * 已经开着就切过去，不重复开标签。切过去会记入历史，所以底栏返回键能回到上一级。
+     */
+    fun openPage(
+        kind: String,
+        state: JSONObject?,
+    ) {
+        val key = state?.optString("key").orEmpty()
+        val existing =
+            tabs.firstOrNull {
+                it.data.kind == kind && (key.isEmpty() || it.data.state.optString("key") == key)
+            }
+        if (existing != null) selectTab(existing.data.id) else createTab(kind, state)
     }
 
     /** 切到另一个根目录，标签按新目录下记录的那一份恢复。 */
@@ -486,10 +497,16 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun createPage(data: WorkspaceTab): WorkspacePage =
-        when (data.kind) {
-            WorkspaceTabs.FILES -> FilesPage(this, data.state)
-            WorkspaceTabs.GIT -> GitPage(this, data.state)
-            WorkspaceTabs.TERMINAL -> TerminalPage(this, data.state)
+        when {
+            data.kind == WorkspaceTabs.FILES -> FilesPage(this, data.state)
+
+            data.kind == WorkspaceTabs.GIT -> GitPage(this, data.state)
+
+            data.kind == WorkspaceTabs.TERMINAL -> TerminalPage(this, data.state)
+
+            // Git 的下一级也是工作区的标签页，不是另一个界面。
+            data.kind.startsWith("git:") -> GitDetailPage(this, data.kind, data.state)
+
             else -> OverviewPage(this, data.state)
         }
 
@@ -828,7 +845,7 @@ class WorkspaceActivity : BaseActivity() {
         )
         head.addView(
             TextView(this).apply {
-                text = WorkspaceTabs.label(entry.data.kind)
+                text = WorkspaceTabs.label(entry.data.kind, entry.data.state)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setTextColor(if (selected) primary else onSurface)
                 maxLines = 1
@@ -938,7 +955,7 @@ class WorkspaceActivity : BaseActivity() {
         id: String,
         into: CodaSheet? = null,
     ) {
-        val label = tabs.firstOrNull { it.data.id == id }?.let { WorkspaceTabs.label(it.data.kind) } ?: "标签"
+        val label = tabs.firstOrNull { it.data.id == id }?.let { WorkspaceTabs.label(it.data.kind, it.data.state) } ?: "标签"
         // 菜单页就地换到"标签操作"时，宿主是那张已经打开的卡；否则自己新建一张。
         val holder = arrayOfNulls<CodaSheet>(1)
 
@@ -1112,10 +1129,12 @@ class WorkspaceActivity : BaseActivity() {
         }
 
     private fun iconFor(kind: String): Int =
-        when (kind) {
-            WorkspaceTabs.FILES -> R.drawable.ic_folder
-            WorkspaceTabs.GIT -> R.drawable.ic_branch
-            WorkspaceTabs.TERMINAL -> R.drawable.ic_terminal
+        when {
+            kind == WorkspaceTabs.FILES -> R.drawable.ic_folder
+            kind == WorkspaceTabs.GIT -> R.drawable.ic_branch
+            kind == WorkspaceTabs.TERMINAL -> R.drawable.ic_terminal
+            kind == WorkspaceTabs.GIT_BRANCHES || kind == WorkspaceTabs.GIT_BRANCH -> R.drawable.ic_branch
+            kind.startsWith("git:") -> R.drawable.ic_commit
             else -> R.drawable.ic_chart
         }
 

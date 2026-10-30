@@ -21,6 +21,12 @@ object Git {
         fun lines(): List<String> = output.split('\n').map { it.trimEnd('\r') }.filter { it.isNotEmpty() }
     }
 
+    /** 一次 diff 读取的结果。text 为空表示没有改动，truncated 为真表示过长被截断。 */
+    data class Diff(
+        val text: String,
+        val truncated: Boolean,
+    )
+
     private val FIELD = "\u001f"
     private val RECORD = "\u001e"
 
@@ -255,6 +261,28 @@ object Git {
     fun describe(commit: Commit): String {
         val short = commit.hash.take(7)
         return if (commit.refs.isEmpty()) "$short ${commit.subject}" else "$short ${commit.refs} ${commit.subject}"
+    }
+
+    /**
+     * 未提交改动的完整 diff（已暂存 + 未暂存）。
+     *
+     * 优先 `git diff HEAD` 一次拿到全部；仓库还没有任何提交时 HEAD 不存在，这条命令
+     * 会失败，退回到分别取未暂存与已暂存两段再拼起来。未跟踪文件不在 diff 里，
+     * 界面另有提示。
+     */
+    fun diffUncommitted(
+        env: LinuxEnv,
+        root: File,
+        limit: Int = 160_000,
+    ): Diff {
+        val head = run(env, root, listOf("diff", "HEAD"), timeoutMs = 120_000L)
+        var text = if (head.ok) head.output else ""
+        if (text.isBlank()) {
+            val unstaged = run(env, root, listOf("diff"), timeoutMs = 120_000L)
+            val staged = run(env, root, listOf("diff", "--cached"), timeoutMs = 120_000L)
+            text = listOf(unstaged.output, staged.output).filter { it.isNotBlank() }.joinToString("\n")
+        }
+        return if (text.length > limit) Diff(text.take(limit), true) else Diff(text, false)
     }
 
     /** 状态目录是否被忽略，用于提示用户把元数据目录排除在版本控制外。 */

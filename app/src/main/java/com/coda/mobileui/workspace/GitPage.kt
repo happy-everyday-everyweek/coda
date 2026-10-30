@@ -1,34 +1,35 @@
 package com.coda.mobileui.workspace
 
+import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
-import android.widget.ImageView
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.coda.mobileui.CodaSheet
 import com.coda.mobileui.R
 import com.coda.mobileui.core.Workspaces
 import org.json.JSONObject
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
- * Git 页：提交图、变更概览与分支操作。
+ * Git 页：自由画布的提交图 + 底部控制卡。
+ *
+ * 本页只负责画布与控制卡。分支列表、提交详情、未提交改动这些都是工作区的下一级标签页，
+ * 交给 [WorkspaceActivity.openPage] 打开：同一套标签栏、同一套返回/前进历史、同样会落盘，
+ * 不会另开界面，也不会弹半屏卡片。
+ *
+ * 控制卡的按钮由「当前选中了什么」决定：没初始化给初始化，选中分支最新提交给切分支，
+ * 选中普通提交给从这里建分支与详情。
  *
  * 所有命令在容器里执行，结果回到主线程后刷新这一页。
  */
 class GitPage(
     host: WorkspaceActivity,
-    // 由 WorkspaceActivity 传入用于恢复页面状态；本页目前不读它，
+    // 由 WorkspaceActivity 传入用于恢复页面状态；本页只用它恢复选中项，
     // 但构造签名要与其余工作区页面保持一致，不能删。
-    // 不写成 private val：那样会变成未使用的私有属性，而这里只需要
-    // 接收构造参数即可。
     saved: JSONObject,
 ) : WorkspacePage(host) {
     override val kind: String = WorkspaceTabs.GIT
@@ -44,27 +45,40 @@ class GitPage(
         val stateIgnored: Boolean,
     )
 
-    private lateinit var content: LinearLayout
-    private lateinit var graph: GitGraphView
+    /** 控制卡要展示的一组文案与按钮。 */
+    private class Control(
+        val title: String,
+        val subtitle: String?,
+        val actions: List<Pair<String, () -> Unit>>,
+        val filled: Boolean = true,
+    )
+
+    private lateinit var stage: FrameLayout
+    private lateinit var canvas: GitCanvasView
+    private var control: View? = null
 
     private var snapshot: Snapshot? = null
+    private var picked: Git.Commit? = null
     private var busy = false
 
-    private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-
     override fun build(): View {
-        content =
-            LinearLayout(host).apply {
-                orientation = LinearLayout.VERTICAL
+        stage =
+            FrameLayout(host).apply {
                 setBackgroundColor(surface)
             }
-        graph =
-            GitGraphView(host).apply {
-                layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
-                onPick = { showCommit(it) }
+        canvas =
+            GitCanvasView(host).apply {
+                layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
+                onPick = { commit -> pick(commit) }
+                onClearPick = {
+                    picked = null
+                    selected = null
+                    rebuildControl()
+                }
             }
-        render()
-        return content
+        stage.addView(canvas)
+        rebuildControl()
+        return stage
     }
 
     override fun onShown() {
@@ -73,30 +87,38 @@ class GitPage(
 
     override fun subtitle(): String? = snapshot?.branch?.ifEmpty { null }
 
-    override fun saveState(): JSONObject = JSONObject()
+    override fun saveState(): JSONObject = JSONObject().apply { picked?.let { put("selected", it.hash) } }
 
-    override fun menuItems(): List<String> = listOf("刷新", "提交变更", "分支管理", "拉取", "推送")
+    override fun menuItems(): List<String> {
+        val items = mutableListOf("刷新", "提交变更", "分支管理", "拉取", "推送")
+        val current = snapshot
+        if (current != null && current.repo && !current.stateIgnored) items.add("忽略 ${Workspaces.STATE_DIR}")
+        return items
+    }
 
     override fun onMenuItem(label: String) {
         when (label) {
             "刷新" -> refresh()
-            "提交变更" -> commitDialog()
-            "分支管理" -> showBranches()
+            "提交变更" -> openCommitMessage()
+            "分支管理" -> openBranches()
             "拉取" -> operate("拉取") { Git.pull(host.env, host.root) }
             "推送" -> operate("推送") { Git.push(host.env, host.root) }
+            else -> if (label.startsWith("忽略")) ignoreStateDir()
         }
     }
+
+    /** 顶部有 back/前进，所以本页不截返回键。 */
+    override fun onBack(): Boolean = false
 
     // ---------------------------------------------------------------- 刷新
 
     private fun refresh() {
         if (busy) return
         busy = true
-        render()
         host.ensureEnv { ready ->
             if (!ready) {
                 busy = false
-                render()
+                rebuildControl()
                 return@ensureEnv
             }
             host.background(
@@ -119,369 +141,275 @@ class GitPage(
                 },
                 then = { result ->
                     busy = false
+                    val firstLoad = snapshot == null
                     snapshot = result
-                    graph.commits = result.commits
-                    graph.selected = result.commits.firstOrNull()?.hash
-                    render()
+                    // 选中项按哈希在新列表里重新认领，刷新不该把用户的选中丢掉。
+                    picked = picked?.hash?.let { hash -> result.commits.firstOrNull { it.hash == hash } }
+                    canvas.selected = picked?.hash
+                    canvas.commits = result.commits
+                    if (firstLoad) canvas.fitTo(result.commits.firstOrNull()?.hash)
+                    rebuildControl()
                 },
                 onError = {
                     busy = false
-                    render()
+                    rebuildControl()
                 },
             )
         }
     }
 
-    // ---------------------------------------------------------------- 渲染
+    private fun pick(commit: Git.Commit) {
+        picked = commit
+        canvas.selected = commit.hash
+        rebuildControl()
+    }
 
-    private fun render() {
-        if (!::content.isInitialized) return
-        if (::graph.isInitialized) {
-            (graph.parent as? ViewGroup)?.removeView(graph)
+    // ---------------------------------------------------------------- 控制卡
+
+    private fun rebuildControl() {
+        val card =
+            groupCard().apply {
+                layoutParams =
+                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply {
+                        leftMargin = dp(12f)
+                        rightMargin = dp(12f)
+                        bottomMargin = dp(12f)
+                    }
+                radius = host.resources.getDimension(R.dimen.settings_card_corner)
+            }
+        card.addView(controlBody(controlState()), ViewGroup.LayoutParams(MATCH, WRAP))
+        control?.let { stage.removeView(it) }
+        stage.addView(card)
+        control = card
+        // 卡片会挡住画布底部，把遮挡高度告诉画布，它才知道视口下边界在哪。
+        card.addOnLayoutChangeListener { _, _, top, _, _, _, _, _, _ ->
+            canvas.bottomInset = (stage.height - top + dp(10f)).toFloat()
         }
-        content.removeAllViews()
+    }
+
+    private fun controlState(): Control {
         val current = snapshot
-        content.addView(statusCard(current))
-        content.addView(groupSpacing())
-        content.addViews(actionRow(current))
-        content.addView(groupSpacing())
-        if (current != null && current.repo) {
-            content.addView(graph)
-        } else {
-            content.addView(placeholder(current))
-        }
-    }
-
-    private fun statusCard(current: Snapshot?): View {
-        val title =
-            when {
-                current == null -> "读取中…"
-                else -> current.branch.ifEmpty { "无分支" }
+        val selected = picked
+        return when {
+            current == null -> {
+                Control("正在读取仓库", host.root.absolutePath, emptyList())
             }
-        val lines = ArrayList<String>(2)
-        lines.add(
-            when {
-                current == null -> host.root.absolutePath
-                !current.repo -> "当前目录不是 Git 仓库"
-                current.changes.isEmpty() -> "${host.root.absolutePath} · 无未提交变更"
-                else -> "${host.root.absolutePath} · ${current.changes.size} 个未提交变更"
-            },
-        )
-        val locale = current?.locals.orEmpty()
-        val remote = current?.remotes.orEmpty()
-        if (locale.isNotEmpty() || remote.isNotEmpty()) {
-            lines.add("本地 ${locale.size} 个分支 · 远端 ${remote.size} 个分支")
-        }
-        return infoCard(R.drawable.ic_branch, title, lines, click = { showChanges() })
-    }
 
-    /**
-     * 操作按钮：与设置页同形的分组卡片，一行一项。
-     * 未初始化时只留"初始化仓库"。
-     */
-    private fun actionRow(current: Snapshot?): List<View> {
-        val rows = ArrayList<View>()
-        if (current == null || !current.repo) {
-            rows.add(cardRow(R.drawable.ic_commit, "初始化仓库") { operate("初始化") { Git.init(host.env, host.root) } })
-            return cardGroup(rows)
-        }
-        rows.add(cardRow(R.drawable.ic_commit, "提交") { commitDialog() })
-        rows.add(cardRow(R.drawable.ic_branch, "分支") { showBranches() })
-        rows.add(cardRow(R.drawable.ic_arrow_up, "拉取") { operate("拉取") { Git.pull(host.env, host.root) } })
-        rows.add(cardRow(R.drawable.ic_arrow_up, "推送") { operate("推送") { Git.push(host.env, host.root) } })
-        if (!current.stateIgnored) {
-            rows.add(
-                cardRow(R.drawable.ic_file_add, "忽略 ${Workspaces.STATE_DIR}") { ignoreStateDir() },
-            )
-        }
-        return cardGroup(rows)
-    }
-
-    private fun placeholder(current: Snapshot?): View {
-        val box =
-            LinearLayout(host).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                setPadding(dp(24f), dp(48f), dp(24f), dp(24f))
-                layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
-            }
-        box.addView(
-            label(
-                if (current == null) "正在读取仓库" else "这个目录还不是仓库，初始化后就能看到提交图",
-                13f,
-                onSurfaceVariant,
-            ).apply { gravity = Gravity.CENTER },
-        )
-        return box
-    }
-
-    // ---------------------------------------------------------------- 变更
-
-    private fun showChanges() {
-        val current = snapshot ?: return
-        val sheet = sheet().title("未提交变更").subtitle(host.root.absolutePath)
-        sheet.content { column ->
-            column.removeAllViews()
-            if (!current.repo) {
-                column.addView(label("当前目录不是 Git 仓库", 13f, onSurfaceVariant))
-                return@content
-            }
-            if (current.changes.isEmpty()) {
-                column.addView(label("没有未提交变更", 13f, onSurfaceVariant))
-                return@content
-            }
-            for (line in current.changes) {
-                column.addView(
-                    monoLabel(line, 12f, onSurfaceVariant).apply {
-                        setPadding(0, dp(3f), 0, dp(3f))
-                    },
+            !current.repo -> {
+                Control(
+                    "这个目录还不是 Git 仓库",
+                    "初始化之后就能看到提交画布",
+                    listOf("初始化仓库" to { operate("初始化") { Git.init(host.env, host.root) } }),
                 )
             }
-        }
-        if (current.repo) {
-            sheet.primaryAction("提交这些变更") {
-                sheet.dismiss()
-                commitDialog()
-            }
-        }
-        sheet.secondaryAction("关闭") { sheet.dismiss() }
-        sheet.show()
-    }
 
-    private fun commitDialog() {
-        val current = snapshot ?: return
-        if (!current.repo) {
-            toast("当前目录不是 Git 仓库")
-            return
-        }
-        when {
-            current.changes.isEmpty() -> {
-                toast("没有可提交的变更")
+            selected == null -> {
+                val changes = current.changes.size
+                val summary =
+                    buildString {
+                        append("本地 ${current.locals.size} 个分支 · 远端 ${current.remotes.size} 个分支")
+                        append(if (changes == 0) " · 工作区干净" else " · $changes 个未提交变更")
+                    }
+                Control(
+                    title = current.branch.ifEmpty { "游离的 HEAD" },
+                    subtitle = summary,
+                    actions =
+                        if (changes > 0) {
+                            listOf(
+                                "未提交改动" to { openChanges() },
+                                "提交" to { openCommitMessage() },
+                                "分支" to { openBranches() },
+                            )
+                        } else {
+                            listOf("分支" to { openBranches() }, "刷新" to { refresh() })
+                        },
+                )
             }
 
             else -> {
-                inputSheet("提交变更", "更新") { message ->
-                    operate("提交") { Git.commitAll(host.env, host.root, message) }
+                val tips = branchesAt(selected, current)
+                if (tips.isNotEmpty()) {
+                    val tip = tips.first()
+                    val isCurrent = tip == current.branch
+                    val actions = ArrayList<Pair<String, () -> Unit>>(3)
+                    if (!isCurrent) actions.add("切换到 $tip" to { checkoutBranch(tip) })
+                    actions.add("查看详情" to { openCommit(selected) })
+                    if (current.changes.isNotEmpty()) actions.add("未提交改动" to { openChanges() })
+                    Control(
+                        title = "$tip 的最新提交",
+                        subtitle = selected.subject.ifEmpty { selected.hash.take(7) },
+                        actions = actions,
+                    )
+                } else {
+                    Control(
+                        title = "提交 ${selected.hash.take(7)}",
+                        subtitle = "${selected.subject.ifEmpty { "没有提交说明" }} · ${selected.author}",
+                        actions =
+                            listOf(
+                                "从此刻建分支" to { openNewBranch(selected.hash) },
+                                "查看详情" to { openCommit(selected) },
+                            ),
+                    )
                 }
             }
         }
     }
 
-    // ---------------------------------------------------------------- 分支
-
-    private fun showBranches() {
-        val current = snapshot ?: return
-        if (!current.repo) {
-            toast("当前目录不是 Git 仓库")
-            return
-        }
-        val sheet = sheet().title("分支").subtitle("当前 ${current.branch}")
-        sheet.content { column ->
-            column.removeAllViews()
-            column.addView(headerRow("本地"))
-            for (name in current.locals) {
-                column.addView(branchRow(name, name == current.branch, false))
-            }
-            if (current.remotes.isNotEmpty()) {
-                column.addView(headerRow("远端"))
-                for (name in current.remotes) column.addView(branchRow(name, false, true))
-            }
-        }
-        sheet.primaryAction("新建分支") {
-            sheet.dismiss()
-            inputSheet("新建分支", "feature") { name ->
-                operate("新建分支") { Git.createBranch(host.env, host.root, name, null) }
-            }
-        }
-        sheet.secondaryAction("关闭") { sheet.dismiss() }
-        sheet.show()
-    }
-
-    private fun headerRow(text: String): View =
-        label(text, 12f, onSurfaceVariant).apply {
-            letterSpacing = 0.06f
-            setPadding(0, dp(14f), 0, dp(4f))
-        }
-
-    private fun branchRow(
-        name: String,
-        isCurrent: Boolean,
-        isRemote: Boolean,
-    ): View {
-        val row =
+    private fun controlBody(state: Control): View {
+        val column =
             LinearLayout(host).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(12f), 0, dp(12f))
-                isClickable = true
-                setOnClickListener { showBranchActions(name, isCurrent, isRemote) }
-                pressFeedback(pressedAlpha = 0.6f)
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
             }
-        row.addView(
-            ImageView(host).apply {
-                setImageResource(R.drawable.ic_branch)
-                setColorFilter(if (isCurrent) primary else onSurfaceVariant)
-                layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
-            },
-        )
-        row.addView(
-            label(name, 15f, if (isCurrent) primary else onSurface).apply {
-                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+        column.addView(
+            TextView(host).apply {
+                text = state.title
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextColor(onSurface)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.MIDDLE
             },
         )
-        if (isCurrent) {
-            row.addView(label("当前", 12f, onSurfaceVariant))
+        if (!state.subtitle.isNullOrEmpty()) {
+            column.addView(
+                TextView(host).apply {
+                    text = state.subtitle
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                    setTextColor(onSurfaceVariant)
+                    setPadding(0, dp(3f), 0, 0)
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                },
+            )
+        }
+        if (state.actions.isNotEmpty()) {
+            column.addView(
+                actionRow(state),
+                LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(12f) },
+            )
+        }
+        return column
+    }
+
+    private fun actionRow(state: Control): View {
+        val row =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+        state.actions.forEachIndexed { index, action ->
+            if (index > 0) row.addView(View(host), LinearLayout.LayoutParams(dp(8f), 1))
+            row.addView(
+                pillButton(action.first, index == 0 && state.filled) { action.second() },
+                LinearLayout.LayoutParams(0, dp(42f), 1f),
+            )
         }
         return row
     }
 
-    private fun showBranchActions(
-        name: String,
-        isCurrent: Boolean,
-        isRemote: Boolean,
-    ) {
-        val sheet = sheet().title(name)
-        sheet.content { column ->
-            column.removeAllViews()
-            if (!isCurrent) {
-                column.addView(
-                    actionRowInSheet("检出", R.drawable.ic_branch) {
-                        sheet.dismiss()
-                        operate("检出") { Git.checkout(host.env, host.root, name) }
-                    },
-                )
-                if (!isRemote) {
-                    column.addView(
-                        actionRowInSheet("合并到当前分支", R.drawable.ic_commit) {
-                            sheet.dismiss()
-                            mergeBranch(name)
-                        },
-                    )
-                }
-            }
-            if (!isCurrent && !isRemote) {
-                column.addView(
-                    actionRowInSheet("删除", R.drawable.ic_trash) {
-                        sheet.dismiss()
-                        deleteBranch(name)
-                    },
-                )
-            }
-        }
-        sheet.show()
-    }
-
-    private fun mergeBranch(name: String) {
-        operate("合并 $name") { Git.merge(host.env, host.root, name, false) }
-    }
-
-    private fun deleteBranch(name: String) {
-        val sheet = sheet().title("删除分支").subtitle(name)
-        sheet.content { column ->
-            column.addView(label("未合并的分支需要强制删除。", 13f, onSurfaceVariant))
-        }
-        sheet.primaryAction("删除") {
-            sheet.dismiss()
-            host.background(
-                work = { Git.deleteBranch(host.env, host.root, name, false) },
-                then = { result ->
-                    if (result.ok) {
-                        showResult("删除分支", result)
-                        refresh()
-                    } else {
-                        showResult("删除分支", result, offerForce = name)
+    private fun pillButton(
+        text: String,
+        filled: Boolean,
+        click: () -> Unit,
+    ): TextView =
+        TextView(host).apply {
+            this.text = text
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            val corner = dp(21f).toFloat()
+            if (filled) {
+                setTextColor(color(com.google.android.material.R.attr.colorOnPrimary))
+                background =
+                    GradientDrawable().apply {
+                        this.cornerRadius = corner
+                        setColor(primary)
                     }
-                },
-            )
-        }
-        sheet.secondaryAction("取消") { sheet.dismiss() }
-        sheet.show()
-    }
-
-    // ---------------------------------------------------------------- 提交
-
-    private fun showCommit(commit: Git.Commit) {
-        graph.selected = commit.hash
-        val sheet = sheet().title(commit.hash.take(8)).subtitle(commit.subject)
-        sheet.content { column ->
-            column.removeAllViews()
-            column.addView(label(commit.author + " · " + timeFormat.format(Date(commit.time * 1000L)), 12f, onSurfaceVariant))
-            if (commit.refs.isNotEmpty()) {
-                column.addView(label(commit.refs, 12f, primary).apply { setPadding(0, dp(4f), 0, 0) })
-            }
-            if (commit.parents.isNotEmpty()) {
-                column.addView(
-                    label("父提交 " + commit.parents.joinToString(" ") { it.take(7) }, 12f, onSurfaceVariant).apply {
-                        setPadding(0, dp(4f), 0, 0)
-                    },
-                )
-            }
-            column.addView(
-                actionRowInSheet("查看提交详情", R.drawable.ic_commit) {
-                    showCommitDetail(commit, sheet)
-                },
-            )
-            column.addView(
-                actionRowInSheet("从此刻建分支", R.drawable.ic_branch) {
-                    sheet.dismiss()
-                    inputSheet("从此刻建分支", "branch-" + commit.hash.take(6)) { name ->
-                        operate("新建分支") { Git.createBranch(host.env, host.root, name, commit.hash) }
+            } else {
+                setTextColor(onSurface)
+                background =
+                    GradientDrawable().apply {
+                        this.cornerRadius = corner
+                        setStroke(dp(1f), withAlpha(onSurface, 0.25f))
                     }
-                },
-            )
-            if (commit.hash != snapshot?.commits?.firstOrNull()?.hash) {
-                column.addView(
-                    actionRowInSheet("合并到当前分支", R.drawable.ic_commit) {
-                        sheet.dismiss()
-                        mergeBranch(commit.hash)
-                    },
-                )
             }
-            column.addView(
-                actionRowInSheet("检出此提交", R.drawable.ic_branch) {
-                    sheet.dismiss()
-                    operate("检出") { Git.checkout(host.env, host.root, commit.hash) }
-                },
-            )
+            setOnClickListener { click() }
+            pressFeedback(pressedScale = 0.97f)
         }
-        sheet.show()
-    }
 
-    private fun showCommitDetail(
-        commit: Git.Commit,
-        into: CodaSheet? = null,
-    ) {
-        // 从提交卡片点进来时就地换页：先把标题与"加载中"推进去，结果回来再刷新内容。
-        if (into != null) {
-            into.navigate {
-                title(commit.hash.take(8))
-                subtitle(commit.subject)
-                content { column ->
-                    column.removeAllViews()
-                    column.addView(label("正在读取提交内容…", 12f, onSurfaceVariant))
-                }
-            }
+    // ---------------------------------------------------------------- 打开下一级
+
+    private fun openBranches() {
+        val current = snapshot ?: return
+        if (!current.repo) {
+            toast("当前目录不是 Git 仓库")
+            return
         }
-        host.background(
-            work = { Git.show(host.env, host.root, commit.hash).output },
-            then = { text ->
-                if (into != null) {
-                    into.refreshContent { column ->
-                        column.removeAllViews()
-                        column.addView(monoLabel(text.ifEmpty { "没有内容" }, 12f, onSurfaceVariant))
-                    }
-                } else {
-                    val sheet = sheet().title(commit.hash.take(8)).subtitle(commit.subject)
-                    sheet.content { column ->
-                        column.removeAllViews()
-                        column.addView(monoLabel(text.ifEmpty { "没有内容" }, 12f, onSurfaceVariant))
-                    }
-                    sheet.show()
-                }
-            },
+        host.openPage(
+            WorkspaceTabs.GIT_BRANCHES,
+            JSONObject().put("key", "branches").put("current", current.branch),
         )
+    }
+
+    private fun openChanges() {
+        host.openPage(WorkspaceTabs.GIT_CHANGES, JSONObject().put("key", "changes"))
+    }
+
+    private fun openCommitMessage() {
+        val current = snapshot ?: return
+        if (!current.repo) {
+            toast("当前目录不是 Git 仓库")
+            return
+        }
+        if (current.changes.isEmpty()) {
+            toast("没有可提交的变更")
+            return
+        }
+        host.openPage(WorkspaceTabs.GIT_COMMIT_MSG, JSONObject().put("key", "commitMsg"))
+    }
+
+    private fun openCommit(commit: Git.Commit) {
+        val isHead = commit.hash == snapshot?.commits?.firstOrNull()?.hash
+        host.openPage(
+            WorkspaceTabs.GIT_COMMIT,
+            JSONObject()
+                .put("key", "commit:" + commit.hash)
+                .put("hash", commit.hash)
+                .put("subject", commit.subject)
+                .put("author", commit.author)
+                .put("time", commit.time)
+                .put("head", isHead),
+        )
+    }
+
+    private fun openNewBranch(start: String) {
+        host.openPage(
+            WorkspaceTabs.GIT_NEW_BRANCH,
+            JSONObject().put("key", "newBranch:$start").put("start", start),
+        )
+    }
+
+    // ---------------------------------------------------------------- 分支
+
+    private fun parseRefs(refs: String): List<String> {
+        if (refs.isBlank()) return emptyList()
+        return refs
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("tag: ") }
+            .map { it.removePrefix("HEAD -> ").trim() }
+            .filter { it.isNotEmpty() && it != "HEAD" }
+    }
+
+    /** 这个提交是哪些本地分支的最新提交。 */
+    private fun branchesAt(
+        commit: Git.Commit,
+        current: Snapshot,
+    ): List<String> = parseRefs(commit.refs).filter { current.locals.contains(it) }
+
+    private fun checkoutBranch(name: String) {
+        operate("切换到 $name") { Git.checkout(host.env, host.root, name) }
     }
 
     // ---------------------------------------------------------------- 执行
@@ -495,58 +423,28 @@ class GitPage(
             work = action,
             then = { result ->
                 busy = false
-                showResult(label, result)
+                if (result.ok) {
+                    toast("$label 完成")
+                } else {
+                    // 失败原因（认证、网络、冲突）只在输出里，进结果页给用户看。
+                    val note = "$label 未能完成"
+                    host.openPage(
+                        WorkspaceTabs.GIT_RESULT,
+                        JSONObject()
+                            .put("key", "result:" + System.currentTimeMillis())
+                            .put("title", label)
+                            .put("note", note)
+                            .put("output", result.output),
+                    )
+                }
                 refresh()
             },
             onError = {
                 busy = false
                 toast("$label 失败")
-                render()
+                rebuildControl()
             },
         )
-    }
-
-    private fun showResult(
-        label: String,
-        result: Git.Result,
-        offerForce: String? = null,
-    ) {
-        if (result.ok && offerForce == null) {
-            toast("$label 完成")
-            return
-        }
-        val sheet = sheet().title(label).subtitle(if (result.ok) "完成" else "未能完成")
-        sheet.content { column ->
-            column.removeAllViews()
-            val text = result.output.ifEmpty { if (result.ok) "完成" else "没有输出" }
-            column.addView(monoLabel(text, 12f, onSurfaceVariant))
-            if (offerForce != null && text.contains("CONFLICT")) {
-                column.addView(
-                    label("合并存在冲突，可以中止这次合并。", 13f, onSurfaceVariant).apply {
-                        setPadding(0, dp(10f), 0, 0)
-                    },
-                )
-            }
-        }
-        if (offerForce != null) {
-            sheet.primaryAction("强制删除") {
-                sheet.dismiss()
-                host.background(
-                    work = { Git.deleteBranch(host.env, host.root, offerForce, true) },
-                    then = { forced ->
-                        showResult("强制删除分支", forced)
-                        refresh()
-                    },
-                )
-            }
-            sheet.secondaryAction("中止合并") {
-                sheet.dismiss()
-                operate("中止合并") { Git.mergeAbort(host.env, host.root) }
-            }
-        } else {
-            sheet.primaryAction("知道了") { sheet.dismiss() }
-        }
-        sheet.show()
     }
 
     private fun ignoreStateDir() {
@@ -571,63 +469,12 @@ class GitPage(
 
     // ---------------------------------------------------------------- 工具
 
-    private fun actionRowInSheet(
-        text: String,
-        iconRes: Int,
-        click: () -> Unit,
-    ): View {
-        val row =
-            LinearLayout(host).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(12f), 0, dp(12f))
-                isClickable = true
-                setOnClickListener { click() }
-            }
-        row.addView(
-            ImageView(host).apply {
-                setImageResource(iconRes)
-                setColorFilter(onSurfaceVariant)
-                layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { rightMargin = dp(14f) }
-            },
-        )
-        row.addView(label(text, 15f, onSurface))
-        row.pressFeedback(pressedAlpha = 0.6f)
-        return row
-    }
-
-    private fun inputSheet(
-        caption: String,
-        initial: String,
-        onDone: (String) -> Unit,
-    ) {
-        val sheet = sheet().title(caption)
-        val input =
-            EditText(host).apply {
-                setText(initial)
-                setSelection(text.length)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-                setSingleLine()
-                setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
-                background =
-                    androidx.core.content.ContextCompat
-                        .getDrawable(host, R.drawable.bg_tool_card)
-            }
-        sheet.content { column ->
-            column.removeAllViews()
-            column.addView(input)
-        }
-        sheet.primaryAction("确定") {
-            val value = input.text.toString().trim()
-            if (value.isEmpty()) {
-                toast("不能为空")
-                return@primaryAction
-            }
-            sheet.dismiss()
-            onDone(value)
-        }
-        sheet.secondaryAction("取消") { sheet.dismiss() }
-        sheet.show()
+    private fun withAlpha(
+        color: Int,
+        factor: Float,
+    ): Int {
+        val alpha = ((color ushr 24 and 0xFF) * factor).toInt().coerceIn(0, 255)
+        return (color and 0x00FFFFFF) or (alpha shl 24)
     }
 
     private fun toast(text: String) {

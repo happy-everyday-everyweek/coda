@@ -20,6 +20,21 @@ object WorkspaceTabs {
     const val GIT = "git"
     const val TERMINAL = "terminal"
 
+    /**
+     * Git 页的下一级内容。
+     *
+     * 它们是工作区自己的标签页，不是另一个界面：走同一套标签栏、历史前进后退与状态落盘。
+     * 每种下面是「哪一条」，具体参数放在 tab.state 里（用 state.key 区分同种页面的不同实例）。
+     */
+    const val GIT_BRANCHES = "git:branches"
+    const val GIT_BRANCH = "git:branch"
+    const val GIT_COMMIT = "git:commit"
+    const val GIT_CHANGES = "git:changes"
+    const val GIT_DIFF = "git:diff"
+    const val GIT_COMMIT_MSG = "git:commitMsg"
+    const val GIT_NEW_BRANCH = "git:newBranch"
+    const val GIT_RESULT = "git:result"
+
     private const val VERSION = 1
 
     fun newId(): String =
@@ -29,12 +44,62 @@ object WorkspaceTabs {
             .replace("-", "")
             .take(10)
 
-    fun label(kind: String): String =
+    /** 标签名。带参数的页（某个分支、某次提交）从 state 里取具体名字。 */
+    fun label(
+        kind: String,
+        state: JSONObject? = null,
+    ): String =
         when (kind) {
-            FILES -> "文件"
-            GIT -> "Git"
-            TERMINAL -> "终端"
-            else -> "概览"
+            FILES -> {
+                "文件"
+            }
+
+            GIT -> {
+                "Git"
+            }
+
+            TERMINAL -> {
+                "终端"
+            }
+
+            GIT_BRANCHES -> {
+                "分支"
+            }
+
+            GIT_BRANCH -> {
+                when (state?.optString("mode")) {
+                    "delete" -> "删除分支"
+                    else -> state?.optString("branch").orEmpty().ifEmpty { "分支" }
+                }
+            }
+
+            GIT_COMMIT -> {
+                "提交 " + state?.optString("hash").orEmpty().take(7)
+            }
+
+            GIT_CHANGES -> {
+                "未提交改动"
+            }
+
+            GIT_DIFF -> {
+                "diff"
+            }
+
+            GIT_COMMIT_MSG -> {
+                "提交"
+            }
+
+            GIT_NEW_BRANCH -> {
+                "新建分支"
+            }
+
+            GIT_RESULT -> {
+                state?.optString("title").orEmpty().ifEmpty { "结果" }
+            }
+
+            else -> {
+                "概览"
+            }
         }
 
     /** 读回上次的标签页集合与当前标签；没有记录时返回空集合。 */
