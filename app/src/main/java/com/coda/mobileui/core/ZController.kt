@@ -372,7 +372,10 @@ class ZController private constructor(
         // 只在拿到真实数据时写，避免把缓存内容又写回缓存。
         if (!cacheOnly) SessionCache.saveMessages(app, sid, messages)
         val mo = ZParse.parseModelOptions(root)
-        if (mo.isNotEmpty()) modelOptions = mo
+        // 快照里的 model.available 只含当前模型（内核省流），不能拿它覆盖清单：
+        // 覆盖后面板就只剩一个可选，而且会让「列表为空才拉全量」的判断永久失效。
+        // 只在还没有任何清单时用它兜底。
+        if (mo.isNotEmpty() && modelOptions.isEmpty()) modelOptions = mo
         val tl = ZParse.parseThoughtLevels(root)
         if (tl.isNotEmpty()) thoughtLevels = tl
         ZParse.parseCurrentThoughtLevel(root)?.let { currentThoughtLevel = it }
@@ -398,7 +401,8 @@ class ZController private constructor(
         patch.optJSONObject("model")?.let { mo ->
             val root = JSONObject().put("settings", JSONObject().put("model", mo))
             val list = ZParse.parseModelOptions(root)
-            if (list.isNotEmpty()) modelOptions = list
+            // 同上：状态 patch 也只带当前模型，不能覆盖全量清单。
+            if (list.isNotEmpty() && modelOptions.isEmpty()) modelOptions = list
             mo.optJSONObject("current")?.let { cur ->
                 val p = cur.optString("providerId")
                 val m = cur.optString("modelId")

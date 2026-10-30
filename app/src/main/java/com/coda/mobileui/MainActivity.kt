@@ -4692,6 +4692,9 @@ class MainActivity : BaseActivity() {
 
     // ------------------------------------------------------------ 顶部胶囊双态
 
+    /** 正在拉全量模型清单，用于阻止 buildModelPanel 递归。 */
+    private var modelFetching = false
+
     /** 模型名（模型态下显示在胶囊里）。与工作区状态互不干扰，各记一份。 */
     private var modelPillLabel: CharSequence = ""
 
@@ -4805,9 +4808,16 @@ class MainActivity : BaseActivity() {
         container.removeAllViews()
         strengthLevel = controllerStrengthIndex()
         addStrengthCard(container, inflater)
-        // 列表为空时主动刷新一次（读取当前/最近会话的快照）；成功后重建面板。
-        if (zc.modelOptions.isEmpty()) {
+        // 每次打开都后台拉一次全量清单，成功后重建面板。
+        //
+        // 不能只在「列表为空」时拉：内核快照与状态 patch 里的 model.available 只带
+        // 当前模型，配置里同一供应商新加的模型不会自己冒出来，面板就会一直只有
+        // 第一个可选。modelFetching 是防递归用的——refresh 成功会重建面板，
+        // 重建又会走到这里。
+        if (!modelFetching) {
+            modelFetching = true
             zc.refreshModelOptions { ok ->
+                modelFetching = false
                 if (ok) {
                     runOnUiThread {
                         val scrim = findViewById<View>(R.id.model_panel_scrim)
