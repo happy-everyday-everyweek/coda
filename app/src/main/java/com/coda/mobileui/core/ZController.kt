@@ -370,7 +370,11 @@ class ZController private constructor(
         messages = ZParse.parseMessages(root).toMutableList()
         // 顺手把消息落到本地缓存，内核退出后还能只读回看。
         // 只在拿到真实数据时写，避免把缓存内容又写回缓存。
-        if (!cacheOnly) SessionCache.saveMessages(app, sid, messages)
+        // sid 在这里是可空的（拿不到会话 id 就没有归属，不落盘）。
+        val cacheSessionId = sid
+        if (!cacheOnly && cacheSessionId != null) {
+            SessionCache.saveMessages(app, cacheSessionId, messages)
+        }
         val mo = ZParse.parseModelOptions(root)
         // 快照里的 model.available 只含当前模型（内核省流），不能拿它覆盖清单：
         // 覆盖后面板就只剩一个可选，而且会让「列表为空才拉全量」的判断永久失效。
@@ -1135,8 +1139,8 @@ class ZController private constructor(
      * 不该再由这个选择器改动。
      */
     fun newSession(
-        cb: ((Boolean, String) -> Unit)?,
         workspaceOverride: String? = null,
+        cb: ((Boolean, String) -> Unit)? = null,
     ) {
         val wp = workspaceOverride?.takeIf { it.isNotBlank() } ?: workspacePath()
         val params =

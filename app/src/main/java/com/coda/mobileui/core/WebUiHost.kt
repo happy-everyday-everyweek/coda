@@ -326,7 +326,7 @@ object WebUiHost {
                 }
 
                 method == "POST" && path == "/api/session/new" -> {
-                    withKernel(appCtx) { ZController.get(appCtx).newSession(null) }
+                    withKernel(appCtx) { ZController.get(appCtx).newSession() }
                     respondJson(output, JSONObject().put("ok", true))
                 }
 

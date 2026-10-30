@@ -4571,7 +4571,7 @@ class MainActivity : BaseActivity() {
             textSize = 15f
             setTextColor(
                 if (accent) {
-                    MaterialColors.getColor(
+                    com.google.android.material.color.MaterialColors.getColor(
                         this@MainActivity,
                         com.google.android.material.R.attr.colorPrimary,
                         0xFF1B1B1B.toInt(),
@@ -4739,7 +4739,7 @@ class MainActivity : BaseActivity() {
                             0xFF000000.toInt(),
                         ),
                     )
-                    setPadding(dp(4f), dp(14f), dp(4f), dp(14f))
+                    setPadding(dp(4), dp(14), dp(4), dp(14))
                 }
             col.addView(row)
             col.addView(
@@ -4753,7 +4753,7 @@ class MainActivity : BaseActivity() {
                             android.graphics.Color.GRAY,
                         ),
                     )
-                    setPadding(dp(4f), 0, dp(4f), dp(8f))
+                    setPadding(dp(4), 0, dp(4), dp(8))
                 },
             )
         }
