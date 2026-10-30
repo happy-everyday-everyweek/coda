@@ -55,6 +55,9 @@ object WorkspaceTabs {
             val active = saved.optString("active").ifEmpty { null }
             tabs to active
         } catch (_: Throwable) {
+            // 解析失败（多半是上次写入被中断，留下半个 JSON）。
+            // 把坏文件改名留证，不要让它挡住后续写入，也别悄悄删掉。
+            runCatching { file.renameTo(File(file.parentFile, file.name + ".bad")) }
             mutableListOf<WorkspaceTab>() to null
         }
     }
@@ -80,9 +83,21 @@ object WorkspaceTabs {
                 .put("root", root.absolutePath)
                 .put("tabs", array)
         if (active != null) payload.put("active", active)
+        // 先写临时文件再原子改名。
+        //
+        // 原来直接 writeText 覆盖：写到一半被杀进程（切后台被回收、存储满），
+        // 留下的就是半个 JSON，下次 load 解析失败当成「没有记录」，
+        // 所有标签静默消失。改名是原子操作，要么旧内容要么新内容。
         try {
             Workspaces.ensureState(root)
-            Workspaces.stateFile(root).writeText(payload.toString(2))
+            val target = Workspaces.stateFile(root)
+            val temp = File(target.parentFile, target.name + ".tmp")
+            temp.writeText(payload.toString(2))
+            if (!temp.renameTo(target)) {
+                // 某些文件系统上 rename 到已存在的目标会失败，退回覆盖写。
+                target.writeText(payload.toString(2))
+                temp.delete()
+            }
         } catch (_: Throwable) {
         }
     }

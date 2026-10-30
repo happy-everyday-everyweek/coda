@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.coda.mobileui.R
+import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.ArchiveKit
 import org.json.JSONObject
 import java.io.File
@@ -405,9 +406,12 @@ class FilesPage(
                     extractZip(pack, target)
                 } else {
                     target.mkdirs()
+                    // 给 tar 一个上限：包损坏或体积很大时会一直挂着，
+                    // 后面每次进这个目录都卡在「正在解压…」。
                     val r =
                         host.env.exec(
                             listOf("tar", "-xf", pack.absolutePath, "-C", target.absolutePath),
+                            timeoutMs = 300_000L,
                         )
                     r.ok
                 }
@@ -437,6 +441,7 @@ class FilesPage(
         runCatching {
             java.util.zip.ZipFile(pack).use { zf ->
                 val root = target.canonicalFile
+                var extracted = 0L
                 val entries = zf.entries()
                 while (entries.hasMoreElements()) {
                     val e = entries.nextElement()
@@ -451,6 +456,13 @@ class FilesPage(
                         out.parentFile?.mkdirs()
                         zf.getInputStream(e).use { input ->
                             out.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        // 解压总量保护：压缩包里一个条目声明的大小可以和实际写出量差很多
+                        // （解压炸弹），磁盘写满后整个工作区都用不了。
+                        extracted += out.length()
+                        if (extracted > MAX_EXTRACT_BYTES) {
+                            AppLog.w(TAG, "解压中断：累计超过上限 $MAX_EXTRACT_BYTES 字节")
+                            return@use
                         }
                     }
                 }
@@ -615,6 +627,19 @@ class FilesPage(
         DirectoryPicker.show(host, "移动到目录", current) { targetDir ->
             val target = File(targetDir, file.name)
             if (target.absolutePath == file.absolutePath) return@show
+            // 目录移进自己内部：renameTo 在部分文件系统上会「成功」，
+            // 结果是把整个子树搬进自身，目录结构与内容一起坏掉。
+            val srcPath = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+            val dirPath = runCatching { targetDir.canonicalPath }.getOrDefault(targetDir.absolutePath)
+            if (file.isDirectory && (dirPath == srcPath || dirPath.startsWith(srcPath + "/"))) {
+                toast("不能把目录移动到它自己内部")
+                return@show
+            }
+            // 工作区根不能搬走：搬走后标签、配置、当前页面路径全部失效。
+            if (srcPath == runCatching { host.root.canonicalPath }.getOrDefault(host.root.absolutePath)) {
+                toast("工作区根目录不能移动")
+                return@show
+            }
             if (target.exists()) {
                 toast("目标目录已有同名条目")
                 return@show
@@ -629,6 +654,10 @@ class FilesPage(
     }
 
     private fun confirmDelete(file: File) {
+        protectedReason(file)?.let {
+            toast(it)
+            return
+        }
         val sheet = sheet().title("删除").subtitle(file.name)
         sheet.content { column ->
             column.addView(label("删除后无法恢复。", 13f, onSurfaceVariant))
@@ -647,6 +676,35 @@ class FilesPage(
         }
         sheet.secondaryAction("取消") { sheet.dismiss() }
         sheet.show()
+    }
+
+    /**
+     * 这个目录能不能被删除／移动。
+     *
+     * 文件页可以一路浏览到设备根，所以「删除当前目录」不是抽象风险：
+     * 停在工作区根上按删除，会把整个工作区（含 .coda 里的标签与配置）清空。
+     * 这几条挡的是会直接弄坏环境或系统的目标。
+     */
+    private fun protectedReason(file: File): String? {
+        val path = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+        val rootPath = runCatching { host.root.canonicalPath }.getOrDefault(host.root.absolutePath)
+        return when {
+            path == rootPath -> {
+                "工作区根目录不能删除或移动"
+            }
+
+            path == "/" || path == "/sdcard" || path == "/storage" || path == "/storage/emulated" -> {
+                "系统目录不能删除或移动"
+            }
+
+            path.startsWith("/system") || path.startsWith("/data") || path.startsWith("/vendor") -> {
+                "系统目录不能删除或移动"
+            }
+
+            else -> {
+                null
+            }
+        }
     }
 
     private fun deleteRecursive(file: File): Boolean {
@@ -685,6 +743,21 @@ class FilesPage(
         }
     }
 
+    /**
+     * 条目名校验。
+     *
+     * 只靠 File(parent, name) 拼路径是不够的：名字里带 `/` 时它会当成
+     * 子目录，`..` 能直接跳到父级，结果是「在 A 目录新建、实际写进 B 目录」。
+     * 重命名同理，所以统一在这里挡掉。
+     */
+    private fun invalidNameReason(name: String): String? =
+        when {
+            name.isBlank() -> "名称不能为空"
+            name == "." || name == ".." -> "名称不能是 . 或 .."
+            name.contains('/') || name.contains('\u0000') -> "名称不能包含 / 等路径字符"
+            else -> null
+        }
+
     private fun inputSheet(
         caption: String,
         initial: String,
@@ -708,8 +781,9 @@ class FilesPage(
         }
         sheet.primaryAction("确定") {
             val name = input.text.toString().trim()
-            if (name.isEmpty()) {
-                toast("名称不能为空")
+            val bad = invalidNameReason(name)
+            if (bad != null) {
+                toast(bad)
                 return@primaryAction
             }
             sheet.dismiss()
@@ -1295,12 +1369,42 @@ class FilesPage(
         toast(if (wrap) "已启用自动换行" else "已关闭自动换行")
     }
 
+    /**
+     * 编辑器里有未保存修改时，切文件前先拦住。
+     *
+     * showEditor 会直接 setText 覆盖，没有这道拦，点开另一个文件就等于
+     * 把没存的内容丢了，而且没有任何提示。
+     */
+    private fun guardUnsaved(then: () -> Unit) {
+        val file = editing
+        if (file == null || !dirty) {
+            then()
+            return
+        }
+        val sheet = sheet().title("有未保存的修改").subtitle(file.name)
+        sheet.content { column ->
+            column.addView(label("打开另一个文件会丢弃当前修改。", 13f, onSurfaceVariant))
+        }
+        sheet.primaryAction("保存并继续") {
+            sheet.dismiss()
+            if (saveEditorBlocking()) then()
+        }
+        sheet.secondaryAction("放弃修改") {
+            sheet.dismiss()
+            then()
+        }
+        sheet.show()
+    }
+
     private fun openFile(file: File) {
         if (file.length() > MAX_EDIT_BYTES) {
             showInfo(file, "文件过大，未打开")
             return
         }
-        readInto(file, onFail = { showInfo(file, it) }, done = { showEditor(file, it) })
+        if (editing == file && editor.visibility == View.VISIBLE) return
+        guardUnsaved {
+            readInto(file, onFail = { showInfo(file, it) }, done = { showEditor(file, it) })
+        }
     }
 
     /**
@@ -1317,13 +1421,15 @@ class FilesPage(
     private fun openFileSmart(file: File) {
         val textual = isProbablyText(file)
         if (textual && file.length() <= MAX_EDIT_BYTES) {
-            readInto(
-                file,
-                onFail = { note ->
-                    if (!openWithSystem(file) && !tryArchiveByContent(file)) showInfo(file, note)
-                },
-                done = { showEditor(file, it) },
-            )
+            guardUnsaved {
+                readInto(
+                    file,
+                    onFail = { note ->
+                        if (!openWithSystem(file) && !tryArchiveByContent(file)) showInfo(file, note)
+                    },
+                    done = { showEditor(file, it) },
+                )
+            }
             return
         }
         // 二进制，或大到不该塞进编辑器：先问系统
@@ -1483,8 +1589,35 @@ class FilesPage(
         editorInput.post { refreshEditorChrome() }
     }
 
+    /**
+     * 保存编辑器内容。
+     *
+     * 写盘放后台：编辑器上限是 MAX_EDIT_BYTES，主线程同步 writeText 在这个量级上
+     * 会直接卡住界面，慢存储上更明显。
+     */
     private fun saveEditor() {
         val file = editing ?: return
+        val text = editorInput.text.toString()
+        host.background(
+            work = { runCatching { file.writeText(text) }.isSuccess },
+            then = { ok ->
+                if (ok) {
+                    originalText = text
+                    dirty = false
+                    editorTitle.text = file.name
+                    refreshCursorStatus()
+                    toast("已保存")
+                } else {
+                    toast("保存失败")
+                }
+            },
+            onError = { toast("保存失败") },
+        )
+    }
+
+    /** 同步保存，只在「保存并继续」这种需要立刻知道结果的串行流程里用。 */
+    private fun saveEditorBlocking(): Boolean {
+        val file = editing ?: return false
         val text = editorInput.text.toString()
         val ok = runCatching { file.writeText(text) }.isSuccess
         if (ok) {
@@ -1492,10 +1625,10 @@ class FilesPage(
             dirty = false
             editorTitle.text = file.name
             refreshCursorStatus()
-            toast("已保存")
         } else {
             toast("保存失败")
         }
+        return ok
     }
 
     private fun closeEditor() {
@@ -1588,5 +1721,10 @@ class FilesPage(
 
     private companion object {
         const val MAX_EDIT_BYTES = 2L * 1024 * 1024
+
+        /** 单次解压的累计写出上限。防止解压炸弹把磁盘写满。 */
+        const val MAX_EXTRACT_BYTES = 2L * 1024 * 1024 * 1024
+
+        const val TAG = "WorkspaceFiles"
     }
 }

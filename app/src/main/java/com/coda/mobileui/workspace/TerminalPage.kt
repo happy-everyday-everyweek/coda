@@ -530,6 +530,12 @@ class TerminalPage(
     }
 
     private fun attach(session: Process) {
+        // 上一个会话如果还没退干净，先把它的引用换下来并收尾，避免重启时泄漏。
+        val stale = process
+        if (stale != null && stale !== session) {
+            process = null
+            runCatching { stale.destroy() }
+        }
         process = session
         writer = session.outputStream
         status.visibility = View.GONE
@@ -564,10 +570,20 @@ class TerminalPage(
 
     private fun stop() {
         started = false
-        val alive = process ?: return
-        runCatching { alive.destroy() }
+        // 先把引用取下来再清空：顺序反了（先置 null 再读）会让 destroy 永远走不到。
+        val alive = process
         process = null
         writer = null
+        if (alive == null) return
+        // 关流 + destroy + destroyForcibly：bash 卡在读写上时，单靠 destroy 不一定
+        // 能让它退出，留着会一直占着一个进程和一条 pipe。
+        runCatching { alive.outputStream.close() }
+        runCatching { alive.inputStream.close() }
+        runCatching { alive.errorStream?.close() }
+        runCatching { alive.destroy() }
+        if (runCatching { alive.isAlive }.getOrDefault(false)) {
+            runCatching { alive.destroyForcibly() }
+        }
     }
 
     private fun restart() {

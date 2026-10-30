@@ -167,9 +167,19 @@ object Git {
         root: File,
         message: String,
     ): Result {
+        // 空消息直接挡掉：git 会以非 0 退出，用户看到的只是一段用法说明，
+        // 容易误以为仓库坏了。
+        val trimmed = message.trim()
+        if (trimmed.isEmpty()) return Result(false, "提交信息不能为空")
         val staged = run(env, root, listOf("add", "-A"))
         if (!staged.ok) return staged
-        return run(env, root, listOf("commit", "-m", message))
+        // add -A 成功不代表真有变更：没有变更时 commit 会返回非 0 且输出
+        // 一长串提示。先判一次，给出明确的「没有可提交的变更」。
+        val pending = run(env, root, listOf("status", "--porcelain"))
+        if (pending.ok && pending.output.isBlank()) {
+            return Result(false, "没有可提交的变更")
+        }
+        return run(env, root, listOf("commit", "-m", trimmed))
     }
 
     fun checkout(

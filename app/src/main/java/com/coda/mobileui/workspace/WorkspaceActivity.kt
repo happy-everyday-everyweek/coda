@@ -159,6 +159,9 @@ class WorkspaceActivity : BaseActivity() {
     override fun onDestroy() {
         super.onDestroy()
         worker.shutdownNow()
+        // 先把排队的写盘做完再停：直接 shutdownNow 会丢掉最后一次状态保存。
+        workspaceIo.shutdown()
+        runCatching { workspaceIo.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
     }
 
     // -------------------------------------------------------------- 容器能力
@@ -621,9 +624,21 @@ class WorkspaceActivity : BaseActivity() {
             .start()
     }
 
+    // 单线程：连续切标签会连发多次 persist，串行写才不会互相覆盖
+    // （原子写能保证不写坏，但并发时后完成的可能是旧快照）。
+    private val workspaceIo =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "coda-workspace-state").apply { isDaemon = true }
+        }
+
     private fun persist() {
+        // saveState() 要读当前页面的 UI 状态，只能在主线程收；
+        // 序列化与写盘挪到后台，切标签、开新标签都会走到这里，
+        // 主线程同步写文件没必要。
         for (entry in tabs) entry.data.state = entry.page.saveState()
-        WorkspaceTabs.save(root, tabs.map { it.data }, activeId)
+        val snapshot = tabs.map { it.data }
+        val active = activeId
+        workspaceIo.execute { runCatching { WorkspaceTabs.save(root, snapshot, active) } }
     }
 
     // ------------------------------------------------------------ 标签总览
