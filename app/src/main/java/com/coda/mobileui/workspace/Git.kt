@@ -302,6 +302,59 @@ object Git {
         return merge(env, root, source, false)
     }
 
+    /** 冲突文件列表：只列两边都改过的那些（git 的 U 状态）。 */
+    fun conflicts(
+        env: LinuxEnv,
+        root: File,
+    ): List<String> = run(env, root, listOf("diff", "--name-only", "--diff-filter=U")).lines()
+
+    /** 全部标记为已解决（不改变内容，只进暂存区）。 */
+    fun addAll(
+        env: LinuxEnv,
+        root: File,
+    ): Result = run(env, root, listOf("add", "-A"))
+
+    /** 只把一个文件标记为已解决。 */
+    fun addFile(
+        env: LinuxEnv,
+        root: File,
+        file: String,
+    ): Result = run(env, root, listOf("add", "--", file))
+
+    /** 完成合并提交：用 merge 已经写好的信息，不再追问用户。 */
+    fun commitMerge(
+        env: LinuxEnv,
+        root: File,
+    ): Result = run(env, root, listOf("commit", "--no-edit"))
+
+    /**
+     * 冲突时整段取一边：ours 是当前分支（合并的目标），theirs 是被合并的分支。
+     * 取完顺手 git add，让它从冲突列表里消失。
+     */
+    fun takeSide(
+        env: LinuxEnv,
+        root: File,
+        file: String,
+        ours: Boolean,
+    ): Result {
+        val side = if (ours) "--ours" else "--theirs"
+        val checkout = run(env, root, listOf("checkout", side, "--", file))
+        if (!checkout.ok) return checkout
+        return run(env, root, listOf("add", "--", file))
+    }
+
+    /** 读冲突文件的内容，用于在页面上直接看冲突段。 */
+    fun conflictSnippet(
+        root: File,
+        file: String,
+        limit: Int = 60_000,
+    ): String {
+        val target = File(root, file)
+        if (!target.isFile) return "读不到文件：$file"
+        val text = runCatching { target.readText() }.getOrElse { return "读取失败：$file" }
+        return if (text.length > limit) text.take(limit) + "\n\n（内容过长，已截断）" else text
+    }
+
     /** 两个提交之间的差异，用于在画布上比较任意两点。 */
     fun diffRange(
         env: LinuxEnv,

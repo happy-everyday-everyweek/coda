@@ -100,7 +100,7 @@ class GitPage(
             GitDetailView(host).apply {
                 layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
                 visibility = View.GONE
-                onBack = { closeDetail() }
+                onBack = { backPage() }
             }
         stage.addView(detail)
         rebuildControl()
@@ -112,10 +112,10 @@ class GitPage(
         refresh()
     }
 
-    /** 返回键先关页内的下一级，再交回容器处理标签历史。 */
+    /** 返回键先退页内一层，再交回容器处理标签历史。 */
     override fun onBack(): Boolean {
         if (!detailOpen) return false
-        closeDetail()
+        backPage()
         return true
     }
 
@@ -143,28 +143,65 @@ class GitPage(
 
     // ---------------------------------------------------------------- 页内下一级
 
+    /** 页内的一层：标题与重放方式。返回时重新执行 [render] 即可回到上一层。 */
+    private class Page(
+        val title: String,
+        val subtitle: String?,
+        val render: () -> Unit,
+    )
+
+    private val pages = ArrayDeque<Page>()
+
+    /** 进入一级页（清空更深的层级）。 */
     private fun openDetail(
         title: String,
         subtitle: String? = null,
     ): GitDetailView {
+        pages.clear()
+        return pushPage(title, subtitle) { }
+    }
+
+    /** 压一层并发起渲染。用于冲突处理这种需要多级返回的地方。 */
+    private fun pushPage(
+        title: String,
+        subtitle: String? = null,
+        render: () -> Unit,
+    ): GitDetailView {
         detailOpen = true
         detail.setPage(title, subtitle)
         detail.onRowClick = null
+        pages.addLast(Page(title, subtitle, render))
         base.visibility = View.GONE
-        detail.visibility = View.VISIBLE
-        detail.alpha = 0f
-        detail
-            .animate()
-            .alpha(1f)
-            .setDuration(Motion.PANEL_MS)
-            .setInterpolator(Motion.standard)
-            .start()
+        if (detail.visibility != View.VISIBLE) {
+            detail.visibility = View.VISIBLE
+            detail.alpha = 0f
+            detail
+                .animate()
+                .alpha(1f)
+                .setDuration(Motion.PANEL_MS)
+                .setInterpolator(Motion.standard)
+                .start()
+        }
+        render()
         return detail
+    }
+
+    /** 返回一层；已经在最外层就直接回画布。 */
+    private fun backPage() {
+        if (pages.size <= 1) {
+            closeDetail()
+            return
+        }
+        pages.removeLast()
+        val previous = pages.last()
+        detail.setPage(previous.title, previous.subtitle)
+        previous.render()
     }
 
     private fun closeDetail() {
         if (!detailOpen) return
         detailOpen = false
+        pages.clear()
         detail.visibility = View.GONE
         base.visibility = View.VISIBLE
     }
@@ -286,12 +323,12 @@ class GitPage(
         if (conflictText.isNotEmpty()) {
             return Control(
                 title = "合并有冲突",
-                subtitle = "把 $mergeSource 合并到 $mergeTarget 时冲突，可以交给 Agent 处理。",
+                subtitle = "把 $mergeSource 合并到 $mergeTarget 时冲突。可以自己处理，也可以交给 Agent。",
                 actions =
                     listOf(
+                        "手动处理" to { showConflict() },
                         "让 Agent 解决" to { handOffToAgent() },
                         "中止合并" to { abortMerge() },
-                        "看输出" to { showText("合并冲突", conflictText) },
                     ),
             )
         }
@@ -586,7 +623,111 @@ class GitPage(
         title: String,
         text: String,
     ) {
-        openDetail(title).showCode(text)
+        // 压一层而不是清栈：从冲突页点进来时，返回要能回到冲突文件清单。
+        pushPage(title) { detail.showCode(text) }
+    }
+
+    // ---------------------------------------------------------------- 手动处理冲突
+
+    /** 冲突处理的第一层：文件清单 + 能做的收尾动作。 */
+    private fun showConflict() {
+        pushPage("合并冲突", "手动处理") { renderConflict() }
+    }
+
+    private fun renderConflict() {
+        detail.showLoading("正在读取冲突…")
+        host.background(
+            work = { Git.conflicts(host.env, host.root) },
+            then = { files ->
+                val rows = mutableListOf<SettingRow>()
+                val keys = HashMap<String, () -> Unit>()
+                rows.add(SettingRow.Header("冲突文件"))
+                if (files.isEmpty()) {
+                    rows.add(SettingRow.Value("没有冲突文件了", "可以直接完成合并", ""))
+                }
+                for (file in files) {
+                    rows.add(SettingRow.Value(file, "点开选择保留哪一边", "f:$file"))
+                    keys["f:$file"] = { openConflictFile(file) }
+                }
+                rows.add(SettingRow.Header("操作"))
+                rows.add(SettingRow.Value("标记全部已解决", "不改内容，只把改动放进暂存区", "add"))
+                keys["add"] = { conflictOp("标记已解决") { Git.addAll(host.env, host.root) } }
+                rows.add(SettingRow.Value("完成合并", "用 merge 已经写好的信息提交", "commit"))
+                keys["commit"] = {
+                    conflictOp("完成合并", finish = true) { Git.commitMerge(host.env, host.root) }
+                }
+                rows.add(SettingRow.Value("查看合并输出", "git merge 的原始输出", "out"))
+                keys["out"] = { showText("合并输出", conflictText) }
+                bindRows(rows, keys)
+            },
+            onError = { detail.showLoading("读取冲突失败，返回重试") },
+        )
+    }
+
+    /** 第二层：单个冲突文件，整段取一边或直接标记解决。 */
+    private fun openConflictFile(file: String) {
+        pushPage(file, "选择要保留的版本") { renderConflictFile(file) }
+    }
+
+    private fun renderConflictFile(file: String) {
+        detail.showLoading("正在读取冲突内容…")
+        val source = mergeSource.orEmpty()
+        host.background(
+            work = { Git.conflictSnippet(host.root, file) },
+            then = { text ->
+                val rows =
+                    listOf(
+                        SettingRow.Value("保留当前分支的版本", "ours", "ours"),
+                        SettingRow.Value(
+                            "保留被合并分支的版本",
+                            source.ifEmpty { "theirs" },
+                            "theirs",
+                        ),
+                        SettingRow.Value("只标记已解决", "内容我已在别处改好", "add"),
+                    )
+                val keys =
+                    mapOf<String, () -> Unit>(
+                        "ours" to {
+                            conflictOp("保留当前分支版本") { Git.takeSide(host.env, host.root, file, true) }
+                        },
+                        "theirs" to {
+                            conflictOp("保留被合并分支版本") { Git.takeSide(host.env, host.root, file, false) }
+                        },
+                        "add" to { conflictOp("标记已解决") { Git.addFile(host.env, host.root, file) } },
+                    )
+                bindRows(rows, keys)
+                detail.appendCode(text)
+            },
+            onError = { detail.showLoading("读取冲突内容失败，返回重试") },
+        )
+    }
+
+    /** 冲突页里的写操作：成功就刷新当前层（或收尾回画布），失败把输出摊开。 */
+    private fun conflictOp(
+        label: String,
+        finish: Boolean = false,
+        action: () -> Git.Result,
+    ) {
+        host.background(
+            work = action,
+            then = { result ->
+                if (result.ok) {
+                    toast("$label 完成")
+                    if (finish) {
+                        resetMerge()
+                        closeDetail()
+                        refresh()
+                    } else {
+                        pages.lastOrNull()?.render?.invoke()
+                    }
+                } else {
+                    pushPage(label, "未能完成") {
+                        detail.showCode(result.output.ifEmpty { "没有输出" })
+                    }
+                }
+            },
+            onError = { toast("$label 失败") },
+        )
     }
 
     // ---------------------------------------------------------------- 分支
