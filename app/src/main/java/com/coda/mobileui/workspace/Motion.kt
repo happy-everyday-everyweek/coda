@@ -5,6 +5,7 @@ import android.animation.ValueAnimator
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.LinearInterpolator
 import android.view.animation.PathInterpolator
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -33,6 +34,26 @@ internal object Motion {
 
     /** 回弹用的缓动，结尾略微放缓，不做真正的弹簧以免抖动。 */
     val settle: TimeInterpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+
+    /**
+     * 页面切换时长与缓动。
+     *
+     * 对齐 NextPlayer 的页面过渡（navigationTransition）：200ms、线性缓动。
+     * 它不用减速曲线是有道理的——切换过程里两页同时在动，
+     * 给整体加缓动会让两页的速度关系不断变化，看着反而发飘；
+     * 线性则让位移匀速，层次感来自两页行程不同，而不是来自速度变化。
+     */
+    const val NAV_MS = 200L
+    val linear: TimeInterpolator = LinearInterpolator()
+
+    /**
+     * 切换时旧页的退出行程占比。
+     *
+     * NextPlayer 里前进是「新页走满屏、旧页只走 30%」，后退反过来。
+     * 用行程差做出前后景层次，比两页都走满屏更像翻页，也不会让两页
+     * 以同样速度对向交叉而显得忙。
+     */
+    const val NAV_EXIT_RATIO = 0.3f
 }
 
 /**

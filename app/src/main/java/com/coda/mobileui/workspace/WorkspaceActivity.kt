@@ -515,37 +515,73 @@ class WorkspaceActivity : BaseActivity() {
         if (overview != null) fillGrid()
     }
 
+    // 切页方向。标签直点没有前后关系，按前进处理，至少有明确的切换感。
+    private enum class NavDirection { FORWARD, BACK }
+
     /** 不记历史的切换。 */
-    private fun setActive(id: String) {
+
+    private fun setActive(
+        id: String,
+        direction: NavDirection = NavDirection.FORWARD,
+    ) {
         val next = tabs.firstOrNull { it.data.id == id } ?: return
-        if (activeId != id) {
-            tabs.firstOrNull { it.data.id == activeId }?.let { previous ->
-                previous.page.view.visibility = View.GONE
-                previous.page.onHidden()
-            }
-            next.page.view.visibility = View.VISIBLE
-            // 轻量淡入：切页时给一次明确的"内容换了"的反馈，不做位移动画以免与
-            // 各页自身的滚动位置打架。
-            next.page.view
-                .animate()
-                .cancel()
-            next.page.view.alpha = 0f
-            next.page.view
-                .animate()
-                .alpha(1f)
-                .setDuration(Motion.SETTLE_MS)
-                .setInterpolator(Motion.standard)
-                .start()
-            activeId = id
-            next.page.onShown()
+        if (activeId == id) {
+            updateBar()
+            return
         }
+        val firstShow = activeId == null
+        val width = (pageHost.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels).toFloat()
+        val back = direction == NavDirection.BACK
+        // 页面切换参考 NextPlayer 的过渡：全程 200ms、线性缓动，
+        // 靠两页行程差做出层次——前进时新页走满屏、旧页只退 30%；后退反向。
+        // 之前这里是纯 alpha 淡入，等于「内容直接跳过去」，看不出切换方向。
+        tabs.firstOrNull { it.data.id == activeId }?.let { previous ->
+            previous.page.onHidden()
+            val outgoing = previous.page.view
+            outgoing.animate().cancel()
+            if (firstShow || width <= 0f) {
+                outgoing.visibility = View.GONE
+            } else {
+                outgoing
+                    .animate()
+                    .translationX(if (back) width else -width * Motion.NAV_EXIT_RATIO)
+                    .alpha(0f)
+                    .setDuration(Motion.NAV_MS)
+                    .setInterpolator(Motion.linear)
+                    .withEndAction {
+                        // 动画结束时它可能已经又被切回来了，别把活跃页藏掉。
+                        if (previous.data.id != activeId) {
+                            outgoing.visibility = View.GONE
+                            outgoing.translationX = 0f
+                            outgoing.alpha = 1f
+                        }
+                    }.start()
+            }
+        }
+        val incoming = next.page.view
+        incoming.animate().cancel()
+        incoming.visibility = View.VISIBLE
+        incoming.alpha = 1f
+        if (firstShow || width <= 0f) {
+            incoming.translationX = 0f
+        } else {
+            incoming.translationX = if (back) -width * Motion.NAV_EXIT_RATIO else width
+            incoming
+                .animate()
+                .translationX(0f)
+                .setDuration(Motion.NAV_MS)
+                .setInterpolator(Motion.linear)
+                .start()
+        }
+        activeId = id
+        next.page.onShown()
         updateBar()
     }
 
     private fun stepBack() {
         val previous = history.removeLastOrNull() ?: return
         activeId?.let { ahead.addLast(it) }
-        setActive(previous)
+        setActive(previous, NavDirection.BACK)
         hideOverview()
         persist()
     }
@@ -553,7 +589,7 @@ class WorkspaceActivity : BaseActivity() {
     private fun stepAhead() {
         val next = ahead.removeLastOrNull() ?: return
         activeId?.let { history.addLast(it) }
-        setActive(next)
+        setActive(next, NavDirection.FORWARD)
         hideOverview()
         persist()
     }
