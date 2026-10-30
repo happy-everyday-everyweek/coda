@@ -73,6 +73,26 @@
                 android:tint="?attr/colorOnSurfaceVariant" />
         </FrameLayout>
 
+        <!--
+            只读提示条。
+
+            内核没起来时界面上显示的是本地缓存，不标出来用户会以为是卡住了、
+            或者发送没反应。放在顶栏下面、内容区上面，一眼能看到又不遮内容。
+        -->
+        <TextView
+            android:id="@+id/readonly_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="?attr/colorSurfaceVariant"
+            android:paddingStart="16dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="6dp"
+            android:text="@string/readonly_banner"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
         <!-- 内容区：空态 / 对话视图 -->
         <FrameLayout
             android:id="@+id/content_area"

@@ -88,4 +88,5 @@
     <string name="workspace_pick_title">工作区</string>
     <string name="workspace_create">创建工作区</string>
     <string name="workspace_none_hint">先选择或创建一个工作区</string>
+    <string name="readonly_banner">核心未就绪 · 正在查看本地缓存（只读）</string>
 </resources>

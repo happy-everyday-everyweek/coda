@@ -1052,6 +1052,11 @@ class MainActivity : BaseActivity() {
             }
             return
         }
+        // 只读态：界面内容是本地缓存，发的任何请求都会失败，直接说明白。
+        if (zc.cacheOnly) {
+            snack("核心未就绪，正在查看本地缓存（只读）")
+            return
+        }
         // 新会话必须先有工作区。输入框本身不拦（用户可以先写再选），只拦发送。
         if (zc.currentSessionId == null && composerWorkspace == null) {
             snack("先选择或创建一个工作区")
@@ -1539,9 +1544,21 @@ class MainActivity : BaseActivity() {
         if (!java.io.File(filesDir, "core/.ready").exists()) {
             snack("首次启动：正在解包核心运行时，约 1-2 分钟，完成后自动可用…")
         }
+        // 先把本地缓存里的上次会话摆出来：核心首次解包要 1-2 分钟，
+        // 这期间如果界面全空，用户会以为应用挂了。缓存有内容时这里会顺带
+        // 把界面切到只读态，核心起来后 refreshSessions 会自然覆盖并退出只读。
+        zc.restoreFromCache()
         zc.ensureStarted { ok, msg ->
             if (!ok) {
-                snack("核心启动失败: $msg")
+                // 核心起不来：退而用缓存，让用户至少能翻看上次聊到哪。
+                // 已经有内容（刚读的缓存，或启动前拿到的数据）就静默切只读，
+                // 不要再报一个「启动失败」——用户关心的不是启动日志。
+                if (zc.restoreFromCache() || zc.sessions.isNotEmpty()) {
+                    zc.enterReadOnly()
+                    updateReadOnlyBanner()
+                } else {
+                    snack("核心启动失败: $msg")
+                }
             } else {
                 renderFromController()
                 // 无会话时也预取命令表：输入“/”即可看到内置命令
@@ -1784,9 +1801,24 @@ class MainActivity : BaseActivity() {
 
     private fun shorten(text: String): String = if (text.length <= 40) text else text.take(39) + "…"
 
+    /**
+     * 只读提示条的显隐。
+     *
+     * 内核没起来时界面上的内容是本地缓存，必须显式标出来：不然用户会觉得
+     * 界面卡住了、或者输入后点了发送没反应。
+     */
+    private fun updateReadOnlyBanner() {
+        val banner = findViewById<View>(R.id.readonly_banner)
+        if (banner != null) {
+            banner.visibility = if (zc.cacheOnly) View.VISIBLE else View.GONE
+        }
+        updateSendAvailability()
+    }
+
     /** 依据控制器状态刷新界面。 */
     private fun renderFromController() {
         syncPet()
+        updateReadOnlyBanner()
         if (zc.running) {
             if (runningSince == null) runningSince = System.currentTimeMillis()
         } else {
@@ -4652,7 +4684,7 @@ class MainActivity : BaseActivity() {
      * 不应该因为没选工作区就整个输不进去。
      */
     private fun updateSendAvailability() {
-        val ready = zc.currentSessionId != null || composerWorkspace != null
+        val ready = !zc.cacheOnly && (zc.currentSessionId != null || composerWorkspace != null)
         findViewById<View>(R.id.btn_send)?.apply {
             alpha = if (ready) 1f else 0.4f
         }

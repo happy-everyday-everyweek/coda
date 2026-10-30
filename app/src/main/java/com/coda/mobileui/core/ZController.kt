@@ -68,6 +68,15 @@ class ZController private constructor(
     var currentSessionId: String? = null
         private set
     var messages: MutableList<ZMessage> = mutableListOf()
+
+    /**
+     * 当前展示的内容来自本地缓存、而不是内核。
+     *
+     * 内核没起来时靠它把界面切成只读：能翻看上次的会话与消息，但不允许发送、
+     * 不允许新建会话，也不允许改模型——那些动作都要经过内核，发出去只会失败。
+     */
+    @Volatile
+    var cacheOnly: Boolean = false
         private set
     var running: Boolean = false
         private set
@@ -359,6 +368,9 @@ class ZController private constructor(
             if (status == "running" || status == "waiting") running = true else running = false
         }
         messages = ZParse.parseMessages(root).toMutableList()
+        // 顺手把消息落到本地缓存，内核退出后还能只读回看。
+        // 只在拿到真实数据时写，避免把缓存内容又写回缓存。
+        if (!cacheOnly) SessionCache.saveMessages(app, sid, messages)
         val mo = ZParse.parseModelOptions(root)
         if (mo.isNotEmpty()) modelOptions = mo
         val tl = ZParse.parseThoughtLevels(root)
@@ -574,6 +586,7 @@ class ZController private constructor(
             refreshing = false
             if (ok) {
                 val list = ZParse.parseMessages(body)
+                if (!cacheOnly) SessionCache.saveMessages(app, sid, list)
                 post {
                     messages = list.toMutableList()
                     for (l in listeners) l.onStateChanged()
@@ -747,6 +760,56 @@ class ZController private constructor(
         return toolCallToParentCall[callId]
     }
 
+    //
+    // 用本地缓存撑起界面。
+    //
+    // 内核不可用（冷启动、崩溃、更新包替换中）时调。列表与消息都从缓存来，
+    // 并置 [cacheOnly]，上层据此把界面切成只读。返回 false 表示连缓存都没有。
+    //
+
+    /**
+     * 直接进入只读态。
+     *
+     * 用在「内核起不来，但界面上已经有内容」的情形：那些内容不管是刚读的缓存
+     * 还是启动前拿到的真实数据，都已经发不出去请求了，必须切成只读。
+     */
+    fun enterReadOnly() {
+        post {
+            cacheOnly = true
+            for (l in listeners) l.onStateChanged()
+        }
+    }
+
+    fun restoreFromCache(): Boolean {
+        if (sessions.isNotEmpty()) return false
+        val cached = SessionCache.loadSessions(app)
+        if (cached.isEmpty()) return false
+        post {
+            cacheOnly = true
+            sessions = cached.toMutableList()
+            for (l in listeners) l.onStateChanged()
+        }
+        return true
+    }
+
+    /**
+     * 只读打开一个缓存会话：把缓存消息填进来，全程不碰内核。
+     *
+     * 刻意不改工作区、不发任何请求——内核没起来时任何请求都会失败，
+     * 还会在界面上报一串错。这里就是要让用户安静地看一眼上次聊了什么。
+     */
+    fun openCachedSession(sessionId: String): Boolean {
+        val cached = SessionCache.loadMessages(app, sessionId)
+        if (cached.isEmpty()) return false
+        post {
+            cacheOnly = true
+            currentSessionId = sessionId
+            messages = cached.toMutableList()
+            for (l in listeners) l.onStateChanged()
+        }
+        return true
+    }
+
     fun refreshSessions(cb: ((Boolean) -> Unit)?) {
         val params =
             JSONObject()
@@ -755,10 +818,17 @@ class ZController private constructor(
         runtime.call("session/list", params) { ok, body ->
             if (ok) {
                 val list = ZParse.parseSessionInfos(body)
+                // 拿到了真实列表：说明内核在线，退出只读态，并把这份快照存下来
+                // 供下次内核没起来时展示。
+                SessionCache.saveSessions(app, list)
                 post {
+                    cacheOnly = false
                     sessions = list.toMutableList()
                     for (l in listeners) l.onStateChanged()
                 }
+            } else {
+                // 内核不可用：用缓存兜底，让用户至少能看见上次的会话。
+                restoreFromCache()
             }
             cb?.invoke(ok)
         }
@@ -1092,6 +1162,12 @@ class ZController private constructor(
         sessionId: String,
         cb: ((Boolean) -> Unit)?,
     ) {
+        // 只读态直接读缓存：内核没起来，订阅请求必然失败，
+        // 先发一次再回退只会白等一轮超时，还会闪一下错误提示。
+        if (cacheOnly && openCachedSession(sessionId)) {
+            cb?.invoke(true)
+            return
+        }
         subscribeSession(sessionId) { ok, msg ->
             if (ok) {
                 cb?.invoke(true)
@@ -1111,6 +1187,12 @@ class ZController private constructor(
                     }
                 }
             } else {
+                // 只读态下的会话本来就不能订阅（内核没起来），直接读缓存展示，
+                // 不要在这里弹一个用户无法处理的错误。
+                if (cacheOnly && openCachedSession(sessionId)) {
+                    cb?.invoke(true)
+                    return@subscribeSession
+                }
                 if (msg != null) notif { onNotice("打开会话失败: $msg") }
                 cb?.invoke(false)
             }
