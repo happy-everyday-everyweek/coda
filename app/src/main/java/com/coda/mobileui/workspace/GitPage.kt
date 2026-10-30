@@ -10,21 +10,26 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.coda.mobileui.R
+import com.coda.mobileui.SettingRow
 import com.coda.mobileui.core.Workspaces
+import com.coda.mobileui.core.ZController
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Git 页：自由画布的提交图 + 底部控制卡。
  *
- * 本页只负责画布与控制卡。分支列表、提交详情、未提交改动这些都是工作区的下一级标签页，
- * 交给 [WorkspaceActivity.openPage] 打开：同一套标签栏、同一套返回/前进历史、同样会落盘，
- * 不会另开界面，也不会弹半屏卡片。
+ * Git 是工作区的一个标签页，它的下一级内容（分支、提交、改动、diff）都在这**同一页**里
+ * 换内容（[GitDetailView]），不新开标签、也不另开界面；顶栏给返回，底栏还是工作区那条。
+ *
+ * 列表一律交给设置页那套 MD3 组件渲染（[GitDetailView] 内部走 SettingsViewBuilder），
+ * 本页只负责画布、控制卡与数据。
  *
  * 控制卡的按钮由「当前选中了什么」决定：没初始化给初始化，选中分支最新提交给切分支，
  * 选中普通提交给从这里建分支与详情。
- *
- * 所有命令在容器里执行，结果回到主线程后刷新这一页。
  */
 class GitPage(
     host: WorkspaceActivity,
@@ -54,15 +59,27 @@ class GitPage(
     )
 
     private lateinit var stage: FrameLayout
+    private lateinit var base: FrameLayout
+    private lateinit var detail: GitDetailView
     private lateinit var canvas: GitCanvasView
     private var control: View? = null
+    private var detailOpen = false
 
     private var snapshot: Snapshot? = null
     private var picked: Git.Commit? = null
     private var busy = false
 
+    /** 画布上的操作步骤。合并是"选源 → 选目标 → 确认"三段，状态就放在这里。 */
+    private var pickingTarget = false
+    private var mergeSource: String? = null
+    private var mergeTarget: String? = null
+    private var conflictText: String = ""
+
+    private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+
     override fun build(): View {
-        stage =
+        stage = FrameLayout(host)
+        base =
             FrameLayout(host).apply {
                 setBackgroundColor(surface)
             }
@@ -76,13 +93,30 @@ class GitPage(
                     rebuildControl()
                 }
             }
-        stage.addView(canvas)
+        base.addView(canvas)
+        stage.addView(base, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        detail =
+            GitDetailView(host).apply {
+                layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
+                visibility = View.GONE
+                onBack = { closeDetail() }
+            }
+        stage.addView(detail)
         rebuildControl()
         return stage
     }
 
     override fun onShown() {
+        if (detailOpen) return
         refresh()
+    }
+
+    /** 返回键先关页内的下一级，再交回容器处理标签历史。 */
+    override fun onBack(): Boolean {
+        if (!detailOpen) return false
+        closeDetail()
+        return true
     }
 
     override fun subtitle(): String? = snapshot?.branch?.ifEmpty { null }
@@ -99,16 +133,49 @@ class GitPage(
     override fun onMenuItem(label: String) {
         when (label) {
             "刷新" -> refresh()
-            "提交变更" -> openCommitMessage()
-            "分支管理" -> openBranches()
+            "提交变更" -> commitDialog()
+            "分支管理" -> showBranches()
             "拉取" -> operate("拉取") { Git.pull(host.env, host.root) }
             "推送" -> operate("推送") { Git.push(host.env, host.root) }
             else -> if (label.startsWith("忽略")) ignoreStateDir()
         }
     }
 
-    /** 顶部有 back/前进，所以本页不截返回键。 */
-    override fun onBack(): Boolean = false
+    // ---------------------------------------------------------------- 页内下一级
+
+    private fun openDetail(
+        title: String,
+        subtitle: String? = null,
+    ): GitDetailView {
+        detailOpen = true
+        detail.setPage(title, subtitle)
+        detail.onRowClick = null
+        base.visibility = View.GONE
+        detail.visibility = View.VISIBLE
+        detail.alpha = 0f
+        detail
+            .animate()
+            .alpha(1f)
+            .setDuration(Motion.PANEL_MS)
+            .setInterpolator(Motion.standard)
+            .start()
+        return detail
+    }
+
+    private fun closeDetail() {
+        if (!detailOpen) return
+        detailOpen = false
+        detail.visibility = View.GONE
+        base.visibility = View.VISIBLE
+    }
+
+    private fun bindRows(
+        rows: List<SettingRow>,
+        keys: Map<String, () -> Unit>,
+    ) {
+        detail.showRows(rows)
+        detail.onRowClick = { key -> keys[key]?.invoke() }
+    }
 
     // ---------------------------------------------------------------- 刷新
 
@@ -159,6 +226,10 @@ class GitPage(
     }
 
     private fun pick(commit: Git.Commit) {
+        if (pickingTarget) {
+            pickTarget(commit)
+            return
+        }
         picked = commit
         canvas.selected = commit.hash
         rebuildControl()
@@ -178,18 +249,52 @@ class GitPage(
                 radius = host.resources.getDimension(R.dimen.settings_card_corner)
             }
         card.addView(controlBody(controlState()), ViewGroup.LayoutParams(MATCH, WRAP))
-        control?.let { stage.removeView(it) }
-        stage.addView(card)
+        control?.let { base.removeView(it) }
+        base.addView(card)
         control = card
         // 卡片会挡住画布底部，把遮挡高度告诉画布，它才知道视口下边界在哪。
         card.addOnLayoutChangeListener { _, _, top, _, _, _, _, _, _ ->
-            canvas.bottomInset = (stage.height - top + dp(10f)).toFloat()
+            canvas.bottomInset = (base.height - top + dp(10f)).toFloat()
         }
     }
 
     private fun controlState(): Control {
         val current = snapshot
         val selected = picked
+        // 选择步骤优先：这时候画布上只该点候选，控制卡只讲这一件事。
+        if (pickingTarget) {
+            return Control(
+                title = "选择合并目标",
+                subtitle = "源是 $mergeSource。在画布上点另一个分支的最新提交，再确认。",
+                actions = listOf("取消" to { cancelMerge() }),
+            )
+        }
+        if (mergeTarget != null) {
+            return Control(
+                title = "确认合并",
+                subtitle = "$mergeSource 合并到 $mergeTarget",
+                actions =
+                    listOf(
+                        "确认合并" to { runMerge() },
+                        "取消" to {
+                            resetMerge()
+                            rebuildControl()
+                        },
+                    ),
+            )
+        }
+        if (conflictText.isNotEmpty()) {
+            return Control(
+                title = "合并有冲突",
+                subtitle = "把 $mergeSource 合并到 $mergeTarget 时冲突，可以交给 Agent 处理。",
+                actions =
+                    listOf(
+                        "让 Agent 解决" to { handOffToAgent() },
+                        "中止合并" to { abortMerge() },
+                        "看输出" to { showText("合并冲突", conflictText) },
+                    ),
+            )
+        }
         return when {
             current == null -> {
                 Control("正在读取仓库", host.root.absolutePath, emptyList())
@@ -216,12 +321,12 @@ class GitPage(
                     actions =
                         if (changes > 0) {
                             listOf(
-                                "未提交改动" to { openChanges() },
-                                "提交" to { openCommitMessage() },
-                                "分支" to { openBranches() },
+                                "未提交改动" to { showChanges() },
+                                "提交" to { commitDialog() },
+                                "分支" to { showBranches() },
                             )
                         } else {
-                            listOf("分支" to { openBranches() }, "刷新" to { refresh() })
+                            listOf("分支" to { showBranches() }, "刷新" to { refresh() })
                         },
                 )
             }
@@ -232,9 +337,9 @@ class GitPage(
                     val tip = tips.first()
                     val isCurrent = tip == current.branch
                     val actions = ArrayList<Pair<String, () -> Unit>>(3)
-                    if (!isCurrent) actions.add("切换到 $tip" to { checkoutBranch(tip) })
-                    actions.add("查看详情" to { openCommit(selected) })
-                    if (current.changes.isNotEmpty()) actions.add("未提交改动" to { openChanges() })
+                    if (!isCurrent) actions.add("合并到…" to { startMerge(selected, tip) })
+                    actions.add("查看详情" to { showCommit(selected) })
+                    if (current.changes.isNotEmpty()) actions.add("未提交改动" to { showChanges() })
                     Control(
                         title = "$tip 的最新提交",
                         subtitle = selected.subject.ifEmpty { selected.hash.take(7) },
@@ -246,8 +351,9 @@ class GitPage(
                         subtitle = "${selected.subject.ifEmpty { "没有提交说明" }} · ${selected.author}",
                         actions =
                             listOf(
-                                "从此刻建分支" to { openNewBranch(selected.hash) },
-                                "查看详情" to { openCommit(selected) },
+                                "与当前分支比" to { compareWithHead(selected) },
+                                "从此刻建分支" to { branchFrom(selected.hash) },
+                                "查看详情" to { showCommit(selected) },
                             ),
                     )
                 }
@@ -338,56 +444,149 @@ class GitPage(
             pressFeedback(pressedScale = 0.97f)
         }
 
-    // ---------------------------------------------------------------- 打开下一级
+    // ---------------------------------------------------------------- 画布选择流
 
-    private fun openBranches() {
+    /** 从某个分支尖端开始：把画布切成"只能点目标"的状态。 */
+    private fun startMerge(
+        commit: Git.Commit,
+        source: String,
+    ) {
         val current = snapshot ?: return
-        if (!current.repo) {
-            toast("当前目录不是 Git 仓库")
-            return
-        }
-        host.openPage(
-            WorkspaceTabs.GIT_BRANCHES,
-            JSONObject().put("key", "branches").put("current", current.branch),
-        )
+        // 候选是所有分支的尖端，但要排除源分支自己——合并到自己没有意义。
+        val tips =
+            current.commits.filter { row ->
+                branchesAt(row, current).any { it != source }
+            }
+        mergeSource = source
+        mergeTarget = null
+        conflictText = ""
+        pickingTarget = true
+        picked = commit
+        canvas.selected = commit.hash
+        canvas.candidates = tips.map { it.hash }.toSet()
+        canvas.dimOthers = true
+        rebuildControl()
     }
 
-    private fun openChanges() {
-        host.openPage(WorkspaceTabs.GIT_CHANGES, JSONObject().put("key", "changes"))
-    }
-
-    private fun openCommitMessage() {
+    /** 第二步：点中的必须是某个分支的最新提交。 */
+    private fun pickTarget(commit: Git.Commit) {
         val current = snapshot ?: return
-        if (!current.repo) {
-            toast("当前目录不是 Git 仓库")
+        val targets = branchesAt(commit, current).filter { it != mergeSource }
+        if (targets.isEmpty()) {
+            toast("请选择某个分支的最新提交")
             return
         }
-        if (current.changes.isEmpty()) {
-            toast("没有可提交的变更")
-            return
-        }
-        host.openPage(WorkspaceTabs.GIT_COMMIT_MSG, JSONObject().put("key", "commitMsg"))
+        mergeTarget = targets.first()
+        pickingTarget = false
+        picked = commit
+        canvas.selected = commit.hash
+        canvas.candidates = emptySet()
+        canvas.dimOthers = false
+        rebuildControl()
     }
 
-    private fun openCommit(commit: Git.Commit) {
-        val isHead = commit.hash == snapshot?.commits?.firstOrNull()?.hash
-        host.openPage(
-            WorkspaceTabs.GIT_COMMIT,
-            JSONObject()
-                .put("key", "commit:" + commit.hash)
-                .put("hash", commit.hash)
-                .put("subject", commit.subject)
-                .put("author", commit.author)
-                .put("time", commit.time)
-                .put("head", isHead),
+    /** 第三步：确认后执行「切到目标分支 → 合并源分支」。 */
+    private fun runMerge() {
+        val source = mergeSource ?: return
+        val target = mergeTarget ?: return
+        busy = true
+        host.background(
+            work = { Git.mergeInto(host.env, host.root, target, source) },
+            then = { result ->
+                busy = false
+                if (result.ok) {
+                    toast("合并完成")
+                    resetMerge()
+                } else {
+                    conflictText = result.output.ifEmpty { "合并失败，没有输出" }
+                    pickingTarget = false
+                    mergeTarget = null
+                    canvas.candidates = emptySet()
+                    canvas.dimOthers = false
+                }
+                rebuildControl()
+                refresh()
+            },
+            onError = {
+                busy = false
+                toast("合并失败")
+                rebuildControl()
+            },
         )
     }
 
-    private fun openNewBranch(start: String) {
-        host.openPage(
-            WorkspaceTabs.GIT_NEW_BRANCH,
-            JSONObject().put("key", "newBranch:$start").put("start", start),
+    private fun cancelMerge() {
+        resetMerge()
+        rebuildControl()
+    }
+
+    private fun resetMerge() {
+        pickingTarget = false
+        mergeSource = null
+        mergeTarget = null
+        conflictText = ""
+        canvas.candidates = emptySet()
+        canvas.dimOthers = false
+    }
+
+    private fun abortMerge() {
+        // 合并前已经切到了目标分支，中止只撤销合并本身；分支留在目标上，
+        // 这是 git 的正常结果，不额外切回去（切回去会额外改一次工作区）。
+        host.background(
+            work = { Git.mergeAbort(host.env, host.root) },
+            then = {
+                toast("已中止合并")
+                resetMerge()
+                rebuildControl()
+                refresh()
+            },
+            onError = {
+                toast("中止合并失败")
+                rebuildControl()
+            },
         )
+    }
+
+    /** 冲突交给 Agent：在工作区里新开一个会话，把上下文写清楚再发过去。 */
+    private fun handOffToAgent() {
+        val source = mergeSource ?: return
+        val target = mergeTarget ?: return
+        val prompt =
+            "工作区仓库 ${host.root.absolutePath} 正在把分支 $source 合并到 $target，" +
+                "产生了冲突。请先跑 git status 看冲突文件，逐个解决并保留两边的意图，" +
+                "然后 git add 并用原来的合并提交信息完成这次 merge。解决完告诉我结果。"
+        val zc = ZController.get(host)
+        toast("正在交给 Agent")
+        zc.newSession(host.root.absolutePath) { ok, message ->
+            if (!ok) {
+                toast("创建会话失败：$message")
+                return@newSession
+            }
+            zc.send(prompt) { sent, error ->
+                toast(if (sent) "已交给 Agent，切到会话可看进度" else "发送失败：$error")
+            }
+        }
+    }
+
+    /** 任意提交与当前分支的差异。 */
+    private fun compareWithHead(commit: Git.Commit) {
+        val view = openDetail("与 ${snapshot?.branch.orEmpty()} 的差异", commit.hash.take(8))
+        view.showLoading("正在计算差异…")
+        host.background(
+            work = { Git.diffRange(host.env, host.root, commit.hash, "HEAD") },
+            then = { diff ->
+                val text = if (diff.truncated) diff.text + "\n\n（内容过长，已截断）" else diff.text
+                view.showCode(text)
+            },
+            onError = { view.showLoading("计算差异失败，返回重试") },
+        )
+    }
+
+    private fun showText(
+        title: String,
+        text: String,
+    ) {
+        openDetail(title).showCode(text)
     }
 
     // ---------------------------------------------------------------- 分支
@@ -412,6 +611,192 @@ class GitPage(
         operate("切换到 $name") { Git.checkout(host.env, host.root, name) }
     }
 
+    private fun showBranches() {
+        val current = snapshot ?: return
+        if (!current.repo) {
+            toast("当前目录不是 Git 仓库")
+            return
+        }
+        val view = openDetail("分支", "当前 ${current.branch}")
+        view.showLoading("正在读取分支…")
+        host.background(
+            work = { Git.localBranches(host.env, host.root) to Git.remoteBranches(host.env, host.root) },
+            then = { pair ->
+                val (locals, remotes) = pair
+                val rows = mutableListOf<SettingRow>()
+                val keys = HashMap<String, () -> Unit>()
+                rows.add(SettingRow.Header("本地"))
+                for (name in locals) {
+                    val isCurrent = name == current.branch
+                    rows.add(SettingRow.Value(name, if (isCurrent) "当前分支" else "", "b:$name"))
+                    keys["b:$name"] = { showBranch(name, isCurrent) }
+                }
+                if (remotes.isNotEmpty()) {
+                    rows.add(SettingRow.Header("远端"))
+                    for (name in remotes) {
+                        rows.add(SettingRow.Value(name, "", "r:$name"))
+                        keys["r:$name"] = { showBranch(name, false) }
+                    }
+                }
+                rows.add(SettingRow.Header("操作"))
+                rows.add(SettingRow.Value("新建分支", "", "new"))
+                keys["new"] = {
+                    showInput("新建分支", "feature") { name ->
+                        operate("新建分支") { Git.createBranch(host.env, host.root, name, null) }
+                    }
+                }
+                bindRows(rows, keys)
+            },
+            onError = { view.showLoading("读取分支失败，返回重试") },
+        )
+    }
+
+    private fun showBranch(
+        name: String,
+        isCurrent: Boolean,
+    ) {
+        openDetail(name, if (isCurrent) "当前分支" else "本地分支")
+        if (isCurrent) {
+            val rows = listOf(SettingRow.Value("这是当前分支", "检出与删除都不可用", ""))
+            bindRows(rows, emptyMap())
+            return
+        }
+        val rows =
+            listOf(
+                SettingRow.Value("检出到这个分支", "", "checkout"),
+                SettingRow.Value("合并到当前分支", "", "merge"),
+                SettingRow.Value("删除分支", "未合并的需要走强制删除", "delete"),
+            )
+        bindRows(
+            rows,
+            mapOf(
+                "checkout" to { operate("切换到 $name") { Git.checkout(host.env, host.root, name) } },
+                "merge" to { operate("合并 $name") { Git.merge(host.env, host.root, name, false) } },
+                "delete" to { showDeleteBranch(name) },
+            ),
+        )
+    }
+
+    private fun showDeleteBranch(name: String) {
+        openDetail("删除分支", name)
+        val rows =
+            listOf(
+                SettingRow.Value("删除", "已合并时才成功", "delete"),
+                SettingRow.Value("强制删除", "未合并的提交会丢掉", "force"),
+            )
+        bindRows(
+            rows,
+            mapOf(
+                "delete" to { runDelete(name, false) },
+                "force" to { runDelete(name, true) },
+            ),
+        )
+    }
+
+    private fun runDelete(
+        name: String,
+        force: Boolean,
+    ) {
+        operate(if (force) "强制删除" else "删除分支") { Git.deleteBranch(host.env, host.root, name, force) }
+    }
+
+    // ---------------------------------------------------------------- 变更
+
+    private fun showChanges() {
+        val view = openDetail("未提交改动", host.root.absolutePath)
+        view.showLoading("正在读取改动…")
+        host.background(
+            work = { Git.changes(host.env, host.root) },
+            then = then@{ lines ->
+                if (lines.isEmpty()) {
+                    view.showLoading("工作区是干净的，没有未提交的改动。")
+                    return@then
+                }
+                val rows = mutableListOf<SettingRow>()
+                val keys = HashMap<String, () -> Unit>()
+                rows.add(SettingRow.Header("变更文件"))
+                for (line in lines) rows.add(SettingRow.Value(line, "", ""))
+                rows.add(SettingRow.Header("操作"))
+                rows.add(SettingRow.Value("查看完整 diff", "未跟踪的文件不在 diff 里", "diff"))
+                keys["diff"] = { showDiff() }
+                rows.add(SettingRow.Value("提交这些变更", "", "commit"))
+                keys["commit"] = { commitDialog() }
+                bindRows(rows, keys)
+            },
+            onError = { view.showLoading("读取改动失败，返回重试") },
+        )
+    }
+
+    private fun showDiff() {
+        val view = openDetail("未提交改动", "git diff")
+        view.showLoading("正在读取改动…")
+        host.background(
+            work = { Git.diffUncommitted(host.env, host.root) },
+            then = { diff ->
+                val text = if (diff.truncated) diff.text + "\n\n（内容过长，已截断）" else diff.text
+                view.showCode(text)
+            },
+            onError = { view.showLoading("读取改动失败，返回重试") },
+        )
+    }
+
+    private fun commitDialog() {
+        val current = snapshot ?: return
+        if (!current.repo) {
+            toast("当前目录不是 Git 仓库")
+            return
+        }
+        if (current.changes.isEmpty()) {
+            toast("没有可提交的变更")
+            return
+        }
+        showInput("提交变更", "更新") { message ->
+            operate("提交") { Git.commitAll(host.env, host.root, message) }
+        }
+    }
+
+    // ---------------------------------------------------------------- 提交
+
+    private fun showCommit(commit: Git.Commit) {
+        val view = openDetail(commit.hash.take(8), commit.subject)
+        view.showLoading("正在读取提交内容…")
+        host.background(
+            work = { Git.show(host.env, host.root, commit.hash).output },
+            then = { output ->
+                val rows = mutableListOf<SettingRow>()
+                val keys = HashMap<String, () -> Unit>()
+                rows.add(SettingRow.Header("提交"))
+                rows.add(SettingRow.Value(commit.hash.take(12), commit.subject, ""))
+                rows.add(
+                    SettingRow.Value(
+                        commit.author,
+                        timeFormat.format(Date(commit.time * 1000L)),
+                        "",
+                    ),
+                )
+                rows.add(SettingRow.Header("操作"))
+                rows.add(SettingRow.Value("从此刻建分支", "", "branch"))
+                keys["branch"] = { branchFrom(commit.hash) }
+                rows.add(SettingRow.Value("检出此提交", "", "checkout"))
+                keys["checkout"] = { operate("检出") { Git.checkout(host.env, host.root, commit.hash) } }
+                val isHead = commit.hash == snapshot?.commits?.firstOrNull()?.hash
+                if (!isHead) {
+                    rows.add(SettingRow.Value("合并到当前分支", "", "merge"))
+                    keys["merge"] = { operate("合并") { Git.merge(host.env, host.root, commit.hash, false) } }
+                }
+                bindRows(rows, keys)
+                view.appendCode(output)
+            },
+            onError = { view.showLoading("读取提交失败，返回重试") },
+        )
+    }
+
+    private fun branchFrom(start: String) {
+        showInput("从此刻建分支", "branch-" + start.take(6)) { name ->
+            operate("新建分支") { Git.createBranch(host.env, host.root, name, start) }
+        }
+    }
+
     // ---------------------------------------------------------------- 执行
 
     private fun operate(
@@ -425,17 +810,9 @@ class GitPage(
                 busy = false
                 if (result.ok) {
                     toast("$label 完成")
+                    closeDetail()
                 } else {
-                    // 失败原因（认证、网络、冲突）只在输出里，进结果页给用户看。
-                    val note = "$label 未能完成"
-                    host.openPage(
-                        WorkspaceTabs.GIT_RESULT,
-                        JSONObject()
-                            .put("key", "result:" + System.currentTimeMillis())
-                            .put("title", label)
-                            .put("note", note)
-                            .put("output", result.output),
-                    )
+                    showResult(label, result)
                 }
                 refresh()
             },
@@ -445,6 +822,32 @@ class GitPage(
                 rebuildControl()
             },
         )
+    }
+
+    private fun showResult(
+        label: String,
+        result: Git.Result,
+    ) {
+        val view = openDetail(label, if (result.ok) "完成" else "未能完成")
+        view.showRows(emptyList())
+        view.onRowClick = null
+        view.appendCode(result.output.ifEmpty { if (result.ok) "完成" else "没有输出" })
+    }
+
+    private fun showInput(
+        title: String,
+        initial: String,
+        onDone: (String) -> Unit,
+    ) {
+        val view = openDetail(title)
+        view.showInput(initial) { value ->
+            if (value.isEmpty()) {
+                toast("不能为空")
+                return@showInput
+            }
+            closeDetail()
+            onDone(value)
+        }
     }
 
     private fun ignoreStateDir() {

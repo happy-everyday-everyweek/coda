@@ -52,6 +52,22 @@ internal class GitCanvasView(
             invalidate()
         }
 
+    /** 需要突出显示的提交（合并目标的候选分支尖端）。 */
+    var candidates: Set<String> = emptySet()
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
+    /** 压暗非候选的行：进入"现在只该选这些"的步骤时用。 */
+    var dimOthers = false
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
     /** 点中某个提交。 */
     var onPick: ((Git.Commit) -> Unit)? = null
 
@@ -376,21 +392,30 @@ internal class GitCanvasView(
             val top = row * rowHeight
             val midY = top + rowHeight / 2f
             val centerX = leftPad + lane * laneWidth + laneWidth / 2f
+            val selectedRow = commit.hash == selected
+            val candidate = commit.hash in candidates
+            // 选择步骤里只让候选保持正常亮度，其余压暗——视线自然落到能点的地方。
+            val factor = if (dimOthers && !candidate && !selectedRow) 0.28f else 1f
 
-            if (commit.hash == selected) {
+            if (selectedRow) {
                 highlightPaint.color = withAlpha(primaryColor, 0.08f)
                 rowRect.set(dp(4f), top + dp(2f), worldWidth - dp(6f), top + rowHeight - dp(2f))
                 canvas.drawRoundRect(rowRect, dp(10f), dp(10f), highlightPaint)
             }
 
-            nodePaint.color = laneColorOf(commit)
+            nodePaint.color = withAlpha(laneColorOf(commit), if (factor < 1f) 0.35f else 1f)
             canvas.drawCircle(centerX, midY, nodeRadius, nodePaint)
-            if (commit.hash == selected) {
+            if (candidate) {
+                // 候选：一圈更亮的环，和"已选中"的实心环区分开。
+                ringPaint.color = withAlpha(primaryColor, 0.9f)
+                canvas.drawCircle(centerX, midY, nodeRadius + dp(5f), ringPaint)
+            }
+            if (selectedRow) {
                 ringPaint.color = primaryColor
                 canvas.drawCircle(centerX, midY, nodeRadius + dp(3.5f), ringPaint)
             }
 
-            titlePaint.color = onSurfaceColor
+            titlePaint.color = withAlpha(onSurfaceColor, factor)
             val subject = commit.subject.ifEmpty { commit.hash.take(7) }
             canvas.drawText(ellipsize(subject, titlePaint, available), left, midY - dp(2f), titlePaint)
 
@@ -398,12 +423,12 @@ internal class GitCanvasView(
             val refY = midY + dp(15f)
             val refs = commit.refs.replace("HEAD -> ", "")
             if (refs.isNotEmpty()) {
-                refPaint.color = primaryColor
+                refPaint.color = withAlpha(primaryColor, factor)
                 val refText = ellipsize(refs.replace(", ", " · "), refPaint, available * 0.62f)
                 canvas.drawText(refText, refX, refY, refPaint)
                 refX += refPaint.measureText(refText) + dp(6f)
             }
-            smallPaint.color = variantColor
+            smallPaint.color = withAlpha(variantColor, factor)
             val detail = "${commit.hash.take(7)} · ${timeFormat.format(Date(commit.time * 1000L))}"
             val remain = (available - (refX - left)).coerceAtLeast(dp(30f))
             canvas.drawText(ellipsize(detail, smallPaint, remain), refX, refY, smallPaint)

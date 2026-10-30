@@ -285,6 +285,36 @@ object Git {
         return if (text.length > limit) Diff(text.take(limit), true) else Diff(text, false)
     }
 
+    /**
+     * 把 [source] 合并进 [target]。
+     *
+     * 先切到 target 再 merge source——这是 git 的语义：merge 只能往当前分支上合。
+     * 切换失败（例如本地有未提交改动挡着）就直接返回那一步的输出，不去动工作区。
+     */
+    fun mergeInto(
+        env: LinuxEnv,
+        root: File,
+        target: String,
+        source: String,
+    ): Result {
+        val checkout = checkout(env, root, target)
+        if (!checkout.ok) return checkout
+        return merge(env, root, source, false)
+    }
+
+    /** 两个提交之间的差异，用于在画布上比较任意两点。 */
+    fun diffRange(
+        env: LinuxEnv,
+        root: File,
+        from: String,
+        to: String,
+        limit: Int = 160_000,
+    ): Diff {
+        val result = run(env, root, listOf("diff", "$from..$to"), timeoutMs = 120_000L)
+        val text = result.output
+        return if (text.length > limit) Diff(text.take(limit), true) else Diff(text, false)
+    }
+
     /** 状态目录是否被忽略，用于提示用户把元数据目录排除在版本控制外。 */
     fun ignoresState(
         env: LinuxEnv,
