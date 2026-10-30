@@ -117,29 +117,43 @@ class SettingsDetailActivity :
     /**
      * 在同一页内切到下一级（如 providers → providers_kind）。
      *
-     * 用与 CodaSheet.navigate 同方向的位移：旧内容快速淡出，新内容从右侧推入。
-     * 这里没有独立卡片，所以只用内容容器本身做，时长比卡片内略短（110/150ms）。
+     * 只有一个内容容器，没法像 NextPlayer 那样两页同时动，所以分两段：
+     * 旧内容按方向滑出并淡出，换完内容后新内容从反侧滑入并淡入。
+     *
+     * 参数对齐 NextPlayer 的页面过渡：总 200ms、线性缓动、行程 30% 屏宽。
+     * 之前是 12dp 位移 + 110/150ms，幅度太小（几乎只剩「闪一下」），
+     * 而且先把 alpha 淡到 0 再换内容，中间有一段什么都没有的空白；
+     * 把行程放大到屏宽的 30% 之后方向才看得出来。
      */
     private fun navigatePage(
         forward: Boolean,
         block: () -> Unit,
     ) {
         val container = findViewById<LinearLayout>(R.id.page_container)
-        val out = if (forward) -dp(12).toFloat() else dp(12).toFloat()
-        val inFrom = if (forward) dp(16).toFloat() else -dp(16).toFloat()
+        val width =
+            (container.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels).toFloat()
+        // 参数对齐 NextPlayer 的页面过渡：总 200ms、线性缓动、行程 30% 屏宽。
+        // 写成本页自己的值，不去借工作区的 Motion，两处互不影响。
+        val shift = width * 0.3f
+        val half = 100L
+        val linear = android.view.animation.LinearInterpolator()
+        container.animate().cancel()
         container
             .animate()
             .alpha(0f)
-            .translationX(out)
-            .setDuration(110)
+            .translationX(if (forward) -shift else shift)
+            .setDuration(half)
+            .setInterpolator(linear)
             .withEndAction {
                 block()
-                container.translationX = inFrom
+                container.translationX = if (forward) shift else -shift
+                container.alpha = 0f
                 container
                     .animate()
                     .alpha(1f)
                     .translationX(0f)
-                    .setDuration(150)
+                    .setDuration(half)
+                    .setInterpolator(linear)
                     .start()
             }.start()
     }
