@@ -4571,9 +4571,10 @@ class MainActivity : BaseActivity() {
             textSize = 15f
             setTextColor(
                 if (accent) {
-                    com.google.android.material.color.MaterialColors.getColor(
-                        this@MainActivity,
-                        com.google.android.material.R.attr.colorPrimary,
+                    // 主色用主题属性取：material 的 public R 里没有 colorPrimary
+                    // （它来自 appcompat），所以走本项目已有的 attrColor。
+                    attrColor(
+                        androidx.appcompat.R.attr.colorPrimary,
                         0xFF1B1B1B.toInt(),
                     )
                 } else {
