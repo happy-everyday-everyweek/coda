@@ -30,8 +30,10 @@
                 android:src="@drawable/ic_menu"
                 android:tint="?attr/colorOnSurfaceVariant" />
 
+            <!-- 顶部胶囊：双态。新会话且未选工作区时是「运行位置」（这台设备），
+                 其余情况仍是模型选择器。切换逻辑在 MainActivity 的 syncHeaderPill()。 -->
             <LinearLayout
-                android:id="@+id/model_selector"
+                android:id="@+id/header_pill"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
                 android:layout_gravity="center"
@@ -44,10 +46,10 @@
                 android:paddingEnd="8dp">
 
                 <TextView
-                    android:id="@+id/tv_model"
+                    android:id="@+id/tv_header_pill"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/default_model"
+                    android:text="@string/run_target_this_device"
                     android:textAppearance="?attr/textAppearanceTitleMedium"
                     android:textColor="?attr/colorOnSurface" />
 
@@ -78,19 +80,35 @@
             android:layout_height="0dp"
             android:layout_weight="1">
 
+            <!--
+                空态。中间的欢迎语换成了工作区选择器：新会话必须先有工作区，
+                就把入口放在这一步，省得先发一条消息才发现没选地方。
+                具体内容由 MainActivity.renderWorkspacePicker() 动态填充。
+            -->
             <LinearLayout
                 android:id="@+id/empty_state"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:orientation="vertical">
+                android:orientation="vertical"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp">
 
                 <TextView
+                    android:id="@+id/workspace_picker_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/greeting"
                     android:textAppearance="?attr/textAppearanceTitleMedium"
                     android:textColor="?attr/colorOnSurfaceVariant" />
+
+                <LinearLayout
+                    android:id="@+id/workspace_picker_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical" />
             </LinearLayout>
 
             <ScrollView

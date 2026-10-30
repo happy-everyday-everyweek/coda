@@ -40,6 +40,7 @@ import com.coda.mobileui.core.SilentUpdater
 import com.coda.mobileui.core.UpdateChecker
 import com.coda.mobileui.core.UpdateInstaller
 import com.coda.mobileui.core.WebUiHost
+import com.coda.mobileui.core.Workspaces
 import com.coda.mobileui.core.ZController
 import com.coda.mobileui.core.ZModelLevel
 import com.coda.mobileui.core.ZParse
@@ -429,6 +430,9 @@ class MainActivity : BaseActivity() {
         )
         emptyState = findViewById(R.id.empty_state)
         chatView = findViewById(R.id.chat_view)
+        // 初始态：新会话且未选工作区时胶囊是「运行位置」，否则是模型名。
+        syncHeaderPill()
+        updateSendAvailability()
         setupSendMode()
         attachScroll = findViewById(R.id.attach_scroll)
         attachChips = findViewById(R.id.attach_chips)
@@ -471,8 +475,14 @@ class MainActivity : BaseActivity() {
             drawerLayout.openDrawer(Gravity.LEFT)
         }
 
-        findViewById<LinearLayout>(R.id.model_selector).setOnClickListener {
+        findViewById<LinearLayout>(R.id.header_pill).setOnClickListener {
+            // 双态：新会话且未选工作区时是运行位置选择器，其余情况是模型选择器。
+            if (isRunTargetMode()) showRunTargetSheet() else toggleModelPanel()
+        }
+        findViewById<LinearLayout>(R.id.header_pill).setOnLongClickListener {
+            // 模型面板始终有入口：运行位置态时长按也能改模型。
             toggleModelPanel()
+            true
         }
 
         // 点击面板以外的区域收起面板
@@ -688,8 +698,12 @@ class MainActivity : BaseActivity() {
                 reasoningStart.clear()
                 reasoningDone.clear()
                 runningSince = null
-                zc.newSession { ok, msg ->
+                zc.newSession(workspaceOverride = composerWorkspace) { ok, msg ->
                     if (ok) {
+                        // 工作区已随会话绑定；清掉选择，下次新会话重新选。
+                        composerWorkspace = null
+                        syncHeaderPill()
+                        updateSendAvailability()
                         chatView.visibility = View.VISIBLE
                         emptyState.visibility = View.GONE
                     } else {
@@ -1038,6 +1052,11 @@ class MainActivity : BaseActivity() {
             }
             return
         }
+        // 新会话必须先有工作区。输入框本身不拦（用户可以先写再选），只拦发送。
+        if (zc.currentSessionId == null && composerWorkspace == null) {
+            snack("先选择或创建一个工作区")
+            return
+        }
         val protocolMode = SendModes.toProtocol(mode)
         zc.setDefaultMode(protocolMode)
         inputMessage.text?.clear()
@@ -1061,8 +1080,13 @@ class MainActivity : BaseActivity() {
         // 先设置发送模式（确保工具审批等策略在消息发出前生效），完成后再发送（设置失败也继续发送）
         zc.setMode(protocolMode) { _, _ ->
             if (zc.currentSessionId == null) {
-                zc.newSession { ok, msg ->
-                    if (ok) doSend() else snack("新建会话失败: $msg")
+                zc.newSession(workspaceOverride = composerWorkspace) { ok, msg ->
+                    if (ok) {
+                        composerWorkspace = null
+                        doSend()
+                    } else {
+                        snack("新建会话失败: $msg")
+                    }
                 }
             } else {
                 doSend()
@@ -1774,7 +1798,8 @@ class MainActivity : BaseActivity() {
                 zc.modelOptions
                     .firstOrNull { it.providerId == pair.first && it.modelId == pair.second }
                     ?.label
-            findViewById<TextView>(R.id.tv_model).text = label ?: pair.second
+            modelPillLabel = label ?: pair.second
+            syncHeaderPill()
         }
         strengthLevel = controllerStrengthIndex()
         if (zc.currentSessionId != null) {
@@ -4312,7 +4337,7 @@ class MainActivity : BaseActivity() {
         chatView.visibility = View.GONE
         findViewById<View>(R.id.composer_container).visibility = View.GONE
         // 顶栏属于会话页，设置页里不显示
-        (findViewById<View>(R.id.model_selector)?.parent as? ViewGroup)?.visibility = View.GONE
+        (findViewById<View>(R.id.header_pill)?.parent as? ViewGroup)?.visibility = View.GONE
         // 设置页不是会话页：手势必须按"设置页"那套判定（见 dispatchTouchEvent），
         // 否则在设置页右滑会被当成主界面手势，误开工作区。
         updateSwipeIntercept()
@@ -4325,7 +4350,7 @@ class MainActivity : BaseActivity() {
         (chatView.parent as? ViewGroup)
             ?.findViewWithTag<LinearLayout>("settings_page")
             ?.visibility = View.GONE
-        (findViewById<View>(R.id.model_selector)?.parent as? ViewGroup)?.visibility = View.VISIBLE
+        (findViewById<View>(R.id.header_pill)?.parent as? ViewGroup)?.visibility = View.VISIBLE
         findViewById<View>(R.id.composer_container).visibility = View.VISIBLE
         // 设置页里可能改过宠物形象与开关，回到会话时对齐一次
         applyPetSettings()
@@ -4446,6 +4471,261 @@ class MainActivity : BaseActivity() {
         return page
     }
 
+    // ------------------------------------------------------------ 工作区选择
+
+    /**
+     * 最近用过的不同工作区。
+     *
+     * 从会话列表里取：会话自带绑定的工作区，按最近更新时间排，去重后取前几个。
+     * 只保留目录仍然存在的——工作区被删掉后再列出来，点进去只会报错。
+     */
+    private fun recentWorkspaces(limit: Int = 3): List<String> =
+        zc.sessions
+            .sortedByDescending { it.updatedAt }
+            .mapNotNull { it.workspacePath?.takeIf { p -> p.isNotBlank() } }
+            .distinct()
+            .filter { java.io.File(it).isDirectory }
+            .take(limit)
+
+    /** 空态里那行提示：未选工作区时是欢迎语，选好后直接显示工作区名。 */
+    private fun renderWorkspacePicker() {
+        if (!::emptyState.isInitialized) return
+        val title = findViewById<TextView>(R.id.workspace_picker_title)
+        val list = findViewById<LinearLayout>(R.id.workspace_picker_list)
+        list.removeAllViews()
+        val chosen = composerWorkspace
+        if (chosen != null) {
+            title.text = java.io.File(chosen).name
+            list.addView(
+                pickerRow(getString(R.string.workspace_pick_title), onClick = { selectWorkspace(null) }),
+            )
+            return
+        }
+        title.text = getString(R.string.greeting)
+        val recents = recentWorkspaces()
+        if (recents.isEmpty()) {
+            list.addView(pickerHint(getString(R.string.workspace_none_hint)))
+        }
+        for (path in recents) {
+            // 只显示最深一层目录名：完整路径太长，而且路径前缀对用户没有信息量。
+            list.addView(pickerRow(java.io.File(path).name, onClick = { selectWorkspace(path) }))
+        }
+        list.addView(
+            pickerRow(getString(R.string.workspace_create), accent = true, onClick = { showCreateWorkspaceEditor() }),
+        )
+    }
+
+    private fun pickerHint(text: String): View =
+        TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setTextColor(
+                com.google.android.material.color.MaterialColors.getColor(
+                    this@MainActivity,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                ),
+            )
+            setPadding(dp(4), dp(6), dp(4), dp(10))
+        }
+
+    private fun pickerRow(
+        text: String,
+        accent: Boolean = false,
+        onClick: () -> Unit,
+    ): View =
+        TextView(this).apply {
+            this.text = text
+            textSize = 15f
+            setTextColor(
+                if (accent) {
+                    MaterialColors.getColor(
+                        this@MainActivity,
+                        com.google.android.material.R.attr.colorPrimary,
+                        0xFF1B1B1B.toInt(),
+                    )
+                } else {
+                    com.google.android.material.color.MaterialColors.getColor(
+                        this@MainActivity,
+                        com.google.android.material.R.attr.colorOnSurface,
+                        0xFF000000.toInt(),
+                    )
+                },
+            )
+            setPadding(dp(10), dp(12), dp(10), dp(12))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+        }
+
+    /** 选定新会话要用的工作区；传 null 表示清掉选择、回到未选状态。 */
+    private fun selectWorkspace(path: String?) {
+        composerWorkspace = path
+        renderWorkspacePicker()
+        syncHeaderPill()
+        updateSendAvailability()
+    }
+
+    /**
+     * 点「创建工作区」后，把那一行换成输入框并自动聚焦。
+     *
+     * 不另开弹层：创建只是一次输入，原地变换比再弹一层更轻，
+     * 也符合「输入框就长在这里」的直觉。
+     */
+    private fun showCreateWorkspaceEditor() {
+        val list = findViewById<LinearLayout>(R.id.workspace_picker_list)
+        list.removeAllViews()
+        val input =
+            EditText(this).apply {
+                hint = getString(R.string.workspace_create)
+                setSingleLine()
+                textSize = 15f
+                setTextColor(
+                    com.google.android.material.color.MaterialColors.getColor(
+                        this,
+                        com.google.android.material.R.attr.colorOnSurface,
+                        0xFF000000.toInt(),
+                    ),
+                )
+                setPadding(dp(10), dp(12), dp(10), dp(12))
+                imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            }
+        list.addView(input)
+        // 先挂上焦点再来键盘，否则部分机型键盘会抢焦点导致输不进去。
+        input.requestFocus()
+        input.post {
+            val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+            imm?.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        }
+        input.setOnEditorActionListener { _, action, _ ->
+            if (action == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                createWorkspace(input.text.toString())
+                true
+            } else {
+                false
+            }
+        }
+        list.addView(
+            pickerRow(getString(R.string.workspace_create), accent = true) {
+                createWorkspace(input.text.toString())
+            },
+        )
+    }
+
+    /** 在工作区根下建一个同名子目录，建成后直接选中它。 */
+    private fun createWorkspace(rawName: String) {
+        val name = rawName.trim()
+        val bad =
+            when {
+                name.isEmpty() -> "名称不能为空"
+                name == "." || name == ".." -> "名称不能是 . 或 .."
+                name.contains('/') || name.contains('\u0000') -> "名称不能包含 / 等路径字符"
+                else -> null
+            }
+        if (bad != null) {
+            snack(bad)
+            return
+        }
+        val target = java.io.File(Workspaces.root(this), name)
+        if (target.exists()) {
+            // 目录已在：直接选中，不报错。多数情况是之前建过、又被删了会话。
+            selectWorkspace(target.absolutePath)
+            return
+        }
+        val ok = runCatching { target.mkdirs() }.getOrDefault(false)
+        if (!ok) {
+            snack("创建工作区失败")
+            return
+        }
+        selectWorkspace(target.absolutePath)
+        // 建完就能直接说话：焦点交给下方输入框，用户不必再点一下。
+        inputMessage.requestFocus()
+        // 收起键盘，把界面还给输入框
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        imm?.hideSoftInputFromWindow(inputMessage.windowToken, 0)
+    }
+
+    /**
+     * 发送按钮的可用状态。
+     *
+     * 新会话必须先有工作区，但输入框保持可输入——用户可以先写，再去选地方，
+     * 不应该因为没选工作区就整个输不进去。
+     */
+    private fun updateSendAvailability() {
+        val ready = zc.currentSessionId != null || composerWorkspace != null
+        findViewById<View>(R.id.btn_send)?.apply {
+            alpha = if (ready) 1f else 0.4f
+        }
+    }
+
+    // ------------------------------------------------------------ 顶部胶囊双态
+
+    /** 模型名（模型态下显示在胶囊里）。与工作区状态互不干扰，各记一份。 */
+    private var modelPillLabel: CharSequence = ""
+
+    /**
+     * 新会话要用的工作区路径；null 表示还没选。
+     *
+     * 只作用于「新建会话」那一刻：已有会话的工作区是内核绑定的，
+     * 这个选择器不应去改变它。
+     */
+    private var composerWorkspace: String? = null
+
+    /** 当前是否处于「运行位置」态：新会话且没选工作区。 */
+    private fun isRunTargetMode(): Boolean = zc.currentSessionId == null && composerWorkspace == null
+
+    /** 按当前状态刷新胶囊文案。两种态只差文案，其它地方不用管。 */
+    private fun syncHeaderPill() {
+        val label = findViewById<TextView>(R.id.tv_header_pill) ?: return
+        label.text =
+            if (isRunTargetMode()) {
+                getString(R.string.run_target_this_device)
+            } else {
+                modelPillLabel.ifEmpty { getString(R.string.default_model) }
+            }
+    }
+
+    /**
+     * 运行位置弹层。
+     *
+     * 跨端还没接，这里只列出本机一项并置为选中；以后有远程设备时往这个列表里加。
+     */
+    private fun showRunTargetSheet() {
+        val sheet = CodaSheet(this).title(getString(R.string.run_target_title))
+        sheet.content { col ->
+            val row =
+                TextView(this).apply {
+                    text = getString(R.string.run_target_this_device)
+                    textSize = 15f
+                    setTextColor(
+                        com.google.android.material.color.MaterialColors.getColor(
+                            this,
+                            com.google.android.material.R.attr.colorOnSurface,
+                            0xFF000000.toInt(),
+                        ),
+                    )
+                    setPadding(dp(4f), dp(14f), dp(4f), dp(14f))
+                }
+            col.addView(row)
+            col.addView(
+                TextView(this).apply {
+                    text = getString(R.string.run_target_local_note)
+                    textSize = 12f
+                    setTextColor(
+                        com.google.android.material.color.MaterialColors.getColor(
+                            this,
+                            com.google.android.material.R.attr.colorOnSurfaceVariant,
+                            android.graphics.Color.GRAY,
+                        ),
+                    )
+                    setPadding(dp(4f), 0, dp(4f), dp(8f))
+                },
+            )
+        }
+        sheet.secondaryAction("关闭") { sheet.dismiss() }
+        sheet.show()
+    }
+
     private fun toggleModelPanel() {
         val scrim = findViewById<View>(R.id.model_panel_scrim)
         val card = scrim.findViewById<View>(R.id.model_panel_card)
@@ -4533,7 +4813,7 @@ class MainActivity : BaseActivity() {
             modelView.text =
                 getString(
                     R.string.model_panel_current_model,
-                    findViewById<TextView>(R.id.tv_model).text,
+                    modelPillLabel,
                 )
         }
 
@@ -4694,7 +4974,8 @@ class MainActivity : BaseActivity() {
         chatView.visibility = View.VISIBLE
 
         // 顶栏模型与思考强度跟随该会话（每条会话各自独立）
-        findViewById<TextView>(R.id.tv_model).text = conversation.model
+        modelPillLabel = conversation.model
+        syncHeaderPill()
         strengthLevel = conversation.strength
         currentConversationId = conversation.id
         hideSettingsPage()
@@ -4830,6 +5111,9 @@ class MainActivity : BaseActivity() {
     private fun showEmptyState() {
         chatView.visibility = View.GONE
         emptyState.visibility = View.VISIBLE
+        // 空态里放的是工作区选择器，内容随当前选择变化，每次显示都重画一遍。
+        renderWorkspacePicker()
+        updateSendAvailability()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

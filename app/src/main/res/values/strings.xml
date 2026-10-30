@@ -82,4 +82,10 @@
     <!-- 手机控制 -->
     <string name="phone_control_service_description">Coda 手机控制：允许你在对话中让 Agent 读取屏幕内容并执行点击、输入、滑动等操作。仅在本地运行，需手动开启。</string>
     <string name="phone_control_service_label">Coda 手机控制</string>
+    <string name="run_target_this_device">这台设备</string>
+    <string name="run_target_title">运行位置</string>
+    <string name="run_target_local_note">当前仅支持在本机运行</string>
+    <string name="workspace_pick_title">工作区</string>
+    <string name="workspace_create">创建工作区</string>
+    <string name="workspace_none_hint">先选择或创建一个工作区</string>
 </resources>

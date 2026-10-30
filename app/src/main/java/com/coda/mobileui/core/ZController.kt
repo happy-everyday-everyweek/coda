@@ -1052,8 +1052,19 @@ class ZController private constructor(
 
     fun workspacePath(): String = Workspaces.root(app).absolutePath
 
-    fun newSession(cb: ((Boolean, String) -> Unit)?) {
-        val wp = workspacePath()
+    /**
+     * 新建会话。
+     *
+     * [workspaceOverride] 非空时用它当工作区，否则落到默认工作区。
+     * 客户端的新会话页允许用户先选/建一个工作区再发第一条消息，
+     * 那个选择只能从这条口子进来——会话一旦建立，工作区就由内核绑定，
+     * 不该再由这个选择器改动。
+     */
+    fun newSession(
+        cb: ((Boolean, String) -> Unit)?,
+        workspaceOverride: String? = null,
+    ) {
+        val wp = workspaceOverride?.takeIf { it.isNotBlank() } ?: workspacePath()
         val params =
             JSONObject()
                 .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
