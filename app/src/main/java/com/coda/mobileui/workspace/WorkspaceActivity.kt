@@ -486,16 +486,10 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun createPage(data: WorkspaceTab): WorkspacePage =
-        when {
-            data.kind == WorkspaceTabs.FILES -> FilesPage(this, data.state)
-
-            data.kind == WorkspaceTabs.GIT -> GitPage(this, data.state)
-
-            data.kind == WorkspaceTabs.TERMINAL -> TerminalPage(this, data.state)
-
-            // Git 的下一级也是工作区的标签页，不是另一个界面。
-            data.kind.startsWith("git:") -> GitDetailPage(this, data.kind, data.state)
-
+        when (data.kind) {
+            WorkspaceTabs.FILES -> FilesPage(this, data.state)
+            WorkspaceTabs.GIT -> GitPage(this, data.state)
+            WorkspaceTabs.TERMINAL -> TerminalPage(this, data.state)
             else -> OverviewPage(this, data.state)
         }
 
