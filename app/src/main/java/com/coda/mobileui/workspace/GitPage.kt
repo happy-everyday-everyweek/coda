@@ -71,6 +71,7 @@ class GitPage(
 
     /** 画布上的操作步骤。合并是"选源 → 选目标 → 确认"三段，状态就放在这里。 */
     private var pickingTarget = false
+    private var merging = false
     private var mergeSource: String? = null
     private var mergeTarget: String? = null
     private var conflictText: String = ""
@@ -183,6 +184,7 @@ class GitPage(
                 .start()
         }
         render()
+        detail.playPageEnter(forward = true)
         return detail
     }
 
@@ -196,6 +198,7 @@ class GitPage(
         val previous = pages.last()
         detail.setPage(previous.title, previous.subtitle)
         previous.render()
+        detail.playPageEnter(forward = false)
     }
 
     private fun closeDetail() {
@@ -275,6 +278,7 @@ class GitPage(
     // ---------------------------------------------------------------- 控制卡
 
     private fun rebuildControl() {
+        val previous = control
         val card =
             groupCard().apply {
                 layoutParams =
@@ -286,8 +290,29 @@ class GitPage(
                 radius = host.resources.getDimension(R.dimen.settings_card_corner)
             }
         card.addView(controlBody(controlState()), ViewGroup.LayoutParams(MATCH, WRAP))
-        control?.let { base.removeView(it) }
+        // 新卡从下方 8dp 淡入，旧卡同时淡出：状态切换不该是一下子换掉内容。
+        card.alpha = 0f
+        card.translationY = dp(8f).toFloat()
         base.addView(card)
+        card
+            .animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(Motion.PANEL_MS)
+            .setInterpolator(Motion.standard)
+            .start()
+        if (previous != null) {
+            // 过渡期间旧卡不能再点，否则会点到已经作废的按钮。
+            previous.isEnabled = false
+            previous
+                .animate()
+                .alpha(0f)
+                .translationY(dp(6f).toFloat())
+                .setDuration(Motion.SETTLE_MS)
+                .setInterpolator(Motion.standard)
+                .withEndAction { base.removeView(previous) }
+                .start()
+        }
         control = card
         // 卡片会挡住画布底部，把遮挡高度告诉画布，它才知道视口下边界在哪。
         card.addOnLayoutChangeListener { _, _, top, _, _, _, _, _, _ ->
@@ -299,6 +324,13 @@ class GitPage(
         val current = snapshot
         val selected = picked
         // 选择步骤优先：这时候画布上只该点候选，控制卡只讲这一件事。
+        if (merging) {
+            return Control(
+                title = "正在合并…",
+                subtitle = "$mergeSource → $mergeTarget",
+                actions = emptyList(),
+            )
+        }
         if (pickingTarget) {
             return Control(
                 title = "选择合并目标",
@@ -440,10 +472,12 @@ class GitPage(
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
+        // 三个按钮时字号收一档，否则中文标签会被截成省略号。
+        val size = if (state.actions.size >= 3) 12.5f else 13.5f
         state.actions.forEachIndexed { index, action ->
             if (index > 0) row.addView(View(host), LinearLayout.LayoutParams(dp(8f), 1))
             row.addView(
-                pillButton(action.first, index == 0 && state.filled) { action.second() },
+                pillButton(action.first, index == 0 && state.filled, size) { action.second() },
                 LinearLayout.LayoutParams(0, dp(42f), 1f),
             )
         }
@@ -453,11 +487,12 @@ class GitPage(
     private fun pillButton(
         text: String,
         filled: Boolean,
+        textSize: Float,
         click: () -> Unit,
     ): TextView =
         TextView(host).apply {
             this.text = text
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
             gravity = Gravity.CENTER
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -526,11 +561,15 @@ class GitPage(
     private fun runMerge() {
         val source = mergeSource ?: return
         val target = mergeTarget ?: return
+        // 立刻切到"正在合并"：合并可能要几秒，期间按钮不该还能点。
+        merging = true
+        rebuildControl()
         busy = true
         host.background(
             work = { Git.mergeInto(host.env, host.root, target, source) },
             then = { result ->
                 busy = false
+                merging = false
                 if (result.ok) {
                     toast("合并完成")
                     resetMerge()
@@ -546,6 +585,7 @@ class GitPage(
             },
             onError = {
                 busy = false
+                merging = false
                 toast("合并失败")
                 rebuildControl()
             },
@@ -559,6 +599,7 @@ class GitPage(
 
     private fun resetMerge() {
         pickingTarget = false
+        merging = false
         mergeSource = null
         mergeTarget = null
         conflictText = ""

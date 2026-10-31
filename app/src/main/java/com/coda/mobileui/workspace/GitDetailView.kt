@@ -104,6 +104,21 @@ internal class GitDetailView(
         addView(scroll)
     }
 
+    /** 切页入场：内容轻微横移 + 淡入。方向由 [forward] 决定，和"进入更深一层"一致。 */
+    fun playPageEnter(forward: Boolean) {
+        val shift = dp(10f).toFloat() * if (forward) 1f else -1f
+        container.animate().cancel()
+        container.alpha = 0f
+        container.translationX = shift
+        container
+            .animate()
+            .alpha(1f)
+            .translationX(0f)
+            .setDuration(Motion.PANEL_MS)
+            .setInterpolator(Motion.standard)
+            .start()
+    }
+
     fun setPage(
         title: String,
         subtitle: String?,

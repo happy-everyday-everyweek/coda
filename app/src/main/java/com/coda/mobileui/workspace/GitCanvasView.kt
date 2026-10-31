@@ -60,13 +60,31 @@ internal class GitCanvasView(
             invalidate()
         }
 
-    /** 压暗非候选的行：进入"现在只该选这些"的步骤时用。 */
+    /** 压暗非候选的行：进入"现在只该选这些"的步骤时用。渐变到目标值，不要瞬变。 */
     var dimOthers = false
         set(value) {
             if (field == value) return
             field = value
-            invalidate()
+            animateDim(if (value) 1f else 0f)
         }
+
+    /** 压暗进度：0 正常，1 完全压暗。候选环也按它淡入淡出。 */
+    private var dimProgress = 0f
+    private var dimAnim: ValueAnimator? = null
+
+    private fun animateDim(target: Float) {
+        dimAnim?.cancel()
+        dimAnim =
+            ValueAnimator.ofFloat(dimProgress, target).apply {
+                duration = Motion.SETTLE_MS
+                interpolator = Motion.standard
+                addUpdateListener { anim ->
+                    dimProgress = anim.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
+    }
 
     /** 点中某个提交。 */
     var onPick: ((Git.Commit) -> Unit)? = null
@@ -394,8 +412,13 @@ internal class GitCanvasView(
             val centerX = leftPad + lane * laneWidth + laneWidth / 2f
             val selectedRow = commit.hash == selected
             val candidate = commit.hash in candidates
-            // 选择步骤里只让候选保持正常亮度，其余压暗——视线自然落到能点的地方。
-            val factor = if (dimOthers && !candidate && !selectedRow) 0.28f else 1f
+            // 选择步骤里只让候选保持正常亮度，其余按进度压暗——视线自然落到能点的地方。
+            val factor =
+                if (!candidate && !selectedRow) {
+                    1f - (1f - 0.28f) * dimProgress
+                } else {
+                    1f
+                }
 
             if (selectedRow) {
                 highlightPaint.color = withAlpha(primaryColor, 0.08f)
@@ -406,8 +429,8 @@ internal class GitCanvasView(
             nodePaint.color = withAlpha(laneColorOf(commit), if (factor < 1f) 0.35f else 1f)
             canvas.drawCircle(centerX, midY, nodeRadius, nodePaint)
             if (candidate) {
-                // 候选：一圈更亮的环，和"已选中"的实心环区分开。
-                ringPaint.color = withAlpha(primaryColor, 0.9f)
+                // 候选：一圈更亮的环，和"已选中"的实心环区分开；跟随压暗进度淡入。
+                ringPaint.color = withAlpha(primaryColor, 0.25f + 0.65f * dimProgress)
                 canvas.drawCircle(centerX, midY, nodeRadius + dp(5f), ringPaint)
             }
             if (selectedRow) {
