@@ -141,7 +141,7 @@ abstract class WorkspacePage(
         titleText: String,
         subtitleText: String? = null,
         trailing: String? = null,
-        minHeightDp: Int = 52,
+        minHeightDp: Int = 48,
         longClick: (() -> Unit)? = null,
         click: (() -> Unit)? = null,
     ): LinearLayout {
@@ -378,7 +378,7 @@ abstract class WorkspacePage(
         titleText: String,
         subtitleText: String? = null,
         trailing: String? = null,
-        minHeightDp: Int = 64,
+        minHeightDp: Int = 48,
         click: (() -> Unit)? = null,
         longClick: (() -> Unit)? = null,
     ): LinearLayout {
