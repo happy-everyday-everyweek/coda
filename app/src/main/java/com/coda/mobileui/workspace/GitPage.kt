@@ -572,7 +572,14 @@ class GitPage(
                 merging = false
                 if (result.ok) {
                     toast("合并完成")
+                    // 合并后目标分支的尖端会变成新的合并提交；先在旧尖端上放一次扩散环，
+                    // 让"结果落在哪里"这件事有个明确的视觉落点。
+                    val tip =
+                        snapshot?.let { current ->
+                            current.commits.firstOrNull { row -> branchesAt(row, current).contains(target) }?.hash
+                        }
                     resetMerge()
+                    if (tip != null) canvas.pulse(tip)
                 } else {
                     conflictText = result.output.ifEmpty { "合并失败，没有输出" }
                     pickingTarget = false

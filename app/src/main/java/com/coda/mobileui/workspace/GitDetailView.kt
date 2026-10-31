@@ -131,12 +131,14 @@ internal class GitDetailView(
     fun showLoading(text: String) {
         container.removeAllViews()
         container.addView(hint(text))
+        fadeContentIn()
     }
 
     /** 用 MD3 分组卡片渲染一组行。 */
     fun showRows(rows: List<SettingRow>) {
         container.removeAllViews()
         SettingsViewBuilder.render(activity, container, rows, this)
+        fadeContentIn()
     }
 
     /** 在已渲染的内容后面追加一张代码卡。 */
@@ -147,6 +149,7 @@ internal class GitDetailView(
     fun showCode(text: String) {
         container.removeAllViews()
         container.addView(codeBlock(text))
+        fadeContentIn()
     }
 
     /**
@@ -167,6 +170,20 @@ internal class GitDetailView(
                 render(text, mode)
             },
         )
+        fadeContentIn()
+    }
+
+    /** 内容整体替换后的轻反馈：从略淡处回到常态，避免列表/代码块一下子跳出来。 */
+    private fun fadeContentIn() {
+        if (!isAttachedToWindow) return
+        container.animate().cancel()
+        container.alpha = 0.55f
+        container
+            .animate()
+            .alpha(1f)
+            .setDuration(Motion.SETTLE_MS)
+            .setInterpolator(Motion.standard)
+            .start()
     }
 
     /** 输入页：一个输入框 + 一行「确定」。 */

@@ -44,13 +44,52 @@ internal class GitCanvasView(
             invalidate()
         }
 
-    /** 当前选中的提交哈希，画一圈描边表示。 */
+    /** 当前选中的提交哈希，画一圈描边表示。切换时做一次收拢，别直接跳。 */
     var selected: String? = null
         set(value) {
             if (field == value) return
             field = value
-            invalidate()
+            animateSelection()
         }
+
+    /** 选中进度：0 刚点上，1 稳定。高亮与描边都按它推进。 */
+    private var selectedProgress = 1f
+    private var selectedAnim: ValueAnimator? = null
+
+    private fun animateSelection() {
+        selectedAnim?.cancel()
+        selectedProgress = 0f
+        selectedAnim =
+            ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = Motion.PANEL_MS
+                interpolator = Motion.standard
+                addUpdateListener { anim ->
+                    selectedProgress = anim.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
+    }
+
+    /** 合并完成之类的成功动作：在某个提交上放一次扩散环，给结果一个落点。 */
+    fun pulse(hash: String) {
+        pulseHash = hash
+        pulseAnim?.cancel()
+        pulseAnim =
+            ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 520L
+                interpolator = Motion.standard
+                addUpdateListener { anim ->
+                    pulseProgress = anim.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
+    }
+
+    private var pulseHash: String? = null
+    private var pulseProgress = 1f
+    private var pulseAnim: ValueAnimator? = null
 
     /** 需要突出显示的提交（合并目标的候选分支尖端）。 */
     var candidates: Set<String> = emptySet()
@@ -421,7 +460,7 @@ internal class GitCanvasView(
                 }
 
             if (selectedRow) {
-                highlightPaint.color = withAlpha(primaryColor, 0.08f)
+                highlightPaint.color = withAlpha(primaryColor, 0.08f * selectedProgress)
                 rowRect.set(dp(4f), top + dp(2f), worldWidth - dp(6f), top + rowHeight - dp(2f))
                 canvas.drawRoundRect(rowRect, dp(10f), dp(10f), highlightPaint)
             }
@@ -434,8 +473,16 @@ internal class GitCanvasView(
                 canvas.drawCircle(centerX, midY, nodeRadius + dp(5f), ringPaint)
             }
             if (selectedRow) {
-                ringPaint.color = primaryColor
-                canvas.drawCircle(centerX, midY, nodeRadius + dp(3.5f), ringPaint)
+                // 描边从远处收到位：点下去时有一个"吸附"的观感，不是直接出现。
+                ringPaint.color = withAlpha(primaryColor, selectedProgress)
+                canvas.drawCircle(centerX, midY, nodeRadius + dp(3.5f) * (0.45f + 0.55f * selectedProgress), ringPaint)
+            }
+            if (commit.hash == pulseHash && pulseProgress < 1f) {
+                // 成功动作的落点：一圈向外扩散并淡出的环。
+                ringPaint.strokeWidth = dp(2f)
+                ringPaint.color = withAlpha(primaryColor, (1f - pulseProgress) * 0.9f)
+                canvas.drawCircle(centerX, midY, nodeRadius + dp(4f) + dp(26f) * pulseProgress, ringPaint)
+                ringPaint.strokeWidth = dp(1.8f)
             }
 
             titlePaint.color = withAlpha(onSurfaceColor, factor)
