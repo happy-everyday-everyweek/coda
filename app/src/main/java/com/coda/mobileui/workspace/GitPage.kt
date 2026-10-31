@@ -654,7 +654,7 @@ class GitPage(
             work = { Git.diffRange(host.env, host.root, commit.hash, "HEAD") },
             then = { diff ->
                 val text = if (diff.truncated) diff.text + "\n\n（内容过长，已截断）" else diff.text
-                view.showCode(text)
+                view.showDiff(text)
             },
             onError = { view.showLoading("计算差异失败，返回重试") },
         )
@@ -737,7 +737,7 @@ class GitPage(
                         "add" to { conflictOp("标记已解决") { Git.addFile(host.env, host.root, file) } },
                     )
                 bindRows(rows, keys)
-                detail.appendCode(text)
+                detail.showDiff(text, DiffView.Mode.CONFLICT, clear = false)
             },
             onError = { detail.showLoading("读取冲突内容失败，返回重试") },
         )
@@ -916,7 +916,7 @@ class GitPage(
             work = { Git.diffUncommitted(host.env, host.root) },
             then = { diff ->
                 val text = if (diff.truncated) diff.text + "\n\n（内容过长，已截断）" else diff.text
-                view.showCode(text)
+                view.showDiff(text)
             },
             onError = { view.showLoading("读取改动失败，返回重试") },
         )

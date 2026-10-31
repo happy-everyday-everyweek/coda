@@ -149,6 +149,26 @@ internal class GitDetailView(
         container.addView(codeBlock(text))
     }
 
+    /**
+     * diff / 冲突内容：按文件分卡、按行着色。
+     *
+     * [clear] 为假时追加到当前内容后面（冲突文件页是「操作行 + 内容」的结构）。
+     */
+    fun showDiff(
+        text: String,
+        mode: DiffView.Mode = DiffView.Mode.DIFF,
+        clear: Boolean = true,
+    ) {
+        if (clear) container.removeAllViews()
+        container.addView(
+            DiffView(activity).apply {
+                layoutParams =
+                    LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                render(text, mode)
+            },
+        )
+    }
+
     /** 输入页：一个输入框 + 一行「确定」。 */
     fun showInput(
         initial: String,
