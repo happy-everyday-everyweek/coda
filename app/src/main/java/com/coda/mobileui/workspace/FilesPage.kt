@@ -278,7 +278,12 @@ class FilesPage(
                             updateSideLabels()
                         }
                     },
-                    cardRow(R.drawable.ic_file_add, "新建文件") { newFile(dir) },
+                    cardRow(R.drawable.ic_file_add, "新建文件") {
+                        // newFile 作用在当前目录；双栏时先在右栏选中，再让用户切过去确认。
+                        rightDir = dir
+                        switchSide(Side.RIGHT)
+                        newFile()
+                    },
                     cardRow(R.drawable.ic_file, "复制到当前目录") { copyCurrentToRight() },
                 ),
             ),
