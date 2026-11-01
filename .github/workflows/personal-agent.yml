@@ -43,5 +43,6 @@ jobs:
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
           [ -x "$AAPT2" ] || AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)"
           ./gradlew :app:compileDebugKotlin \
+            -x installDebugPythonRequirements \
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
