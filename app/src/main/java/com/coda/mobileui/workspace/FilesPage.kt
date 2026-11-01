@@ -36,12 +36,12 @@ class FilesPage(
 
     /** 双栏容器：左右两栏各是一套完整目录列表，彼此独立。 */
     private lateinit var split: LinearLayout
-    private lateinit var leftScroll: ScrollView
     private lateinit var rightScroll: ScrollView
-    private lateinit var leftColumn: LinearLayout
     private lateinit var rightColumn: LinearLayout
-    private lateinit var leftLabel: TextView
-    private lateinit var rightLabel: TextView
+    private lateinit var editorBody: View
+    private lateinit var markdownPreview: ScrollView
+    private lateinit var markdownPreviewText: TextView
+    private var markdownMode = false
 
     /** 当前在活动的那一栏。文件操作作用在这一栏，另一栏作为移动/复制的目标。 */
     private var activeSide = Side.LEFT
@@ -147,27 +147,16 @@ class FilesPage(
     private fun switchSide(side: Side) {
         if (side == activeSide) return
         activeSide = side
-        applyDualPane()
-        renderList()
     }
 
     private fun applyDualPane() {
         if (!::split.isInitialized) return
-        // 单栏时隐藏右栏；双栏时左右等宽，活动栏用一个小标签点出来。
+        // 单栏时隐藏右栏；双栏时左右等宽。
         rightScroll.visibility = if (dualPane) View.VISIBLE else View.GONE
         (split.getChildAt(1) as? View)?.visibility = if (dualPane) View.VISIBLE else View.GONE
-        updateSideLabels()
     }
 
-    private fun updateSideLabels() {
-        if (!::leftLabel.isInitialized || !::rightLabel.isInitialized) return
-        val left = if (activeSide == Side.LEFT) primary else onSurfaceVariant
-        val right = if (activeSide == Side.RIGHT) primary else onSurfaceVariant
-        leftLabel.setTextColor(left)
-        rightLabel.setTextColor(right)
-        leftLabel.text = "左栏 · ${current.absolutePath}"
-        rightLabel.text = "右栏 · ${rightPath()}"
-    }
+    private fun operationDir(): File = if (dualPane && activeSide == Side.RIGHT) rightDir ?: current else current
 
     /** 右栏当前路径。双栏开启后，另一栏的位置独立维护，切换目录不动它。 */
     private var rightDir: File? = null
@@ -175,7 +164,7 @@ class FilesPage(
     private fun rightPath(): String = rightDir?.absolutePath ?: current.absolutePath
 
     private fun rightFiles(): List<File> {
-        val dir = rightDir ?: return emptyList()
+        val dir = rightDir ?: current
         return runCatching {
             dir.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })).orEmpty()
         }.getOrDefault(emptyList())
@@ -275,7 +264,6 @@ class FilesPage(
                         dir.parentFile?.let {
                             rightDir = it
                             renderRightPane()
-                            updateSideLabels()
                         }
                     },
                     cardRow(R.drawable.ic_file_add, "新建文件") {
@@ -327,12 +315,11 @@ class FilesPage(
                 if (isDir) {
                     rightDir = file
                     renderRightPane()
-                    updateSideLabels()
                 } else {
                     openFileSmart(file)
                 }
             },
-            longClick = { showActions(file) },
+            longClick = { showActions(file, Side.RIGHT) },
         )
 
     /** 当前选中的文件（用于复制/移动到另一栏）。 */
@@ -355,10 +342,7 @@ class FilesPage(
     }
 
     /** 把一个文件复制到指定目录，然后刷新两栏。 */
-    private fun otherPaneDir(file: File): File {
-        val right = rightDir ?: current
-        return if (file.parentFile?.absolutePath == right.absolutePath) current else right
-    }
+    private fun otherPaneDir(): File = if (activeSide == Side.RIGHT) current else rightDir ?: current
 
     private fun moveToDir(
         file: File,
@@ -399,6 +383,14 @@ class FilesPage(
         dir: File,
     ) {
         val target = File(dir, file.name)
+        if (file.isDirectory) {
+            val srcPath = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+            val dirPath = runCatching { dir.canonicalPath }.getOrDefault(dir.absolutePath)
+            if (dirPath == srcPath || dirPath.startsWith("$srcPath/")) {
+                toast("不能把目录复制到它自己内部")
+                return
+            }
+        }
         if (target.exists()) {
             toast("同名文件已存在")
             return
@@ -787,8 +779,8 @@ class FilesPage(
                 when {
                     isDir -> open(file)
 
-                    // 压缩包点开＝进目录：与文件夹同一种交互，不弹菜单也不跳编辑器
-                    ArchiveKit.isArchive(file) -> enterArchive(file)
+                    // 已知压缩包也要尊重用户按后缀设置的默认打开方式。
+                    ArchiveKit.isArchive(file) -> openFileSmart(file)
 
                     // 双栏时先选中，再点一次才打开；避免一碰就跳走，选不中文件。
                     dualPane && selectedFile != file -> pickFile(file)
@@ -814,7 +806,11 @@ class FilesPage(
 
     // -------------------------------------------------------------- 文件操作
 
-    private fun showActions(file: File) {
+    private fun showActions(
+        file: File,
+        side: Side = Side.LEFT,
+    ) {
+        activeSide = side
         val sheet = sheet().title(file.name).subtitle(file.absolutePath)
         val isDir = file.isDirectory
         sheet.content { column ->
@@ -854,13 +850,13 @@ class FilesPage(
                 column.addView(
                     actionRowInSheet("复制到另一栏", R.drawable.ic_file_add) {
                         sheet.dismiss()
-                        copyFileToDir(file, otherPaneDir(file))
+                        copyFileToDir(file, otherPaneDir())
                     },
                 )
                 column.addView(
                     actionRowInSheet("移动到另一栏", R.drawable.ic_folder) {
                         sheet.dismiss()
-                        moveToDir(file, otherPaneDir(file))
+                        moveToDir(file, otherPaneDir())
                     },
                 )
             }
@@ -1020,7 +1016,7 @@ class FilesPage(
 
     private fun newFile() {
         inputSheet("新建文件", "untitled.txt") { name ->
-            val target = File(current, name)
+            val target = File(operationDir(), name)
             if (target.exists()) {
                 toast("同名条目已存在")
                 return@inputSheet
@@ -1032,6 +1028,7 @@ class FilesPage(
                 }.getOrDefault(false)
             if (ok) {
                 renderList()
+                renderRightPane()
                 openFile(target)
             } else {
                 toast("创建失败")
@@ -1041,9 +1038,14 @@ class FilesPage(
 
     private fun newFolder() {
         inputSheet("新建文件夹", "new-folder") { name ->
-            val target = File(current, name)
-            val ok = runCatching { target.mkdirs() }.getOrDefault(false)
-            if (ok) renderList() else toast("创建失败")
+            val target = File(operationDir(), name)
+            val ok = target.mkdirs()
+            if (ok) {
+                renderList()
+                renderRightPane()
+            } else {
+                toast("创建失败")
+            }
         }
     }
 
@@ -1132,6 +1134,7 @@ class FilesPage(
                 layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             }
         header.addView(editorTitle)
+        header.addView(editorChip("预览") { toggleMarkdownPreview() })
         header.addView(editorChip("转到行") { gotoLine() })
         header.addView(editorChip("换行") { toggleWrap() })
         val save =
@@ -1229,7 +1232,23 @@ class FilesPage(
             android.widget.FrameLayout.LayoutParams(MATCH, MATCH),
         )
         body.addView(editorCanvas, LinearLayout.LayoutParams(0, MATCH, 1f))
-        editor.addView(body)
+        editorBody = body
+        editor.addView(editorBody)
+
+        markdownPreviewText =
+            TextView(host).apply {
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextColor(onSurface)
+                setPadding(dp(16f), dp(16f), dp(16f), dp(24f))
+                textIsSelectable = true
+            }
+        markdownPreview =
+            ScrollView(host).apply {
+                visibility = View.GONE
+                setBackgroundColor(surface)
+                addView(markdownPreviewText, ViewGroup.LayoutParams(MATCH, WRAP))
+            }
+        editor.addView(markdownPreview, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         editorStatus =
             label("", 12f, onSurfaceVariant).apply {
@@ -1237,6 +1256,24 @@ class FilesPage(
             }
         editor.addView(editorStatus)
         return editor
+    }
+
+    private fun isMarkdownFile(file: File): Boolean = file.extension.lowercase() in setOf("md", "markdown", "mdown", "mkd")
+
+    private fun toggleMarkdownPreview() {
+        if (!markdownMode) {
+            toast("请先用 Markdown 编辑器打开")
+            return
+        }
+        val preview = markdownPreview.visibility != View.VISIBLE
+        if (preview) {
+            val markwon =
+                io.noties.markwon.Markwon
+                    .create(host)
+            markwon.setMarkdown(markdownPreviewText, editorInput.text.toString())
+        }
+        markdownPreview.visibility = if (preview) View.VISIBLE else View.GONE
+        editorBody.visibility = if (preview) View.GONE else View.VISIBLE
     }
 
     /**
@@ -1700,14 +1737,17 @@ class FilesPage(
         sheet.show()
     }
 
-    private fun openFile(file: File) {
+    private fun openFile(
+        file: File,
+        forceMarkdown: Boolean = false,
+    ) {
         if (file.length() > MAX_EDIT_BYTES) {
             showInfo(file, "文件过大，未打开")
             return
         }
         if (editing == file && editor.visibility == View.VISIBLE) return
         guardUnsaved {
-            readInto(file, onFail = { showInfo(file, it) }, done = { showEditor(file, it) })
+            readInto(file, onFail = { showInfo(file, it) }, done = { showEditor(file, it, forceMarkdown) })
         }
     }
 
@@ -1737,8 +1777,9 @@ class FilesPage(
         val sheet = sheet().title("打开方式").subtitle(if (ext.isEmpty()) file.name else ".$ext 文件")
         val options =
             listOf(
-                Triple(OPEN_AUTO, "自动", "按内容选择编辑器、系统应用或压缩包"),
-                Triple(OPEN_EDITOR, "内置编辑器", "查看或编辑文本内容"),
+                Triple(OPEN_AUTO, "自动", "按后缀与内容选择合适的打开方式"),
+                Triple(OPEN_MARKDOWN, "Markdown 编辑器", "编辑 Markdown 源码并渲染预览"),
+                Triple(OPEN_EDITOR, "普通文本编辑器", "查看或编辑纯文本内容"),
                 Triple(OPEN_SYSTEM, "系统应用", "调用设备上的其他应用"),
                 Triple(OPEN_ARCHIVE, "压缩包", "浏览包内目录，不解压"),
             )
@@ -1788,6 +1829,7 @@ class FilesPage(
         mode: String,
     ) {
         when (mode) {
+            OPEN_MARKDOWN -> openFile(file, forceMarkdown = true)
             OPEN_EDITOR -> openFile(file)
             OPEN_ARCHIVE -> enterArchive(file)
             OPEN_SYSTEM -> if (!openWithSystem(file)) toast("没有应用能打开这个文件")
@@ -1797,6 +1839,11 @@ class FilesPage(
 
     private fun openFileSmart(file: File) {
         when (preferredOpenMode(file)) {
+            OPEN_MARKDOWN -> {
+                openFile(file, forceMarkdown = true)
+                return
+            }
+
             OPEN_EDITOR -> {
                 openFile(file)
                 return
@@ -1821,7 +1868,7 @@ class FilesPage(
                     onFail = { note ->
                         if (!openWithSystem(file) && !tryArchiveByContent(file)) showInfo(file, note)
                     },
-                    done = { showEditor(file, it) },
+                    done = { showEditor(file, it, isMarkdownFile(file)) },
                 )
             }
             return
@@ -1965,8 +2012,10 @@ class FilesPage(
     private fun showEditor(
         file: File,
         content: String,
+        markdown: Boolean = false,
     ) {
         editing = file
+        markdownMode = markdown
         originalText = content
         dirty = false
         editorRules = rulesFor(file)
@@ -1978,6 +2027,9 @@ class FilesPage(
         editorInput.setSelection(0)
         suppressEdits = false
         editor.visibility = View.VISIBLE
+        editorBody.visibility = View.VISIBLE
+        markdownPreview.visibility = View.GONE
+        editorTitle.text = if (markdown) "${file.name} · Markdown" else file.name
         runHighlight()
         // 当前行底、行号与参考线要靠布局里的行位置，等这一帧量完再上一次。
         editorInput.post { refreshEditorChrome() }
@@ -2116,6 +2168,7 @@ class FilesPage(
     private companion object {
         const val MAX_EDIT_BYTES = 2L * 1024 * 1024
         const val OPEN_AUTO = "auto"
+        const val OPEN_MARKDOWN = "markdown"
         const val OPEN_EDITOR = "editor"
         const val OPEN_SYSTEM = "system"
         const val OPEN_ARCHIVE = "archive"
