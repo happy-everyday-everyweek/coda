@@ -365,8 +365,8 @@ class FilesPage(
         dir: File,
     ) {
         val target = File(dir, file.name)
-        if (protectedReason(file) != null) {
-            toast(protectedReason(file))
+        protectedReason(file)?.let {
+            toast(it)
             return
         }
         if (target.exists()) {
@@ -1756,7 +1756,7 @@ class FilesPage(
                 )
                 if (mode != currentMode) {
                     column.addView(
-                        actionRowInSheet("将$title设为默认", R.drawable.ic_check) {
+                        actionRowInSheet("将${title}设为默认", R.drawable.ic_check) {
                             sheet.dismiss()
                             if (ext.isEmpty()) {
                                 toast("无后缀文件不能设置默认打开方式")
