@@ -131,7 +131,7 @@ class CodaBotActivity : BaseActivity() {
             setColorFilter(attr(com.google.android.material.R.attr.colorOnPrimary))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(attr(com.google.android.material.R.attr.colorPrimary))
+                setColor(attr(androidx.appcompat.R.attr.colorPrimary))
             }
             contentDescription = "发送"
             setOnClickListener { sendMessage() }
@@ -217,7 +217,7 @@ class CodaBotActivity : BaseActivity() {
     private fun settingsRoot(body: LinearLayout) {
         val hero = MaterialCardView(this).apply {
             radius = dp(24).toFloat()
-            setCardBackgroundColor(attr(com.google.android.material.R.attr.colorPrimaryContainer))
+            setCardBackgroundColor(attr(androidx.appcompat.R.attr.colorPrimaryContainer))
             strokeWidth = 0
             cardElevation = 0f
         }
@@ -368,7 +368,7 @@ class CodaBotActivity : BaseActivity() {
             strokeWidth = 0
             cardElevation = 0f
             setCardBackgroundColor(
-                attr(if (message.fromUser) com.google.android.material.R.attr.colorPrimary else com.google.android.material.R.attr.colorSurfaceContainerHigh),
+                attr(if (message.fromUser) androidx.appcompat.R.attr.colorPrimary else com.google.android.material.R.attr.colorSurfaceContainerHigh),
             )
         }
         val text = TextView(this).apply {
@@ -434,7 +434,7 @@ class CodaBotActivity : BaseActivity() {
             text = title
             textSize = 13f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setTextColor(attr(com.google.android.material.R.attr.colorPrimary))
+            setTextColor(attr(androidx.appcompat.R.attr.colorPrimary))
             setPadding(dp(6), dp(20), dp(6), dp(7))
         })
     }
@@ -494,7 +494,7 @@ class CodaBotActivity : BaseActivity() {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(18), dp(12), dp(18), dp(12))
                 addView(label(title, 15f, com.google.android.material.R.attr.colorOnSurface), LinearLayout.LayoutParams(0, -2, 1f))
-                addView(label(if (checked) "开" else "关", 13f, com.google.android.material.R.attr.colorPrimary))
+                addView(label(if (checked) "开" else "关", 13f, androidx.appcompat.R.attr.colorPrimary))
             })
         }, LinearLayout.LayoutParams(-1, -2))
     }
