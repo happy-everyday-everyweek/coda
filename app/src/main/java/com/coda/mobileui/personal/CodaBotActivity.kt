@@ -217,7 +217,7 @@ class CodaBotActivity : BaseActivity() {
     private fun settingsRoot(body: LinearLayout) {
         val hero = MaterialCardView(this).apply {
             radius = dp(24).toFloat()
-            setCardBackgroundColor(attr(androidx.appcompat.R.attr.colorPrimaryContainer))
+            setCardBackgroundColor(attr(com.google.android.material.R.attr.colorPrimaryContainer))
             strokeWidth = 0
             cardElevation = 0f
         }
