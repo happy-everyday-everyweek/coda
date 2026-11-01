@@ -161,9 +161,6 @@ object SettingsData {
         SettingsPage(
             "外观",
             listOf(
-                // 这一行只在「其它设置页」开关打开时才有内容；关掉时高度为 0。
-                // 放在最前面，是为了让它趴在第一张卡片的留白里，而不是压住正文。
-                SettingRow.Custom(kind = SettingRow.Custom.KIND_PET_STAGE, key = "appearance"),
                 SettingRow.Header("主题"),
                 SettingRow.Radio("跟随系统", store.themeMode == SettingsStore.MODE_SYSTEM, "theme=${SettingsStore.MODE_SYSTEM}"),
                 SettingRow.Radio("浅色", store.themeMode == SettingsStore.MODE_LIGHT, "theme=${SettingsStore.MODE_LIGHT}"),
