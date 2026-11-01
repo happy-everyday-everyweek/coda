@@ -26,6 +26,7 @@ import com.coda.mobileui.applyBottomInsetWithIme
 import com.coda.mobileui.core.PetSkins
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.setupEdgeToEdge
+import com.coda.mobileui.topSafeInsetPx
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.card.MaterialCardView
 
@@ -83,7 +84,7 @@ class CodaBotActivity : BaseActivity() {
         }
         root.addView(column, match())
         column.addView(topBar(profile.name, "Coda Bot") { render(Page.ROOT) }, LinearLayout.LayoutParams(-1, dp(56) + statusBarHeight()))
-        scroll = ScrollView(this).apply { fillViewport = true }
+        scroll = ScrollView(this).apply { isFillViewport = true }
         messages = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(16), dp(16), dp(8))
@@ -118,7 +119,7 @@ class CodaBotActivity : BaseActivity() {
             hint = "和${profile.name}说点什么"
             setTextColor(attr(com.google.android.material.R.attr.colorOnSurface))
             setHintTextColor(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
-            backgroundColor = Color.TRANSPARENT
+            setBackgroundColor(Color.TRANSPARENT)
             minLines = 1
             maxLines = 5
             textSize = 16f
@@ -130,7 +131,7 @@ class CodaBotActivity : BaseActivity() {
             setColorFilter(attr(com.google.android.material.R.attr.colorOnPrimary))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(attr(androidx.appcompat.R.attr.colorPrimary))
+                setColor(attr(com.google.android.material.R.attr.colorPrimary))
             }
             contentDescription = "发送"
             setOnClickListener { sendMessage() }
@@ -367,7 +368,7 @@ class CodaBotActivity : BaseActivity() {
             strokeWidth = 0
             cardElevation = 0f
             setCardBackgroundColor(
-                attr(if (message.fromUser) androidx.appcompat.R.attr.colorPrimary else com.google.android.material.R.attr.colorSurfaceContainerHigh),
+                attr(if (message.fromUser) com.google.android.material.R.attr.colorPrimary else com.google.android.material.R.attr.colorSurfaceContainerHigh),
             )
         }
         val text = TextView(this).apply {
@@ -553,7 +554,7 @@ class CodaBotActivity : BaseActivity() {
     private fun attr(id: Int): Int = MaterialColors.getColor(root, id, Color.GRAY)
     private fun match() = FrameLayout.LayoutParams(-1, -1)
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density + .5f).toInt()
-    private fun statusBarHeight(): Int = com.coda.mobileui.topSafeInsetPx()
+    private fun statusBarHeight(): Int = topSafeInsetPx()
     private fun modelLabel(provider: String, model: String, fallback: String): String =
         if (model.isBlank()) fallback else "$model · $provider"
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
