@@ -1779,7 +1779,7 @@ class FilesPage(
             listOf(
                 Triple(OPEN_AUTO, "自动", "按后缀与内容选择合适的打开方式"),
                 Triple(OPEN_MARKDOWN, "Markdown 编辑器", "编辑 Markdown 源码并渲染预览"),
-                Triple(OPEN_EDITOR, "普通文本编辑器", "查看或编辑纯文本内容"),
+                Triple(OPEN_EDITOR, "代码编辑器", "查看或编辑代码与纯文本内容"),
                 Triple(OPEN_SYSTEM, "系统应用", "调用设备上的其他应用"),
                 Triple(OPEN_ARCHIVE, "压缩包", "浏览包内目录，不解压"),
             )
