@@ -23,6 +23,7 @@ class CodaBotRuntime(
         fun controlSession(action: String, text: String): String
     }
 
+    @Volatile
     private var bridge: PyObject? = null
     private val codingAgent by lazy { ZController.get(context) }
 
@@ -34,7 +35,8 @@ class CodaBotRuntime(
         Bg.run {
         try {
             val module = ensurePython().getModule("src.lite_android_bridge")
-            val instance = bridge ?: module.callAttr(
+            val instance = synchronized(this) {
+                bridge ?: module.callAttr(
                 "create_android_bridge",
                 File(context.filesDir, "coda-bot-kernel").absolutePath,
                 object : Listener {
@@ -58,6 +60,7 @@ class CodaBotRuntime(
                 providerConfig(profile.plannerProviderId, profile.plannerModel, "planner"),
                 providerConfig(profile.replyProviderId, profile.replyModel, "reply"),
             ).also { bridge = it }
+            }
             instance.callAttr("send", text)
         } catch (t: Throwable) {
             onError(t.message ?: t.javaClass.simpleName)
@@ -116,9 +119,13 @@ class CodaBotRuntime(
     }
 
     fun close() {
-        runCatching {
-            bridge?.callAttr("close")
-            bridge = null
+        Bg.run {
+            runCatching {
+                synchronized(this@CodaBotRuntime) {
+                    bridge?.callAttr("close")
+                    bridge = null
+                }
+            }
         }
     }
 }

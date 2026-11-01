@@ -714,10 +714,12 @@ class MainActivity : BaseActivity() {
             },
         )
         val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
-        actions.addView(
-            createActionRow(inflater, actions, R.drawable.ic_person, botProfile.name) {
+        val botRow = createActionRow(inflater, actions, R.drawable.ic_person, botProfile.name) {
                 startActivity(android.content.Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
-            },
+            }
+        botRow.tag = "drawer_bot"
+        actions.addView(
+            botRow,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -4308,6 +4310,11 @@ class MainActivity : BaseActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Bot 改名或改形象后，侧边栏与待发内容无需重建整页即可同步名称。
+        findViewById<View>(R.id.drawer_content)
+            ?.findViewWithTag<View>("drawer_bot")
+            ?.findViewById<TextView>(R.id.action_title)
+            ?.text = com.coda.mobileui.personal.CodaBotStore.profile(this).name
         // 浏览器控制引擎需要 Activity 承载隐藏 WebView。
         BrowserControl.attachActivity(this)
         // 从设置页回来时，宠物形象与三项开关可能已经改过，这里重新套一遍。
