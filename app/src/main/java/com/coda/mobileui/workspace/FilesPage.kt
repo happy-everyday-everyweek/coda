@@ -332,6 +332,7 @@ class FilesPage(
                     openFileSmart(file)
                 }
             },
+            longClick = { showActions(file) },
         )
 
     /** 当前选中的文件（用于复制/移动到另一栏）。 */
@@ -354,6 +355,45 @@ class FilesPage(
     }
 
     /** 把一个文件复制到指定目录，然后刷新两栏。 */
+    private fun otherPaneDir(file: File): File {
+        val right = rightDir ?: current
+        return if (file.parentFile?.absolutePath == right.absolutePath) current else right
+    }
+
+    private fun moveToDir(
+        file: File,
+        dir: File,
+    ) {
+        val target = File(dir, file.name)
+        if (protectedReason(file) != null) {
+            toast(protectedReason(file))
+            return
+        }
+        if (target.exists()) {
+            toast("目标目录已有同名条目")
+            return
+        }
+        val srcPath = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+        val dirPath = runCatching { dir.canonicalPath }.getOrDefault(dir.absolutePath)
+        if (file.isDirectory && (dirPath == srcPath || dirPath.startsWith("$srcPath/"))) {
+            toast("不能把目录移动到它自己内部")
+            return
+        }
+        host.background(
+            work = {
+                runCatching {
+                    if (file.renameTo(target)) true else file.copyRecursively(target) && file.deleteRecursively()
+                }.getOrDefault(false)
+            },
+            then = { ok ->
+                toast(if (ok) "已移动到 ${dir.name}" else "移动失败")
+                renderList()
+                renderRightPane()
+            },
+            onError = { toast("移动失败") },
+        )
+    }
+
     private fun copyFileToDir(
         file: File,
         dir: File,
@@ -364,7 +404,7 @@ class FilesPage(
             return
         }
         host.background(
-            work = { runCatching { file.copyTo(target) != null }.getOrDefault(false) },
+            work = { runCatching { file.copyRecursively(target, overwrite = false) }.getOrDefault(false) },
             then = { ok ->
                 toast(if (ok) "已复制到 ${dir.name}" else "复制失败")
                 if (ok) {
@@ -799,6 +839,28 @@ class FilesPage(
                     actionRowInSheet("打开", R.drawable.ic_file) {
                         sheet.dismiss()
                         openFile(file)
+                    },
+                )
+            }
+            if (!isDir) {
+                column.addView(
+                    actionRowInSheet("打开方式", R.drawable.ic_file) {
+                        sheet.dismiss()
+                        showOpenWith(file)
+                    },
+                )
+            }
+            if (dualPane) {
+                column.addView(
+                    actionRowInSheet("复制到另一栏", R.drawable.ic_file_add) {
+                        sheet.dismiss()
+                        copyFileToDir(file, otherPaneDir(file))
+                    },
+                )
+                column.addView(
+                    actionRowInSheet("移动到另一栏", R.drawable.ic_folder) {
+                        sheet.dismiss()
+                        moveToDir(file, otherPaneDir(file))
                     },
                 )
             }
@@ -1660,7 +1722,97 @@ class FilesPage(
      * 注意不能靠"readText 是否抛异常"来区分文本与二进制：任意字节都能被解码成乱码
      * 且不报错，那样二进制永远走不到第 2 步，全被塞进编辑器里显示乱码。
      */
+    private fun preferredOpenMode(file: File): String {
+        val ext = file.extension.lowercase()
+        if (ext.isEmpty()) return OPEN_AUTO
+        return openModePrefs().getString("ext.$ext", OPEN_AUTO) ?: OPEN_AUTO
+    }
+
+    private fun openModePrefs() = host.getSharedPreferences("file_open_modes", android.content.Context.MODE_PRIVATE)
+
+    /** 打开方式：本次使用或设为该后缀的默认。 */
+    private fun showOpenWith(file: File) {
+        val ext = file.extension.lowercase()
+        val currentMode = preferredOpenMode(file)
+        val sheet = sheet().title("打开方式").subtitle(if (ext.isEmpty()) file.name else ".$ext 文件")
+        val options =
+            listOf(
+                Triple(OPEN_AUTO, "自动", "按内容选择编辑器、系统应用或压缩包"),
+                Triple(OPEN_EDITOR, "内置编辑器", "查看或编辑文本内容"),
+                Triple(OPEN_SYSTEM, "系统应用", "调用设备上的其他应用"),
+                Triple(OPEN_ARCHIVE, "压缩包", "浏览包内目录，不解压"),
+            )
+        sheet.content { column ->
+            column.removeAllViews()
+            options.forEach { (mode, title, subtitle) ->
+                column.addView(
+                    actionRowInSheet(
+                        if (mode == currentMode) "$title（当前默认）" else title,
+                        if (mode == OPEN_ARCHIVE) R.drawable.ic_archive else R.drawable.ic_file,
+                    ) {
+                        sheet.dismiss()
+                        applyOpenMode(file, mode)
+                    },
+                )
+                if (mode != currentMode) {
+                    column.addView(
+                        actionRowInSheet("将$title设为默认", R.drawable.ic_check) {
+                            sheet.dismiss()
+                            if (ext.isEmpty()) {
+                                toast("无后缀文件不能设置默认打开方式")
+                            } else {
+                                openModePrefs().edit().putString("ext.$ext", mode).apply()
+                                toast(".$ext 文件默认使用$title")
+                                applyOpenMode(file, mode)
+                            }
+                        },
+                    )
+                }
+            }
+            if (ext.isNotEmpty() && currentMode != OPEN_AUTO) {
+                column.addView(
+                    actionRowInSheet("恢复自动选择", R.drawable.ic_refresh) {
+                        sheet.dismiss()
+                        openModePrefs().edit().remove("ext.$ext").apply()
+                        toast("已恢复 .$ext 文件的自动打开方式")
+                    },
+                )
+            }
+        }
+        sheet.secondaryAction("取消") { sheet.dismiss() }
+        sheet.show()
+    }
+
+    private fun applyOpenMode(
+        file: File,
+        mode: String,
+    ) {
+        when (mode) {
+            OPEN_EDITOR -> openFile(file)
+            OPEN_ARCHIVE -> enterArchive(file)
+            OPEN_SYSTEM -> if (!openWithSystem(file)) toast("没有应用能打开这个文件")
+            else -> openFileSmart(file)
+        }
+    }
+
     private fun openFileSmart(file: File) {
+        when (preferredOpenMode(file)) {
+            OPEN_EDITOR -> {
+                openFile(file)
+                return
+            }
+
+            OPEN_ARCHIVE -> {
+                enterArchive(file)
+                return
+            }
+
+            OPEN_SYSTEM -> {
+                if (openWithSystem(file)) return
+                toast("没有应用能打开这个文件")
+                return
+            }
+        }
         val textual = isProbablyText(file)
         if (textual && file.length() <= MAX_EDIT_BYTES) {
             guardUnsaved {
@@ -1963,6 +2115,10 @@ class FilesPage(
 
     private companion object {
         const val MAX_EDIT_BYTES = 2L * 1024 * 1024
+        const val OPEN_AUTO = "auto"
+        const val OPEN_EDITOR = "editor"
+        const val OPEN_SYSTEM = "system"
+        const val OPEN_ARCHIVE = "archive"
 
         /** 单次解压的累计写出上限。防止解压炸弹把磁盘写满。 */
         const val MAX_EXTRACT_BYTES = 2L * 1024 * 1024 * 1024
