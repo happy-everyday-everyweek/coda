@@ -6,6 +6,7 @@ import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -32,6 +33,24 @@ class FilesPage(
     override val title: String = "文件"
 
     private lateinit var shell: FrameLayout
+
+    /** 双栏容器：左右两栏各是一套完整目录列表，彼此独立。 */
+    private lateinit var split: LinearLayout
+    private lateinit var leftScroll: ScrollView
+    private lateinit var rightScroll: ScrollView
+    private lateinit var leftColumn: LinearLayout
+    private lateinit var rightColumn: LinearLayout
+    private lateinit var leftLabel: TextView
+    private lateinit var rightLabel: TextView
+
+    /** 当前在活动的那一栏。文件操作作用在这一栏，另一栏作为移动/复制的目标。 */
+    private var activeSide = Side.LEFT
+
+    /** 是否启用双栏。手机上默认单栏；平板或设置项开启后用双栏。 */
+    private var dualPane = false
+
+    private enum class Side { LEFT, RIGHT }
+
     private lateinit var listScroll: ScrollView
     private lateinit var listColumn: LinearLayout
     private lateinit var editor: LinearLayout
@@ -87,18 +106,87 @@ class FilesPage(
 
     override fun build(): View {
         shell = FrameLayout(host)
+        // 平板（sw >= 600dp）默认双栏；手机仍是单栏，可以用菜单切换。
+        dualPane = host.resources.configuration.smallestScreenWidthDp >= 600
+        split =
+            LinearLayout(host).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
+            }
         listScroll = scrolling()
         listColumn = scrollColumn(listScroll)
-        shell.addView(listScroll, FrameLayout.LayoutParams(MATCH, MATCH))
+        split.addView(paneSlot(listScroll, true))
+        split.addView(
+            View(host).apply {
+                setBackgroundColor(outline)
+                layoutParams = LinearLayout.LayoutParams(dp(0.7f), MATCH)
+            },
+        )
+        rightScroll = scrolling()
+        rightColumn = scrollColumn(rightScroll)
+        split.addView(paneSlot(rightScroll, false))
+        shell.addView(split, FrameLayout.LayoutParams(MATCH, MATCH))
         shell.addView(buildEditor(), FrameLayout.LayoutParams(MATCH, MATCH))
         current = resolveInitial()
+        applyDualPane()
         renderList()
         return shell
     }
 
+    /** 一栏的容器：占据半屏，点击空白处会把活动栏切过来。 */
+    private fun paneSlot(
+        scroll: ScrollView,
+        isLeft: Boolean,
+    ): View =
+        FrameLayout(host).apply {
+            layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
+            setOnClickListener { switchSide(if (isLeft) Side.LEFT else Side.RIGHT) }
+            addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
+        }
+
+    private fun switchSide(side: Side) {
+        if (side == activeSide) return
+        activeSide = side
+        applyDualPane()
+        renderList()
+    }
+
+    private fun applyDualPane() {
+        if (!::split.isInitialized) return
+        // 单栏时隐藏右栏；双栏时左右等宽，活动栏用一个小标签点出来。
+        rightScroll.visibility = if (dualPane) View.VISIBLE else View.GONE
+        (split.getChildAt(1) as? View)?.visibility = if (dualPane) View.VISIBLE else View.GONE
+        updateSideLabels()
+    }
+
+    private fun updateSideLabels() {
+        if (!::leftLabel.isInitialized || !::rightLabel.isInitialized) return
+        val left = if (activeSide == Side.LEFT) primary else onSurfaceVariant
+        val right = if (activeSide == Side.RIGHT) primary else onSurfaceVariant
+        leftLabel.setTextColor(left)
+        rightLabel.setTextColor(right)
+        leftLabel.text = "左栏 · ${current.absolutePath}"
+        rightLabel.text = "右栏 · ${rightPath()}"
+    }
+
+    /** 右栏当前路径。双栏开启后，另一栏的位置独立维护，切换目录不动它。 */
+    private var rightDir: File? = null
+
+    private fun rightPath(): String = rightDir?.absolutePath ?: current.absolutePath
+
+    private fun rightFiles(): List<File> {
+        val dir = rightDir ?: return emptyList()
+        return runCatching {
+            dir.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })).orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
     override fun onShown() {
         if (!::listColumn.isInitialized) return
-        if (editor.visibility != View.VISIBLE) renderList()
+        if (editor.visibility != View.VISIBLE) {
+            renderList()
+            renderRightPane()
+        }
     }
 
     override fun onBack(): Boolean {
@@ -129,18 +217,158 @@ class FilesPage(
         }
     }
 
-    override fun saveState(): JSONObject = JSONObject().put("path", current.absolutePath)
+    override fun saveState(): JSONObject = JSONObject().put("path", current.absolutePath).put("rightPath", rightDir?.absolutePath ?: "")
 
-    override fun menuItems(): List<String> = listOf("回到工作区目录", "上一级", "刷新", "新建文件", "新建文件夹")
+    override fun menuItems(): List<String> = listOf("回到工作区目录", "上一级", "刷新", "新建文件", "新建文件夹", if (dualPane) "切换为单栏" else "双栏显示")
 
     override fun onMenuItem(label: String) {
         when (label) {
-            "回到工作区目录" -> open(host.root)
-            "上一级" -> current.parentFile?.let { open(it) }
-            "刷新" -> renderList()
-            "新建文件" -> newFile()
-            "新建文件夹" -> newFolder()
+            "回到工作区目录" -> {
+                open(host.root)
+            }
+
+            "上一级" -> {
+                current.parentFile?.let { open(it) }
+            }
+
+            "刷新" -> {
+                renderList()
+                renderRightPane()
+            }
+
+            "新建文件" -> {
+                newFile()
+            }
+
+            "新建文件夹" -> {
+                newFolder()
+            }
+
+            "双栏显示" -> {
+                dualPane = true
+                if (rightDir == null) rightDir = current
+                applyDualPane()
+                renderRightPane()
+                renderList()
+            }
+
+            "切换为单栏" -> {
+                dualPane = false
+                activeSide = Side.LEFT
+                applyDualPane()
+                renderList()
+            }
         }
+    }
+
+    // -------------------------------------------------------------- 右栏
+
+    private fun renderRightPane() {
+        if (!dualPane || !::rightColumn.isInitialized) return
+        val dir = rightDir ?: current
+        rightColumn.removeAllViews()
+        rightColumn.addView(groupHeader("右栏"))
+        rightColumn.addViews(
+            cardGroup(
+                listOf(
+                    cardRow(R.drawable.ic_arrow_up, "上一级") {
+                        dir.parentFile?.let {
+                            rightDir = it
+                            renderRightPane()
+                            updateSideLabels()
+                        }
+                    },
+                    cardRow(R.drawable.ic_file_add, "新建文件") { newFile(dir) },
+                    cardRow(R.drawable.ic_file, "复制到当前目录") { copyCurrentToRight() },
+                ),
+            ),
+        )
+        rightColumn.addView(groupSpacing())
+        val files = rightFiles()
+        val dirs = files.filter { it.isDirectory }
+        val docs = files.filterNot { it.isDirectory }
+        if (dirs.isNotEmpty()) {
+            rightColumn.addView(groupHeader("目录"))
+            rightColumn.addViews(cardGroup(dirs.map { rightEntryRow(it, true) }))
+            rightColumn.addView(groupSpacing())
+        }
+        rightColumn.addView(groupHeader("文件"))
+        if (docs.isEmpty()) {
+            rightColumn.addView(hint("此目录下没有文件"))
+        } else {
+            rightColumn.addViews(cardGroup(docs.map { rightEntryRow(it, false) }))
+        }
+        rightColumn.addView(tail())
+        rightColumn.alpha = 0f
+        rightColumn
+            .animate()
+            .alpha(1f)
+            .setDuration(Motion.PANEL_MS)
+            .setInterpolator(Motion.standard)
+            .start()
+    }
+
+    private fun rightEntryRow(
+        file: File,
+        isDir: Boolean,
+    ): View =
+        cardRow(
+            if (isDir) R.drawable.ic_folder else fileIcon(file.name),
+            file.name,
+            if (isDir) "目录" else readableSize(file.length()),
+            null,
+            minHeightDp = 48,
+            click = {
+                if (isDir) {
+                    rightDir = file
+                    renderRightPane()
+                    updateSideLabels()
+                } else {
+                    openFileSmart(file)
+                }
+            },
+        )
+
+    /** 当前选中的文件（用于复制/移动到另一栏）。 */
+    private var selectedFile: File? = null
+
+    private fun pickFile(file: File) {
+        selectedFile = file
+        toast("已选中 ${file.name}，可用右栏的「复制到此」")
+        renderRightPane()
+    }
+
+    private fun copyCurrentToRight() {
+        val file = selectedFile
+        if (file == null) {
+            toast("先在文件页选一个文件")
+            return
+        }
+        val target = rightDir ?: current
+        copyFileToDir(file, target)
+    }
+
+    /** 把一个文件复制到指定目录，然后刷新两栏。 */
+    private fun copyFileToDir(
+        file: File,
+        dir: File,
+    ) {
+        val target = File(dir, file.name)
+        if (target.exists()) {
+            toast("同名文件已存在")
+            return
+        }
+        host.background(
+            work = { runCatching { file.copyTo(target) != null }.getOrDefault(false) },
+            then = { ok ->
+                toast(if (ok) "已复制到 ${dir.name}" else "复制失败")
+                if (ok) {
+                    renderList()
+                    renderRightPane()
+                }
+            },
+            onError = { toast("复制失败") },
+        )
     }
 
     // -------------------------------------------------------------- 目录浏览
@@ -148,6 +376,12 @@ class FilesPage(
     private fun resolveInitial(): File {
         val path = saved.optString("path")
         val candidate = if (path.isEmpty()) host.root else File(path)
+        // 双栏时把右栏位置也恢复回来，回到上次离开时的布局。
+        val savedRight = saved.optString("rightPath")
+        if (savedRight.isNotEmpty()) {
+            val dir = File(savedRight)
+            if (dir.isDirectory) rightDir = dir
+        }
         return if (candidate.isDirectory) candidate else host.root
     }
 
@@ -503,13 +737,16 @@ class FilesPage(
             file.name,
             detail,
             trailing,
-            minHeightDp = 64,
+            minHeightDp = 48,
             click = {
                 when {
                     isDir -> open(file)
 
                     // 压缩包点开＝进目录：与文件夹同一种交互，不弹菜单也不跳编辑器
                     ArchiveKit.isArchive(file) -> enterArchive(file)
+
+                    // 双栏时先选中，再点一次才打开；避免一碰就跳走，选不中文件。
+                    dualPane && selectedFile != file -> pickFile(file)
 
                     else -> openFileSmart(file)
                 }
