@@ -1240,7 +1240,7 @@ class FilesPage(
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setTextColor(onSurface)
                 setPadding(dp(16f), dp(16f), dp(16f), dp(24f))
-                textIsSelectable = true
+                setTextIsSelectable(true)
             }
         markdownPreview =
             ScrollView(host).apply {
