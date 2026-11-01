@@ -92,6 +92,8 @@ data class SettingsPage(
 object SettingsData {
     val home: List<SettingRow> =
         listOf(
+            SettingRow.Header("Coda Bot"),
+            SettingRow.Category("coda_bot", "Coda Bot", "形象、人设、记忆与陪伴设置", R.drawable.ic_person),
             SettingRow.Header("基础设置"),
             SettingRow.Category("system", "系统", "运行状态、存储与日志", R.drawable.ic_settings),
             SettingRow.Category("general", "通用", "界面语言与交互行为", R.drawable.ic_chat),
@@ -112,7 +114,6 @@ object SettingsData {
             // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
             SettingRow.Header("实验性功能"),
             SettingRow.Category("webui", "Web UI", "局域网网页端，运行时从 GitHub 拉取", R.drawable.ic_globe),
-            SettingRow.Category("pet", "宠物", "形象、提示方式与动态效果", R.drawable.ic_logo_spark),
             SettingRow.Header("数据与统计"),
             SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
             // 日志是诊断入口，和"使用统计"同属"看清应用在做什么"这一类，归到数据与统计下。

@@ -282,6 +282,11 @@ class SettingsDetailActivity :
             PAGE_PET -> {
                 SettingsData.pet(store, this)
             }
+            PAGE_CODA_BOT -> {
+                startActivity(Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
+                finish()
+                SettingsData.system(this)
+            }
 
             PAGE_WEB_UI -> {
                 SettingsData.webUi(store, this)
@@ -339,7 +344,9 @@ class SettingsDetailActivity :
                         renderPage()
                     }
                 }
-
+                "coda_bot" -> {
+                    startActivity(Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
+                }
                 else -> {
                     Unit
                 }
@@ -3563,6 +3570,7 @@ class SettingsDetailActivity :
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
         const val PAGE_PET = "pet"
+        const val PAGE_CODA_BOT = "coda_bot"
         const val PAGE_WEB_UI = "webui"
         const val PAGE_PET_APPEARANCE = "pet_appearance"
         const val PAGE_PET_PLACES = "pet_places"

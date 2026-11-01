@@ -495,7 +495,8 @@ class MainActivity : BaseActivity() {
         }
 
         buildDrawer()
-        setupPetBar()
+        // 宠物动画已迁到 Personal Agent 页面，Coding Agent 会话不再创建宠物栏。
+        findViewById<android.view.View>(R.id.pet_bar_host)?.visibility = android.view.View.GONE
         attachZController()
         requestStoragePermissionIfNeeded()
 
@@ -712,6 +713,16 @@ class MainActivity : BaseActivity() {
                 }
             },
         )
+        val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        actions.addView(
+            createActionRow(inflater, actions, R.drawable.ic_person, botProfile.name) {
+                startActivity(android.content.Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(2) },
+        )
         // 新对话与设置之间的间隔比「历史列表与动作项」再小一半。
         actions.addView(
             createActionRow(inflater, actions, R.drawable.ic_settings, R.string.nav_settings) {
@@ -746,10 +757,18 @@ class MainActivity : BaseActivity() {
         iconRes: Int,
         titleRes: Int,
         onClick: () -> Unit,
+    ): View = createActionRow(inflater, container, iconRes, getString(titleRes), onClick)
+
+    private fun createActionRow(
+        inflater: LayoutInflater,
+        container: LinearLayout,
+        iconRes: Int,
+        title: CharSequence,
+        onClick: () -> Unit,
     ): View =
         inflater.inflate(R.layout.view_drawer_action, container, false).apply {
             findViewById<ImageView>(R.id.action_icon).setImageResource(iconRes)
-            findViewById<TextView>(R.id.action_title).setText(titleRes)
+            findViewById<TextView>(R.id.action_title).text = title
             setOnClickListener {
                 onClick()
                 drawerLayout.closeDrawer(Gravity.LEFT)

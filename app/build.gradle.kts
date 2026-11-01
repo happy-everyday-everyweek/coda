@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.chaquo.python")
 }
 
 android {
@@ -91,6 +92,28 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+    ndk {
+        abiFilters += listOf("arm64-v8a")
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.12"
+        buildPython("/usr/bin/python3.12")
+        pip {
+            install("-r", "../kernel/maibot-lite/requirements-lite.txt")
+        }
+    }
+    sourceSets {
+        getByName("main") {
+            srcDirs(
+                "../kernel/maibot-lite/src",
+                "../kernel/maibot-lite/prompts",
+                "../kernel/maibot-lite/locales",
+            )
+        }
     }
 }
 

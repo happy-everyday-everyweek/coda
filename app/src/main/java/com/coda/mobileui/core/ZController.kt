@@ -1130,6 +1130,9 @@ class ZController private constructor(
 
     fun workspacePath(): String = Workspaces.root(app).absolutePath
 
+    /** Personal Agent 规划工具只操作宿主当前打开的编码会话。 */
+    fun activeSessionId(): String? = currentSessionId
+
     /**
      * 新建会话。
      *
