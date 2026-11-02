@@ -87,8 +87,9 @@ jobs:
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android24-clang"
           export PYO3_CROSS=1
           export PYO3_CROSS_PYTHON_VERSION=3.12
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
           mkdir -p app/wheels
-          (cd /tmp/pc/pydantic_core-2.50.2 && maturin build --release --target aarch64-linux-android --interpreter python3 --out "$GITHUB_WORKSPACE/app/wheels")
+          (cd /tmp/pc/pydantic_core-2.50.2 && maturin build --release --target aarch64-linux-android --interpreter "$PYTHON_BIN" --out "$GITHUB_WORKSPACE/app/wheels")
           python - <<'PY'
           import glob, os, re, zipfile
           for whl in glob.glob('app/wheels/pydantic_core-*.whl'):
