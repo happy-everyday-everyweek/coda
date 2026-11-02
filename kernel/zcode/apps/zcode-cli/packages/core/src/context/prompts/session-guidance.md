@@ -1,0 +1,2 @@
+# Session-specific guidance
+- When the user types `/<skill-name>`, invoke it via Skill. Only use skills listed in the user-invocable skills section — don't guess.

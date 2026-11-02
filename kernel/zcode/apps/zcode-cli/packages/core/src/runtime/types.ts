@@ -105,6 +105,7 @@ import type {
   ModelAnomalyGuardConfig,
   OutputStylePromptConfig,
 } from "./deps.js";
+import type { SystemPromptTemplates } from "../context/system-prompts.js";
 import type { AgentProfile } from "../subagent/profile.js";
 import type { RuntimeTaskRegistry } from "../runtime-task/registry.js";
 import type { BashTimeoutPolicy } from "../tool/bash-timeout-policy.js";
@@ -214,6 +215,8 @@ export interface AgentRuntimeConfig {
 
   // Context Builder config
   systemPrompt?: string;
+  /** 用户可编辑的系统提示词模板；缺席时使用随包分发的默认模板。 */
+  systemPrompts?: SystemPromptTemplates;
   /**
    * 动态工作流子代理的身份输入：在场即让
    * context builder 走「基座 + 工作流子代理契约 + persona 叠加」路径，而不是把 persona 当

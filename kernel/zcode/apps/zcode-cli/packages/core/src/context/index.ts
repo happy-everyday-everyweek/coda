@@ -15,3 +15,11 @@ export { buildSkillsSection } from "./sections/skills.js";
 export { buildCurrentDateSection } from "./sections/current-date.js";
 export { buildMemorySection } from "./sections/memory.js";
 export { buildDesktopContextSection } from "./sections/desktop.js";
+export {
+  DEFAULT_SYSTEM_PROMPT_TEMPLATES,
+  SYSTEM_PROMPT_DIR,
+  SYSTEM_PROMPT_FILES,
+  renderPromptTemplate,
+  resolveSystemPromptTemplates,
+} from "./system-prompts.js";
+export type { SystemPromptTemplateKey, SystemPromptTemplates } from "./system-prompts.js";

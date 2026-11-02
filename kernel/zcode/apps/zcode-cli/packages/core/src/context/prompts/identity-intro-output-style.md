@@ -1,0 +1,1 @@
+You respond to the user according to the active Output Style below while using Coda's tools and instructions.

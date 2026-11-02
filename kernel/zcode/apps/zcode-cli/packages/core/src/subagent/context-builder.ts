@@ -23,6 +23,8 @@ export interface SubagentContextBuilderConfig {
   skillMetadataBudget?: number;
   skills?: ContextBuilderConfig["skills"];
   userInstructions?: ContextBuilderConfig["userInstructions"];
+  /** 与主 Agent 共用同一份可编辑系统提示词模板。 */
+  systemPrompts?: ContextBuilderConfig["systemPrompts"];
 }
 
 const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" as const };
@@ -104,7 +106,7 @@ export function createSubagentContextBuilder(
 }
 
 function buildSubagentContextSections(config: SubagentContextBuilderConfig): ContextSection[] {
-  const sections: ContextSection[] = [buildCliPrefixSection()];
+  const sections: ContextSection[] = [buildCliPrefixSection(config.systemPrompts)];
   const agentPrompt = config.agentPrompt.trimEnd();
   if (agentPrompt) {
     sections.push(
@@ -125,7 +127,7 @@ function buildSubagentContextSections(config: SubagentContextBuilderConfig): Con
       source: "subagent_notes",
       cacheHint: "stable",
       // ZCode by design：后续 Subagent system block 统一自带双换行左边界。
-      content: `\n\n${buildSubagentCommonNotes()}`,
+      content: `\n\n${buildSubagentCommonNotes(config.systemPrompts)}`,
     }),
     createSubagentSection({
       name: "Subagent Environment",
@@ -135,7 +137,7 @@ function buildSubagentContextSections(config: SubagentContextBuilderConfig): Con
         agentPrompt: config.agentPrompt,
         envInfo: config.envInfo,
         model: config.model,
-      })}`,
+      }, config.systemPrompts)}`,
     }),
   );
 
@@ -192,5 +194,6 @@ function toBaseContextBuilderConfig(config: SubagentContextBuilderConfig): Conte
     currentDate: config.currentDate,
     skillMetadataBudget: config.skillMetadataBudget,
     skills: config.skills,
+    systemPrompts: config.systemPrompts,
   };
 }

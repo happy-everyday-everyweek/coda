@@ -24,7 +24,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-prompt-templates.mjs",
     "clean": "node ../../scripts/clean-dist.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src --no-ignore",

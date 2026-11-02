@@ -13,6 +13,7 @@ import {
 import { omitMcpServers, resolveTrustedOfficialCuaServerNames } from "../mcp-config.js";
 import { resolveDefaultEmbeddedSearchBackend } from "./embedded-search-backend.js";
 import { getProjectMemoryRoot } from "./paths.js";
+import { loadSystemPromptTemplates } from "./system-prompt-files.js";
 import type { ZCodeAppOptions } from "./types.js";
 import {
   resolveRegistryOwnedModelSelection,
@@ -141,6 +142,8 @@ export function resolveAppRuntimeConfig(input: {
       ...userInstructions,
       workingDirectory: userInstructions.workingDirectory ?? workingDirectory,
     },
+    // 系统提示词从 HOME/.zcode/system-prompts/ 读取；首次启动写入默认模板。
+    systemPrompts: loadSystemPromptTemplates((options.env ?? process.env).HOME),
     skillMetadataBudget:
       options.runtimeConfig?.skillMetadataBudget ?? configResult.config.skills.metadataBudget,
     toolConcurrency: {

@@ -4,11 +4,13 @@
 
 import type { ContextSection } from "../types.js";
 import { estimateTokens } from "../utils.js";
+import { resolveSystemPromptTemplates, type SystemPromptTemplates } from "../system-prompts.js";
 
-const CLI_PREFIX_PROMPT = "You are Coda, an interactive coding agent";
-
-export function buildCliPrefixSection(): ContextSection {
-  const content = CLI_PREFIX_PROMPT;
+/** 产品身份前缀。文案来自用户可编辑的 cli-prefix.md。 */
+export function buildCliPrefixSection(
+  templates: SystemPromptTemplates = resolveSystemPromptTemplates(undefined),
+): ContextSection {
+  const content = templates.cliPrefix.trim();
 
   return {
     name: "CLI Prefix",

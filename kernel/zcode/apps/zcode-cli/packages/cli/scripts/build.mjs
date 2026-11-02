@@ -247,6 +247,8 @@ export const buildCli = async ({
     // 函数/类名，避免依赖 name 的诊断与注册逻辑被 esbuild 标识符压缩影响。
     keepNames: minify,
     legalComments: "none",
+    // 系统提示词模板是 .md 文本，随 core 的 dist 一起复制；打包时按文本内联。
+    loader: { ".md": "text" },
     logLevel: "info",
     minify,
     metafile: true,
