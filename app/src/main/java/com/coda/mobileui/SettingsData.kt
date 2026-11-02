@@ -92,8 +92,6 @@ data class SettingsPage(
 object SettingsData {
     val home: List<SettingRow> =
         listOf(
-            SettingRow.Header("Coda Bot"),
-            SettingRow.Category("coda_bot", "Coda Bot", "形象、人设、记忆与陪伴设置", R.drawable.ic_person),
             SettingRow.Header("基础设置"),
             SettingRow.Category("system", "系统", "运行状态、存储与日志", R.drawable.ic_settings),
             SettingRow.Category("general", "通用", "界面语言与交互行为", R.drawable.ic_chat),
@@ -110,6 +108,7 @@ object SettingsData {
             SettingRow.Category("commands", "命令", "管理 .md 命令文件", R.drawable.ic_terminal),
             SettingRow.Category("automations", "定时任务", "按计划自动运行任务", R.drawable.ic_clock),
             SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
+            SettingRow.Category("coda_bot", "Coda Bot", "形象、人设、记忆与陪伴设置", R.drawable.ic_person),
             // 实验性功能：默认全部关闭，开启即代表用户知情尝试。Web UI 的前端资产
             // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
             SettingRow.Header("实验性功能"),

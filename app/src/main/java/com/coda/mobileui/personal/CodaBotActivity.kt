@@ -1,7 +1,9 @@
 package com.coda.mobileui.personal
 
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.speech.RecognizerIntent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -32,7 +34,7 @@ import com.google.android.material.card.MaterialCardView
 
 /** Personal Agent 的唯一页面：聊天态和 Coda Bot 设置态共用同一入口。 */
 class CodaBotActivity : BaseActivity() {
-    private enum class Page { CHAT, ROOT, APPEARANCE, PERSONA, MEMORY, MODELS, CHAT_SETTINGS }
+    private enum class Page { CHAT, ROOT, APPEARANCE, PERSONA, PROMPT, MEMORY, MODELS, CHAT_SETTINGS }
     private lateinit var profile: CodaBotProfile
     private var page = Page.CHAT
     private lateinit var root: FrameLayout
@@ -101,9 +103,16 @@ class CodaBotActivity : BaseActivity() {
         column.addView(host, LinearLayout.LayoutParams(-1, -2))
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(4), dp(14), dp(10))
+            gravity = Gravity.BOTTOM
+            setPadding(dp(10), dp(4), dp(14), dp(10))
         }
+        composer.addView(ImageButton(this).apply {
+            setImageResource(R.drawable.ic_add)
+            setColorFilter(attr(com.google.android.material.R.attr.colorOnSurface))
+            background = null
+            contentDescription = "添加附件"
+            setOnClickListener { pickAttachment() }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { setMargins(0, 0, dp(6), dp(5)) })
         val box = MaterialCardView(this).apply {
             radius = dp(25).toFloat()
             setCardBackgroundColor(attr(com.google.android.material.R.attr.colorSurfaceContainer))
@@ -126,6 +135,14 @@ class CodaBotActivity : BaseActivity() {
             setPadding(dp(10), dp(11), dp(8), dp(11))
         }
         row.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
+        val voice = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_mic)
+            setColorFilter(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
+            background = null
+            contentDescription = "语音输入"
+            setOnClickListener { startVoiceInput() }
+        }
+        row.addView(voice, LinearLayout.LayoutParams(dp(40), dp(40)).apply { setMargins(0, dp(4), 0, dp(4)) })
         val send = ImageButton(this).apply {
             setImageResource(R.drawable.ic_arrow_up)
             setColorFilter(attr(com.google.android.material.R.attr.colorOnPrimary))
@@ -134,9 +151,19 @@ class CodaBotActivity : BaseActivity() {
                 setColor(attr(androidx.appcompat.R.attr.colorPrimary))
             }
             contentDescription = "发送"
+            visibility = View.GONE
             setOnClickListener { sendMessage() }
         }
         row.addView(send, LinearLayout.LayoutParams(dp(40), dp(40)).apply { setMargins(0, dp(4), 0, dp(4)) })
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val hasText = !s.isNullOrBlank()
+                voice.visibility = if (hasText) View.GONE else View.VISIBLE
+                send.visibility = if (hasText) View.VISIBLE else View.GONE
+            }
+        })
         box.addView(row)
         composer.addView(box, LinearLayout.LayoutParams(0, -2, 1f))
         column.addView(composer, LinearLayout.LayoutParams(-1, -2))
@@ -159,8 +186,7 @@ class CodaBotActivity : BaseActivity() {
             setBackgroundColor(attr(com.google.android.material.R.attr.colorSurface))
         }
         bar.addView(ImageButton(this).apply {
-            setImageResource(R.drawable.ic_arrow_up)
-            rotation = 270f
+            setImageResource(R.drawable.ic_arrow_back)
             setColorFilter(attr(com.google.android.material.R.attr.colorOnSurface))
             background = null
             setOnClickListener { if (page == Page.CHAT) finish() else render(Page.CHAT) }
@@ -168,6 +194,10 @@ class CodaBotActivity : BaseActivity() {
         val labels = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setBackgroundResource(R.drawable.bg_pill)
+            isClickable = true
+            setOnClickListener { action() }
         }
         labels.addView(TextView(this).apply {
             text = title
@@ -184,10 +214,13 @@ class CodaBotActivity : BaseActivity() {
         })
         bar.addView(labels, LinearLayout.LayoutParams(0, -1, 1f))
         bar.addView(ImageButton(this).apply {
-            setImageResource(R.drawable.ic_settings)
+            setImageResource(if (page == Page.CHAT) R.drawable.ic_phone else R.drawable.ic_settings)
             setColorFilter(attr(com.google.android.material.R.attr.colorOnSurface))
             background = null
-            setOnClickListener { action() }
+            setOnClickListener {
+                if (page == Page.CHAT) toast("电话功能将在后续接入")
+                else action()
+            }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         return bar
     }
@@ -207,6 +240,7 @@ class CodaBotActivity : BaseActivity() {
             Page.ROOT -> settingsRoot(body)
             Page.APPEARANCE -> settingsAppearance(body)
             Page.PERSONA -> settingsPersona(body)
+            Page.PROMPT -> settingsPrompt(body)
             Page.MEMORY -> settingsMemory(body)
             Page.MODELS -> settingsModels(body)
             Page.CHAT_SETTINGS -> settingsChat(body)
@@ -239,6 +273,7 @@ class CodaBotActivity : BaseActivity() {
         section(body, "Bot")
         row(body, "形象与名称", "五个动画形象、本地图片", "appearance") { render(Page.APPEARANCE) }
         row(body, "人设", profile.persona.take(24), "persona") { render(Page.PERSONA) }
+        row(body, "系统提示词", if (profile.systemPrompt.isBlank()) "自由编辑附加指令" else profile.systemPrompt.take(24), "prompt") { render(Page.PROMPT) }
         row(body, "了解你", "${profile.userName} · ${if (profile.userAbout.isBlank()) "补充你的资料" else profile.userAbout.take(16)}", "memory") { render(Page.MEMORY) }
         section(body, "模型与对话")
         row(body, "规划模型", modelLabel(profile.plannerProviderId, profile.plannerModel, "未选择"), "planner") { render(Page.MODELS) }
@@ -291,6 +326,16 @@ class CodaBotActivity : BaseActivity() {
         }
     }
 
+    private fun settingsPrompt(body: LinearLayout) {
+        section(body, "系统提示词")
+        text(body, "完全由你编辑。保存后与 Bot 人设一起注入规划与回复模型；Coda 只额外保留“读文件/终端仅用于补充上下文与核验”的安全边界。")
+        textArea(body, "例如回复长度、语气、边界、规划方式等。", profile.systemPrompt) {
+            profile.systemPrompt = it
+            CodaBotStore.saveProfile(this, profile)
+            toast("系统提示词已保存")
+        }
+    }
+
     private fun settingsMemory(body: LinearLayout) {
         section(body, "了解你")
         inputRow(body, "你的称呼", profile.userName) {
@@ -340,6 +385,39 @@ class CodaBotActivity : BaseActivity() {
         section(body, "数据")
         row(body, "导出聊天记录", "保存为本地文本", "export") { exportMessages() }
         row(body, "清除聊天记录", "不影响 Coding Agent", "clear") { clearMessages() }
+    }
+
+    private fun startVoiceInput() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "说吧，我在听")
+        }
+        runCatching { startActivityForResult(intent, REQ_VOICE) }
+            .onFailure { toast("当前设备没有可用的语音识别服务") }
+    }
+
+    private fun pickAttachment() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        runCatching { startActivityForResult(intent, REQ_ATTACHMENT) }
+            .onFailure { toast("无法打开文件选择器") }
+    }
+
+    private fun importAttachment(uri: android.net.Uri) {
+        val dir = java.io.File(filesDir, "coda-bot/attachments").apply { mkdirs() }
+        val name = (uri.lastPathSegment ?: "attachment").substringAfterLast('/')
+        val target = java.io.File(dir, "${System.currentTimeMillis()}-$name")
+        runCatching {
+            contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use(input::copyTo)
+            } ?: error("无法读取文件")
+            val current = input.text?.toString().orEmpty()
+            input.setText(current + (if (current.isBlank()) "" else "\n") + "请读取附件文件：${target.absolutePath}")
+            input.setSelection(input.text?.length ?: 0)
+            toast("已附加：$name")
+        }.onFailure { toast(it.message ?: "附件读取失败") }
     }
 
     private fun sendMessage() {
@@ -561,16 +639,32 @@ class CodaBotActivity : BaseActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_AVATAR && resultCode == RESULT_OK) {
-            val uri = data?.data ?: return
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            CodaBotStore.setAvatar(this, profile.avatarSkinId, uri)
-            profile = CodaBotStore.profile(this)
-            render(Page.APPEARANCE)
+        if (resultCode != Activity.RESULT_OK) return
+        when (requestCode) {
+            REQ_AVATAR -> {
+                val uri = data?.data ?: return
+                runCatching {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                CodaBotStore.setAvatar(this, profile.avatarSkinId, uri)
+                profile = CodaBotStore.profile(this)
+                render(Page.APPEARANCE)
+            }
+            REQ_VOICE -> {
+                val text = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
+                if (text.isNotBlank()) {
+                    val current = input.text?.toString().orEmpty()
+                    input.setText(current + text)
+                    input.setSelection(input.text?.length ?: 0)
+                }
+            }
+            REQ_ATTACHMENT -> data?.data?.let(::importAttachment)
         }
     }
 
     companion object {
         private const val REQ_AVATAR = 7101
+        private const val REQ_VOICE = 7102
+        private const val REQ_ATTACHMENT = 7103
     }
 }

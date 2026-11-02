@@ -21,6 +21,10 @@ class CodaBotRuntime(
         fun onError(message: String)
 
         fun controlSession(action: String, text: String): String
+
+        fun readFile(path: String): String
+
+        fun runTerminal(command: String, timeoutSeconds: Int): String
     }
 
     @Volatile
@@ -52,10 +56,15 @@ class CodaBotRuntime(
                         return runCatching { controlCodingAgent(action, text) }
                             .getOrElse { failure -> result(false, failure.message ?: "控制失败") }
                     }
+
+                    override fun readFile(path: String): String = readContextFile(path)
+
+                    override fun runTerminal(command: String, timeoutSeconds: Int): String =
+                        runContextCommand(command, timeoutSeconds)
                 },
                 profile.name,
                 profile.userName,
-                profile.persona,
+                listOf(profile.persona, profile.systemPrompt).filter { it.isNotBlank() }.joinToString("\n\n"),
                 profile.userAbout,
                 providerConfig(profile.plannerProviderId, profile.plannerModel, "planner"),
                 providerConfig(profile.replyProviderId, profile.replyModel, "reply"),
@@ -93,6 +102,57 @@ class CodaBotRuntime(
             return result(false, "Coding Agent 操作超时")
         }
         return result(ok, message)
+    }
+
+    private fun readContextFile(path: String): String {
+        if (path.isBlank()) return result(false, "路径为空")
+        val file = File(path).canonicalFile
+        val allowedRoots = listOf(
+            File(context.filesDir, "coda-bot").canonicalFile,
+            File(codingAgent.workspacePath()).canonicalFile,
+        )
+        if (allowedRoots.none { root -> file.path == root.path || file.path.startsWith(root.path + File.separator) }) {
+            return result(false, "只能读取附件目录或当前工作区文件")
+        }
+        if (!file.isFile) return result(false, "文件不存在")
+        if (file.length() > 1_048_576L) return result(false, "文件超过 1MB 上限")
+        return runCatching {
+            JSONObject().put("ok", true).put("content", file.readText()).toString()
+        }.getOrElse { result(false, it.message ?: "读取失败") }
+    }
+
+    private fun runContextCommand(command: String, timeoutSeconds: Int): String {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) return result(false, "命令为空")
+        val dangerous = listOf("rm -rf /", "mkfs", "reboot", "shutdown", ":(){", "> /dev/block")
+        if (dangerous.any { trimmed.contains(it, ignoreCase = true) }) {
+            return result(false, "该命令不允许用于上下文核验")
+        }
+        val timeout = timeoutSeconds.coerceIn(1, 30)
+        val cwd = File(codingAgent.workspacePath()).apply { mkdirs() }
+        val output = File.createTempFile("coda-bot-check-", ".txt", context.cacheDir)
+        return runCatching {
+            val process = ProcessBuilder("/system/bin/sh", "-c", trimmed)
+                .directory(cwd)
+                .redirectErrorStream(true)
+                .redirectOutput(output)
+                .apply {
+                    environment()["PATH"] = "/system/bin:/system/xbin:/vendor/bin"
+                }
+                .start()
+            val finished = process.waitFor(timeout.toLong(), java.util.concurrent.TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                return@runCatching result(false, "命令超过 ${timeout}s")
+            }
+            val text = output.readText().take(65_536)
+            JSONObject()
+                .put("ok", process.exitValue() == 0)
+                .put("output", text)
+                .put("message", if (process.exitValue() == 0) "完成" else "退出码 ${process.exitValue()}")
+                .toString()
+        }.getOrElse { result(false, it.message ?: "命令执行失败") }
+            .also { output.delete() }
     }
 
     private fun result(ok: Boolean, message: String): String =

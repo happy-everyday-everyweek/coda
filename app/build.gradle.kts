@@ -109,12 +109,22 @@ chaquopy {
     sourceSets {
         getByName("main") {
             srcDirs(
-                "../kernel/maibot-lite/src",
-                "../kernel/maibot-lite/prompts",
-                "../kernel/maibot-lite/locales",
+                layout.buildDirectory.dir("maibot-core/src").get().asFile.absolutePath,
+                layout.buildDirectory.dir("maibot-core/prompts").get().asFile.absolutePath,
+                layout.buildDirectory.dir("maibot-core/locales").get().asFile.absolutePath,
             )
         }
     }
+}
+
+val syncMaibotCore by tasks.registering(Exec::class) {
+    workingDir = rootProject.projectDir
+    commandLine("bash", "tools/sync-maibot-core.sh")
+    outputs.dir(layout.buildDirectory.dir("maibot-core"))
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(syncMaibotCore)
 }
 
 // 显式声明构建工具链，不再依赖构建机的 JAVA_HOME。

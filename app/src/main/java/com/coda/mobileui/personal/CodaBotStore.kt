@@ -13,6 +13,7 @@ data class CodaBotProfile(
     var avatarSkinId: String = "clawd",
     var avatarUri: String = "",
     var persona: String = "温和、真诚、有分寸，以自然的方式陪我聊天。",
+    var systemPrompt: String = "",
     var userName: String = "你",
     var userAbout: String = "",
     var plannerProviderId: String = "",
@@ -40,6 +41,7 @@ object CodaBotStore {
             avatarSkinId = p.getString("avatar_skin", "clawd") ?: "clawd",
             avatarUri = p.getString("avatar_uri", "") ?: "",
             persona = p.getString("persona", CodaBotProfile().persona) ?: CodaBotProfile().persona,
+            systemPrompt = p.getString("system_prompt", "") ?: "",
             userName = p.getString("user_name", "你")?.trim()?.ifEmpty { "你" } ?: "你",
             userAbout = p.getString("user_about", "") ?: "",
             plannerProviderId = p.getString("planner_provider", "") ?: "",
@@ -60,6 +62,7 @@ object CodaBotStore {
             .putString("avatar_skin", profile.avatarSkinId)
             .putString("avatar_uri", profile.avatarUri)
             .putString("persona", profile.persona)
+            .putString("system_prompt", profile.systemPrompt)
             .putString("user_name", profile.userName)
             .putString("user_about", profile.userAbout)
             .putString("planner_provider", profile.plannerProviderId)
