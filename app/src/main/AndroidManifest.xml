@@ -36,6 +36,11 @@
             android:exported="false"
             android:theme="@style/Theme.Coda.SettingsDetail" />
         <activity
+            android:name=".PromptEditorActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Coda.SettingsDetail" />
+        <activity
             android:name=".workspace.WorkspaceActivity"
             android:exported="false"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|uiMode"

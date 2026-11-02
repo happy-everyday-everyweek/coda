@@ -20,6 +20,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatDelegate
 import com.coda.mobileui.core.AgentAssets
+import com.coda.mobileui.core.AgentPrompt
 import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.AsrClient
 import com.coda.mobileui.core.AsrTester
@@ -29,6 +30,7 @@ import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
+import com.coda.mobileui.core.DataBackup
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.PhoneControl
@@ -57,6 +59,24 @@ class SettingsDetailActivity :
 
     /** 进入插件页时的一次性内置市场源同步标记。 */
     private var marketSyncedOnEnter = false
+
+    /** 提示词编辑器返回后刷新状态（字数与是否已设置会变）。 */
+    private val promptEditorLauncher =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+        ) { renderPage() }
+
+    /** 导出备份：由系统文件选择器给出目标 zip。 */
+    private val backupExportLauncher =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/zip"),
+        ) { uri: Uri? -> if (uri != null) doExportBackup(uri) }
+
+    /** 导入备份：选一个 zip 文件。 */
+    private val backupImportLauncher =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+        ) { uri: Uri? -> if (uri != null) doImportBackup(uri) }
 
     /** 供应商配置防抖重启（连续保存合并为一次）。 */
     private val providerRestartHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -278,6 +298,12 @@ class SettingsDetailActivity :
             PAGE_HOOKS -> {
                 SettingsData.hooks(this, ZController.get(this).workspacePath())
             }
+            PAGE_PROMPT -> {
+                SettingsData.prompt(this)
+            }
+            PAGE_BACKUP -> {
+                SettingsData.backup(this)
+            }
 
             PAGE_PET -> {
                 SettingsData.pet(store, this)
@@ -472,6 +498,30 @@ class SettingsDetailActivity :
 
     override fun onValueClick(key: String) {
         when {
+            key == "prompt_edit_global" -> {
+                openPromptEditor(false)
+            }
+
+            key == "prompt_edit_workspace" -> {
+                openPromptEditor(true)
+            }
+
+            key == "prompt_clear_global" -> {
+                clearPrompt(false)
+            }
+
+            key == "prompt_clear_workspace" -> {
+                clearPrompt(true)
+            }
+
+            key == "backup_export" -> {
+                backupExportLauncher.launch(DataBackup.defaultFileName())
+            }
+
+            key == "backup_import" -> {
+                confirmImportBackup()
+            }
+
             key == "check_update" -> {
                 checkUpdate()
             }
@@ -1126,6 +1176,90 @@ class SettingsDetailActivity :
             snack("导出失败")
         }
         sheet.dismiss()
+    }
+
+    // ------------------------------------------------------------ 系统提示词与数据备份
+
+    /** 打开 AGENTS.md 编辑器。 */
+    private fun openPromptEditor(workspace: Boolean) {
+        promptEditorLauncher.launch(
+            Intent(this, PromptEditorActivity::class.java)
+                .putExtra(
+                    PromptEditorActivity.EXTRA_SCOPE,
+                    if (workspace) PromptEditorActivity.SCOPE_WORKSPACE else PromptEditorActivity.SCOPE_GLOBAL,
+                ),
+        )
+    }
+
+    private fun promptFile(workspace: Boolean): File =
+        if (workspace) AgentPrompt.workspaceFile(this) else AgentPrompt.globalFile(this)
+
+    /** 清空一份提示词：删掉文件就等于回到内置提示词。 */
+    private fun clearPrompt(workspace: Boolean) {
+        val target = promptFile(workspace)
+        if (!target.isFile) {
+            snack("当前没有自定义提示词")
+            return
+        }
+        sheetConfirm("清空提示词", "将删除 ${target.absolutePath}，回到内置提示词。", "清空") {
+            val err = AgentPrompt.save(target, "")
+            if (err == null) {
+                snack("已清空")
+                renderPage()
+            } else {
+                snack("清空失败：$err")
+            }
+        }
+    }
+
+    private fun confirmImportBackup() {
+        sheetConfirm(
+            "导入数据",
+            "将用备份文件覆盖设置、模型供应商与两份提示词，随后重启核心；会话记录不受影响。",
+            "选择文件",
+        ) {
+            backupImportLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+        }
+    }
+
+    private fun doExportBackup(uri: Uri) {
+        snack("正在导出…")
+        Thread {
+            val result = runCatching { DataBackup.export(this, uri) }
+            runOnUiThread {
+                val count = result.getOrNull()
+                if (count != null && count > 0) {
+                    snack("已导出 $count 项数据")
+                } else {
+                    snack("导出失败：${result.exceptionOrNull()?.message ?: "没有可写入的内容"}")
+                }
+                renderPage()
+            }
+        }.start()
+    }
+
+    private fun doImportBackup(uri: Uri) {
+        snack("正在导入…")
+        val controller = ZController.get(this)
+        Thread {
+            val result = runCatching { DataBackup.import(this, uri) }
+            val count = result.getOrNull()
+            val err = result.exceptionOrNull()?.message
+            runOnUiThread {
+                if (count == null || count <= 0) {
+                    snack("导入失败：${err ?: "文件里没有可恢复的数据"}")
+                    return@runOnUiThread
+                }
+                controller.restartCore { ok, msg ->
+                    runOnUiThread {
+                        val tip = if (ok) "已导入 $count 项，核心已重启" else "已导入 $count 项，但核心重启失败：$msg"
+                        android.widget.Toast.makeText(this, tip, android.widget.Toast.LENGTH_LONG).show()
+                        // 主题、字号等设置可能变了，重建页面让它们立即生效。
+                        recreate()
+                    }
+                }
+            }
+        }.start()
     }
 
     /** 按行首级别标记过滤；续行（堆栈）跟随上一条显示。 */
@@ -3562,6 +3696,8 @@ class SettingsDetailActivity :
         const val PAGE_MCP = "mcp"
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
+        const val PAGE_PROMPT = "prompt"
+        const val PAGE_BACKUP = "backup"
         const val PAGE_PET = "pet"
         const val PAGE_WEB_UI = "webui"
         const val PAGE_PET_APPEARANCE = "pet_appearance"
