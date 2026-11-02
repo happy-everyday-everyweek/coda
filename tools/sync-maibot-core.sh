@@ -31,8 +31,10 @@ cp -a "$SRC/locales" "$OUT/locales"
 # rpds 的纯 Python 实现，替代 rpds-py 原生包；referencing 以顶层模块方式导入。
 mkdir -p "$OUT/rpds"
 cp -a "$SRC/rpds/__init__.py" "$OUT/rpds/__init__.py"
-# 仅用于读取内核版本号，不包含示例配置或模型密钥。
-cp -a "$SRC/pyproject.toml" "$OUT/pyproject.toml"
+# msgpack 兼容垫片：只为未启用的旧库迁移保留导入，不再安装原生包。
+mkdir -p "$OUT/msgpack"
+cp -a "$SRC/msgpack/__init__.py" "$OUT/msgpack/__init__.py"
+# pyproject.toml 由 app/src/main/python 提供；重复复制会让 Chaquopy 报 DuplicateFileCopying。
 
 find "$OUT" -type d -name __pycache__ -prune -exec rm -rf {} +
 find "$OUT" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
