@@ -127,6 +127,15 @@ tasks.named("preBuild").configure {
     dependsOn(syncMaibotCore)
 }
 
+// Chaquopy 的源码合并任务直接读 build/maibot-core；Gradle 9 要求显式声明这层依赖，
+// 否则会以「使用了别的任务的输出却没声明依赖」直接失败（CI 在 mergeDebugPythonSources 上报过）。
+tasks.configureEach {
+    val usesCoreSources =
+        name.contains("Python") &&
+            (name.startsWith("merge") || name.startsWith("extract") || name.startsWith("install"))
+    if (usesCoreSources) dependsOn(syncMaibotCore)
+}
+
 // 显式声明构建工具链，不再依赖构建机的 JAVA_HOME。
 // AGP 8.13 与 Gradle 8.13 的运行要求同为 JDK 17（与上面的编译目标一致），
 // 声明后本地与 CI 行为一致；缺了它，构建机 JDK 版本不同就会在同步阶段直接失败。
