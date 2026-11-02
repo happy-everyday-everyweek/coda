@@ -106,6 +106,8 @@ chaquopy {
             install("-r", "../kernel/maibot-lite/requirements-lite.txt")
             // pydantic-core 没有 Android 轮子，由 CI 交叉编译后放到这里。
             options("--find-links", file("wheels").absolutePath)
+            // pydantic-core 没有 Android 轮子，由 Chaquopy 用 sdist 交叉编译。
+            options("--no-binary", "pydantic-core")
         }
     }
     sourceSets {

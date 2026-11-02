@@ -50,6 +50,9 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      PYO3_CROSS: "1"
+      PYO3_CROSS_PYTHON_VERSION: "3.12"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,44 +77,6 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           "$SDKMANAGER" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null 2>&1
           echo "NDK=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
-
-      - name: 交叉编译 pydantic-core
-        run: |
-          python -m pip install -q maturin
-          rm -rf /tmp/pc && mkdir -p /tmp/pc
-          python -m pip download pydantic-core==2.50.2 --no-binary=:all: --no-deps -d /tmp/pc
-          tar -xf /tmp/pc/pydantic_core-2.50.2.tar.gz -C /tmp/pc
-          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export CC_aarch64_linux_android="$TC/aarch64-linux-android24-clang"
-          export AR_aarch64_linux_android="$TC/llvm-ar"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android24-clang"
-          export PYO3_CROSS=1
-          export PYO3_CROSS_PYTHON_VERSION=3.12
-          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
-          ln -sf "$PYTHON_BIN" /usr/local/bin/python3.12
-          mkdir -p app/wheels
-          (cd /tmp/pc/pydantic_core-2.50.2 && maturin build --release --target aarch64-linux-android --interpreter python3.12 --out "$GITHUB_WORKSPACE/app/wheels")
-          python - <<'PY'
-          import glob, os, re, zipfile
-          for whl in glob.glob('app/wheels/pydantic_core-*.whl'):
-              if 'android' in whl:
-                  continue
-              base = os.path.basename(whl)
-              parts = base[:-4].split('-')
-              parts[-1] = 'android_24_arm64_v8a'
-              target = 'app/wheels/' + '-'.join(parts) + '.whl'
-              with zipfile.ZipFile(whl) as src, zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as dst:
-                  for item in src.infolist():
-                      data = src.read(item.filename)
-                      if item.filename.endswith('.dist-info/WHEEL'):
-                          text = data.decode()
-                          text = re.sub(r'^Tag: (.+)-(.+)-(.+)$', r'Tag: \1-\2-android_24_arm64_v8a', text, flags=re.M)
-                          data = text.encode()
-                      dst.writestr(item, data)
-              os.remove(whl)
-              print('wheel', target)
-          PY
-          ls -l app/wheels
 
       - name: 构建 APK
         run: |
