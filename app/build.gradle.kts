@@ -104,14 +104,14 @@ chaquopy {
         version = "3.12"
         pip {
             install("-r", "../kernel/maibot-lite/requirements-lite.txt")
+            // pydantic-core 没有 Android 轮子，由 CI 交叉编译后放到这里。
+            options("--find-links", file("wheels").absolutePath)
         }
     }
     sourceSets {
         getByName("main") {
             srcDirs(
-                layout.buildDirectory.dir("maibot-core/src").get().asFile.absolutePath,
-                layout.buildDirectory.dir("maibot-core/prompts").get().asFile.absolutePath,
-                layout.buildDirectory.dir("maibot-core/locales").get().asFile.absolutePath,
+                layout.buildDirectory.dir("maibot-core").get().asFile.absolutePath,
             )
         }
     }

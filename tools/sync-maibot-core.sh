@@ -28,6 +28,9 @@ cp -a "$SRC/src/agent/config.py" "$OUT/src/agent/"
 
 cp -a "$SRC/prompts" "$OUT/prompts"
 cp -a "$SRC/locales" "$OUT/locales"
+# rpds 的纯 Python 实现，替代 rpds-py 原生包；referencing 以顶层模块方式导入。
+mkdir -p "$OUT/rpds"
+cp -a "$SRC/rpds/__init__.py" "$OUT/rpds/__init__.py"
 # 仅用于读取内核版本号，不包含示例配置或模型密钥。
 cp -a "$SRC/pyproject.toml" "$OUT/pyproject.toml"
 

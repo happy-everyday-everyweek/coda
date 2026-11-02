@@ -48,7 +48,7 @@ class CodaBotActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         setupEdgeToEdge()
         profile = CodaBotStore.profile(this)
-        runtime = CodaBotRuntime(this, profile) { message -> runOnUiThread { addBubble(message) } }
+        runtime = createRuntime()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (page == Page.CHAT) finish() else render(Page.CHAT)
@@ -60,7 +60,40 @@ class CodaBotActivity : BaseActivity() {
     override fun onResume() {
         super.onResume()
         profile = CodaBotStore.profile(this)
+        refreshRuntimeIfNeeded()
         if (page == Page.APPEARANCE) render(page)
+    }
+
+    /** 当前运行时对应的配置指纹；人设、提示词、模型一变就需要重建。 */
+    private var runtimeSignature = ""
+
+    private fun signatureOf(p: CodaBotProfile): String =
+        listOf(
+            p.name,
+            p.persona,
+            p.systemPrompt,
+            p.userName,
+            p.userAbout,
+            p.plannerProviderId,
+            p.plannerModel,
+            p.replyProviderId,
+            p.replyModel,
+        ).joinToString("\u0001")
+
+    private fun createRuntime(): CodaBotRuntime {
+        runtimeSignature = signatureOf(profile)
+        return CodaBotRuntime(this, profile) { message -> runOnUiThread { addBubble(message) } }
+    }
+
+    /**
+     * 设置里改了人设、系统提示词或规划/回复模型后，内核的配置在运行时创建时就定下了，
+     * 只改文件不会生效，所以这里按指纹判断并重建一次。
+     */
+    private fun refreshRuntimeIfNeeded() {
+        if (!::runtime.isInitialized) return
+        if (signatureOf(profile) == runtimeSignature) return
+        runCatching { runtime.close() }
+        runtime = createRuntime()
     }
 
     override fun onDestroy() {
@@ -70,6 +103,8 @@ class CodaBotActivity : BaseActivity() {
 
     private fun render(next: Page) {
         page = next
+        // 从设置态回到聊天态时，人设/提示词/模型可能刚被改过，先对齐运行时再画界面。
+        if (next == Page.CHAT) refreshRuntimeIfNeeded()
         root = FrameLayout(this)
         root.setBackgroundColor(attr(com.google.android.material.R.attr.colorSurface))
         setContentView(root)
