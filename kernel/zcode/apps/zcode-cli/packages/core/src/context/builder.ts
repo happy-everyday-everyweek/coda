@@ -21,6 +21,7 @@ import { buildRequestUserContextSection } from "./sections/request-user-context.
 import { buildCurrentDateSection } from "./sections/current-date.js";
 import { buildMemorySection } from "./sections/memory.js";
 import { buildDesktopContextSection } from "./sections/desktop.js";
+import { resolveSystemPromptTemplates } from "./system-prompts.js";
 import {
   buildContextManagementSection,
   buildDynamicBehaviorSection,
@@ -84,6 +85,7 @@ export class ContextBuilder {
     const activeOutputStyle = this.config.outputStyle?.prompt.trim()
       ? this.config.outputStyle
       : undefined;
+    const templates = resolveSystemPromptTemplates(this.config.systemPrompts);
     const customSystemPrompt = this.config.customSystemPrompt?.trim();
     const hasCustomSystemPrompt = Boolean(customSystemPrompt);
     // 工作流子代理身份：第三条路径。与
@@ -101,7 +103,7 @@ export class ContextBuilder {
     // 「You are Coda, an interactive coding agent」对一个
     // 只对脚本说话、可能连读文件工具都没有的子代理是错的身份，且走在正确身份段前面。
     if (!isWorkflowActor) {
-      sections.push(buildCliPrefixSection());
+      sections.push(buildCliPrefixSection(templates));
     }
 
     // 2. Stable agent behavior or custom prompt body
@@ -116,9 +118,9 @@ export class ContextBuilder {
         }),
       );
     } else if (workflowActor !== undefined) {
-      sections.push(buildWorkflowActorIdentitySection(workflowActor));
+      sections.push(buildWorkflowActorIdentitySection(workflowActor, templates));
     } else {
-      sections.push(buildIdentitySection(activeOutputStyle));
+      sections.push(buildIdentitySection(activeOutputStyle, templates));
     }
 
     // 3. Dynamic system context
@@ -129,12 +131,12 @@ export class ContextBuilder {
     // guidance——契约里已把 Report outcomes faithfully 搬过去），保留 memory 与其后各段。
     if (!hasCustomSystemPrompt) {
       if (!isWorkflowActor && this.config.presentationSurface === "zcode_desktop") {
-        sections.push(buildDesktopContextSection());
+        sections.push(buildDesktopContextSection(templates));
       }
 
       // behaviour part right after stable sp...
       if (!isWorkflowActor) {
-        sections.push(buildDynamicBehaviorSection());
+        sections.push(buildDynamicBehaviorSection(templates));
       }
 
       // Session-specific guidance
@@ -143,6 +145,7 @@ export class ContextBuilder {
         : buildSessionGuidanceSection(
             this.config.guidanceToolNames ?? [],
             (this.config.skills?.skills.length ?? 0) > 0,
+            templates,
           );
       if (sessionGuidanceSection) {
         sections.push(sessionGuidanceSection);
@@ -150,7 +153,7 @@ export class ContextBuilder {
 
       // Memory
       if (this.config.memoryRoot) {
-        const memorySection = buildMemorySection(this.config.memoryRoot);
+        const memorySection = buildMemorySection(this.config.memoryRoot, templates);
         if (memorySection) {
           sections.push(memorySection);
         }
@@ -164,7 +167,7 @@ export class ContextBuilder {
       }
 
       // Context Management
-      sections.push(buildContextManagementSection());
+      sections.push(buildContextManagementSection(templates));
 
       const gitSystemContextSection = buildGitSystemContextSection(this.config.envInfo);
       if (gitSystemContextSection) {

@@ -13,6 +13,7 @@ import type {
 } from "@zcode/contracts";
 import type { AutoCompactPolicyConfig } from "../compact/index.js";
 import type { AgentProfile } from "../subagent/profile.js";
+import type { SystemPromptTemplates } from "./system-prompts.js";
 
 export type {
   EnvInfo,
@@ -115,6 +116,8 @@ export interface ContextBuilderConfig {
   embeddedSearchEnabled?: boolean;
   skillMetadataBudget?: number;
   customSystemPrompt?: string;
+  /** 用户可编辑的系统提示词模板；缺席时使用随包分发的默认模板。 */
+  systemPrompts?: SystemPromptTemplates;
   /**
    * 动态工作流子代理（workflow child）的身份输入。在场即走 builder 的第三条路径：
    * 基座段（CLI prefix、安全行、Harness、memory）+ 工作流子代理契约 + persona 叠加，

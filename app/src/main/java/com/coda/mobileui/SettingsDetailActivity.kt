@@ -35,6 +35,7 @@ import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.ProviderStore
+import com.coda.mobileui.core.SystemPrompts
 import com.coda.mobileui.core.SilentUpdater
 import com.coda.mobileui.core.WebUiHost
 import com.coda.mobileui.core.ZController
@@ -60,11 +61,17 @@ class SettingsDetailActivity :
     /** 进入插件页时的一次性内置市场源同步标记。 */
     private var marketSyncedOnEnter = false
 
-    /** 提示词编辑器返回后刷新状态（字数与是否已设置会变）。 */
+    /** 提示词编辑器返回后刷新状态；系统提示词改过则重启内核生效。 */
+    private var pendingPromptRestart = false
+
     private val promptEditorLauncher =
         registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
-        ) { renderPage() }
+        ) { result ->
+            if (pendingPromptRestart && result.resultCode == RESULT_OK) restartCoreForPrompts()
+            pendingPromptRestart = false
+            renderPage()
+        }
 
     /** 导出备份：由系统文件选择器给出目标 zip。 */
     private val backupExportLauncher =
@@ -301,6 +308,9 @@ class SettingsDetailActivity :
             PAGE_PROMPT -> {
                 SettingsData.prompt(this)
             }
+            PAGE_SYSTEM_PROMPT -> {
+                SettingsData.systemPrompt(this)
+            }
             PAGE_BACKUP -> {
                 SettingsData.backup(this)
             }
@@ -520,6 +530,10 @@ class SettingsDetailActivity :
 
             key == "backup_import" -> {
                 confirmImportBackup()
+            }
+
+            key.startsWith("sysprompt_edit:") -> {
+                openSystemPromptEditor(key.removePrefix("sysprompt_edit:"))
             }
 
             key == "check_update" -> {
@@ -1182,6 +1196,7 @@ class SettingsDetailActivity :
 
     /** 打开 AGENTS.md 编辑器。 */
     private fun openPromptEditor(workspace: Boolean) {
+        pendingPromptRestart = false
         promptEditorLauncher.launch(
             Intent(this, PromptEditorActivity::class.java)
                 .putExtra(
@@ -1193,6 +1208,35 @@ class SettingsDetailActivity :
 
     private fun promptFile(workspace: Boolean): File =
         if (workspace) AgentPrompt.workspaceFile(this) else AgentPrompt.globalFile(this)
+
+    /** 打开某一份系统提示词模板；保存后需要重启内核才会被读取。 */
+    private fun openSystemPromptEditor(name: String) {
+        val item = SystemPrompts.itemOf(name)
+        if (item == null) {
+            snack("未知的模板文件：$name")
+            return
+        }
+        pendingPromptRestart = true
+        promptEditorLauncher.launch(
+            Intent(this, PromptEditorActivity::class.java)
+                .putExtra(PromptEditorActivity.EXTRA_PATH, SystemPrompts.fileOf(this, name).absolutePath)
+                .putExtra(PromptEditorActivity.EXTRA_TITLE, item.title)
+                .putExtra(PromptEditorActivity.EXTRA_HINT, item.summary),
+        )
+    }
+
+    private fun restartCoreForPrompts() {
+        snack("已保存，正在重启内核…")
+        ZController.get(this).restartCore { ok, msg ->
+            runOnUiThread {
+                android.widget.Toast.makeText(
+                    this,
+                    if (ok) "内核已重启，新的系统提示词已生效" else "内核重启失败：$msg",
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
 
     /** 清空一份提示词：删掉文件就等于回到内置提示词。 */
     private fun clearPrompt(workspace: Boolean) {
@@ -3697,6 +3741,7 @@ class SettingsDetailActivity :
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
         const val PAGE_PROMPT = "prompt"
+        const val PAGE_SYSTEM_PROMPT = "systemprompt"
         const val PAGE_BACKUP = "backup"
         const val PAGE_PET = "pet"
         const val PAGE_WEB_UI = "webui"

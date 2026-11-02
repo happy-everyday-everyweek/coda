@@ -116,6 +116,7 @@ export function createContextBuilderFromSnapshot(
       skillMetadataBudget: this.config.skillMetadataBudget,
       skills: this.skillLoadOutcome,
       userInstructions: this.config.subagentContext.userInstructions,
+      systemPrompts: this.config.systemPrompts,
     });
   }
 
@@ -134,6 +135,7 @@ export function createContextBuilderFromSnapshot(
     embeddedSearchEnabled: resolveRuntimeEmbeddedSearchEnabled(this),
     skillMetadataBudget: this.config.skillMetadataBudget,
     customSystemPrompt: this.config.systemPrompt,
+    systemPrompts: this.config.systemPrompts,
     workflowActor: this.config.workflowActor,
     language: this.config.language,
     outputStyle: this.config.outputStyle,

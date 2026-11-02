@@ -1,5 +1,10 @@
 import type { EnvInfo, Model } from "@zcode/contracts";
 import { isEnvInfoGitRepository } from "../context/sections/env-info.js";
+import {
+  renderPromptTemplate,
+  resolveSystemPromptTemplates,
+  type SystemPromptTemplates,
+} from "../context/system-prompts.js";
 
 export interface SubagentEnvironmentContextOptions {
   agentPrompt: string;
@@ -7,34 +12,29 @@ export interface SubagentEnvironmentContextOptions {
   model?: Model;
 }
 
-export function buildSubagentCommonNotes(): string {
-  return [
-    "Notes:",
-    "- Agent threads always have their cwd reset between bash calls, as a result please only use absolute file paths.",
-    "- In your final response, share file paths (always absolute, never relative) that are relevant to the task. Include code snippets only when the exact text is load-bearing (e.g., a bug you found, a function signature the caller asked for) — do not recap code you merely read.",
-    "- For clear communication with the user the assistant MUST avoid using emojis.",
-    '- Do not use a colon before tool calls. Text like "Let me read the file:" followed by a read tool call should just be "Let me read the file." with a period.',
-    "- Do NOT Write report/summary/findings/analysis .md files. Return findings directly as your final assistant message — the parent agent reads your text output, not files you create.",
-  ].join("\n");
+/** 子代理通用注意事项，文案来自 subagent-notes.md。 */
+export function buildSubagentCommonNotes(
+  templates: SystemPromptTemplates = resolveSystemPromptTemplates(undefined),
+): string {
+  return templates.subagentNotes.trim();
 }
 
+/** 子代理环境说明，文案来自 subagent-environment.md，变量在渲染时替换。 */
 export function buildSubagentEnvironmentContext(
   options: SubagentEnvironmentContextOptions,
+  templates: SystemPromptTemplates = resolveSystemPromptTemplates(undefined),
 ): string {
   const { envInfo, model } = options;
   const modelLine = model
-    ? [`You are powered by the model named ${model.providerId}/${model.modelId}.`]
-    : [];
+    ? `You are powered by the model named ${model.providerId}/${model.modelId}.`
+    : "";
 
-  return [
-    "Here is useful information about the environment you are running in:",
-    "<env>",
-    `Working directory: ${envInfo.cwd}`,
-    `Is directory a git repo: ${isEnvInfoGitRepository(envInfo) ? "Yes" : "No"}`,
-    `Platform: ${envInfo.platform}`,
-    `Shell: ${envInfo.shell}`,
-    `OS Version: ${envInfo.osVersion}`,
-    "</env>",
-    ...modelLine,
-  ].join("\n");
+  return renderPromptTemplate(templates.subagentEnvironment, {
+    cwd: envInfo.cwd,
+    isGitRepo: isEnvInfoGitRepository(envInfo) ? "Yes" : "No",
+    platform: envInfo.platform,
+    shell: envInfo.shell,
+    osVersion: envInfo.osVersion,
+    modelLine,
+  }).trim();
 }

@@ -16,15 +16,17 @@ import com.google.android.material.color.MaterialColors
 import java.io.File
 
 /**
- * 系统提示词编辑器。
+ * 纯文本模板编辑器。
  *
- * 用户级与工作区两份 AGENTS.md 都按纯文本自由编辑，不做结构化限制；保存即写回文件，
- * 核心在建立新会话时读取。清空等于删除该文件，回到内置提示词。
+ * 系统提示词模板与 AGENTS.md 都用它：给一个文件路径就能编辑，保存即写回，
+ * 不做结构化限制。清空等于删除文件，调用方据此决定是恢复默认还是表示未设置。
  */
 class PromptEditorActivity : BaseActivity() {
     private lateinit var file: File
     private lateinit var input: EditText
     private lateinit var meta: TextView
+    private var title = ""
+    private var hint = ""
 
     /** 进入页面时的内容，用于判断有没有未保存的修改。 */
     private var initial = ""
@@ -32,9 +34,21 @@ class PromptEditorActivity : BaseActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val scope = intent.getStringExtra(EXTRA_SCOPE) ?: SCOPE_GLOBAL
-        file = if (scope == SCOPE_WORKSPACE) AgentPrompt.workspaceFile(this) else AgentPrompt.globalFile(this)
+        val path = intent.getStringExtra(EXTRA_PATH)
+        file =
+            if (!path.isNullOrEmpty()) {
+                File(path)
+            } else if (scope == SCOPE_WORKSPACE) {
+                AgentPrompt.workspaceFile(this)
+            } else {
+                AgentPrompt.globalFile(this)
+            }
+        title =
+            intent.getStringExtra(EXTRA_TITLE)
+                ?: if (scope == SCOPE_WORKSPACE) "工作区提示词" else "用户级提示词"
+        hint = intent.getStringExtra(EXTRA_HINT) ?: "在这里写指令，例如：回答先给结论，再给依据"
         initial = AgentPrompt.read(file)
-        setContentView(buildUi(scope))
+        setContentView(buildUi())
         input.setText(initial)
         input.setSelection(input.text.length)
         updateMeta()
@@ -48,7 +62,7 @@ class PromptEditorActivity : BaseActivity() {
         )
     }
 
-    private fun buildUi(scope: String): View {
+    private fun buildUi(): View {
         val root =
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -77,16 +91,18 @@ class PromptEditorActivity : BaseActivity() {
         )
         bar.addView(
             TextView(this).apply {
-                text = if (scope == SCOPE_WORKSPACE) "工作区提示词" else "用户级提示词"
+                text = title
                 textSize = 18f
                 setTextColor(onSurface)
                 setPadding(dp(6), 0, 0, 0)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
         bar.addView(
             TextView(this).apply {
-                text = "清空"
+                text = "恢复默认"
                 textSize = 15f
                 setTextColor(onSurfaceVariant)
                 setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -126,7 +142,7 @@ class PromptEditorActivity : BaseActivity() {
                 setHorizontallyScrolling(false)
                 setTextColor(onSurface)
                 setHintTextColor(onSurfaceVariant)
-                hint = "在这里写指令，例如：回答先给结论，再给依据"
+                hint = this@PromptEditorActivity.hint
                 setPadding(dp(16), dp(12), dp(16), dp(12))
             }
         input.addTextChangedListener(
@@ -172,7 +188,7 @@ class PromptEditorActivity : BaseActivity() {
             Toast.makeText(this, "保存失败：$err", Toast.LENGTH_LONG).show()
             return
         }
-        Toast.makeText(this, "已保存，新会话生效", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
         setResult(RESULT_OK)
         finish()
     }
@@ -180,10 +196,10 @@ class PromptEditorActivity : BaseActivity() {
     private fun confirmClear() {
         CodaSheet(this)
             .compact()
-            .title("清空提示词")
-            .subtitle("将删除这个文件并回到内置提示词，此操作不可撤销。")
+            .title("恢复默认")
+            .subtitle("将删除这个文件；下次内核启动会写回默认内容。")
             .secondaryAction("取消") { it.dismiss() }
-            .primaryAction("清空") { sheet ->
+            .primaryAction("恢复") { sheet ->
                 sheet.dismiss()
                 AgentPrompt.save(file, "")
                 setResult(RESULT_OK)
@@ -211,5 +227,8 @@ class PromptEditorActivity : BaseActivity() {
         const val EXTRA_SCOPE = "scope"
         const val SCOPE_GLOBAL = "global"
         const val SCOPE_WORKSPACE = "workspace"
+        const val EXTRA_PATH = "path"
+        const val EXTRA_TITLE = "title"
+        const val EXTRA_HINT = "hint"
     }
 }

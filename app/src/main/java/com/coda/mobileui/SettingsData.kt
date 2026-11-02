@@ -10,6 +10,7 @@ import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.DataBackup
 import com.coda.mobileui.core.HooksCore
+import com.coda.mobileui.core.SystemPrompts
 import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.PhoneAccessibilityService
 import com.coda.mobileui.core.PhoneControl
@@ -110,7 +111,8 @@ object SettingsData {
             SettingRow.Category("commands", "命令", "管理 .md 命令文件", R.drawable.ic_terminal),
             SettingRow.Category("automations", "定时任务", "按计划自动运行任务", R.drawable.ic_clock),
             SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
-            SettingRow.Category("prompt", "系统提示词", "自由编辑用户级与工作区指令文件", R.drawable.ic_edit),
+            SettingRow.Category("systemprompt", "系统提示词", "编辑内核内置的提示词段落", R.drawable.ic_edit),
+            SettingRow.Category("prompt", "指令文件", "AGENTS.md：追加给 Agent 的指令", R.drawable.ic_file),
             // 实验性功能：默认全部关闭，开启即代表用户知情尝试。Web UI 的前端资产
             // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
             SettingRow.Header("实验性功能"),
@@ -1025,25 +1027,43 @@ object SettingsData {
         )
 
     /**
-     * 系统提示词页。
+     * 指令文件页。
      *
-     * 两份 AGENTS.md 都是纯文本，用户可自由编辑；编辑动作由 SettingsDetailActivity
-     * 打开 [PromptEditorActivity] 完成，这里只负责展示状态与入口。
+     * AGENTS.md 是追加给 Agent 的指令，不等于系统提示词；两份文件都由
+     * SettingsDetailActivity 打开 [PromptEditorActivity] 编辑。
      */
     fun prompt(ctx: Context): SettingsPage {
         val global = AgentPrompt.globalFile(ctx)
         val workspace = AgentPrompt.workspaceFile(ctx)
         val rows = mutableListOf<SettingRow>()
         rows += SettingRow.Header("用户级")
-        rows += SettingRow.Value("编辑提示词", "${AgentPrompt.summary(global)} · 对全部会话生效", "prompt_edit_global")
-        rows += SettingRow.Value("清空提示词", "删除文件后回到内置提示词", "prompt_clear_global")
+        rows += SettingRow.Value("编辑指令", "${AgentPrompt.summary(global)} · 对全部会话生效", "prompt_edit_global")
+        rows += SettingRow.Value("清空指令", "删除文件后不再追加任何指令", "prompt_clear_global")
         rows += SettingRow.Header("工作区")
-        rows += SettingRow.Value("编辑提示词", "${AgentPrompt.summary(workspace)} · 只对当前工作区生效", "prompt_edit_workspace")
-        rows += SettingRow.Value("清空提示词", "删除工作区根目录下的 AGENTS.md", "prompt_clear_workspace")
+        rows += SettingRow.Value("编辑指令", "${AgentPrompt.summary(workspace)} · 只对当前工作区生效", "prompt_edit_workspace")
+        rows += SettingRow.Value("清空指令", "删除工作区根目录下的 AGENTS.md", "prompt_clear_workspace")
         rows += SettingRow.Header("说明")
         rows += SettingRow.Value("生效方式", "新会话建立时读取；改完新建会话即可")
         rows += SettingRow.Value("用户级文件", global.absolutePath)
         rows += SettingRow.Value("工作区文件", workspace.absolutePath)
+        return SettingsPage("指令文件", rows)
+    }
+
+    /**
+     * 系统提示词页。
+     *
+     * 内核把系统提示词拆成若干段落文件，启动时读取；这里直接编辑那些文件。
+     * 修改后需要重启内核生效。
+     */
+    fun systemPrompt(ctx: Context): SettingsPage {
+        val rows = mutableListOf<SettingRow>()
+        rows += SettingRow.Header("模板文件")
+        SystemPrompts.all.forEach { item ->
+            rows += SettingRow.Value(item.title, "${item.summary} · ${SystemPrompts.summary(ctx, item)}", "sysprompt_edit:${item.file}")
+        }
+        rows += SettingRow.Header("说明")
+        rows += SettingRow.Value("目录", SystemPrompts.dir(ctx).absolutePath)
+        rows += SettingRow.Value("生效方式", "修改后重启内核；清空即恢复默认内容")
         return SettingsPage("系统提示词", rows)
     }
 
