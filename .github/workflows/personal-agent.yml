@@ -93,6 +93,11 @@ jobs:
           python tools/build-pydantic-wheel.py
           ls -l app/wheels
 
+      - name: 构建 rpds-py 垫片轮子
+        run: |
+          python tools/build-rpds-wheel.py
+          ls -l app/wheels
+
       - name: 构建 APK
         run: |
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"

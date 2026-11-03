@@ -28,12 +28,13 @@ cp -a "$SRC/src/agent/config.py" "$OUT/src/agent/"
 
 cp -a "$SRC/prompts" "$OUT/prompts"
 cp -a "$SRC/locales" "$OUT/locales"
-# rpds 的纯 Python 实现，替代 rpds-py 原生包；referencing 以顶层模块方式导入。
-mkdir -p "$OUT/rpds"
-cp -a "$SRC/rpds/__init__.py" "$OUT/rpds/__init__.py"
+# rpds 的纯 Python 实现由 app/wheels 里的 rpds-py 垫片轮子提供，这里不再复制，避免同名文件重复。
 # msgpack 兼容垫片：只为未启用的旧库迁移保留导入，不再安装原生包。
 mkdir -p "$OUT/msgpack"
 cp -a "$SRC/msgpack/__init__.py" "$OUT/msgpack/__init__.py"
+# jieba 只有 sdist，内置纯 Python 源码给 Chaquopy 直接打包。
+mkdir -p "$OUT/jieba"
+cp -a "$SRC/jieba/." "$OUT/jieba/"
 # pyproject.toml 由 app/src/main/python 提供；重复复制会让 Chaquopy 报 DuplicateFileCopying。
 
 find "$OUT" -type d -name __pycache__ -prune -exec rm -rf {} +
