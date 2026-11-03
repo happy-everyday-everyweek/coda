@@ -93,6 +93,20 @@ jobs:
           python tools/build-pydantic-wheel.py
           ls -l app/wheels
 
+      - name: 构建 jiter wheel
+        run: |
+          python -m pip download jiter==0.18.0 --no-binary=:all: --no-deps -d /tmp/jt
+          tar -xf /tmp/jt/jiter-0.18.0.tar.gz -C /tmp/jt
+          ls /tmp/jt/jiter-0.18.0
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$TC/aarch64-linux-android26-clang"
+          export AR_aarch64_linux_android="$TC/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android26-clang"
+          export RUSTFLAGS="-L native=/tmp/fakelib"
+          (cd /tmp/jt/jiter-0.18.0 && cargo build --release --target aarch64-linux-android -p jiter-python --features pyo3/extension-module)
+          python tools/build-jiter-wheel.py /tmp/jt/jiter-0.18.0
+          ls -l app/wheels
+
       - name: 构建 rpds-py 垫片轮子
         run: |
           python tools/build-rpds-wheel.py
