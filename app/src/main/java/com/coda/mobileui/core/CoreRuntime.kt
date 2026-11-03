@@ -324,6 +324,9 @@ class CoreRuntime(
                     env["HOME"] = homeDir.absolutePath
                     env["TMPDIR"] = tmpDir.absolutePath
                     env["PATH"] = "/system/bin:/system/xbin:/vendor/bin:/product/bin"
+                    // 内核二进制带着 Termux 的默认 openssl.cnf 路径，应用无权读取；
+                    // 显式指向空配置，避免 OpenSSL 在启动阶段直接退出（code 13）。
+                    env["OPENSSL_CONF"] = "/dev/null"
                     env["TERM"] = "xterm-256color"
                     env["LANG"] = "C.UTF-8"
                     // 终端由内置 Linux 环境提供：随包携带的 PRoot 引导集加 Alpine 根文件系统，
@@ -444,6 +447,7 @@ class CoreRuntime(
             env["HOME"] = homeDir.absolutePath
             env["TMPDIR"] = tmpDir.absolutePath
             env["PATH"] = "/system/bin:/system/xbin:/vendor/bin:/product/bin"
+            env["OPENSSL_CONF"] = "/dev/null"
             val process = pb.start()
             val output =
                 process.inputStream
