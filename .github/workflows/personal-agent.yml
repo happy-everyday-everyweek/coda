@@ -86,6 +86,9 @@ jobs:
           export CC_aarch64_linux_android="$TC/aarch64-linux-android26-clang"
           export AR_aarch64_linux_android="$TC/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android26-clang"
+          mkdir -p /tmp/fakelib
+          "$TC/aarch64-linux-android26-clang" -shared -fPIC -o /tmp/fakelib/libpython3.12.so -x c /dev/null
+          export RUSTFLAGS="-L native=/tmp/fakelib"
           (cd /tmp/pc/pydantic_core-2.50.2 && cargo build --release --target aarch64-linux-android --features pyo3/extension-module)
           python tools/build-pydantic-wheel.py
           ls -l app/wheels
