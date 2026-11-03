@@ -78,6 +78,18 @@ jobs:
           "$SDKMANAGER" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null 2>&1
           echo "NDK=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
 
+      - name: 构建 pydantic-core wheel
+        run: |
+          python -m pip download pydantic-core==2.50.2 --no-binary=:all: --no-deps -d /tmp/pc
+          tar -xf /tmp/pc/pydantic_core-2.50.2.tar.gz -C /tmp/pc
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$TC/aarch64-linux-android26-clang"
+          export AR_aarch64_linux_android="$TC/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android26-clang"
+          (cd /tmp/pc/pydantic_core-2.50.2 && cargo build --release --target aarch64-linux-android --features extension-module || cargo build --release --target aarch64-linux-android)
+          python tools/build-pydantic-wheel.py
+          ls -l app/wheels
+
       - name: 构建 APK
         run: |
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
