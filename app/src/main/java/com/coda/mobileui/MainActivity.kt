@@ -714,7 +714,7 @@ class MainActivity : BaseActivity() {
             },
         )
         val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
-        val botRow = createActionRow(inflater, actions, R.drawable.ic_person, botProfile.name) {
+        val botRow = createActionRow(inflater, actions, R.drawable.ic_ring, botProfile.name) {
                 startActivity(android.content.Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
             }
         botRow.tag = "drawer_bot"

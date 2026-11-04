@@ -29,8 +29,10 @@ import com.coda.mobileui.core.PetSkins
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.setupEdgeToEdge
 import com.coda.mobileui.topSafeInsetPx
-import com.google.android.material.color.MaterialColors
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.radiobutton.MaterialRadioButton
 
 /** Personal Agent 的唯一页面：聊天态和 Coda Bot 设置态共用同一入口。 */
 class CodaBotActivity : BaseActivity() {
@@ -589,7 +591,26 @@ class CodaBotActivity : BaseActivity() {
         title: String,
         selected: Boolean,
         click: () -> Unit,
-    ) = row(body, (if (selected) "✓  " else "") + title, "", title, click)
+    ) {
+        body.addView(MaterialCardView(this).apply {
+            radius = dp(16).toFloat()
+            strokeWidth = 0
+            cardElevation = 0f
+            setCardBackgroundColor(attr(com.google.android.material.R.attr.colorSurfaceContainerLow))
+            setOnClickListener { click() }
+            addView(LinearLayout(this@CodaBotActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(18), dp(6), dp(12), dp(6))
+                addView(label(title, 15f, com.google.android.material.R.attr.colorOnSurface), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(MaterialRadioButton(this@CodaBotActivity).apply {
+                    isChecked = selected
+                    isClickable = false
+                    isFocusable = false
+                })
+            })
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+    }
 
     private fun toggle(
         body: LinearLayout,
@@ -597,18 +618,22 @@ class CodaBotActivity : BaseActivity() {
         checked: Boolean,
         change: (Boolean) -> Unit,
     ) {
+        val switch = MaterialSwitch(this).apply {
+            isChecked = checked
+            setOnCheckedChangeListener { _, value -> change(value) }
+        }
         body.addView(MaterialCardView(this).apply {
             radius = dp(16).toFloat()
             strokeWidth = 0
             cardElevation = 0f
             setCardBackgroundColor(attr(com.google.android.material.R.attr.colorSurfaceContainerLow))
-            setOnClickListener { change(!checked) }
+            setOnClickListener { switch.toggle() }
             addView(LinearLayout(this@CodaBotActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(18), dp(12), dp(18), dp(12))
+                setPadding(dp(18), dp(6), dp(12), dp(6))
                 addView(label(title, 15f, com.google.android.material.R.attr.colorOnSurface), LinearLayout.LayoutParams(0, -2, 1f))
-                addView(label(if (checked) "开" else "关", 13f, androidx.appcompat.R.attr.colorPrimary))
+                addView(switch)
             })
         }, LinearLayout.LayoutParams(-1, -2))
     }
