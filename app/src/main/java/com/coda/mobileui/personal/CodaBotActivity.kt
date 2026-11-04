@@ -554,7 +554,7 @@ class CodaBotActivity : BaseActivity() {
         if (message.replyToText.isNotBlank()) {
             val who = if (message.replyToFromUser) profile.userName else profile.name
             content.addView(TextView(this).apply {
-                text = "$who：${message.replyToText}"
+                this.text = "$who：${message.replyToText}"
                 textSize = 12f
                 maxLines = 2
                 ellipsize = android.text.TextUtils.TruncateAt.END
