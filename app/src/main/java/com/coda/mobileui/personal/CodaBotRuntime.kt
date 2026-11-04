@@ -158,9 +158,6 @@ class CodaBotRuntime(
     private fun result(ok: Boolean, message: String): String =
         JSONObject().put("ok", ok).put("message", message).toString()
 
-    private fun currentCodingSessionId(): String =
-        context.getSharedPreferences("zcode_bridge", Context.MODE_PRIVATE).getString("current_session", "") ?: ""
-
     private fun providerConfig(providerId: String, model: String, task: String): String {
         val provider = ProviderStore.load(context).firstOrNull { it.id == providerId }
             ?: throw IllegalStateException("找不到模型供应商：$providerId")

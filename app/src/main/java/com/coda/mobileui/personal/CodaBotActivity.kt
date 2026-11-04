@@ -3,11 +3,11 @@ package com.coda.mobileui.personal
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
-import android.speech.RecognizerIntent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.speech.RecognizerIntent
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -97,7 +97,7 @@ class CodaBotActivity : BaseActivity() {
     }
 
     override fun onDestroy() {
-        runtime.close()
+        if (::runtime.isInitialized) runCatching { runtime.close() }
         super.onDestroy()
     }
 
@@ -205,7 +205,7 @@ class CodaBotActivity : BaseActivity() {
         composer.applyBottomInsetWithIme()
         val history = CodaBotStore.messages(this)
         if (history.isEmpty()) addSystemHint("这里只有你和${profile.name}，消息保存在本机。")
-        else history.forEach(::addBubble)
+        else history.forEach { addBubble(it, persist = false) }
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
@@ -385,7 +385,7 @@ class CodaBotActivity : BaseActivity() {
         section(body, "本地记忆")
         val count = CodaBotStore.messages(this).size
         text(body, "本机保存了 $count 条聊天记录。当前长期记忆仍由 MaiBot 的轻量存储范围决定，A_memorix 未接入。")
-        row(body, "聊天记录", "导出为文本", "export") { exportMessages() }
+        row(body, "聊天记录", "分享为文本", "export") { exportMessages() }
         row(body, "清除聊天记录", "只清除 Coda Bot 的本地会话", "clear") { clearMessages() }
     }
 
@@ -415,10 +415,10 @@ class CodaBotActivity : BaseActivity() {
 
     private fun settingsChat(body: LinearLayout) {
         section(body, "聊天气泡")
-        choice(body, "跟随 Coda 主题", profile.bubbleStyle == 0) { profile.bubbleStyle = 0; saveAndRender() }
+        choice(body, "标准", profile.bubbleStyle == 0) { profile.bubbleStyle = 0; saveAndRender() }
         choice(body, "紧凑", profile.bubbleStyle == 1) { profile.bubbleStyle = 1; saveAndRender() }
         section(body, "数据")
-        row(body, "导出聊天记录", "保存为本地文本", "export") { exportMessages() }
+        row(body, "导出聊天记录", "分享给其它应用", "export") { exportMessages() }
         row(body, "清除聊天记录", "不影响 Coding Agent", "clear") { clearMessages() }
     }
 
@@ -470,7 +470,7 @@ class CodaBotActivity : BaseActivity() {
         }
     }
 
-    private fun addBubble(message: CodaBotMessage) {
+    private fun addBubble(message: CodaBotMessage, persist: Boolean = true) {
         if (!::messages.isInitialized) return
         val row = LinearLayout(this).apply {
             gravity = if (message.fromUser) Gravity.END else Gravity.START
@@ -500,7 +500,7 @@ class CodaBotActivity : BaseActivity() {
         messages.addView(row, LinearLayout.LayoutParams(-1, -2))
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
         val incoming = !message.fromUser
-        if (incoming) {
+        if (incoming && persist) {
             pet.showDone(profile.name + "：我在这儿")
             CodaBotStore.appendMessage(this, message)
         }
@@ -572,6 +572,7 @@ class CodaBotActivity : BaseActivity() {
             radius = dp(16).toFloat()
             strokeWidth = 0
             cardElevation = 0f
+            this.tag = tag
             setCardBackgroundColor(attr(com.google.android.material.R.attr.colorSurfaceContainerLow))
             setOnClickListener { click() }
             addView(LinearLayout(this@CodaBotActivity).apply {

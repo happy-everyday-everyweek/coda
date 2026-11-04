@@ -321,7 +321,6 @@ class SettingsDetailActivity :
             PAGE_CODA_BOT -> {
                 startActivity(Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
                 finish()
-                SettingsData.system(this)
             }
 
             PAGE_WEB_UI -> {

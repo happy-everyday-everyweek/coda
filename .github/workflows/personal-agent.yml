@@ -4,7 +4,7 @@ on:
   push:
     branches: [personal-agent]
   pull_request:
-    branches: [personal-agent]
+    branches: [dev, personal-agent]
   workflow_dispatch:
 
 permissions:

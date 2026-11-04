@@ -1590,24 +1590,7 @@ class MainActivity : BaseActivity() {
 
     // ---------------------------------------------------------------- 宠物
 
-    /**
-     * 装配输入框上方的宠物条。
-     *
-     * 位置在 composer_container 上方的 pet_bar_host 里，收起时高度为 0，
-     * 所以不需要在别处补 padding。
-     */
-    private fun setupPetBar() {
-        val host = findViewById<android.widget.FrameLayout>(R.id.pet_bar_host) ?: return
-        if (petBar != null) return
-        val bar = PetBar(this)
-        bar.attachTo(host)
-        val colors = accentTriple()
-        bar.applySkin(this, SettingsStore.get(this).petSkinId, colors[0], colors[1], colors[2])
-        petBar = bar
-        // 点它一下就把状态重复讲一遍（相当于"再看一眼"），不做别的跳转
-        bar.petView().setOnClickListener { syncPet(force = true) }
-        applyPetSettings()
-    }
+    // Coding Agent 页面不再装配宠物条，宠物动画只在 Personal Agent 页面展示。
 
     /**
      * 把宠物相关设置应用到已经建好的控件上。

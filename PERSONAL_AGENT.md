@@ -24,4 +24,6 @@ Coda Bot 设置独立于原宠物设置，包含形象与名称、人设、了�
 
 ## Android 构建现状
 
-内核以 Git 子模块固定在 `kernel/maibot-lite`，Chaquopy 17.2 使用 Python 3.12，仅打包 arm64-v8a。Kotlin 编译由 `.github/workflows/personal-agent.yml` 独立验证。完整 APK 仍被 Android bionic 原生 wheel 阻塞：`pydantic-core`、`rapidfuzz`、`msgpack`、`watchfiles`、`rpds-py` 和 `ahocorasick-rs` 不能直接使用 manylinux 包，需要构建 Chaquopy/Android 轮子后才能完成整包与真机验证。
+内核以 Git 子模块固定在 `kernel/maibot-lite`，Chaquopy 17.2 使用 Python 3.12，仅打包 arm64-v8a。Kotlin 编译与整包构建都由 `.github/workflows/personal-agent.yml` 验证，`assembleDebug` 可产出安装包。
+
+原生依赖已收敛到三个自建轮子：`pydantic-core` 与 `jiter` 在 CI 里用 cargo 交叉编译，`rpds-py` 用纯 Python 垫片轮子满足 jsonschema 的版本下限；`jieba` 源码内置，`msgpack`、`watchfiles`、`rapidfuzz`、`ahocorasick-rs` 已从依赖清单移除。版本钉在 Chaquopy 源实际可用的上限，具体值见 `kernel/maibot-lite/requirements-lite.txt`。
