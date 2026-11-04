@@ -35,7 +35,7 @@ jobs:
       - name: 准备 Android SDK
         run: |
           SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
-          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
           "$SDKMANAGER" "build-tools;36.0.0" > /dev/null 2>&1 || true
 
       - name: 编译 Kotlin 与生成 Python 包
@@ -74,7 +74,7 @@ jobs:
       - name: 准备 Android SDK 与 NDK
         run: |
           SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
-          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
           "$SDKMANAGER" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null 2>&1
           echo "NDK=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
 
