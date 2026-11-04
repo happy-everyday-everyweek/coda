@@ -7,6 +7,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      build_apk:
+        description: 同时构建可安装的 debug APK（仅作为 Actions 产物，不进入 Release）
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,3 +50,49 @@ jobs:
             -x installDebugPythonRequirements \
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
+
+  # 只有手动触发并勾选 build_apk 时才打包：分支构建不产可安装产物，更不会进 Release。
+  apk:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYO3_CROSS: "1"
+      PYO3_CROSS_PYTHON_VERSION: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: 准备 Android SDK 与 NDK
+        run: |
+          SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
+          "$SDKMANAGER" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null 2>&1
+          echo "NDK=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: 构建 Android 轮子
+        run: tools/build-android-wheels.sh
+
+      - name: 构建 APK
+        run: |
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          ./gradlew :app:assembleDebug \
+            -Pandroid.aapt2FromMavenOverride="$AAPT2" \
+            --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coda-debug-${{ github.ref_name }}-${{ github.sha }}
+          path: app/build/outputs/apk/debug/*.apk
