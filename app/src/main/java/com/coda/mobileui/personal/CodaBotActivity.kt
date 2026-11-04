@@ -45,6 +45,9 @@ class CodaBotActivity : BaseActivity() {
     private lateinit var input: MarkdownEditText
     private lateinit var pet: PetBar
     private lateinit var runtime: CodaBotRuntime
+    private var pendingReply: CodaBotMessage? = null
+    private lateinit var replyBar: LinearLayout
+    private lateinit var replyLabel: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -138,6 +141,27 @@ class CodaBotActivity : BaseActivity() {
         }
         host.addView(pet, FrameLayout.LayoutParams(-1, -2))
         column.addView(host, LinearLayout.LayoutParams(-1, -2))
+        replyBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(2), dp(10), dp(2))
+            visibility = View.GONE
+        }
+        replyLabel = TextView(this).apply {
+            textSize = 12.5f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextColor(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
+        }
+        replyBar.addView(replyLabel, LinearLayout.LayoutParams(0, -2, 1f))
+        replyBar.addView(TextView(this).apply {
+            text = "×"
+            textSize = 18f
+            setPadding(dp(10), 0, dp(10), 0)
+            setTextColor(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
+            setOnClickListener { clearReply() }
+        })
+        column.addView(replyBar, LinearLayout.LayoutParams(-1, -2))
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.BOTTOM
@@ -460,16 +484,45 @@ class CodaBotActivity : BaseActivity() {
     private fun sendMessage() {
         val text = input.text?.toString()?.trim().orEmpty()
         if (text.isEmpty()) return
+        val quoted = pendingReply
+        clearReply()
         input.setText("")
-        val message = CodaBotMessage(fromUser = true, text = text)
+        val message = CodaBotMessage(
+            fromUser = true,
+            text = text,
+            replyToId = quoted?.id.orEmpty(),
+            replyToText = quoted?.text.orEmpty(),
+            replyToFromUser = quoted?.fromUser ?: false,
+        )
         CodaBotStore.appendMessage(this, message)
         addBubble(message)
-        runtime.send(text) { error ->
+        val payload = buildString {
+            if (quoted != null) {
+                val who = if (quoted.fromUser) profile.userName else profile.name
+                append("（回复 ").append(who).append(" 的消息：").append(quoted.text.take(200)).append("）\n")
+            }
+            append(text)
+        }
+        runtime.send(payload) { error ->
             runOnUiThread {
                 pet.showError(error)
                 toast(error)
             }
         }
+    }
+
+    private fun setPendingReply(message: CodaBotMessage) {
+        pendingReply = message
+        if (!::replyBar.isInitialized) return
+        val who = if (message.fromUser) profile.userName else profile.name
+        replyLabel.text = "回复 $who：${message.text.take(40)}"
+        replyBar.visibility = View.VISIBLE
+        input.requestFocus()
+    }
+
+    private fun clearReply() {
+        pendingReply = null
+        if (::replyBar.isInitialized) replyBar.visibility = View.GONE
     }
 
     private fun addBubble(message: CodaBotMessage, persist: Boolean = true) {
@@ -489,12 +542,32 @@ class CodaBotActivity : BaseActivity() {
         val text = TextView(this).apply {
             this.text = message.text
             textSize = 15.5f
-            setPadding(dp(14), dp(9), dp(14), dp(9))
+            setPadding(0, 0, 0, 0)
             setTextColor(
                 attr(if (message.fromUser) com.google.android.material.R.attr.colorOnPrimary else com.google.android.material.R.attr.colorOnSurface),
             )
         }
-        bubble.addView(text)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(9), dp(14), dp(9))
+        }
+        if (message.replyToText.isNotBlank()) {
+            val who = if (message.replyToFromUser) profile.userName else profile.name
+            content.addView(TextView(this).apply {
+                text = "$who：${message.replyToText}"
+                textSize = 12f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, 0, 0, dp(4))
+                setTextColor(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
+            })
+        }
+        content.addView(text)
+        bubble.addView(content)
+        bubble.setOnLongClickListener {
+            setPendingReply(message)
+            true
+        }
         row.addView(bubble, LinearLayout.LayoutParams(-2, -2).apply {
             width = (resources.displayMetrics.widthPixels * 0.78f).toInt()
             width = minOf(width, (text.paint.measureText(message.text) + dp(30)).toInt())

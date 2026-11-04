@@ -29,6 +29,9 @@ data class CodaBotMessage(
     val fromUser: Boolean,
     val text: String,
     val timestamp: Long = System.currentTimeMillis(),
+    val replyToId: String = "",
+    val replyToText: String = "",
+    val replyToFromUser: Boolean = false,
 )
 
 object CodaBotStore {
@@ -99,6 +102,9 @@ object CodaBotStore {
                 fromUser = item.getBoolean("fromUser"),
                 text = item.getString("text"),
                 timestamp = item.optLong("timestamp"),
+                replyToId = item.optString("replyToId"),
+                replyToText = item.optString("replyToText"),
+                replyToFromUser = item.optBoolean("replyToFromUser"),
             )
         }
         return result
@@ -117,7 +123,10 @@ object CodaBotStore {
                 .put("id", message.id)
                 .put("fromUser", message.fromUser)
                 .put("text", message.text)
-                .put("timestamp", message.timestamp))
+                .put("timestamp", message.timestamp)
+                .put("replyToId", message.replyToId)
+                .put("replyToText", message.replyToText)
+                .put("replyToFromUser", message.replyToFromUser))
         }
         messageFile(ctx).writeText(items.toString(2))
     }
