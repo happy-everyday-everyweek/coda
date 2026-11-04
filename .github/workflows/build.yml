@@ -1,0 +1,47 @@
+name: Build
+
+# 仓库级通用构建验证：任何分支的 push 与 PR 都跑。
+# 只做 Kotlin 编译与 Python 源码合并，不产 APK——可安装产物与版本号、签名、
+# 更新清单一律由 dev-prerelease / release 两条发布流产出，避免出现第二套口径。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 准备 Android SDK
+        run: |
+          SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
+          "$SDKMANAGER" "build-tools;36.0.0" > /dev/null 2>&1 || true
+
+      - name: 编译 Kotlin 与生成 Python 包
+        run: |
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          [ -x "$AAPT2" ] || AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)"
+          ./gradlew :app:compileDebugKotlin \
+            -x installDebugPythonRequirements \
+            -Pandroid.aapt2FromMavenOverride="$AAPT2" \
+            --stacktrace

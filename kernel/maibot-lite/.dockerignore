@@ -1,0 +1,25 @@
+.git
+__pycache__
+*.pyo
+*.pyd
+.DS_Store
+mongodb
+napcat
+docs/
+.github/
+# test
+.env
+.venv/
+.pytest_cache/
+.ruff_cache/
+.tmp_*/
+node_modules/
+dashboard/node_modules/
+data/
+logs/
+temp/
+tmp/
+mai_knowledge/
+depends-data/
+!depends-data/
+!depends-data/char_frequency.json

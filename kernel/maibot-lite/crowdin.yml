@@ -1,0 +1,22 @@
+project_id_env: CROWDIN_PROJECT_ID
+api_token_env: CROWDIN_PERSONAL_TOKEN
+base_path: .
+base_url: "https://api.crowdin.com"
+preserve_hierarchy: true
+
+export_languages:
+  - en-US
+  - ja
+  - ko
+files:
+  - source: /locales/zh-CN/*.json
+    translation: /locales/%locale%/%original_file_name%
+
+  - source: /prompts/zh-CN/**/*.prompt
+    translation: /prompts/%locale%/**/%original_file_name%
+
+  - source: /dashboard/src/i18n/locales/zh.json
+    translation: /dashboard/src/i18n/locales/%two_letters_code%.json
+    languages_mapping:
+      two_letters_code:
+        en-US: en

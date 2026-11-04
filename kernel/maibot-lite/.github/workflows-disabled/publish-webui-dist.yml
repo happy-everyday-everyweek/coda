@@ -1,0 +1,152 @@
+name: Publish WebUI Dist
+
+on:
+  push:
+    branches:
+      - dev
+      - r-dev
+    paths:
+      - "dashboard/**"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-webui-dist-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    outputs:
+      webui_version: ${{ steps.package_version.outputs.webui_version }}
+    runs-on: ubuntu-24.04
+    environment: webui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.1"
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Prepare dist package
+        id: package_version
+        run: |
+          set -euo pipefail
+
+          rm -rf .webui_dist_pkg
+          mkdir -p .webui_dist_pkg/maibot_dashboard/dist
+          BASE_VERSION=$(python -c "import json; print(json.load(open('dashboard/package.json'))['version'])")
+          TODAY=$(date -u +%Y%m%d)
+          WEBUI_VERSION="${BASE_VERSION}.dev${TODAY}${GITHUB_RUN_NUMBER}"
+          echo "webui_version=${WEBUI_VERSION}" >> "$GITHUB_OUTPUT"
+          cat > .webui_dist_pkg/pyproject.toml <<EOF
+          [project]
+          name = "maibot-dashboard"
+          version = "${WEBUI_VERSION}"
+          description = "MaiBot WebUI static assets"
+          readme = "README.md"
+          requires-python = ">=3.10"
+
+          [build-system]
+          requires = ["setuptools>=80.9.0", "wheel"]
+          build-backend = "setuptools.build_meta"
+
+          [tool.setuptools]
+          include-package-data = true
+
+          [tool.setuptools.packages.find]
+          where = ["."]
+          include = ["maibot_dashboard"]
+          exclude = ["maibot_dashboard.dist*"]
+
+          [tool.setuptools.package-data]
+          maibot_dashboard = ["dist/**"]
+          EOF
+          cat > .webui_dist_pkg/README.md <<'EOF'
+          # MaiBot WebUI Dist
+
+          该包仅包含 MaiBot WebUI 的前端构建产物（dist）。
+          EOF
+          cat > .webui_dist_pkg/maibot_dashboard/__init__.py <<'EOF'
+          from .resources import get_dist_path
+
+          __all__ = ["get_dist_path"]
+          EOF
+          cat > .webui_dist_pkg/maibot_dashboard/resources.py <<'EOF'
+          from pathlib import Path
+
+          def get_dist_path() -> Path:
+              return Path(__file__).parent / "dist"
+          EOF
+          cp -a dashboard/dist/. .webui_dist_pkg/maibot_dashboard/dist/
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build and publish
+        working-directory: .webui_dist_pkg
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine upload -u __token__ -p "$PYPI_API_TOKEN" dist/*
+
+  update-dev-dependency:
+    name: Update Dashboard Dependency
+    needs: build-and-publish
+    if: github.ref_name == 'dev'
+    runs-on: ubuntu-24.04
+    # 构建发布仍可并行，仅串行执行向 dev 写入依赖的阶段。
+    concurrency:
+      group: dashboard-dependency-dev
+      cancel-in-progress: false
+    env:
+      # 优先从官方 PyPI 解析刚发布的包，避免镜像同步延迟。
+      UV_INDEX: https://pypi.org/simple
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Wait for PyPI index and update dashboard dev dependency
+        env:
+          DASHBOARD_DEV_VERSION: ${{ needs.build-and-publish.outputs.webui_version }}
+        run: |
+          uv run --no-project --with packaging --with tomlkit python .github/scripts/update_dashboard_dependency.py
+          uv lock --upgrade-package maibot-dashboard --verbose
+
+      - name: Commit dependency update
+        env:
+          DASHBOARD_DEV_VERSION: ${{ needs.build-and-publish.outputs.webui_version }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- pyproject.toml requirements.txt uv.lock; then
+            echo "Dashboard dev 依赖已是 ${DASHBOARD_DEV_VERSION}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml requirements.txt uv.lock
+          git commit -m "chore: 更新 dashboard dev 依赖至 ${DASHBOARD_DEV_VERSION}"
+          git pull --rebase origin dev
+          git push origin HEAD:dev

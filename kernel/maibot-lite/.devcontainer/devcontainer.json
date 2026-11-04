@@ -1,0 +1,80 @@
+{
+	"name": "MaiBot-DevContainer",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"features": {
+		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+			"moby": true,
+			"installDockerBuildx": true,
+			"installDockerComposeSwitch": true,
+			"version": "latest",
+			"dockerDashComposeVersion": "latest"
+		}
+	},
+	// 同时转发 API 端口（8000）和 WebUI 面板端口（8001）
+	"forwardPorts": [
+		8000,
+		8001
+	],
+	// 开发环境变量：对齐生产部署的必要 env 设定
+	"containerEnv": {
+		"MAIBOT_LOCALE": "zh-CN",
+		"MAIBOT_LEGACY_0X_UPGRADE_CONFIRMED": "1",
+		"TZ": "Asia/Shanghai",
+		"EULA_AGREE": "1b662741904d7155d1ce1c00b3530d0d",
+		"PRIVACY_AGREE": "9943b855e72199d0f5016ea39052f1b6"
+	},
+	// 将 .venv/bin 加入 PATH，对齐生产镜像的 ENV PATH="/MaiMBot/.venv/bin:${PATH}"
+	// 清空从宿主机继承的 HTTP_PROXY，网络路由由 Docker 决定，与宿主机无关
+	// COMPOSE_FILE 指定仅 devcontainer 内加载的覆盖文件，容器外 docker compose 不受影响
+	"remoteEnv": {
+		"PATH": "${containerWorkspaceFolder}/.venv/bin:${containerEnv:PATH}",
+		"HTTP_PROXY": "",
+		"HTTPS_PROXY": "",
+		"COMPOSE_FILE": "docker-compose.yml:docker-compose.devcontainer.yml"
+	},
+	// 处理WSL/开发容器遗留的 safe.directory ；修复 Docker-outside-of-Docker 挂载路径；使用uv安装依赖
+	"postCreateCommand": "git config --global --get-all safe.directory | grep -qx '${containerWorkspaceFolder}' || git config --global --add safe.directory ${containerWorkspaceFolder}; chmod +x ${containerWorkspaceFolder}/.devcontainer/setup-dood-override.sh && ${containerWorkspaceFolder}/.devcontainer/setup-dood-override.sh ${containerWorkspaceFolder}; uv sync",
+	// 启动时重置 safe.directory ;修改 docker-config 权限，使得 WSL 和容器内用户都能访问修改
+	"postStartCommand": "git config --global --unset-all safe.directory 2>/dev/null; git config --global --add safe.directory ${containerWorkspaceFolder}; sudo chmod -R a+rwX ${containerWorkspaceFolder}/docker-config ${containerWorkspaceFolder}/data 2>/dev/null || true",
+
+	"customizations": {
+		"jetbrains": {
+			"backend": "PyCharm"
+		},
+		// 配置VS Code插件和设置
+		"vscode": {
+			"extensions": [
+				// 显式列出以在容器内安装和激活copilot和智能体所需workspace组件
+				"github.copilot",
+				"github.copilot-chat",
+				// github.copilot-chat模型提供程序
+				"vizards.deepseek-v4-for-copilot",
+				"johnny-zhao.oai-compatible-copilot",
+
+				// 开发相关插件
+				"tamasfe.even-better-toml",
+				"njpwerner.autodocstring",
+				"ms-python.python",
+				"KevinRose.vsc-python-indent",
+				"ms-python.vscode-pylance",
+				"ms-python.autopep8",
+				"charliermarsh.ruff"
+			],
+			"settings": {
+				// 使用uv创建的虚拟环境
+				"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+				"python.terminal.activateEnvironment": true,
+				// Python文件使用ruff格式化、自动整理import
+				"[python]": {
+					"editor.defaultFormatter": "charliermarsh.ruff",
+					"editor.formatOnSave": true,
+					"editor.codeActionsOnSave": {
+						"source.organizeImports": "explicit"
+					}
+				}
+			}
+		}
+	}
+}
