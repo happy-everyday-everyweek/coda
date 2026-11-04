@@ -1133,6 +1133,37 @@ class ZController private constructor(
     /** Personal Agent 规划工具只操作宿主当前打开的编码会话。 */
     fun activeSessionId(): String? = currentSessionId
 
+    /** 会话快照：供 Personal Agent 的规划模型挑选要操作的会话。 */
+    fun sessionSnapshot(): List<ZSessionInfo> = sessions.toList()
+
+    /** 向指定会话发送任务，不改变宿主当前打开的会话。 */
+    fun sendTo(sessionId: String, text: String, cb: ((Boolean, String) -> Unit)? = null) {
+        if (sessionId.isBlank()) {
+            cb?.invoke(false, "会话 id 为空")
+            return
+        }
+        doSend(sessionId, text, null, retried = false, cb = cb)
+    }
+
+    /** 终止指定会话的生成；与 stop 的区别是作用于任意会话。 */
+    fun stopSession(sessionId: String, cb: ((Boolean, String) -> Unit)? = null) {
+        if (sessionId.isBlank()) {
+            cb?.invoke(false, "会话 id 为空")
+            return
+        }
+        runtime.call("session/stop", JSONObject().put("sessionId", sessionId)) { ok, body ->
+            if (ok) {
+                post {
+                    if (currentSessionId == sessionId) running = false
+                    notif { onStateChanged() }
+                }
+                cb?.invoke(true, "ok")
+            } else {
+                cb?.invoke(false, errMsg(body))
+            }
+        }
+    }
+
     /**
      * 新建会话。
      *
