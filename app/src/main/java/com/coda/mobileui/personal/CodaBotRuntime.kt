@@ -24,8 +24,9 @@ class CodaBotRuntime(
         fun listSessions(): String
         fun sendToSession(sessionId: String, text: String): String
         fun stopSession(sessionId: String): String
-        fun listModels(): String
-        fun selectModel(kind: String, providerId: String, model: String): String
+        fun listModels(sessionId: String): String
+        fun selectModel(sessionId: String, providerId: String, modelId: String, level: String): String
+        fun approveTool(decision: String): String
         fun readFile(path: String): String
         fun runTerminal(command: String, timeoutSeconds: Int): String
     }
@@ -34,7 +35,36 @@ class CodaBotRuntime(
     private var bridge: PyObject? = null
     private val codingAgent by lazy { ZController.get(context) }
 
-    fun send(text: String, onError: (String) -> Unit) {
+    /** 待应答的审批请求；同一时刻只保留最新一条。 */
+    @Volatile
+    private var pendingPermission: Any? = null
+
+    /**
+     * 监听 Coding Agent 的宿主事件。
+     *
+     * 任意会话（不限于当前打开的那个）回合结束或请求审批时，都把事件作为一条
+     * 宿主消息推给 MaiBot，由规划轮次决定是否复核或处理。
+     */
+    private val hostListener =
+        object : ZController.Listener {
+            override fun onSessionTurnFinished(sessionId: String, status: String) {
+                val title = codingAgent.sessionSnapshot().firstOrNull { it.id == sessionId }?.title ?: sessionId
+                val state = if (status == "turn.failed") "回合失败" else "已完成"
+                notifyHost("Coding Agent 会话「$title」$state，请复核成果后决定是否告知用户。")
+            }
+
+            override fun onPermissionRequest(requestId: Any, params: JSONObject) {
+                pendingPermission = requestId
+                val tool = params.optString("toolName").ifBlank { params.optString("tool") }
+                notifyHost("Coding Agent 请求审批：工具「$tool」。请调用 approve_tool 决定放行或拒绝。")
+            }
+        }
+
+    init {
+        codingAgent.addListener(hostListener)
+    }
+
+    fun send(text: String, replyToId: String = "", onError: (String) -> Unit) {
         if (profile.plannerModel.isBlank() || profile.replyModel.isBlank()) {
             onError("请先在 Coda Bot 设置中选择规划模型和回复模型")
             return
@@ -68,10 +98,16 @@ class CodaBotRuntime(
                     override fun stopSession(sessionId: String): String =
                         stopSessionBlocking(sessionId)
 
-                    override fun listModels(): String = modelListJson()
+                    override fun listModels(sessionId: String): String = modelListJson(sessionId)
 
-                    override fun selectModel(kind: String, providerId: String, model: String): String =
-                        applyModelSelection(kind, providerId, model)
+                    override fun selectModel(
+                        sessionId: String,
+                        providerId: String,
+                        modelId: String,
+                        level: String,
+                    ): String = applySessionModel(sessionId, providerId, modelId, level)
+
+                    override fun approveTool(decision: String): String = resolvePermission(decision)
 
                     override fun readFile(path: String): String = readContextFile(path)
 
@@ -86,7 +122,7 @@ class CodaBotRuntime(
                 providerConfig(profile.replyProviderId, profile.replyModel, "reply"),
             ).also { bridge = it }
             }
-            instance.callAttr("send", text)
+            instance.callAttr("send", text, replyToId)
         } catch (t: Throwable) {
             onError(t.message ?: t.javaClass.simpleName)
         }
@@ -178,47 +214,69 @@ class CodaBotRuntime(
         return result(ok, if (ok) "已停止" else detail.ifBlank { "停止失败" })
     }
 
-    private fun modelListJson(): String {
+    private fun modelListJson(sessionId: String): String {
+        if (sessionId.isBlank()) return result(false, "会话 id 为空")
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var options: List<com.coda.mobileui.core.ZModelOption> = emptyList()
+        codingAgent.modelOptionsFor(sessionId) { list ->
+            options = list
+            latch.countDown()
+        }
+        if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) return result(false, "读取模型超时")
         val items = org.json.JSONArray()
-        ProviderStore.load(context)
-            .filter { it.kind == ProviderStore.ProviderKind.LLM }
-            .forEach { provider ->
-                provider.models.forEach { model ->
-                    items.put(
-                        JSONObject()
-                            .put("provider_id", provider.id)
-                            .put("provider", provider.name)
-                            .put("model", model),
-                    )
-                }
-            }
-        val p = CodaBotStore.profile(context)
+        options.forEach { option ->
+            val levels = org.json.JSONArray()
+            option.levels.forEach { levels.put(JSONObject().put("value", it.value).put("label", it.label)) }
+            items.put(
+                JSONObject()
+                    .put("provider_id", option.providerId)
+                    .put("provider", option.providerLabel ?: option.providerId)
+                    .put("model", option.modelId)
+                    .put("label", option.label)
+                    .put("default_level", option.defaultLevel ?: "")
+                    .put("levels", levels),
+            )
+        }
         return JSONObject()
             .put("ok", true)
-            .put("planner", "${p.plannerProviderId}/${p.plannerModel}")
-            .put("reply", "${p.replyProviderId}/${p.replyModel}")
+            .put("session_id", sessionId)
             .put("models", items)
             .toString()
     }
 
-    private fun applyModelSelection(kind: String, providerId: String, model: String): String {
-        if (providerId.isBlank() || model.isBlank()) return result(false, "provider 与 model 都不能为空")
-        val provider = ProviderStore.load(context).firstOrNull { it.id == providerId }
-            ?: return result(false, "找不到供应商：$providerId")
-        if (model !in provider.models) return result(false, "该供应商没有模型：$model")
-        when (kind) {
-            "planner" -> {
-                profile.plannerProviderId = providerId
-                profile.plannerModel = model
-            }
-            "reply" -> {
-                profile.replyProviderId = providerId
-                profile.replyModel = model
-            }
-            else -> return result(false, "未知的模型类型：$kind，只支持 planner 或 reply")
+    private fun applySessionModel(
+        sessionId: String,
+        providerId: String,
+        modelId: String,
+        level: String,
+    ): String {
+        if (sessionId.isBlank()) return result(false, "会话 id 为空")
+        if (providerId.isBlank() || modelId.isBlank()) return result(false, "provider 与 model 都不能为空")
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var ok = false
+        var detail = ""
+        codingAgent.setModelFor(sessionId, providerId, modelId, level.takeIf { it.isNotBlank() }) { success, message ->
+            ok = success
+            detail = message
+            latch.countDown()
         }
-        CodaBotStore.saveProfile(context, profile)
-        return result(true, "已切换到 $model")
+        if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) return result(false, "切换模型超时")
+        return result(ok, detail.ifBlank { if (ok) "已切换" else "切换失败" })
+    }
+
+    private fun resolvePermission(decision: String): String {
+        val requestId = pendingPermission ?: return result(false, "当前没有待审批的请求")
+        val allow = decision.trim().lowercase() in setOf("allow", "approve", "yes", "true")
+        pendingPermission = null
+        codingAgent.respondPermission(requestId, allow)
+        return result(true, if (allow) "已放行" else "已拒绝")
+    }
+
+    /** 把宿主事件作为一条消息送进 MaiBot，触发规划轮次。 */
+    private fun notifyHost(text: String) {
+        Bg.run {
+            runCatching { bridge?.callAttr("notify_event", text) }
+        }
     }
 
     private fun readContextFile(path: String): String {
@@ -283,6 +341,7 @@ class CodaBotRuntime(
     }
 
     fun close() {
+        codingAgent.removeListener(hostListener)
         Bg.run {
             runCatching {
                 synchronized(this@CodaBotRuntime) {

@@ -503,7 +503,7 @@ class CodaBotActivity : BaseActivity() {
             }
             append(text)
         }
-        runtime.send(payload) { error ->
+        runtime.send(payload, message.replyToId) { error ->
             runOnUiThread {
                 pet.showError(error)
                 toast(error)

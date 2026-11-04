@@ -34,12 +34,18 @@ class ZController private constructor(
 
         /** 轻提示（错误/状态）。 */
         fun onNotice(text: String) {}
-
         /** 权限请求需要 UI 决策。 */
         fun onPermissionRequest(
             requestId: Any,
             params: JSONObject,
         ) {}
+
+        /** 任意会话的回合结束，不限于当前打开的会话。 */
+        fun onSessionTurnFinished(
+            sessionId: String,
+            status: String,
+        ) {}
+
 
         /** 用户提问需要 UI 决策。 */
         fun onUserInputRequest(
@@ -144,6 +150,8 @@ class ZController private constructor(
     private val toolCallToParentCall = HashMap<String, String>()
 
     private val listeners = CopyOnWriteArrayList<Listener>()
+    /** 待应答的权限请求参数（requestId → requestPermission 的原始 params）。 */
+    private val pendingPermissionParams = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     private val main = Handler(Looper.getMainLooper())
     private val prefs = app.getSharedPreferences("zcode_bridge", Context.MODE_PRIVATE)
 
@@ -288,6 +296,7 @@ class ZController private constructor(
                             runtime.respond(requestId, resp)
                             true
                         } else if (listeners.isNotEmpty()) {
+                            pendingPermissionParams[requestId.toString()] = params
                             notif { onPermissionRequest(requestId, params) }
                             true
                         } else {
@@ -426,9 +435,13 @@ class ZController private constructor(
 
     private fun handleSessionEvent(params: JSONObject) {
         val sid = params.optString("sessionId")
-        if (sid.isNotEmpty() && currentSessionId != null && sid != currentSessionId) return
         val type = params.optString("type")
         val payload = params.optJSONObject("payload") ?: JSONObject()
+        if (type == "turn.completed" || type == "turn.failed") {
+            // 先广播给所有监听者，再决定是否继续处理当前会话的 UI 状态。
+            notif { onSessionTurnFinished(sid, type) }
+        }
+        if (sid.isNotEmpty() && currentSessionId != null && sid != currentSessionId) return
         when (type) {
             "turn.started" -> {
                 running = true
@@ -1164,6 +1177,61 @@ class ZController private constructor(
         }
     }
 
+    /** 读取指定会话可选的模型；只读，不改动宿主面板当前的模型列表。 */
+    fun modelOptionsFor(sessionId: String, cb: (List<ZModelOption>) -> Unit) {
+        if (sessionId.isBlank()) {
+            cb(emptyList())
+            return
+        }
+        val params =
+            JSONObject()
+                .put("sessionId", sessionId)
+                .put("deliveryKind", "desktop-continuous")
+                .put("modelAvailability", "all")
+        runtime.call("session/read", params) { ok, body ->
+            cb(if (ok) ZParse.parseModelOptions(body) else emptyList())
+        }
+    }
+
+    /** 切换指定会话使用的模型；显式传 level 时优先，否则取该模型默认档位。 */
+    fun setModelFor(
+        sessionId: String,
+        providerId: String,
+        modelId: String,
+        level: String? = null,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
+        if (sessionId.isBlank()) {
+            cb?.invoke(false, "会话 id 为空")
+            return
+        }
+        modelOptionsFor(sessionId) { options ->
+            val option = options.firstOrNull { it.providerId == providerId && it.modelId == modelId }
+            if (option == null) {
+                cb?.invoke(false, "该会话没有这个模型：$providerId/$modelId")
+                return@modelOptionsFor
+            }
+            val chosen = level?.takeIf { it.isNotEmpty() } ?: option.defaultLevel ?: option.levels.firstOrNull()?.value
+            if (chosen.isNullOrEmpty()) {
+                cb?.invoke(false, "该模型未声明推理档位")
+                return@modelOptionsFor
+            }
+            val model =
+                JSONObject()
+                    .put("providerId", providerId)
+                    .put("modelId", modelId)
+                    .put("options", JSONObject().put("reasoningLevel", chosen))
+            val params =
+                JSONObject()
+                    .put("sessionId", sessionId)
+                    .put("model", model)
+                    .put("persistAsWorkspaceLastUsed", true)
+            runtime.call("session/setModel", params) { ok, body ->
+                cb?.invoke(ok, if (ok) "已切换到 ${option.label}" else errMsg(body))
+            }
+        }
+    }
+
     /**
      * 新建会话。
      *
@@ -1737,6 +1805,15 @@ class ZController private constructor(
             o.put("options", JSONObject().put("reasoningLevel", lv))
         }
         return o
+    }
+
+    /** 应答一条交互式权限请求；allow 为 true 放行，false 拒绝。 */
+    fun respondPermission(requestId: Any, allow: Boolean) {
+        val params = pendingPermissionParams.remove(requestId.toString()) ?: JSONObject()
+        val response =
+            (if (allow) findAllowResponse(params) else findDenyResponse(params))
+                ?: JSONObject().put("decision", if (allow) "allow" else "deny")
+        runtime.respond(requestId, response)
     }
 
     fun setDefaultMode(protocolMode: String) {
