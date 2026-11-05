@@ -138,12 +138,20 @@ class LiteRuntime:
         await manager.start()
         self._started = True
 
-    async def send(self, text: str) -> None:
-        """发送用户文本；模型回复由 ``on_message`` 逐段返回。"""
+    async def send(self, text: str, reply_to: str | None = None, message_id: str | None = None) -> None:
+        """发送用户文本；reply_to 非空时按 MaiBot 标准 reply 段引用原消息。
+
+        message_id 允许由宿主给出，使本地消息记录与内核消息库使用同一个 id，
+        这样后续 reply 段回查原消息时也能命中。
+        """
         content = text.strip()
         if not content:
             raise ValueError("消息不能为空")
         await self.start()
+        segments = []
+        if reply_to:
+            segments.append({"type": "reply", "data": reply_to})
+        segments.append({"type": "text", "data": content})
         payload = {
             "message_info": {
                 "platform": PLATFORM,
@@ -157,9 +165,11 @@ class LiteRuntime:
                     "platform_io_target_user_id": USER_ID,
                 },
             },
-            "message_segment": {"type": "text", "data": content},
+            "message_segment": (
+                {"type": "seglist", "data": segments} if reply_to else {"type": "text", "data": content}
+            ),
             "raw_message": content,
-            "message_id": f"android_{uuid4().hex}",
+            "message_id": message_id or f"android_{uuid4().hex}",
         }
         await self._chat_bot.message_process(payload)
 
@@ -235,11 +245,18 @@ class LiteRuntimeBridge:
         finally:
             self._loop.close()
 
-    def send(self, text: str) -> str:
-        """提交一条消息；真实处理错误回调给宿主，不转换成虚假回复。"""
+    def send(self, text: str, reply_to: str = "", message_id: str = "") -> str:
+        """提交一条消息；reply_to 非空时按标准 reply 段引用原消息。"""
         if self._failure is not None:
             raise RuntimeError("MaiBot Lite 事件循环已停止") from self._failure
-        future = asyncio.run_coroutine_threadsafe(self._runtime.send(text), self._loop)
+        future = asyncio.run_coroutine_threadsafe(
+            self._runtime.send(
+                text,
+                reply_to=reply_to or None,
+                message_id=message_id or None,
+            ),
+            self._loop,
+        )
         future.add_done_callback(self._report_failure)
         return "accepted"
 

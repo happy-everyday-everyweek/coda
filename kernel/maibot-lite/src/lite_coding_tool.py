@@ -113,6 +113,42 @@ def get_model_list_spec() -> ToolSpec:
     )
 
 
+def _format_session_list(payload: Dict[str, Any]) -> str:
+    """把会话清单整理成 planner 易读的文本。"""
+
+    current = str(payload.get("current_session_id") or "")
+    lines: List[str] = []
+    for item in payload.get("sessions") or []:
+        if not isinstance(item, dict):
+            continue
+        session_id = str(item.get("id") or "")
+        title = str(item.get("title") or "未命名会话")
+        status = str(item.get("status") or "unknown")
+        mark = "（当前打开）" if session_id and session_id == current else ""
+        lines.append(f"- {session_id}｜{title}｜{status}{mark}")
+    if not lines:
+        return "当前没有 Coding Agent 会话。"
+    return "\n".join(lines)
+
+
+def _format_model_list(payload: Dict[str, Any]) -> str:
+    """把会话可用模型整理成 planner 易读的文本。"""
+
+    lines: List[str] = []
+    for item in payload.get("models") or []:
+        if not isinstance(item, dict):
+            continue
+        provider_id = str(item.get("provider_id") or "")
+        model_id = str(item.get("model") or "")
+        label = str(item.get("label") or model_id)
+        default_level = str(item.get("default_level") or "")
+        level_note = f"，默认档位 {default_level}" if default_level else ""
+        lines.append(f"- {provider_id} / {model_id}（{label}{level_note}）")
+    if not lines:
+        return "该会话没有可用模型。"
+    return "\n".join(lines)
+
+
 def get_approve_spec() -> ToolSpec:
     return ToolSpec(
         name="approve_tool",
@@ -134,17 +170,24 @@ def get_model_select_spec() -> ToolSpec:
     return ToolSpec(
         name="model_select",
         description=(
-            "切换 Personal Agent 的模型。kind=planner 换规划模型，kind=reply 换回复模型；"
-            "provider_id 与 model 必须来自 model_list。切换后下一轮对话生效。"
+            "切换指定 Coding Agent 会话使用的模型。session_id 省略时作用于用户当前打开的会话；"
+            "provider_id 与 model 必须来自 model_list。"
         ),
         parameters_schema={
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "enum": ["planner", "reply"]},
+                "session_id": {
+                    "type": "string",
+                    "description": "目标会话 id；省略时用用户当前打开的会话。",
+                },
                 "provider_id": {"type": "string"},
                 "model": {"type": "string"},
+                "level": {
+                    "type": "string",
+                    "description": "推理档位；省略时用该模型的默认档位。",
+                },
             },
-            "required": ["kind", "provider_id", "model"],
+            "required": ["provider_id", "model"],
         },
         provider_name="coda_android",
         provider_type="builtin",
@@ -188,25 +231,50 @@ class CodingAgentToolProvider(ToolProvider):
                 error_message="当前宿主没有 Coding Agent 控制器。",
             )
         if invocation.tool_name == "session_list":
+            try:
+                payload = json.loads(str(_controller.listSessions()))
+            except Exception as exc:
+                return ToolExecutionResult(
+                    tool_name=invocation.tool_name, success=False, error_message=str(exc)
+                )
+            if not payload.get("ok"):
+                return ToolExecutionResult(
+                    tool_name=invocation.tool_name,
+                    success=False,
+                    error_message=str(payload.get("message") or "读取会话列表失败"),
+                )
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=True,
-                content=str(_controller.listSessions()),
+                content=_format_session_list(payload),
             )
         if invocation.tool_name == "model_list":
+            try:
+                payload = json.loads(str(_controller.listModels(session_id)))
+            except Exception as exc:
+                return ToolExecutionResult(
+                    tool_name=invocation.tool_name, success=False, error_message=str(exc)
+                )
+            if not payload.get("ok"):
+                return ToolExecutionResult(
+                    tool_name=invocation.tool_name,
+                    success=False,
+                    error_message=str(payload.get("message") or "读取模型列表失败"),
+                )
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=True,
-                content=str(_controller.listModels()),
+                content=_format_model_list(payload),
             )
         if invocation.tool_name == "model_select":
             try:
                 payload = json.loads(
                     str(
                         _controller.selectModel(
-                            str(invocation.arguments.get("kind") or ""),
+                            str(invocation.arguments.get("session_id") or ""),
                             str(invocation.arguments.get("provider_id") or ""),
                             str(invocation.arguments.get("model") or ""),
+                            str(invocation.arguments.get("level") or ""),
                         )
                     )
                 )

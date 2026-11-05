@@ -496,14 +496,7 @@ class CodaBotActivity : BaseActivity() {
         )
         CodaBotStore.appendMessage(this, message)
         addBubble(message)
-        val payload = buildString {
-            if (quoted != null) {
-                val who = if (quoted.fromUser) profile.userName else profile.name
-                append("（回复 ").append(who).append(" 的消息：").append(quoted.text.take(200)).append("）\n")
-            }
-            append(text)
-        }
-        runtime.send(payload, message.replyToId) { error ->
+        runtime.send(text, message.replyToId, message.id) { error ->
             runOnUiThread {
                 pet.showError(error)
                 toast(error)

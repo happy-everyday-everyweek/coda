@@ -64,7 +64,7 @@ class CodaBotRuntime(
         codingAgent.addListener(hostListener)
     }
 
-    fun send(text: String, replyToId: String = "", onError: (String) -> Unit) {
+    fun send(text: String, replyToId: String = "", messageId: String = "", onError: (String) -> Unit) {
         if (profile.plannerModel.isBlank() || profile.replyModel.isBlank()) {
             onError("请先在 Coda Bot 设置中选择规划模型和回复模型")
             return
@@ -122,7 +122,7 @@ class CodaBotRuntime(
                 providerConfig(profile.replyProviderId, profile.replyModel, "reply"),
             ).also { bridge = it }
             }
-            instance.callAttr("send", text, replyToId)
+            instance.callAttr("send", text, replyToId, messageId)
         } catch (t: Throwable) {
             onError(t.message ?: t.javaClass.simpleName)
         }
@@ -215,10 +215,11 @@ class CodaBotRuntime(
     }
 
     private fun modelListJson(sessionId: String): String {
-        if (sessionId.isBlank()) return result(false, "会话 id 为空")
+        val target = sessionId.ifBlank { codingAgent.activeSessionId().orEmpty() }
+        if (target.isBlank()) return result(false, "当前没有打开的 Coding Agent 会话")
         val latch = java.util.concurrent.CountDownLatch(1)
         var options: List<com.coda.mobileui.core.ZModelOption> = emptyList()
-        codingAgent.modelOptionsFor(sessionId) { list ->
+        codingAgent.modelOptionsFor(target) { list ->
             options = list
             latch.countDown()
         }
@@ -239,7 +240,7 @@ class CodaBotRuntime(
         }
         return JSONObject()
             .put("ok", true)
-            .put("session_id", sessionId)
+            .put("session_id", target)
             .put("models", items)
             .toString()
     }
@@ -250,12 +251,13 @@ class CodaBotRuntime(
         modelId: String,
         level: String,
     ): String {
-        if (sessionId.isBlank()) return result(false, "会话 id 为空")
         if (providerId.isBlank() || modelId.isBlank()) return result(false, "provider 与 model 都不能为空")
+        val target = sessionId.ifBlank { codingAgent.activeSessionId().orEmpty() }
+        if (target.isBlank()) return result(false, "当前没有打开的 Coding Agent 会话")
         val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false
         var detail = ""
-        codingAgent.setModelFor(sessionId, providerId, modelId, level.takeIf { it.isNotBlank() }) { success, message ->
+        codingAgent.setModelFor(target, providerId, modelId, level.takeIf { it.isNotBlank() }) { success, message ->
             ok = success
             detail = message
             latch.countDown()

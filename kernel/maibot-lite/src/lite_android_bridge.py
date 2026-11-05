@@ -127,8 +127,8 @@ class _AndroidBotBridge:
             nickname=nickname,
         )
 
-    def send(self, text: str) -> str:
-        return self._bridge.send(text)
+    def send(self, text: str, reply_to: str = "", message_id: str = "") -> str:
+        return self._bridge.send(text, reply_to=reply_to, message_id=message_id)
 
     def notify_event(self, text: str) -> str:
         """把宿主事件作为一条消息送进内核，触发规划轮次。"""
