@@ -5,6 +5,7 @@ import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.coda.mobileui.core.Bg
+import com.coda.mobileui.core.LinuxEnv
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.core.ZController
 import org.json.JSONObject
@@ -27,6 +28,7 @@ class CodaBotRuntime(
         fun selectModel(sessionId: String, providerId: String, modelId: String, level: String): String
         fun approveTool(requestKey: String, decision: String): String
         fun readFile(path: String): String
+        fun runTerminal(command: String, timeoutSeconds: Int): String
     }
 
     @Volatile
@@ -113,6 +115,8 @@ class CodaBotRuntime(
                     override fun approveTool(requestKey: String, decision: String): String = resolvePermission(requestKey, decision)
                     override fun readFile(path: String): String = readContextFile(path)
 
+                    override fun runTerminal(command: String, timeoutSeconds: Int): String =
+                        runContextCommand(command, timeoutSeconds)
                 },
                 profile.name,
                 profile.userName,
@@ -308,6 +312,27 @@ class CodaBotRuntime(
             JSONObject().put("ok", true).put("content", file.readText()).toString()
         }.getOrElse { result(false, it.message ?: "读取失败") }
     }
+
+    /** 终端工具直接在 Coding Agent 的 Linux 容器里跑，工作目录固定为当前工作区。 */
+    private fun runContextCommand(command: String, timeoutSeconds: Int): String {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) return result(false, "命令为空")
+        val timeout = timeoutSeconds.coerceIn(1, 30)
+        val workspace = File(codingAgent.workspacePath()).apply { mkdirs() }
+        val linux = LinuxEnv(context)
+        if (!linux.isReady()) return result(false, "Coding Agent 的 Linux 环境尚未就绪")
+        val guest = linux.guestPath(workspace.absolutePath)
+        val script = "cd " + shellQuote(guest) + " && " + trimmed
+        val shellResult = linux.exec(listOf("/bin/bash", "-lc", script), timeout.toLong() * 1000L)
+        val text = shellResult.output.take(65_536)
+        return JSONObject()
+            .put("ok", shellResult.ok)
+            .put("output", text)
+            .put("message", if (shellResult.ok) "完成" else "退出码 ${shellResult.code}")
+            .toString()
+    }
+
+    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     private fun result(ok: Boolean, message: String): String =
         JSONObject().put("ok", ok).put("message", message).toString()

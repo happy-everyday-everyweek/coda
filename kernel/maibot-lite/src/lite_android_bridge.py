@@ -169,7 +169,9 @@ def create_bridge(
         + "\n你可以使用这些宿主工具：session_list 查看本机 Coding Agent 会话并拿到 session_id；"
         "coding_agent 新建会话、向任意会话发送任务、停止生成或关闭会话；"
         "model_list 与 model_select 查看并切换指定 Coding Agent 会话的模型，不改变 Personal Agent 的模型；"
-        "context_read_file 读取附件或工作区文件的内容。"
+        "context_read_file 读取附件或工作区文件的内容；"
+        "context_run_terminal 在 Coding Agent 的 Linux 环境里执行命令，用于复核成果。"
+        "读取文件与执行终端是两个不同工具，不要互相替代。"
         "这些工具都不是替用户直接完成工作的工具，需要交付代码时应规划并控制 Coding Agent 完成。"
     )
     global_config.personality.behavior_style = persona
