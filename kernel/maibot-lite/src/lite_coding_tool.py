@@ -39,27 +39,6 @@ def get_read_file_spec() -> ToolSpec:
         provider_type="builtin",
     )
 
-
-def get_terminal_spec() -> ToolSpec:
-    return ToolSpec(
-        name="context_run_terminal",
-        description=(
-            "只在当前工作区运行只读检查命令，用于核验 Coding Agent 的成果或补充上下文。"
-            "不得用它直接替用户完成开发任务，不得执行破坏性命令、后台常驻服务或交互式程序。"
-        ),
-        parameters_schema={
-            "type": "object",
-            "properties": {
-                "command": {"type": "string", "description": "例如 git diff、grep、测试命令。"},
-                "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 30},
-            },
-            "required": ["command"],
-        },
-        provider_name="coda_android",
-        provider_type="builtin",
-    )
-
-
 def get_tool_spec() -> ToolSpec:
     """声明会话生命周期控制，可指定任意会话。"""
 
@@ -104,10 +83,13 @@ def get_model_list_spec() -> ToolSpec:
     return ToolSpec(
         name="model_list",
         description=(
-            "列出可用于 Personal Agent 的模型（provider_id、供应商名、模型名），"
-            "并返回当前规划模型与回复模型的选择。"
+            "列出指定 Coding Agent 会话可用的模型（provider_id、供应商名、模型名）。"
+            "不改变 Personal Agent 的规划模型或回复模型；session_id 省略时使用当前打开的会话。"
         ),
-        parameters_schema={"type": "object", "properties": {}},
+        parameters_schema={
+            "type": "object",
+            "properties": {"session_id": {"type": "string", "description": "目标 Coding Agent 会话 id。"}},
+        },
         provider_name="coda_android",
         provider_type="builtin",
     )
@@ -158,8 +140,11 @@ def get_approve_spec() -> ToolSpec:
         ),
         parameters_schema={
             "type": "object",
-            "properties": {"decision": {"type": "string", "enum": ["allow", "deny"]}},
-            "required": ["decision"],
+            "properties": {
+                "request_key": {"type": "string", "description": "审批事件提供的请求标识。"},
+                "decision": {"type": "string", "enum": ["allow", "deny"]},
+            },
+            "required": ["request_key", "decision"],
         },
         provider_name="coda_android",
         provider_type="builtin",
@@ -216,7 +201,6 @@ class CodingAgentToolProvider(ToolProvider):
             get_model_select_spec(),
             get_approve_spec(),
             get_read_file_spec(),
-            get_terminal_spec(),
         ]
         for spec in specs:
             spec.metadata.setdefault("visibility", "visible")
@@ -253,6 +237,7 @@ class CodingAgentToolProvider(ToolProvider):
                 content=_format_session_list(payload),
             )
         if invocation.tool_name == "model_list":
+            session_id = str(invocation.arguments.get("session_id") or "").strip()
             try:
                 payload = json.loads(str(_controller.listModels(session_id)))
             except Exception as exc:
@@ -295,7 +280,12 @@ class CodingAgentToolProvider(ToolProvider):
         if invocation.tool_name == "approve_tool":
             try:
                 payload = json.loads(
-                    str(_controller.approveTool(str(invocation.arguments.get("decision") or "")))
+                    str(
+                        _controller.approveTool(
+                            str(invocation.arguments.get("request_key") or "").strip(),
+                            str(invocation.arguments.get("decision") or ""),
+                        )
+                    )
                 )
             except Exception as exc:
                 return ToolExecutionResult(
@@ -319,26 +309,6 @@ class CodingAgentToolProvider(ToolProvider):
                 success=bool(payload.get("ok")),
                 content=str(payload.get("content") or payload.get("message") or ""),
                 error_message=None if payload.get("ok") else str(payload.get("message") or "读取失败"),
-            )
-        if invocation.tool_name == "context_run_terminal":
-            try:
-                payload = json.loads(
-                    str(
-                        _controller.runTerminal(
-                            str(invocation.arguments.get("command") or ""),
-                            int(invocation.arguments.get("timeout_seconds") or 20),
-                        )
-                    )
-                )
-            except Exception as exc:
-                return ToolExecutionResult(
-                    tool_name=invocation.tool_name, success=False, error_message=str(exc)
-                )
-            return ToolExecutionResult(
-                tool_name=invocation.tool_name,
-                success=bool(payload.get("ok")),
-                content=str(payload.get("output") or payload.get("message") or ""),
-                error_message=None if payload.get("ok") else str(payload.get("message") or "命令失败"),
             )
         action = str(invocation.arguments.get("action") or "").strip().lower()
         text = str(invocation.arguments.get("text") or "").strip()

@@ -5,7 +5,6 @@ import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.coda.mobileui.core.Bg
-import com.coda.mobileui.core.LinuxEnv
 import com.coda.mobileui.core.ProviderStore
 import com.coda.mobileui.core.ZController
 import org.json.JSONObject
@@ -26,9 +25,8 @@ class CodaBotRuntime(
         fun stopSession(sessionId: String): String
         fun listModels(sessionId: String): String
         fun selectModel(sessionId: String, providerId: String, modelId: String, level: String): String
-        fun approveTool(decision: String): String
+        fun approveTool(requestKey: String, decision: String): String
         fun readFile(path: String): String
-        fun runTerminal(command: String, timeoutSeconds: Int): String
     }
 
     @Volatile
@@ -38,7 +36,7 @@ class CodaBotRuntime(
     private val codingAgent by lazy { ZController.get(context) }
 
     /** 待应答的审批请求队列，按到达顺序处理。 */
-    private val pendingPermissions = java.util.ArrayDeque<Any>()
+    private val pendingPermissions = java.util.LinkedHashMap<String, Any>()
 
     /**
      * 监听 Coding Agent 的宿主事件。
@@ -54,10 +52,14 @@ class CodaBotRuntime(
                 notifyHost("Coding Agent 会话「$title」$state，请复核成果后决定是否告知用户。")
             }
 
-            override fun onPermissionRequest(requestId: Any, params: JSONObject) {
-                synchronized(pendingPermissions) { pendingPermissions.addLast(requestId) }
+            override fun onSessionPermissionRequest(sessionId: String, requestId: Any, params: JSONObject) {
+                val requestKey = requestId.toString()
+                synchronized(pendingPermissions) { pendingPermissions[requestKey] = requestId }
                 val tool = params.optString("toolName").ifBlank { params.optString("tool") }
-                notifyHost("Coding Agent 请求审批：工具「$tool」。请调用 approve_tool 决定放行或拒绝。")
+                notifyHost(
+                    "Coding Agent 请求审批：request_key=$requestKey，session_id=$sessionId，工具「$tool」。" +
+                        "请用该 request_key 调用 approve_tool 决定放行或拒绝。",
+                )
             }
         }
 
@@ -108,12 +110,9 @@ class CodaBotRuntime(
                         level: String,
                     ): String = applySessionModel(sessionId, providerId, modelId, level)
 
-                    override fun approveTool(decision: String): String = resolvePermission(decision)
-
+                    override fun approveTool(requestKey: String, decision: String): String = resolvePermission(requestKey, decision)
                     override fun readFile(path: String): String = readContextFile(path)
 
-                    override fun runTerminal(command: String, timeoutSeconds: Int): String =
-                        runContextCommand(command, timeoutSeconds)
                 },
                 profile.name,
                 profile.userName,
@@ -269,9 +268,9 @@ class CodaBotRuntime(
         return result(ok, detail.ifBlank { if (ok) "已切换" else "切换失败" })
     }
 
-    private fun resolvePermission(decision: String): String {
-        val requestId = synchronized(pendingPermissions) { pendingPermissions.pollFirst() }
-            ?: return result(false, "当前没有待审批的请求")
+    private fun resolvePermission(requestKey: String, decision: String): String {
+        val requestId = synchronized(pendingPermissions) { pendingPermissions.remove(requestKey) }
+            ?: return result(false, "没有该请求标识对应的待审批请求")
         val allow = decision.trim().lowercase() in setOf("allow", "approve", "yes", "true")
         codingAgent.respondPermission(requestId, allow)
         return result(true, if (allow) "已放行" else "已拒绝")
@@ -309,27 +308,6 @@ class CodaBotRuntime(
             JSONObject().put("ok", true).put("content", file.readText()).toString()
         }.getOrElse { result(false, it.message ?: "读取失败") }
     }
-
-    /** 终端工具直接在 Coding Agent 的 Linux 容器里跑，工作目录固定为当前工作区。 */
-    private fun runContextCommand(command: String, timeoutSeconds: Int): String {
-        val trimmed = command.trim()
-        if (trimmed.isEmpty()) return result(false, "命令为空")
-        val timeout = timeoutSeconds.coerceIn(1, 30)
-        val workspace = File(codingAgent.workspacePath()).apply { mkdirs() }
-        val linux = LinuxEnv(context)
-        if (!linux.isReady()) return result(false, "Coding Agent 的 Linux 环境尚未就绪")
-        val guest = linux.guestPath(workspace.absolutePath)
-        val script = "cd " + shellQuote(guest) + " && " + trimmed
-        val shellResult = linux.exec(listOf("/bin/bash", "-lc", script), timeout.toLong() * 1000L)
-        val text = shellResult.output.take(65_536)
-        return JSONObject()
-            .put("ok", shellResult.ok)
-            .put("output", text)
-            .put("message", if (shellResult.ok) "完成" else "退出码 ${shellResult.code}")
-            .toString()
-    }
-
-    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     private fun result(ok: Boolean, message: String): String =
         JSONObject().put("ok", ok).put("message", message).toString()
