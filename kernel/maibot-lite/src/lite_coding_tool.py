@@ -204,19 +204,23 @@ class CodingAgentToolProvider(ToolProvider):
         self,
         context: Optional[ToolAvailabilityContext] = None,
     ) -> List[ToolSpec]:
-        return (
-            [
-                get_tool_spec(),
-                get_session_list_spec(),
-                get_model_list_spec(),
-                get_model_select_spec(),
-                get_approve_spec(),
-                get_read_file_spec(),
-                get_terminal_spec(),
-            ]
-            if _controller is not None
-            else []
-        )
+        del context
+        # Personal Agent 固定单会话私聊，工具不随会话类型裁剪；这里显式声明可见性，
+        # 与内置工具的元数据约定保持一致。
+        if _controller is None:
+            return []
+        specs = [
+            get_tool_spec(),
+            get_session_list_spec(),
+            get_model_list_spec(),
+            get_model_select_spec(),
+            get_approve_spec(),
+            get_read_file_spec(),
+            get_terminal_spec(),
+        ]
+        for spec in specs:
+            spec.metadata.setdefault("visibility", "visible")
+        return specs
 
     async def invoke(
         self,

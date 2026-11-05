@@ -150,8 +150,8 @@ class ZController private constructor(
     private val toolCallToParentCall = HashMap<String, String>()
 
     private val listeners = CopyOnWriteArrayList<Listener>()
-    /** 待应答的权限请求参数（requestId → requestPermission 的原始 params）。 */
-    private val pendingPermissionParams = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+    /** 待应答的权限请求参数（requestId → requestPermission 的原始 params），只保留最近 10 条。 */
+    private val pendingPermissionParams = java.util.Collections.synchronizedMap(linkedMapOf<String, JSONObject>())
     private val main = Handler(Looper.getMainLooper())
     private val prefs = app.getSharedPreferences("zcode_bridge", Context.MODE_PRIVATE)
 
@@ -296,7 +296,12 @@ class ZController private constructor(
                             runtime.respond(requestId, resp)
                             true
                         } else if (listeners.isNotEmpty()) {
-                            pendingPermissionParams[requestId.toString()] = params
+                            synchronized(pendingPermissionParams) {
+                                pendingPermissionParams[requestId.toString()] = params
+                                while (pendingPermissionParams.size > 10) {
+                                    pendingPermissionParams.remove(pendingPermissionParams.keys.first())
+                                }
+                            }
                             notif { onPermissionRequest(requestId, params) }
                             true
                         } else {

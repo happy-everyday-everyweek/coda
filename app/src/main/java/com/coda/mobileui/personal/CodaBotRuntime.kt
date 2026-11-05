@@ -33,11 +33,12 @@ class CodaBotRuntime(
 
     @Volatile
     private var bridge: PyObject? = null
+    /** 串行化对 Python 桥的发送调用，避免同一实例并发重入。 */
+    private val sendLock = Any()
     private val codingAgent by lazy { ZController.get(context) }
 
-    /** 待应答的审批请求；同一时刻只保留最新一条。 */
-    @Volatile
-    private var pendingPermission: Any? = null
+    /** 待应答的审批请求队列，按到达顺序处理。 */
+    private val pendingPermissions = java.util.ArrayDeque<Any>()
 
     /**
      * 监听 Coding Agent 的宿主事件。
@@ -54,7 +55,7 @@ class CodaBotRuntime(
             }
 
             override fun onPermissionRequest(requestId: Any, params: JSONObject) {
-                pendingPermission = requestId
+                synchronized(pendingPermissions) { pendingPermissions.addLast(requestId) }
                 val tool = params.optString("toolName").ifBlank { params.optString("tool") }
                 notifyHost("Coding Agent 请求审批：工具「$tool」。请调用 approve_tool 决定放行或拒绝。")
             }
@@ -122,7 +123,9 @@ class CodaBotRuntime(
                 providerConfig(profile.replyProviderId, profile.replyModel, "reply"),
             ).also { bridge = it }
             }
-            instance.callAttr("send", text, replyToId, messageId)
+            synchronized(sendLock) {
+                instance.callAttr("send", text, replyToId, messageId)
+            }
         } catch (t: Throwable) {
             onError(t.message ?: t.javaClass.simpleName)
         }
@@ -267,9 +270,9 @@ class CodaBotRuntime(
     }
 
     private fun resolvePermission(decision: String): String {
-        val requestId = pendingPermission ?: return result(false, "当前没有待审批的请求")
+        val requestId = synchronized(pendingPermissions) { pendingPermissions.pollFirst() }
+            ?: return result(false, "当前没有待审批的请求")
         val allow = decision.trim().lowercase() in setOf("allow", "approve", "yes", "true")
-        pendingPermission = null
         codingAgent.respondPermission(requestId, allow)
         return result(true, if (allow) "已放行" else "已拒绝")
     }
@@ -278,6 +281,12 @@ class CodaBotRuntime(
     private fun notifyHost(text: String) {
         Bg.run {
             runCatching { bridge?.callAttr("notify_event", text) }
+                .onFailure { error ->
+                    com.coda.mobileui.core.AppLog.w(
+                        "CodaBot",
+                        "宿主事件注入失败：${error.message ?: error.javaClass.simpleName}",
+                    )
+                }
         }
     }
 
