@@ -51,11 +51,17 @@ jobs:
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
 
-      - name: 测试 Personal Agent 工具契约
+      - name: 安装 Personal Agent 测试依赖
         working-directory: kernel/maibot-lite
         run: |
+          grep -v '^maim-message' requirements-lite.txt > /tmp/req-nomaim.txt
+          python -m pip install -r /tmp/req-nomaim.txt
+          python -m pip install --no-deps 'maim-message==0.6.8'
           python -m pip install pytest pytest-asyncio
-          python -m pytest tests/test_lite_coding_tool.py -q
+
+      - name: 测试 Personal Agent 工具契约
+        working-directory: kernel/maibot-lite
+        run: python -m pytest tests/test_lite_coding_tool.py -q
 
   # 只有手动触发并勾选 build_apk 时才打包：分支构建不产可安装产物，更不会进 Release。
   apk:
