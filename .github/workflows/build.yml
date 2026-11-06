@@ -1,8 +1,8 @@
 name: Build
 
 # 仓库级通用构建验证：任何分支的 push 与 PR 都跑。
-# 只做 Kotlin 编译与 Python 源码合并，不产 APK——可安装产物与版本号、签名、
-# 更新清单一律由 dev-prerelease / release 两条发布流产出，避免出现第二套口径。
+# 编译 Android 源码，并验证 Personal Agent 的 Python 消息入口与宿主工具契约。
+# 可安装产物与版本号、签名、更新清单一律由发布流或手动 APK 构建产出。
 on:
   push:
   pull_request:
@@ -50,6 +50,12 @@ jobs:
             -x installDebugPythonRequirements \
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
+
+      - name: 测试 Personal Agent 工具契约
+        working-directory: kernel/maibot-lite
+        run: |
+          python -m pip install pytest pytest-asyncio
+          python -m pytest tests/test_lite_coding_tool.py -q
 
   # 只有手动触发并勾选 build_apk 时才打包：分支构建不产可安装产物，更不会进 Release。
   apk:
