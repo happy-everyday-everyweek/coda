@@ -13,8 +13,8 @@ class _Host:
     def __init__(self) -> None:
         self.calls = []
 
-    def controlSession(self, action: str, text: str) -> str:
-        self.calls.append((action, text))
+    def controlSession(self, action: str, text: str, session_id: str) -> str:
+        self.calls.append((action, text, session_id))
         return json.dumps({"ok": True, "message": "完成"})
 
     def readFile(self, path: str) -> str:
@@ -31,16 +31,19 @@ async def test_coding_agent_tool_is_hidden_without_host() -> None:
 
 
 @pytest.mark.asyncio
-async def test_coding_agent_tool_passes_only_session_actions() -> None:
+async def test_coding_agent_tool_passes_session_id_to_host() -> None:
     host = _Host()
     configure_host_controller(host)
     provider = get_provider()
-    invocation = SimpleNamespace(tool_name="coding_agent", arguments={"action": "send", "text": "修复构建"})
+    invocation = SimpleNamespace(
+        tool_name="coding_agent",
+        arguments={"action": "send", "text": "修复构建", "session_id": "session-1"},
+    )
 
     result = await provider.invoke(invocation)
 
     assert result.success
-    assert host.calls == [("send", "修复构建")]
+    assert host.calls == [("send", "修复构建", "session-1")]
     configure_host_controller(None)
 
 
