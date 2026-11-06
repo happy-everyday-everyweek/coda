@@ -7,6 +7,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# 本脚本始终为 Chaquopy 的 CPython 3.12 交叉编译 pyo3 扩展，
+# 由脚本统一设置，避免不同工作流遗漏环境变量。
+export PYO3_CROSS=1
+export PYO3_CROSS_PYTHON_VERSION=3.12
+
 DEFAULT_NDK_VERSION="28.2.13676358"
 NDK_PATH="${NDK:-${ANDROID_NDK_ROOT:-${ANDROID_HOME:-}/ndk/$DEFAULT_NDK_VERSION}}"
 if [ ! -d "$NDK_PATH" ]; then
