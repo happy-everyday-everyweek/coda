@@ -305,9 +305,6 @@ class SettingsDetailActivity :
             PAGE_HOOKS -> {
                 SettingsData.hooks(this, ZController.get(this).workspacePath())
             }
-            PAGE_PROMPT -> {
-                SettingsData.prompt(this)
-            }
             PAGE_SYSTEM_PROMPT -> {
                 SettingsData.systemPrompt(this)
             }
@@ -515,23 +512,7 @@ class SettingsDetailActivity :
 
     override fun onValueClick(key: String) {
         when {
-            key == "prompt_edit_global" -> {
-                openPromptEditor(false)
-            }
-
-            key == "prompt_edit_workspace" -> {
-                openPromptEditor(true)
-            }
-
-            key == "prompt_clear_global" -> {
-                clearPrompt(false)
-            }
-
-            key == "prompt_clear_workspace" -> {
-                clearPrompt(true)
-            }
-
-            key == "backup_export" -> {
+key == "backup_export" -> {
                 backupExportLauncher.launch(DataBackup.defaultFileName())
             }
 
@@ -1201,21 +1182,6 @@ class SettingsDetailActivity :
 
     // ------------------------------------------------------------ 系统提示词与数据备份
 
-    /** 打开 AGENTS.md 编辑器。 */
-    private fun openPromptEditor(workspace: Boolean) {
-        pendingPromptRestart = false
-        promptEditorLauncher.launch(
-            Intent(this, PromptEditorActivity::class.java)
-                .putExtra(
-                    PromptEditorActivity.EXTRA_SCOPE,
-                    if (workspace) PromptEditorActivity.SCOPE_WORKSPACE else PromptEditorActivity.SCOPE_GLOBAL,
-                ),
-        )
-    }
-
-    private fun promptFile(workspace: Boolean): File =
-        if (workspace) AgentPrompt.workspaceFile(this) else AgentPrompt.globalFile(this)
-
     /** 打开某一份系统提示词模板；保存后需要重启内核才会被读取。 */
     private fun openSystemPromptEditor(name: String) {
         val item = SystemPrompts.itemOf(name)
@@ -1227,38 +1193,19 @@ class SettingsDetailActivity :
         promptEditorLauncher.launch(
             Intent(this, PromptEditorActivity::class.java)
                 .putExtra(PromptEditorActivity.EXTRA_PATH, SystemPrompts.fileOf(this, name).absolutePath)
-                .putExtra(PromptEditorActivity.EXTRA_TITLE, item.title)
-                .putExtra(PromptEditorActivity.EXTRA_HINT, item.summary),
+                .putExtra(PromptEditorActivity.EXTRA_TITLE, item.title),
         )
     }
 
     private fun restartCoreForPrompts() {
-        snack("已保存，正在重启内核…")
+        snack("重启内核")
         ZController.get(this).restartCore { ok, msg ->
             runOnUiThread {
                 android.widget.Toast.makeText(
                     this,
-                    if (ok) "内核已重启，新的系统提示词已生效" else "内核重启失败：$msg",
+                    if (ok) "内核已重启" else "重启失败：$msg",
                     android.widget.Toast.LENGTH_LONG,
                 ).show()
-            }
-        }
-    }
-
-    /** 清空一份提示词：删掉文件就等于回到内置提示词。 */
-    private fun clearPrompt(workspace: Boolean) {
-        val target = promptFile(workspace)
-        if (!target.isFile) {
-            snack("当前没有自定义提示词")
-            return
-        }
-        sheetConfirm("清空提示词", "将删除 ${target.absolutePath}，回到内置提示词。", "清空") {
-            val err = AgentPrompt.save(target, "")
-            if (err == null) {
-                snack("已清空")
-                renderPage()
-            } else {
-                snack("清空失败：$err")
             }
         }
     }
@@ -1266,7 +1213,7 @@ class SettingsDetailActivity :
     private fun confirmImportBackup() {
         sheetConfirm(
             "导入数据",
-            "将用备份文件覆盖设置、模型供应商与两份提示词，随后重启核心；会话记录不受影响。",
+            "覆盖设置、供应商与提示词，并重启内核。",
             "选择文件",
         ) {
             backupImportLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
@@ -1274,15 +1221,15 @@ class SettingsDetailActivity :
     }
 
     private fun doExportBackup(uri: Uri) {
-        snack("正在导出…")
+        snack("导出")
         Thread {
             val result = runCatching { DataBackup.export(this, uri) }
             runOnUiThread {
                 val count = result.getOrNull()
                 if (count != null && count > 0) {
-                    snack("已导出 $count 项数据")
+                    snack("已导出")
                 } else {
-                    snack("导出失败：${result.exceptionOrNull()?.message ?: "没有可写入的内容"}")
+                    snack("导出失败：${result.exceptionOrNull()?.message ?: "空文件"}")
                 }
                 renderPage()
             }
@@ -1290,7 +1237,7 @@ class SettingsDetailActivity :
     }
 
     private fun doImportBackup(uri: Uri) {
-        snack("正在导入…")
+        snack("导入")
         val controller = ZController.get(this)
         Thread {
             val result = runCatching { DataBackup.import(this, uri) }
@@ -1303,7 +1250,8 @@ class SettingsDetailActivity :
                 }
                 controller.restartCore { ok, msg ->
                     runOnUiThread {
-                        val tip = if (ok) "已导入 $count 项，核心已重启" else "已导入 $count 项，但核心重启失败：$msg"
+                        val tip =
+                            if (ok) "已导入" else "导入完成，重启失败：$msg"
                         android.widget.Toast.makeText(this, tip, android.widget.Toast.LENGTH_LONG).show()
                         // 主题、字号等设置可能变了，重建页面让它们立即生效。
                         recreate()
@@ -3747,7 +3695,6 @@ class SettingsDetailActivity :
         const val PAGE_MCP = "mcp"
         const val PAGE_AUTOMATIONS = "automations"
         const val PAGE_HOOKS = "hooks"
-        const val PAGE_PROMPT = "prompt"
         const val PAGE_SYSTEM_PROMPT = "systemprompt"
         const val PAGE_BACKUP = "backup"
         const val PAGE_PET = "pet"

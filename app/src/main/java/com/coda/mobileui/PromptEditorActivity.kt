@@ -46,7 +46,7 @@ class PromptEditorActivity : BaseActivity() {
         title =
             intent.getStringExtra(EXTRA_TITLE)
                 ?: if (scope == SCOPE_WORKSPACE) "工作区提示词" else "用户级提示词"
-        hint = intent.getStringExtra(EXTRA_HINT) ?: "在这里写指令，例如：回答先给结论，再给依据"
+        hint = intent.getStringExtra(EXTRA_HINT) ?: ""
         initial = AgentPrompt.read(file)
         setContentView(buildUi())
         input.setText(initial)
@@ -178,8 +178,7 @@ class PromptEditorActivity : BaseActivity() {
 
     private fun updateMeta() {
         if (!::meta.isInitialized) return
-        val text = input.text.toString()
-        meta.text = "${text.length} 字符\n${file.absolutePath}"
+        meta.text = "${input.text.length} 字"
     }
 
     private fun saveAndFinish() {
@@ -197,7 +196,7 @@ class PromptEditorActivity : BaseActivity() {
         CodaSheet(this)
             .compact()
             .title("恢复默认")
-            .subtitle("将删除这个文件；下次内核启动会写回默认内容。")
+            .subtitle("删除后恢复默认")
             .secondaryAction("取消") { it.dismiss() }
             .primaryAction("恢复") { sheet ->
                 sheet.dismiss()
@@ -212,7 +211,7 @@ class PromptEditorActivity : BaseActivity() {
         CodaSheet(this)
             .compact()
             .title("放弃修改")
-            .subtitle("有未保存的修改，返回后会丢失。")
+            .subtitle("修改尚未保存")
             .secondaryAction("继续编辑") { it.dismiss() }
             .primaryAction("放弃") { sheet ->
                 sheet.dismiss()

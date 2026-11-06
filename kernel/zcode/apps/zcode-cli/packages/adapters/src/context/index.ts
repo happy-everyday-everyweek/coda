@@ -21,7 +21,8 @@ import type {
 } from "@zcode/contracts";
 import { resolveGitSnapshot } from "./git-snapshot.js";
 
-const DEFAULT_PRIORITY_FILES = ["AGENTS.md"];
+// AGENTS.md 优先；随后按 Claude Code 的约定读取 CLAUDE.md 与 CLAUDE.local.md。
+const DEFAULT_PRIORITY_FILES = ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md"];
 const DEFAULT_MAX_BYTES = 100 * 1024;
 
 export interface NodeContextSourceAdapterOptions {
@@ -100,19 +101,15 @@ async function resolveUserInstructions(
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const projectRoot = options.projectRoot ?? (await findProjectRoot(options.workingDirectory));
 
-  const defaultUserInstructionFile = await findDefaultUserInstructionFile(priorityFiles, env);
-  const workspaceInstructionFile = await findInstructionFile(
-    options.workingDirectory,
-    projectRoot,
-    priorityFiles,
-  );
+  const defaultUserInstructionFiles = await findDefaultUserInstructionFiles(priorityFiles, env);
+  // 工作区按 Claude Code 的规则从当前目录向上收集，全部注入；顺序改为由外到内，
+  // 越靠近当前目录的指令越靠后，具体规则可以覆盖外层通则。
+  const workspaceInstructionFiles = (
+    await findInstructionFiles(options.workingDirectory, projectRoot, priorityFiles)
+  ).reverse();
   const candidates = dedupeInstructionFileCandidates([
-    defaultUserInstructionFile
-      ? { ...defaultUserInstructionFile, scope: "user" as const }
-      : undefined,
-    workspaceInstructionFile
-      ? { ...workspaceInstructionFile, scope: "workspace" as const }
-      : undefined,
+    ...defaultUserInstructionFiles.map((file) => ({ ...file, scope: "user" as const })),
+    ...workspaceInstructionFiles.map((file) => ({ ...file, scope: "workspace" as const })),
   ]);
   const sources: ResolvedUserInstructionSource[] = [];
 
@@ -201,18 +198,19 @@ function mergeInstructionSources(
   };
 }
 
-async function findInstructionFile(
+async function findInstructionFiles(
   startDir: string,
   projectRoot: string | null,
   priorityFiles: string[],
-): Promise<{ filePath: string; fileName: string } | undefined> {
+): Promise<Array<{ filePath: string; fileName: string }>> {
+  const found: Array<{ filePath: string; fileName: string }> = [];
   let current = resolve(startDir);
 
   while (true) {
     for (const fileName of priorityFiles) {
       const filePath = join(current, fileName);
       if (await isFile(filePath)) {
-        return { filePath, fileName };
+        found.push({ filePath, fileName });
       }
     }
 
@@ -223,23 +221,31 @@ async function findInstructionFile(
     current = dirname(current);
   }
 
-  return undefined;
+  return found;
 }
 
-async function findDefaultUserInstructionFile(
+/**
+ * 用户级指令文件。
+ *
+ * 先看 Coda 自己的 `~/.zcode/AGENTS.md`，再看 Claude Code 的 `~/.claude/CLAUDE.md`；
+ * 两者都存在时都会注入，Coda 的在前。
+ */
+async function findDefaultUserInstructionFiles(
   priorityFiles: string[],
   env: NodeJS.ProcessEnv,
-): Promise<{ filePath: string; fileName: string } | undefined> {
-  if (!priorityFiles.includes("AGENTS.md")) {
-    return undefined;
-  }
+): Promise<Array<{ filePath: string; fileName: string }>> {
+  const home = resolveUserHomeDir(env);
+  const candidates: string[] = [];
+  if (priorityFiles.includes("AGENTS.md")) candidates.push(join(home, ".zcode", "AGENTS.md"));
+  if (priorityFiles.includes("CLAUDE.md")) candidates.push(join(home, ".claude", "CLAUDE.md"));
 
-  const filePath = join(resolveUserHomeDir(env), ".zcode", "AGENTS.md");
-  if (await isFile(filePath)) {
-    return { filePath, fileName: "AGENTS.md" };
+  const found: Array<{ filePath: string; fileName: string }> = [];
+  for (const filePath of candidates) {
+    if (await isFile(filePath)) {
+      found.push({ filePath, fileName: basename(filePath) });
+    }
   }
-
-  return undefined;
+  return found;
 }
 
 function resolveUserHomeDir(env: NodeJS.ProcessEnv): string {
