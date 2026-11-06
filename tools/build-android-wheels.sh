@@ -7,21 +7,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# 只改变源码索引的下载地址，不跳过 pip 的包元数据与完整性校验。
-# CI 可通过 PIP_INDEX_URL 覆盖；Cargo 使用镜像稀疏索引，失败时不自动回退。
-export PIP_INDEX_URL="${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
-export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-mkdir -p "$CARGO_HOME"
-if [ ! -f "$CARGO_HOME/config.toml" ]; then
-  printf '%s\n' \
-    '[source.crates-io]' \
-    'replace-with = "rsproxy-sparse"' \
-    '' \
-    '[source.rsproxy-sparse]' \
-    'registry = "sparse+https://rsproxy.cn/index/"' \
-    > "$CARGO_HOME/config.toml"
-fi
-
 DEFAULT_NDK_VERSION="28.2.13676358"
 NDK_PATH="${NDK:-${ANDROID_NDK_ROOT:-${ANDROID_HOME:-}/ndk/$DEFAULT_NDK_VERSION}}"
 if [ ! -d "$NDK_PATH" ]; then
