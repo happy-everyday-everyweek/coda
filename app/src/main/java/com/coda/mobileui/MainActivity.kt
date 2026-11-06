@@ -430,6 +430,8 @@ class MainActivity : BaseActivity() {
         )
         emptyState = findViewById(R.id.empty_state)
         chatView = findViewById(R.id.chat_view)
+        // 首帧也走统一空态渲染：核心启动/解包期间同样能选择或创建工作区。
+        showEmptyState()
         // 初始态：新会话且未选工作区时胶囊是「运行位置」，否则是模型名。
         syncHeaderPill()
         updateSendAvailability()
