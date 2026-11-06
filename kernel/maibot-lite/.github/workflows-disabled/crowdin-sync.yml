@@ -1,0 +1,77 @@
+name: Crowdin Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+  push:
+    branches:
+      - main
+      - r-dev
+    paths:
+      - "crowdin.yml"
+      - "locales/zh-CN/*.json"
+      - "prompts/zh-CN/**/*.prompt"
+      - "dashboard/src/i18n/locales/zh.json"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-current-branch:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync translations with Crowdin
+        uses: crowdin/github-action@v2
+        with:
+          config: crowdin.yml
+          upload_sources: true
+          upload_translations: false
+          download_translations: true
+          localization_branch_name: l10n_${{ github.ref_name }}
+          create_pull_request: true
+          pull_request_title: "chore(i18n): sync Crowdin translations"
+          pull_request_body: "Automated translation sync from Crowdin."
+          pull_request_base_branch_name: ${{ github.ref_name }}
+          commit_message: "chore(i18n): sync Crowdin translations"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+
+  sync-scheduled-branches:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        base_branch:
+          - main
+          - r-dev
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.base_branch }}
+      - name: Sync scheduled translations with Crowdin
+        uses: crowdin/github-action@v2
+        with:
+          config: crowdin.yml
+          skip_ref_checkout: true
+          upload_sources: true
+          upload_translations: false
+          download_translations: true
+          localization_branch_name: l10n_${{ matrix.base_branch }}
+          create_pull_request: true
+          pull_request_title: "chore(i18n): sync Crowdin translations"
+          pull_request_body: "Automated translation sync from Crowdin."
+          pull_request_base_branch_name: ${{ matrix.base_branch }}
+          commit_message: "chore(i18n): sync Crowdin translations"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}

@@ -113,11 +113,11 @@ object SettingsData {
             SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
             SettingRow.Category("systemprompt", "系统提示词", "编辑内核内置的提示词段落", R.drawable.ic_edit),
             SettingRow.Category("prompt", "指令文件", "AGENTS.md：追加给 Agent 的指令", R.drawable.ic_file),
+            SettingRow.Category("coda_bot", "Coda Bot", "形象、人设、记忆与陪伴设置", R.drawable.ic_person),
             // 实验性功能：默认全部关闭，开启即代表用户知情尝试。Web UI 的前端资产
             // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
             SettingRow.Header("实验性功能"),
             SettingRow.Category("webui", "Web UI", "局域网网页端，运行时从 GitHub 拉取", R.drawable.ic_globe),
-            SettingRow.Category("pet", "宠物", "形象、提示方式与动态效果", R.drawable.ic_logo_spark),
             SettingRow.Header("数据与统计"),
             SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
             // 日志是诊断入口，和"使用统计"同属"看清应用在做什么"这一类，归到数据与统计下。
@@ -166,9 +166,6 @@ object SettingsData {
         SettingsPage(
             "外观",
             listOf(
-                // 这一行只在「其它设置页」开关打开时才有内容；关掉时高度为 0。
-                // 放在最前面，是为了让它趴在第一张卡片的留白里，而不是压住正文。
-                SettingRow.Custom(kind = SettingRow.Custom.KIND_PET_STAGE, key = "appearance"),
                 SettingRow.Header("主题"),
                 SettingRow.Radio("跟随系统", store.themeMode == SettingsStore.MODE_SYSTEM, "theme=${SettingsStore.MODE_SYSTEM}"),
                 SettingRow.Radio("浅色", store.themeMode == SettingsStore.MODE_LIGHT, "theme=${SettingsStore.MODE_LIGHT}"),

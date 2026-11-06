@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.chaquo.python")
 }
 
 android {
@@ -22,6 +23,10 @@ android {
         // 允许 CI 用 -PcodaVersionCode/-PcodaVersionName 覆盖，Tag 打包即用 Tag 号。
         versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt() ?: 28
         versionName = (project.findProperty("codaVersionName") as String?) ?: "0.8.4-core"
+        // Personal Agent 内核只提供 Python 3.12 的 64 位 Chaquopy 运行时。
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
     signingConfigs {
         // 本地或 CI 提供密钥时才启用；否则 release 复用 debug 签名，保证产物可安装。
@@ -92,6 +97,43 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.12"
+        pip {
+            install("-r", "../kernel/maibot-lite/requirements-lite.txt")
+            // pydantic-core 没有 Android 轮子，由 CI 交叉编译后放到这里。
+            options("--find-links", file("wheels").absolutePath)
+        }
+    }
+    sourceSets {
+        getByName("main") {
+            srcDirs(
+                layout.buildDirectory.dir("maibot-core").get().asFile.absolutePath,
+            )
+        }
+    }
+}
+
+val syncMaibotCore by tasks.registering(Exec::class) {
+    workingDir = rootProject.projectDir
+    commandLine("bash", "tools/sync-maibot-core.sh")
+    outputs.dir(layout.buildDirectory.dir("maibot-core"))
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(syncMaibotCore)
+}
+
+// Chaquopy 的源码合并任务直接读 build/maibot-core；Gradle 9 要求显式声明这层依赖，
+// 否则会以「使用了别的任务的输出却没声明依赖」直接失败（CI 在 mergeDebugPythonSources 上报过）。
+tasks.configureEach {
+    val usesCoreSources =
+        name.contains("Python") &&
+            (name.startsWith("merge") || name.startsWith("extract") || name.startsWith("install"))
+    if (usesCoreSources) dependsOn(syncMaibotCore)
 }
 
 // 显式声明构建工具链，不再依赖构建机的 JAVA_HOME。

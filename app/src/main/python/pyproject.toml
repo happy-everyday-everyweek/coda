@@ -1,0 +1,21 @@
+# 仅供 Chaquopy 识别 Python 源码包结构使用。
+# 真实依赖清单是 kernel/maibot-lite/requirements-lite.txt，不在此处声明；
+# 在上游 pyproject 里保留全量 dependencies 会让打包边界被误判。
+
+[build-system]
+requires = ["setuptools>=80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MaiBot"
+version = "1.3.15"
+requires-python = ">=3.12"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src", "src.*"]
+exclude = ["src.MaiBot.egg-info*", "src.data*", "*.__pycache__*"]
+namespaces = true

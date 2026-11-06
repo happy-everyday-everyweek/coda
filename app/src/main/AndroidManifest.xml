@@ -32,6 +32,10 @@
             android:name=".SettingsActivity"
             android:exported="false" />
         <activity
+            android:name=".personal.CodaBotActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".SettingsDetailActivity"
             android:exported="false"
             android:theme="@style/Theme.Coda.SettingsDetail" />

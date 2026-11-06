@@ -1,0 +1,134 @@
+[inner]
+version = "1.17.24"
+
+[web]
+preview_chars = 4000
+services = {}
+
+[[models]]
+model_type = "llm"
+model_identifier = "cn:deepseek-v4.1-flash"
+name = "ds-flash-think"
+api_provider = "WorkBuddy"
+price_in = 0.0
+cache = false
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = true
+force_stream_mode = false
+visual = true
+extra_params = {reasoning_effort = "high"}
+
+[[models]]
+model_type = "llm"
+model_identifier = "cn:deepseek-v4.1-flash"
+name = "ds-flash"
+api_provider = "WorkBuddy"
+price_in = 0.0
+cache = false
+cache_price_in = 0.0
+price_out = 0.0
+price_periods = []
+send_temperature = true
+force_stream_mode = false
+visual = true
+extra_params = {reasoning_effort = "low"}
+
+[model_task_config.web_search]
+model_list = []
+
+[model_task_config.replyer]
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 1.0
+selection_strategy = "random"
+hard_timeout = 240.0
+
+[model_task_config.planner]
+model_list = ["ds-flash"]
+max_tokens = 16384
+temperature = 0.7
+selection_strategy = "random"
+hard_timeout = 180.0
+
+[model_task_config.memory]
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.3
+selection_strategy = "random"
+hard_timeout = 240.0
+
+[model_task_config.utils]
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.5
+selection_strategy = "random"
+hard_timeout = 120.0
+
+[model_task_config.learner]
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 120.0
+
+[model_task_config.fast_model]
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.3
+selection_strategy = "balance"
+hard_timeout = 120.0
+
+[model_task_config.emoji]
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 120.0
+
+[model_task_config.vlm]
+model_list = ["ds-flash"]
+max_tokens = 8192
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 240.0
+
+[model_task_config.voice]
+model_list = []
+max_tokens = 8192
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 120.0
+
+[model_task_config.embedding]
+model_list = []
+max_tokens = 4096
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 60.0
+
+[model_task_config.image_embedding]
+model_list = []
+max_tokens = 4096
+temperature = 0.7
+selection_strategy = "balance"
+hard_timeout = 60.0
+
+[[api_providers]]
+name = "WorkBuddy"
+base_url = "http://192.168.1.18:7864/v1"
+api_key = "none"
+client_type = "openai"
+auth_type = "none"
+auth_header_name = "Authorization"
+auth_header_prefix = "Bearer"
+auth_query_name = "api_key"
+default_headers = {}
+default_query = {}
+model_list_endpoint = "/models"
+reasoning_parse_mode = "auto"
+tool_argument_parse_mode = "auto"
+max_retry = 3
+timeout = 180
+retry_interval = 4

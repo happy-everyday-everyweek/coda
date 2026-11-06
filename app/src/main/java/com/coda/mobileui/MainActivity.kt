@@ -495,7 +495,8 @@ class MainActivity : BaseActivity() {
         }
 
         buildDrawer()
-        setupPetBar()
+        // 宠物动画已迁到 Personal Agent 页面，Coding Agent 会话不再创建宠物栏。
+        findViewById<android.view.View>(R.id.pet_bar_host)?.visibility = android.view.View.GONE
         attachZController()
         requestStoragePermissionIfNeeded()
 
@@ -712,6 +713,18 @@ class MainActivity : BaseActivity() {
                 }
             },
         )
+        val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        val botRow = createActionRow(inflater, actions, R.drawable.ic_ring, botProfile.name) {
+                startActivity(android.content.Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
+            }
+        botRow.tag = "drawer_bot"
+        actions.addView(
+            botRow,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(2) },
+        )
         // 新对话与设置之间的间隔比「历史列表与动作项」再小一半。
         actions.addView(
             createActionRow(inflater, actions, R.drawable.ic_settings, R.string.nav_settings) {
@@ -746,10 +759,18 @@ class MainActivity : BaseActivity() {
         iconRes: Int,
         titleRes: Int,
         onClick: () -> Unit,
+    ): View = createActionRow(inflater, container, iconRes, getString(titleRes), onClick)
+
+    private fun createActionRow(
+        inflater: LayoutInflater,
+        container: LinearLayout,
+        iconRes: Int,
+        title: CharSequence,
+        onClick: () -> Unit,
     ): View =
         inflater.inflate(R.layout.view_drawer_action, container, false).apply {
             findViewById<ImageView>(R.id.action_icon).setImageResource(iconRes)
-            findViewById<TextView>(R.id.action_title).setText(titleRes)
+            findViewById<TextView>(R.id.action_title).text = title
             setOnClickListener {
                 onClick()
                 drawerLayout.closeDrawer(Gravity.LEFT)
@@ -1569,24 +1590,7 @@ class MainActivity : BaseActivity() {
 
     // ---------------------------------------------------------------- 宠物
 
-    /**
-     * 装配输入框上方的宠物条。
-     *
-     * 位置在 composer_container 上方的 pet_bar_host 里，收起时高度为 0，
-     * 所以不需要在别处补 padding。
-     */
-    private fun setupPetBar() {
-        val host = findViewById<android.widget.FrameLayout>(R.id.pet_bar_host) ?: return
-        if (petBar != null) return
-        val bar = PetBar(this)
-        bar.attachTo(host)
-        val colors = accentTriple()
-        bar.applySkin(this, SettingsStore.get(this).petSkinId, colors[0], colors[1], colors[2])
-        petBar = bar
-        // 点它一下就把状态重复讲一遍（相当于"再看一眼"），不做别的跳转
-        bar.petView().setOnClickListener { syncPet(force = true) }
-        applyPetSettings()
-    }
+    // Coding Agent 页面不再装配宠物条，宠物动画只在 Personal Agent 页面展示。
 
     /**
      * 把宠物相关设置应用到已经建好的控件上。
@@ -4289,6 +4293,11 @@ class MainActivity : BaseActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Bot 改名或改形象后，侧边栏与待发内容无需重建整页即可同步名称。
+        findViewById<View>(R.id.drawer_content)
+            ?.findViewWithTag<View>("drawer_bot")
+            ?.findViewById<TextView>(R.id.action_title)
+            ?.text = com.coda.mobileui.personal.CodaBotStore.profile(this).name
         // 浏览器控制引擎需要 Activity 承载隐藏 WebView。
         BrowserControl.attachActivity(this)
         // 从设置页回来时，宠物形象与三项开关可能已经改过，这里重新套一遍。

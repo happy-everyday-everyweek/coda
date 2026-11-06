@@ -1,0 +1,64 @@
+name: Crowdin Bootstrap Target Translations
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_branch:
+        description: "Repository branch whose committed target translations should be bootstrapped into Crowdin."
+        required: true
+        type: choice
+        options:
+          - main
+          - r-dev
+      confirm_bootstrap:
+        description: "Explicit confirmation for the one-time or exceptional bootstrap upload."
+        required: true
+        type: choice
+        options:
+          - "no"
+          - "yes-bootstrap-current-target-translations"
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-target-translations:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Require explicit bootstrap confirmation
+        if: inputs.confirm_bootstrap != 'yes-bootstrap-current-target-translations'
+        run: |
+          echo "This workflow uploads committed target translations into Crowdin." >&2
+          echo "Re-run it with confirm_bootstrap=yes-bootstrap-current-target-translations when you really want the bootstrap path." >&2
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_branch }}
+
+      - name: Bootstrap committed target translations into Crowdin
+        uses: crowdin/github-action@v2
+        with:
+          config: crowdin.yml
+          skip_ref_checkout: true
+          upload_sources: true
+          upload_translations: true
+          download_translations: false
+          create_pull_request: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+
+      - name: Summarize bootstrap outcome
+        env:
+          BASE_BRANCH: ${{ inputs.base_branch }}
+        run: |
+          {
+            echo "## Crowdin bootstrap completed"
+            echo
+            echo "- Bootstrapped committed target-locale files from \`${BASE_BRANCH}\` into Crowdin."
+            echo "- This workflow is for one-time or exceptional seeding only."
+            echo "- The steady-state sync path remains \`crowdin-sync.yml\`, which uploads only \`zh-CN\` source assets on normal push-triggered runs and returns translations through \`l10n_${BASE_BRANCH}\` pull requests."
+          } >> "$GITHUB_STEP_SUMMARY"
