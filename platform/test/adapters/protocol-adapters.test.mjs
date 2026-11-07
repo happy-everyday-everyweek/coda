@@ -52,10 +52,13 @@ function noSupportedValues(capabilities) {
 
 test("勘察证据：8 个 agent 都有版本与入口记录，codex 的 initialize 握手是真实响应", () => {
   const all = listProbeEvidence();
-  assert.equal(all.length, 8);
+  assert.ok(all.length >= 8, `勘察证据不足: ${all.length}`);
+  assert.ok(all.some((p) => p.id === "qoder-cn"));
+  assert.ok(all.some((p) => p.id === "codebuddy"));
   for (const item of all) {
-    assert.ok(item.packageVersion, `${item.id} 缺少版本`);
-    assert.ok(item.totalProbes > 0);
+    assert.ok(item.totalProbes > 0, `${item.id} 没有勘察记录`);
+    // npm 安装的 agent 有 packageVersion；curl 安装的（fx/kimi/trae 等）允许为 null
+    if (item.package) assert.ok(item.packageVersion, `${item.id} 缺少包版本`);
   }
   const codex = loadProbeEvidence("codex");
   assert.ok(codex.probes.some((p) => p.cmd === "codex app-server --help"), "缺少 app-server 帮助记录");

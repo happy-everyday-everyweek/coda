@@ -81,7 +81,14 @@
 | opencode | acp-profile（原生 HTTP+SSE 待接） | CI 探测 1.19.5 | host | experimental（ACP initialize + session/new 匿名成功；session/prompt 需登录，超时已录制） | `fixtures/adapters/opencode-acp-flow.fixture.json`、`platform/adapters/acp-profiles.mjs` |
 | grok / hermes / fx / antigravity | acp-profile | 未安装 | host | UNVERIFIED（ACP 命令来自 Zeron README；未在本环境安装验证） | `platform/adapters/acp-profiles.mjs`、`platform/docs/REFERENCE-PROJECTS.md` |
 | qwen / copilot / auggie / crush | 各自 CLI | CI 探测版本见 probes | host | IN PROGRESS（入口已验证，未实现适配器） | `fixtures/adapters/probes/*.json` |
-| Qoder / TRAE / WorkBuddy / CodeBuddy / OpenClaw / Kimi / Coda 宿主桥 | — | — | — | UNVERIFIED（国产，需协议勘察或走官方/参考项目接口） | `platform/docs/REFERENCE-PROJECTS.md` §3 |
+| qoder | headless（Claude 同族） | CI 实测 1.1.85 | host | experimental（headless 入口已验证；无真实回合录制；ACP 待复核） | `fixtures/adapters/probes/qoder-cn.json`、`platform/adapters/headless-profiles.mjs` |
+| codebuddy | acp-profile / headless | CI 实测 2.181.0 | host | experimental（--acp 与 stream-json 入口已验证；无真实回合录制） | `fixtures/adapters/probes/codebuddy.json`、`platform/adapters/{acp-profiles,headless-profiles}.mjs` |
+| openclaw | acp-profile | CI 实测 2026.11.1 | host | experimental（`openclaw acp` 存在；需 Gateway 凭据） | `fixtures/adapters/probes/openclaw.json` |
+| fx | acp-profile | CI 实测 0.0.16 | host | experimental（`fx acp` 存在；需模型凭据） | `fixtures/adapters/probes/fx.json` |
+| kimi | acp-profile / headless | 安装路径待确认 | host | UNVERIFIED（CI 安装后不在 PATH） | `fixtures/adapters/probes/kimi.json` |
+| trae | — | — | — | BLOCKED（企业版旗舰套餐门槛） | `platform/docs/DOMESTIC-AGENTS.md` §2 |
+| workbuddy | — | — | — | BLOCKED（官方无本地可编程入口） | `platform/docs/DOMESTIC-AGENTS.md` §3 |
+| coda 宿主桥（AGT-130） | — | — | — | BLOCKED（需 Android 真机/ADB） | — |
 
 生成与校验规则见 `platform/docs/adr/ADR-0005-agent-capability-matrix.md` 与
 `platform/adapters/capability-matrix.mjs`；界面只能通过 `supportsCapability()` 读取矩阵。

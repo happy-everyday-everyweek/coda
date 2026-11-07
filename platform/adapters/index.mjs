@@ -224,3 +224,9 @@ export {
   listInstallCatalog,
   normalizePlatform,
 } from "./install-catalog.mjs";
+
+export {
+  HEADLESS_PROFILES,
+  createHeadlessProfileAdapter,
+  getHeadlessProfile,
+} from "./headless-profiles.mjs";

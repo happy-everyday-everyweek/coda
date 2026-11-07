@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-07T13:46:05.097Z",
+  "agent": {
+    "id": "kimi",
+    "package": null,
+    "bin": "kimi",
+    "needsAuth": true,
+    "commands": [
+      {
+        "cmd": "kimi --version",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "kimi --help",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "kimi acp --help",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "kimi web --help",
+        "timeoutMs": 20000
+      }
+    ]
+  },
+  "packageVersion": null,
+  "runner": {
+    "os": "linux",
+    "arch": "x64",
+    "release": "7.0.0-1019-azure",
+    "node": "v24.22.2",
+    "host": "runnervmwuk1x"
+  },
+  "probes": [
+    {
+      "cmd": "kimi --version",
+      "timeoutMs": 20000,
+      "exitCode": 127,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 101,
+      "stdout": "",
+      "stderr": "bash: line 1: kimi: command not found\n"
+    },
+    {
+      "cmd": "kimi --help",
+      "timeoutMs": 20000,
+      "exitCode": 127,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 95,
+      "stdout": "",
+      "stderr": "bash: line 1: kimi: command not found\n"
+    },
+    {
+      "cmd": "kimi acp --help",
+      "timeoutMs": 20000,
+      "exitCode": 127,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 95,
+      "stdout": "",
+      "stderr": "bash: line 1: kimi: command not found\n"
+    },
+    {
+      "cmd": "kimi web --help",
+      "timeoutMs": 20000,
+      "exitCode": 127,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 97,
+      "stdout": "",
+      "stderr": "bash: line 1: kimi: command not found\n"
+    }
+  ]
+}

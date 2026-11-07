@@ -150,3 +150,23 @@ test("Claude 能力声明覆盖全部键且没有 supported", () => {
   assert.deepEqual(Object.keys(decl).sort(), [...CAPABILITY_KEYS].sort());
   assert.deepEqual(noSupportedValues(decl), []);
 });
+
+test("headless 画像：Claude/Qoder/CodeBuddy 命令与能力诚实", async () => {
+  const { HEADLESS_PROFILES, createHeadlessProfileAdapter, getHeadlessProfile } = await import("../../adapters/headless-profiles.mjs");
+  assert.deepEqual(Object.keys(HEADLESS_PROFILES).sort(), ["claude", "codebuddy", "qoder"]);
+  assert.equal(HEADLESS_PROFILES.qoder.taskId, "AGT-114");
+  assert.equal(HEADLESS_PROFILES.qoder.command, "qodercn");
+  assert.equal(HEADLESS_PROFILES.codebuddy.taskId, "AGT-117");
+  assert.equal(HEADLESS_PROFILES.claude.protocolConfirmed, true);
+  assert.equal(HEADLESS_PROFILES.qoder.protocolConfirmed, false);
+  assert.equal(getHeadlessProfile("claude").command, "claude");
+  assert.throws(() => getHeadlessProfile("nope"), /unknown headless profile/);
+
+  const adapter = createHeadlessProfileAdapter({ profileId: "codebuddy", instanceId: "ai_cb", command: process.execPath, baseArgs: [FAKE] });
+  await adapter.probe();
+  const decl = adapter.capabilities();
+  assert.equal(decl.provider, "codebuddy");
+  assert.deepEqual(Object.keys(decl.capabilities).sort(), [...CAPABILITY_KEYS].sort());
+  assert.deepEqual(noSupportedValues(decl.capabilities), []);
+  await adapter.dispose();
+});

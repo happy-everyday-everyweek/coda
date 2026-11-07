@@ -524,3 +524,21 @@ TRAE(ACP/exec)     ───┘                                   ↑
 6. **CodeBuddy（AGT-117）**：先 ACP（稳定），HTTP API（Beta）作为后续扩展；国内/国际只差
    `CODEBUDDY_INTERNET_ENVIRONMENT`，不拆两套适配器。
 7. **优先级**：CodeBuddy → Qoder → Kimi（都只差 CI 复核 + 协议录制）。
+
+## 12. CI 无凭证复核结果（2026-11-07，run 42378437823）
+
+> 公开仓库 `happy-everyday-everyweek/coda-agent-probes`，矩阵安装 + `--version/--help` 探测；
+> 证据文件：`platform/fixtures/adapters/probes/<agent>.json`。
+
+| Agent | 安装结果 | 版本 | 观察到的入口 | 结论 |
+|---|---|---|---|---|
+| Qoder（qoder-cn） | ✅ curl 安装成功，bin `qodercn` | 1.1.85 | `-p`、`--output-format`、`--session-id`、`--resume`、`--permission-mode`；`--help` 未见 `--acp` | headless 可接；ACP 待升级/企业版复核 |
+| CodeBuddy | ✅ npm 安装成功 | 2.181.0 | `--acp`、`--serve`（HTTP+SSE）、`--output-format/--input-format stream-json`、`--resume` | ACP 与 headless 双通道可接 |
+| Kimi Code | ⚠️ 安装脚本执行成功但 `kimi` 不在 CI PATH | — | 未探测到 | 需补 PATH/安装目录探测（run11） |
+| TRAE | ⚠️ 安装脚本未产出 `traecli` | — | — | 与企业版门槛一致：无凭证不可用 |
+| OpenClaw | ✅ npm 安装成功 | 2026.11.1 | `openclaw acp`（Gateway 桥） | ACP 画像可接，需 Gateway 凭据 |
+| fx | ✅ curl 安装成功 | 0.0.16 | `fx acp`（stdio） | 与现有 ACP 画像一致 |
+| WorkBuddy | — | — | 官方无 CLI | BLOCKED（不采用非官方网关照生产） |
+
+结论：Qoder/CodeBuddy 的 headless 适配器已按「Claude 同族 CLI」接入（`adapters/headless-profiles.mjs`），
+OpenClaw/fx 走 ACP 画像；Kimi 待安装路径修复后复核。

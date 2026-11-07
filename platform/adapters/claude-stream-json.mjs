@@ -99,9 +99,9 @@ function truncate(value, max = 2000) {
 }
 
 export class ClaudeStreamJsonAdapter extends BaseAdapter {
-  constructor({ instanceId, environment = "host", command = "claude", baseArgs = [], extraArgs = [], permissionMode = null, model = null, spawnImpl = spawn, version = null, probeTimeoutMs = 15000, clock = () => new Date() } = {}) {
-    super({ instanceId, environment, provider: "claude-code", version, clock });
-    this.command = command; this.baseArgs = baseArgs; this.extraArgs = extraArgs;
+  constructor({ instanceId, environment = "host", command = "claude", provider = "claude-code", taskId = "AGT-111", baseArgs = [], extraArgs = [], permissionMode = null, model = null, spawnImpl = spawn, version = null, probeTimeoutMs = 15000, clock = () => new Date() } = {}) {
+    super({ instanceId, environment, provider, version, clock });
+    this.command = command; this.taskId = taskId; this.baseArgs = baseArgs; this.extraArgs = extraArgs;
     this.permissionMode = permissionMode; this.model = model;
     this.spawnImpl = spawnImpl; this.probeTimeoutMs = probeTimeoutMs;
     this.probing = { path: null, streamJsonDetected: false, resumeDetected: false, helpHead: null };
@@ -113,7 +113,7 @@ export class ClaudeStreamJsonAdapter extends BaseAdapter {
     if (!executable) {
       this.version = "0.0.0-unknown";
       this.declareCapabilities(claudeStreamCapabilityDeclaration());
-      return sideEffectFreeProbe({ installed: false, version: null, loggedIn: null, path: null, details: { taskId: CLAUDE_STREAM_TASK_ID, reason: "not-found", command: this.command, blocked: true } });
+      return sideEffectFreeProbe({ installed: false, version: null, loggedIn: null, path: null, details: { taskId: this.taskId, reason: "not-found", command: this.command, blocked: true } });
     }
     const versionRun = await runProcess({ command: executable, args: [...this.baseArgs, "--version"], timeoutMs: this.probeTimeoutMs, isolate: false }).catch(() => null);
     const helpRun = await runProcess({ command: executable, args: [...this.baseArgs, "--help"], timeoutMs: this.probeTimeoutMs, isolate: false }).catch(() => null);
@@ -123,7 +123,7 @@ export class ClaudeStreamJsonAdapter extends BaseAdapter {
     this.version = (versionRun?.stdout ?? "").trim() || "0.0.0-unknown";
     this.declareCapabilities(claudeStreamCapabilityDeclaration({ protocolDetected: streamJsonDetected }));
     this.probing = { path: executable, streamJsonDetected, resumeDetected, helpHead: helpText.slice(0, 400) };
-    return sideEffectFreeProbe({ installed: true, version: this.version, loggedIn: null, path: executable, details: { taskId: CLAUDE_STREAM_TASK_ID, protocol: CLAUDE_STREAM_PROTOCOL.name, streamJsonDetected, resumeDetected, note: "loggedIn 不提供无副作用探测" } });
+    return sideEffectFreeProbe({ installed: true, version: this.version, loggedIn: null, path: executable, details: { taskId: this.taskId, protocol: CLAUDE_STREAM_PROTOCOL.name, streamJsonDetected, resumeDetected, note: "loggedIn 不提供无副作用探测" } });
   }
 
   async createSession({ sessionId } = {}) {

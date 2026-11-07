@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-07T13:45:55.595Z",
+  "agent": {
+    "id": "fx",
+    "package": null,
+    "bin": "fx",
+    "needsAuth": true,
+    "commands": [
+      {
+        "cmd": "fx --version",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "fx --help",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "fx acp --help",
+        "timeoutMs": 20000
+      }
+    ]
+  },
+  "packageVersion": null,
+  "runner": {
+    "os": "linux",
+    "arch": "x64",
+    "release": "7.0.0-1019-azure",
+    "node": "v24.22.2",
+    "host": "runnervmwuk1x"
+  },
+  "probes": [
+    {
+      "cmd": "fx --version",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 141,
+      "stdout": "0.0.16\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "fx --help",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 119,
+      "stdout": "𝒇x v0.0.16\nFast, native coding agent for the terminal.\n\nfx starts an interactive session by default. Use `fx ask` to run one\nnoninteractive request.\n\nUsage:\n  fx [flags]\n  fx <command> [...flags] [...args]\n\nCommands:\n  ask <prompt>                       Run one noninteractive request\n\n  pr [context]                       Draft or publish a pull request\n  issue [context]                    Draft or publish a GitHub issue\n\n  sessions                           List saved sessions for the current\n                                     workspace\n  session <last|id>                  Inspect, resume, or recover saved sessions\n  session resume [last|id]           Resume the latest workspace session or a\n                                     session by id\n  session recover <id>               Copy a recoverable corrupt session\n\n  login [vercel|codex|grok]          Sign in to a model provider\n  logout [vercel|codex|grok]         Sign out of a model provider\n  provider <name>                    Choose the active model provider\n  models                             List available models\n\n  setup                              Configure a Vercel AI Gateway API key\n  teams                              Choose a Vercel AI Gateway team\n  credits|balance                    Show Vercel AI Gateway credits\n\n  usage [--period <today|7d|month>]  Show your provider's usage and spend\n\n  status                             Show configuration and runtime information\n  doctor                             Run local health and preflight checks\n  mcp <command> ...                  Manage MCP servers without opening the\n                                     interactive shell\n  slack <install|status|refresh>     Install and manage the workspace Slack bot\n                                     locally\n  permissions                        Show the permission mode and rules\n  workspace                          Manage additional workspace directories\n  upgrade|update                     Upgrade fx on the selected release channel\n  acp                                Start an ACP server over stdio\n  help                               Show this help\n\nFlags:\n  --context-limit <spec>       Set name=bytes|off; repeatable\n  --add-dir <path>             Add a workspace directory; repeatable\n  --no-additional-dirs         Ignore saved additional directories\n  --provider <name>            Override the model provider for an interactive\n                               session (gateway, codex, grok, or a configured\n                               name)\n  --model <id>                 Override the model for an interactive session\n  --effort <level>             Override the reasoning effort for an interactive\n                               session\n  --fast, --no-fast            Turn Fast mode on or off for an interactive\n                               session\n  --ultrafast, --no-ultrafast  Request Ultra mode on or off for an interactive\n                               session\n  -c, --continue               Resume the remembered workspace session\n  -r                           Open the saved-session picker\n  --resume [last|<id>]         Resume the latest workspace session or an exact\n                               ID\n  --resume-last                Resume the latest workspace session\n  --resume-<id>                Resume a session by exact ID\n  -h, --help                   Display this help and exit\n  -v, --version                Print the fx version and exit\n\nExamples:\n  fx\n      Start a fresh interactive session\n\n  fx ask \"Explain the changes in this repository\"\n      Run one request and exit\n\n  fx session resume last\n      Continue the latest session for this workspace\n\n  fx status --json\n      Inspect the current configuration as JSON\n\nRun `fx <command> --help` for command-specific usage and options.\nRun `/help` inside an interactive session for slash commands.\n\nLearn more about fx:  https://fx.sh/docs\nReport a problem:     run `/feedback` inside fx\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "fx acp --help",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 123,
+      "stdout": "fx acp\n\nStart an ACP server over stdio\n\nUsage:\n  fx acp [--model <id>] [--ultrafast|--no-ultrafast] [--log-file <path>]\n\nOptions:\n  --model <id>       Override the default model\n  --ultrafast        Request Ultra mode when the model supports it\n  --no-ultrafast     Disable Ultra mode\n  --log-file <path>  Write ACP logs to a file\n",
+      "stderr": ""
+    }
+  ]
+}
