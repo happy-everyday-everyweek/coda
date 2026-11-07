@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-07T13:46:59.283Z",
+  "generatedAt": "2026-11-07T13:52:31.477Z",
   "agent": {
     "id": "openclaw",
     "package": "openclaw",
@@ -18,6 +18,14 @@
       {
         "cmd": "openclaw acp --help",
         "timeoutMs": 30000
+      },
+      {
+        "cmd": "openclaw acp",
+        "timeoutMs": 30000,
+        "acpFlow": {
+          "prompt": "ping",
+          "timeoutMs": 25000
+        }
       }
     ]
   },
@@ -36,7 +44,7 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 358,
+      "durationMs": 219,
       "stdout": "OpenClaw 2026.11.1 (4ffdd20)\n",
       "stderr": ""
     },
@@ -46,7 +54,7 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 146,
+      "durationMs": 175,
       "stdout": "\nOpenClaw 2026.11.1 (4ffdd20) — All your chats, one OpenClaw.\n\nUsage: openclaw [options] [command]\n\nOptions:\n  --container <name>   Run the CLI inside a running Podman/Docker container\n                       named <name> (default: env OPENCLAW_CONTAINER)\n  --dev                Dev profile: isolate state under ~/.openclaw-dev, default\n                       gateway port 19001, and shift derived ports\n                       (browser/canvas)\n  -h, --help           Display help for command\n  --log-level <level>  Global log level override for file + console\n                       (silent|fatal|error|warn|info|debug|trace)\n  --no-color           Disable ANSI colors\n  --profile <name>     Use a named profile (isolates\n                       OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under\n                       ~/.openclaw-<name>)\n  -V, --version        output the version number\n\nCommands:\n  Hint: commands suffixed with * have subcommands. Run <command> --help for details.\n  acp *                Run an ACP bridge backed by the Gateway\n  agent *              Run an agent turn via the Gateway (use --local for\n                       embedded)\n  agents *             Manage isolated agents (workspaces + auth + routing)\n  approvals *          Manage approval policy and pending requests\n  attach               Attach Claude Code to a gateway session with scoped MCP\n                       tools\n  audit                Inspect activity records and exact-run identity context\n  automations *        Manage automations (alias for cron)\n  backup *             Create, verify, and restore backup archives and SQLite\n                       snapshots\n  browser *            Manage OpenClaw's dedicated browser (Chrome/Chromium)\n  capability *         Run provider capability commands (fallback alias: infer)\n  channels *           Manage connected chat channels and accounts\n  chat                 Open a local terminal UI (alias for tui --local)\n  clawbot *            Legacy clawbot command aliases\n  completion           Generate shell completion script\n  config *             Non-interactive config helpers\n                       (get/set/patch/unset/file/schema/validate). Run without\n                       subcommand for guided setup.\n  configure            Interactive configuration for credentials, channels,\n                       gateway, and agent defaults\n  connect              Connect this machine to an OpenClaw Gateway as a node\n  cron *               Manage automations (via Gateway)\n  daemon *             Manage the Gateway service (launchd/systemd/schtasks)\n  dashboard            Open the Control UI with your current token\n  database *           Inspect database compatibility, manage ownership, and\n                       port workboard stores\n  devices *            Device pairing and auth tokens (for mobile app setup\n                       codes, use `openclaw qr` instead)\n  directory *          Lookup contact and group IDs (self, peers, groups) for\n                       supported chat channels\n  dns *                DNS helpers for wide-area discovery (Tailscale + CoreDNS)\n  docs                 Search the live OpenClaw docs\n  doctor               Health checks + quick fixes for the gateway and channels\n  exec-approvals *     Manage exec approvals (alias for approvals)\n  exec-policy *        Show or synchronize requested exec policy with host\n                       approvals\n  file-transfer *      Review file-transfer standing approvals\n  gateway *            Run, inspect, and query the WebSocket Gateway\n  googlemeet *         Join and manage Google Meet calls\n  health               Fetch health from the running gateway\n  help                 Display help for command\n  hooks *              Manage internal agent hooks\n  infer *              Run provider-backed inference commands through a stable\n                       CLI surface\n  logs                 Tail gateway file logs via RPC\n  mcp *                Manage OpenClaw mcp.servers config and channel bridge\n  memory *             Search, inspect, and reindex memory files\n  message *            Send, read, and manage messages and channel actions\n  migrate *            Import state from another agent system\n  models *             Model discovery, scanning, and configuration\n  node *               Run and manage the headless node host service\n  nodes *              Manage gateway-owned nodes (pairing, status, invoke, and\n                       media)\n  onboard *            Guided setup for auth, models, Gateway, workspace,\n                       channels, and skills\n  pairing *            Secure DM pairing (approve inbound requests)\n  plugins *            Manage OpenClaw plugins and extensions\n  promos *             Discover and claim promotional model offers from ClawHub\n  proxy *              Run the OpenClaw debug proxy and inspect captured traffic\n  qr                   Generate a mobile pairing QR code and setup code\n  reset                Reset local config/state (keeps the CLI installed)\n  resume               Resume a recent Gateway session in the TUI\n  sandbox *            Manage sandbox containers (Docker-based agent isolation)\n  secrets *            Secrets runtime controls\n  security *           Audit local config and state for common security\n                       foot-guns\n  sessions *           List stored conversation sessions\n  setup                Chat with OpenClaw; onboard when setup is incomplete\n  skills *             List and inspect available skills\n  status               Show channel health and recent session recipients\n  storage *            List, initialize, and test configured storage locations\n  system *             System tools (events, heartbeat, presence)\n  teamsmeetings *      Join and manage Microsoft Teams meeting guests\n  telemetry *          Inspect and manage anonymous usage telemetry\n  terminal             Open a local terminal UI (alias for tui --local)\n  transcripts *        Inspect stored transcripts\n  triage               Collect sanitized diagnostics and open a local coding\n                       agent for repair\n  tui                  Open a terminal UI connected to the Gateway\n  uninstall            Uninstall the gateway service + local data\n  update *             Update OpenClaw and inspect update channel status\n  users *              Manage durable user profiles and email aliases\n  webhooks *           Webhook helpers and integrations\n  worker               Run the restricted cloud worker runtime\n  worktrees *          Create, inspect, restore, and clean up managed worktrees\n  zoommeetings *       Join and manage Zoom meeting guests\n\nExamples:\n  openclaw onboard\n    Run guided setup for a local Gateway, workspace, auth, and channels.\n  openclaw setup --baseline\n    Create the baseline config, workspace, and session folders.\n  openclaw configure\n    Change models, Gateway, channels, plugins, skills, and health checks.\n  openclaw status\n    Check Gateway, channel, model, and recent-session status.\n  openclaw doctor --fix\n    Repair common config, service, plugin, and channel problems.\n  openclaw channels add\n    Add or update a chat channel account with guided prompts.\n  openclaw channels status\n    See connected messaging accounts and login state.\n  openclaw --dev gateway\n    Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001.\n  openclaw gateway run --force\n    Start the Gateway and replace anything bound to its port.\n  openclaw models status\n    Show model/provider auth health before running agents.\n  openclaw plugins list\n    Inspect enabled, disabled, and installed plugins.\n  openclaw agent --to +15555550123 --message \"Run summary\" --deliver\n    Run one agent turn through the Gateway and optionally deliver the reply.\n  openclaw message send --channel telegram --target @mychat --message \"Hi\"\n    Send via your Telegram bot.\n\nDocs: https://docs.openclaw.ai/cli\n\n",
       "stderr": ""
     },
@@ -56,9 +64,20 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 668,
+      "durationMs": 944,
       "stdout": "\nOpenClaw 2026.11.1 (4ffdd20) — All your chats, one OpenClaw.\n\nUsage: openclaw acp [options] [command]\n\nRun an ACP bridge backed by the Gateway\n\nOptions:\n  -h, --help               Display help for command\n  --no-prefix-cwd          Do not prefix prompts with the working directory\n  --password <password>    Gateway password (if required)\n  --password-file <path>   Read gateway password from file\n  --provenance <mode>      ACP provenance mode: off, meta, or meta+receipt\n  --require-existing       Fail if the session key/label does not exist\n                           (default: false)\n  --reset-session          Reset the session key before first use (default:\n                           false)\n  --session <key>          Default session key (e.g. agent:main:main)\n  --session-label <label>  Default session label to resolve\n  --token <token>          Gateway token (if required)\n  --token-file <path>      Read gateway token from file\n  --url <url>              Gateway WebSocket URL (defaults to gateway.remote.url\n                           when configured)\n  -v, --verbose            Verbose logging to stderr (default: false)\n\nCommands:\n  client                   Run an interactive ACP client against the local ACP\n                           bridge\n\nDocs: https://docs.openclaw.ai/cli/acp\n\n",
       "stderr": ""
+    },
+    {
+      "cmd": "openclaw acp",
+      "timeoutMs": 30000,
+      "exitCode": 1,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 2277,
+      "frames": [],
+      "stdout": "",
+      "stderr": "ACP bridge failed: connect ECONNREFUSED 127.0.0.1:18789\n"
     }
   ]
 }

@@ -542,3 +542,18 @@ TRAE(ACP/exec)     ───┘                                   ↑
 
 结论：Qoder/CodeBuddy 的 headless 适配器已按「Claude 同族 CLI」接入（`adapters/headless-profiles.mjs`），
 OpenClaw/fx 走 ACP 画像；Kimi 待安装路径修复后复核。
+
+## 13. CI 复核第二轮（run 42378826849，2026-11-07）
+
+| Agent | 结果 | 证据 |
+|---|---|---|
+| Kimi Code | ✅ 安装到 `~/.kimi-code`（不在默认 PATH），版本 **2.5.2**；`kimi acp` 子命令存在 | `probes/kimi.json` |
+| CodeBuddy | ACP `initialize` 成功（loadSession/promptCapabilities/mcp）；`session/new` 返回 `Authentication required`（缺 `CODEBUDDY_API_KEY`） | `fixtures/adapters/codebuddy-acp-auth-gate.fixture.json` |
+| fx | ACP `initialize` 返回 `-32600`：需要 Vercel AI Gateway 登录或 `AI_GATEWAY_API_KEY` | `fixtures/adapters/fx-acp-auth-gate.fixture.json` |
+| OpenClaw | 已安装 2026.11.1；`openclaw acp` 依赖本地 Gateway，无凭据时启动即退出 | `probes/openclaw.json` |
+| Qoder | 1.1.85：`-p/--print` 非交互确认，`--output-format` 存在；`--help` 仍无 `--acp` | `probes/qoder-cn.json` |
+| TRAE | 安装脚本未产出 `traecli`（企业版门槛一致） | `probes/trae.json` |
+
+结论：国产三家的**协议门槛**都已摸清——Kimi/CodeBuddy/fx 的 ACP 握手可达但需要各自凭据；
+Qoder 走 headless stream-json；WorkBuddy 官方无入口；TRAE 卡企业版。真实回合录制需要凭据，
+在「CI 一律无凭证」的决策下只能做到握手/错误帧证据。
