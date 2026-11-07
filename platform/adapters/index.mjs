@@ -230,3 +230,11 @@ export {
   createHeadlessProfileAdapter,
   getHeadlessProfile,
 } from "./headless-profiles.mjs";
+
+export {
+  CODEBUDDY_HTTP_TASK_ID,
+  CODEBUDDY_HTTP_PROTOCOL,
+  CodeBuddyHttpAdapter,
+  codebuddyHttpCapabilityDeclaration,
+  createCodeBuddyHttpAdapter,
+} from "./codebuddy-http.mjs";
