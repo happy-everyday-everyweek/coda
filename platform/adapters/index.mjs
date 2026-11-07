@@ -216,3 +216,11 @@ export {
   createAcpProfileAdapter,
   getAcpProfile,
 } from "./acp-profiles.mjs";
+
+export {
+  INSTALL_CATALOG,
+  INSTALL_CATALOG_VERSION,
+  installPlanFor,
+  listInstallCatalog,
+  normalizePlatform,
+} from "./install-catalog.mjs";

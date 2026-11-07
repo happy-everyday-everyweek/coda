@@ -192,7 +192,7 @@ ART / SEC / REL / PERF / QA / 发布
 
 | ID | 状态 | 优先级 | 任务与产出 | 依赖 | 验收 |
 |---|---|---|---|---|---|
-| INST-101 | OPEN | P0 | UI 安装器统一发现/安装/复用核心；三种界面可共存 | CORE-107 | LIFE-001~003, LIFE-007 |
+| INST-101 | IN PROGRESS | P0 | UI 安装器统一发现/安装/复用核心；三种界面可共存 | CORE-107 | LIFE-001~003, LIFE-007 |
 | INST-102 | BLOCKED | P0 | Windows 用户级后台安装、登录启动、退出 UI 不停止 | DOC-104, CORE-107 | PLAT-001, LIFE-004 |
 | INST-103 | BLOCKED | P0 | macOS 后台项/登录启动、退出 UI 不停止 | DOC-104, CORE-107 | PLAT-002, LIFE-004 |
 | INST-104 | BLOCKED | P0 | Linux user service、登录启动、退出 UI 不停止 | DOC-104, CORE-107 | PLAT-003, LIFE-004 |
