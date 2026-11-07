@@ -2,6 +2,7 @@ name: Platform
 
 # 跨端平台参考实现（platform/）的契约测试。
 # 零外部依赖，Node 24 内置 node:sqlite / node:crypto / node:test。
+# QA-101：三平台矩阵；Windows 只跑平台无关的 contracts/tools 冒烟（适配器测试依赖 POSIX 进程语义）。
 on:
   push:
     paths:
@@ -22,8 +23,18 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, suite: full }
+          - { os: macos-latest, suite: full }
+          - { os: windows-latest, suite: smoke }
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,8 +45,15 @@ jobs:
         run: |
           node tools/capability-matrix.mjs --check
           node tools/fixture-index.mjs --check
-      - name: 契约测试
+      - name: 契约测试（full）
+        if: matrix.suite == 'full'
         working-directory: platform
         run: |
           node --version
           node --test "test/**/*.test.mjs"
+      - name: 平台无关冒烟（smoke）
+        if: matrix.suite == 'smoke'
+        working-directory: platform
+        run: |
+          node --version
+          node --test "test/contracts/**/*.test.mjs" "test/tools/**/*.test.mjs"
