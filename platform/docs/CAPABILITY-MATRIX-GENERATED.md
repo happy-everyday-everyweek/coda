@@ -1,6 +1,6 @@
 # 能力矩阵（自动生成，勿手改）
 
-> 生成时间：2026-11-07T14:11:47.648Z；实例 17 个，可用（experimental）15 个。
+> 生成时间：2026-11-07T14:14:05.748Z；实例 18 个，可用（experimental）16 个。
 > 规则见 `platform/docs/adr/ADR-0005-agent-capability-matrix.md`；本文件不替代发布矩阵。
 > **任何行都不得当作 supported**：真实成功回合录制缺失，release 最高 experimental。
 
@@ -9,6 +9,7 @@
 | ai_auggie | auggie | 0.37.0 | experimental | usable(experimental) | - |
 | ai_claude | claude | 2.1.319 | experimental | usable(experimental) | - |
 | ai_codebuddy | codebuddy | 2.181.0 | experimental | usable(experimental) | - |
+| ai_codebuddy_openapi | codebuddy-openapi | unknown | experimental | usable(experimental) | - |
 | ai_codex | codex | 0.167.0 | experimental | usable(experimental) | - |
 | ai_copilot | copilot | 1.0.107 | experimental | usable(experimental) | - |
 | ai_crush | crush | 0.100.0 | experimental | usable(experimental) | - |

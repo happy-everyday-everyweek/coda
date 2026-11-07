@@ -33,7 +33,14 @@ export function codebuddyHttpCapabilityDeclaration({ openapiDiscovered = false }
   return {
     session: { multiThread: unk, modelSwitch: unk, permissionModeSwitch: unk, resume: unk, requestDurability: unk },
     thread: { empty: unk, snapshot: false, fork: unk, fromTurn: unk, nativeId: unk },
-    turn: { startEndEvents: openapiDiscovered ? exp : unk, interrupt: unk, nativeSteer: unk, stopThenAppend: unk, queue: unk, terminalTrust: unk },
+    turn: {
+      startEndEvents: openapiDiscovered ? exp : unk, // POST /jobs + GET /jobs/{id}/stream（规范已固定）
+      interrupt: openapiDiscovered ? exp : unk, // POST /jobs/{id}/stop
+      nativeSteer: openapiDiscovered ? exp : unk, // POST /jobs/{id}/reply
+      stopThenAppend: unk,
+      queue: unk,
+      terminalTrust: unk,
+    },
     streaming: { text: openapiDiscovered ? exp : unk, reasoning: unk, toolOutput: unk, planText: unk, messageCompleted: unk },
     tools: unk,
     approvals: { command: unk, fileRead: unk, fileWrite: unk, patch: unk, subagent: unk, nativeRequestId: unk },
@@ -47,11 +54,15 @@ export function codebuddyHttpCapabilityDeclaration({ openapiDiscovered = false }
 }
 
 export class CodeBuddyHttpAdapter extends BaseAdapter {
-  constructor({ instanceId, environment = "host", command = "codebuddy", baseArgs = [], port = CODEBUDDY_HTTP_PROTOCOL.defaultPort, spawnImpl = spawn, fetchImpl = globalThis.fetch, version = null, probeTimeoutMs = 15000, clock = () => new Date() } = {}) {
+  constructor({ instanceId, environment = "host", command = "codebuddy", baseArgs = [], port = CODEBUDDY_HTTP_PROTOCOL.defaultPort, apiKey = null, workspace = null, spawnImpl = spawn, fetchImpl = globalThis.fetch, version = null, probeTimeoutMs = 15000, clock = () => new Date() } = {}) {
     super({ instanceId, environment, provider: "codebuddy", version, clock });
     this.command = command;
     this.baseArgs = baseArgs;
     this.port = port;
+    this.apiKey = apiKey;
+    this.workspace = workspace;
+    this._jobs = new Map(); // coreSessionId → job data
+    this._jobsBySessionId = new Map(); // coreSessionId → jobId
     this.spawnImpl = spawnImpl;
     this.fetchImpl = fetchImpl;
     this.probeTimeoutMs = probeTimeoutMs;
@@ -107,24 +118,231 @@ export class CodeBuddyHttpAdapter extends BaseAdapter {
     }
   }
 
+  _headers(extra = {}) {
+    return {
+      // CodeBuddy 要求该头，否则 403（CI 实测 /api/v1/health）
+      "x-codebuddy-request": "1",
+      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+      ...extra,
+    };
+  }
+
+  async _request(method, path, { body = null, signal = null } = {}) {
+    const res = await this.fetchImpl(`http://127.0.0.1:${this.port}${path}`, {
+      method,
+      headers: this._headers(body ? { "Content-Type": "application/json" } : {}),
+      body: body === null ? undefined : JSON.stringify(body),
+      signal: signal ?? AbortSignal.timeout(15000),
+    });
+    const text = await res.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* 非 JSON */ }
+    if (!res.ok) {
+      throw new AdapterError("PROCESS_EXIT", `codebuddy HTTP ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`, {
+        details: { status: res.status, path },
+      });
+    }
+    return json;
+  }
+
+  /** 列出智能体实例（GET /api/v1/jobs）。 */
+  async listJobs() {
+    const body = await this._request("GET", "/api/v1/jobs");
+    return body?.data?.jobs ?? [];
+  }
+
+  /** 派发智能体（POST /api/v1/jobs，OpenAPI 已固定字段）。 */
+  async dispatchJob({ prompt, cwd = null, agent = null, model = null, effort = null, permissionMode = null } = {}) {
+    const body = await this._request("POST", "/api/v1/jobs", {
+      body: {
+        prompt: String(prompt ?? ""),
+        ...(cwd ?? this.workspace ? { cwd: cwd ?? this.workspace } : {}),
+        ...(agent ? { agent } : {}),
+        ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
+        ...(permissionMode ? { permissionMode } : {}),
+      },
+    });
+    return body?.data ?? null;
+  }
+
+  /** 回放并尾随 transcript（GET /api/v1/jobs/{id}/stream，SSE event=message）。 */
+  async streamJob(jobId, { onRecord, timeoutMs = 120000 } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer.unref?.();
+    try {
+      const res = await this.fetchImpl(`http://127.0.0.1:${this.port}/api/v1/jobs/${jobId}/stream`, {
+        headers: this._headers({ Accept: "text/event-stream" }),
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) return { ok: false, reason: `HTTP ${res.status}` };
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let index;
+        while ((index = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, index).trim();
+          buffer = buffer.slice(index + 2);
+          const dataLines = block.split("\n").filter((line) => line.startsWith("data:"));
+          if (dataLines.length === 0) continue;
+          const payload = dataLines.map((line) => line.slice(5).trim()).join("\n");
+          let record = null;
+          try { record = JSON.parse(payload); } catch { record = { raw: payload.slice(0, 500) }; }
+          onRecord?.(record);
+        }
+      }
+      return { ok: true };
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+
+  async getJob(jobId) {
+    const body = await this._request("GET", `/api/v1/jobs/${jobId}`);
+    return body?.data ?? null;
+  }
+
+  async replyJob(jobId, text) {
+    const body = await this._request("POST", `/api/v1/jobs/${jobId}/reply`, { body: { text: String(text ?? "") } });
+    return body?.data ?? null;
+  }
+
+  async stopJob(jobId) {
+    const body = await this._request("POST", `/api/v1/jobs/${jobId}/stop`);
+    return body?.data ?? null;
+  }
+
+  /** Gateway/JSONL 记录 → 统一事件（形状未录制，未知记录只进诊断）。 */
+  _mapRecord(record, sessionId) {
+    if (!record || typeof record !== "object") return;
+    const type = String(record.type ?? record.kind ?? "");
+    const text = record.text ?? record.content ?? record.message;
+    if (typeof text === "string" && text.length > 0 && /text|message|assistant|delta/i.test(type)) {
+      this.emitEvent({ kind: "message", sessionId, payload: { role: "assistant", text, delta: /delta/i.test(type) } });
+      return;
+    }
+    if (/tool/i.test(type)) {
+      this.emitEvent({ kind: "tool", sessionId, payload: { tool: record } });
+      return;
+    }
+    if (/error/i.test(type)) {
+      this.emitEvent({ kind: "error", sessionId, payload: { message: String(text ?? record.error ?? "codebuddy error") } });
+      return;
+    }
+    if (/result|done|complete|end/i.test(type)) {
+      this.emitEvent({ kind: "status", sessionId, payload: { state: "idle", terminal: true } });
+      return;
+    }
+    if (this.diagnostics.unknownFrames.length < 20) this.diagnostics.unknownFrames.push({ type, record: JSON.stringify(record).slice(0, 400) });
+  }
+
   _blocked(operation) {
     return new AdapterError("BLOCKED", `codebuddy HTTP ${operation} 尚未按 OpenAPI 固定；先 discoverOpenApi() 并录制真实调用`, {
       details: { taskId: CODEBUDDY_HTTP_TASK_ID, evidence: CODEBUDDY_HTTP_PROTOCOL.evidence },
     });
   }
 
-  async createSession() {
-    await this.discoverOpenApi();
-    throw this._blocked("createSession");
+  async createSession({ sessionId } = {}) {
+    this._jobs.set(sessionId ?? "", null);
+    return { providerThreadId: null };
   }
-  async send() {
+
+  /** 一次 send = 派发 job 或对活会话回复，随后等待 job 进入终态。 */
+  async send({ sessionId, text, model = null, effort = null, permissionMode = null, timeoutMs = 120000 }) {
+    this._assertUsable();
+    this.assertCapability("turn", "startEndEvents");
+    const body = String(text ?? "");
+    if (!body.trim()) throw new AdapterError("PROTOCOL_ERROR", "empty prompt");
     await this.discoverOpenApi();
-    throw this._blocked("send");
+
+    const existing = this._jobs.get(sessionId) ?? null;
+    const existingId = existing?.id ?? existing?.jobId ?? this._jobsBySessionId.get(sessionId) ?? null;
+    if (existingId) {
+      await this.replyJob(existingId, body);
+      this.emitEvent({ kind: "message", sessionId, payload: { role: "user", text: body, delta: false } });
+      return { state: "succeeded", text: "", upstreamSessionId: existingId };
+    }
+
+    this.emitStatus(sessionId, "running", { phase: "job_dispatch" });
+    const job = await this.dispatchJob({ prompt: body, model, effort, permissionMode });
+    if (!job?.id) throw new AdapterError("PROTOCOL_ERROR", "codebuddy POST /api/v1/jobs returned no job id");
+    this._jobs.set(sessionId, job);
+    this._jobsBySessionId.set(sessionId, job.id);
+
+    let textOut = "";
+    const records = [];
+    const originalEmit = this.emitEvent.bind(this);
+    this.emitEvent = (event) => {
+      if (event.kind === "message" && event.payload?.text) textOut += event.payload.text;
+      return originalEmit(event);
+    };
+    try {
+      await this.streamJob(job.id, {
+        timeoutMs,
+        onRecord: (record) => {
+          records.push(record);
+          this._mapRecord(record, sessionId);
+        },
+      });
+    } finally {
+      this.emitEvent = originalEmit;
+    }
+
+    const deadline = Date.now() + Math.max(1000, Math.min(timeoutMs, 10000));
+    let finalJob = job;
+    for (;;) {
+      try {
+        const current = await this.getJob(job.id);
+        if (current) finalJob = current;
+      } catch {
+        /* 轮询失败不改变结论 */
+      }
+      const state = String(finalJob?.state ?? "");
+      if (["done", "failed", "stopped"].includes(state)) break;
+      if (Date.now() > deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    const state = String(finalJob?.state ?? "unknown");
+    this.emitStatus(sessionId, state === "done" ? "idle" : state === "working" ? "unknown" : state);
+    if (state === "failed") {
+      const message = String(finalJob?.detail ?? finalJob?.error ?? "codebuddy job failed");
+      this.emitError(sessionId, new AdapterError("PROCESS_EXIT", message));
+      return { state: "failed", text: textOut, error: { message }, upstreamSessionId: job.id };
+    }
+    if (state === "stopped") return { state: "stopped", text: textOut, upstreamSessionId: job.id };
+    if (state === "unknown" || state === "working") return { state: "unknown", text: textOut, upstreamSessionId: job.id };
+    return { state: "succeeded", text: textOut, upstreamSessionId: job.id };
   }
-  async steer() { throw this._blocked("steer"); }
-  async interrupt() { throw this._blocked("interrupt"); }
-  async resume() { throw this._blocked("resume"); }
-  async fork() { throw this._blocked("fork"); }
+
+  async steer({ sessionId, text }) {
+    this.assertCapability("turn", "nativeSteer");
+    const jobId = this._jobsBySessionId.get(sessionId) ?? null;
+    if (!jobId) throw new AdapterError("CONFLICT", "no active codebuddy job to steer");
+    return this.replyJob(jobId, text);
+  }
+
+  async interrupt({ sessionId }) {
+    this.assertCapability("turn", "interrupt");
+    const jobId = this._jobsBySessionId.get(sessionId) ?? null;
+    if (!jobId) return { stopped: false, reason: "no-active-job" };
+    await this.stopJob(jobId);
+    return { stopped: true, trust: "upstream-confirmed" };
+  }
+
+  async resume() {
+    await this.discoverOpenApi();
+    throw new AdapterError("BLOCKED", "codebuddy POST /api/v1/jobs/resume 端点已发现但请求体未固定；等录制后实现");
+  }
+
+  async fork() {
+    throw new AdapterError("UNSUPPORTED_CAPABILITY", "codebuddy HTTP fork not documented");
+  }
 
   async dispose() {
     try { if (this._child?.pid) process.kill(-this._child.pid, "SIGTERM"); } catch { try { this._child?.kill?.("SIGKILL"); } catch { /* ignore */ } }

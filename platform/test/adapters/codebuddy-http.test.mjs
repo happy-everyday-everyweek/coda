@@ -31,17 +31,59 @@ test("CodeBuddy HTTP：probe 检测 --serve，能力不声明 supported", async 
   await adapter.dispose();
 });
 
-test("CodeBuddy HTTP：discoverOpenApi 抓规范，会话方法仍 BLOCKED", async () => {
-  let calledUrl = null;
-  const fetchImpl = async (url) => {
-    calledUrl = url;
+test("CodeBuddy HTTP：discoverOpenApi + 派发 job + SSE 转录 + 终态", async () => {
+  const calls = [];
+  function jsonResponse(status, body) {
+    const text = JSON.stringify(body);
+    return {
+      ok: status < 400,
+      status,
+      text: async () => text,
+      clone() { return { json: async () => body }; },
+      body: null,
+    };
+  }
+  function sseResponse(records) {
+    const payload = `${records.map((r) => `data: ${JSON.stringify(r)}\n\n`).join("")}`;
+    const encoder = new TextEncoder();
+    let sent = false;
     return {
       ok: true,
       status: 200,
-      clone() {
-        return { json: async () => ({ openapi: "3.1.0", info: { title: "CodeBuddy Code API (Beta)" }, paths: { "/api/v1/health": {} } }) };
+      text: async () => payload,
+      clone() { return { json: async () => null }; },
+      body: {
+        getReader() {
+          return {
+            async read() {
+              if (sent) return { done: true, value: undefined };
+              sent = true;
+              return { done: false, value: encoder.encode(payload) };
+            },
+          };
+        },
       },
     };
+  }
+  const fetchImpl = async (url, init = {}) => {
+    calls.push(`${init.method ?? "GET"} ${url}`);
+    if (url.endsWith("/api/openapi.json")) return jsonResponse(200, { openapi: "3.1.0", info: { title: "CodeBuddy" }, paths: {} });
+    if (url.endsWith("/api/v1/jobs") && (init.method ?? "GET") === "POST") {
+      return jsonResponse(200, { data: { id: "job_1", sessionId: "sess_1", state: "working" } });
+    }
+    if (url.endsWith("/api/v1/jobs/job_1/stream")) {
+      return sseResponse([
+        { type: "assistant.message", text: "po" },
+        { type: "assistant.message.delta", text: "ng" },
+        { type: "result.done" },
+      ]);
+    }
+    if (url.endsWith("/api/v1/jobs/job_1") && (init.method ?? "GET") === "GET") {
+      return jsonResponse(200, { data: { id: "job_1", state: "done" } });
+    }
+    if (url.endsWith("/api/v1/jobs/job_1/reply") && init.method === "POST") return jsonResponse(200, { data: { delivered: true, saved: false, notice: "ok" } });
+    if (url.endsWith("/api/v1/jobs/job_1/stop") && init.method === "POST") return jsonResponse(200, { data: { stopped: true } });
+    return jsonResponse(404, { error: "not found" });
   };
   const adapter = new CodeBuddyHttpAdapter({
     instanceId: "ai_cbhttp2",
@@ -50,16 +92,28 @@ test("CodeBuddy HTTP：discoverOpenApi 抓规范，会话方法仍 BLOCKED", asy
     fetchImpl,
     spawnImpl: () => fakeChild(),
     port: 8799,
+    workspace: "/work/demo",
+    apiKey: "test-key",
   });
   await adapter.probe();
   const spec = await adapter.discoverOpenApi();
   assert.equal(spec.openapi.openapi, "3.1.0");
-  assert.match(calledUrl, /\/api\/openapi\.json$/);
-  const decl = adapter.capabilities();
-  assert.equal(decl.capabilities.turn.startEndEvents, "experimental");
-  assert.deepEqual(noSupportedValues(decl.capabilities), []);
-  await assert.rejects(adapter.createSession(), (err) => err.code === "BLOCKED");
-  await assert.rejects(adapter.send(), (err) => err.code === "BLOCKED");
+
+  const events = [];
+  adapter.emit = (event) => events.push(event);
+  await adapter.createSession({ sessionId: "ses_cb" });
+  const result = await adapter.send({ sessionId: "ses_cb", text: "ping" });
+  assert.equal(result.state, "succeeded");
+  assert.equal(result.text, "pong");
+  assert.equal(result.upstreamSessionId, "job_1");
+  assert.ok(events.some((e) => e.kind === "message" && e.payload.text === "po"));
+  assert.ok(calls.some((c) => c === "POST http://127.0.0.1:8799/api/v1/jobs"));
+
+  const steer = await adapter.steer({ sessionId: "ses_cb", text: "more" });
+  assert.equal(steer.delivered, true);
+  const stopped = await adapter.interrupt({ sessionId: "ses_cb" });
+  assert.equal(stopped.stopped, true);
+  assert.equal(stopped.trust, "upstream-confirmed");
   await adapter.dispose();
 });
 

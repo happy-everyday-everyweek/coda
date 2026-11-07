@@ -1,6 +1,6 @@
 {
   "matrixVersion": 1,
-  "generatedAt": "2026-11-07T14:11:47.648Z",
+  "generatedAt": "2026-11-07T14:14:05.748Z",
   "columns": [
     "session",
     "thread",
@@ -201,6 +201,50 @@
       ],
       "blockedReason": null,
       "notes": "有真实帧录制；成功模型回合仍需账号"
+    },
+    {
+      "instanceId": "ai_codebuddy_openapi",
+      "provider": "codebuddy-openapi",
+      "version": "unknown",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/codebuddy-openapi.json",
+          "note": "0 probes"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "仅有安装/入口证据，无会话录制"
     },
     {
       "instanceId": "ai_codex",

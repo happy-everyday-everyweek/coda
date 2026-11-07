@@ -573,3 +573,17 @@ Qoder 的 headless 在无登录时不输出 JSONL（stderr 报 `NonInteractiveAu
   `session/new` 返回 `Authentication required`（设备码登录；`kimi acp --login`）。
 - headless：正确写法是 `kimi -p "<prompt>" --output-format stream-json`；
   注意 `-p` 是**带值**参数，`kimi -p --output-format stream-json` 会把 `stream-json` 当子命令（CI 首次误报）。
+
+## 16. CodeBuddy HTTP API（run 42380252448 抓取完整 OpenAPI）
+
+`codebuddy --serve` 的 `/api/openapi.json` 可匿名读取（OpenAPI 3.1.0，27KB+，已存
+`platform/fixtures/adapters/probes/codebuddy-openapi.json`）。核心端点：
+
+- `POST /api/v1/jobs`：派发智能体 `{prompt,cwd,agent,model,effort,permissionMode}` → `AgentJob{id,sessionId,state}`
+- `GET /api/v1/jobs/{id}`：状态；`GET /api/v1/jobs/{id}/stream`：SSE（event=message，先回放后尾随 JSONL）
+- `POST /api/v1/jobs/{id}/reply`：对活会话投递（steer）；`POST /api/v1/jobs/{id}/stop`：停止
+- `POST /api/v1/jobs/resume`、`GET /api/v1/jobs/{id}/transcript`、`/api/v1/ptx` 等
+- 鉴权：`BearerAuth` 或 `PasswordQuery`；健康检查必须带 `x-codebuddy-request: 1`
+
+`adapters/codebuddy-http.mjs` 已按上述规范实现 discoverOpenApi / dispatchJob / streamJob /
+replyJob / stopJob，并用 fake HTTP/SSE 测试；真实调用仍需 `CODEBUDDY_API_KEY`（CI 无凭证）。
