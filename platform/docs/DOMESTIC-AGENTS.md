@@ -508,3 +508,19 @@ TRAE(ACP/exec)     ───┘                                   ↑
 | 日期 | 内容 |
 |---|---|
 | 2026-11-07 | 首版：7 个 Agent 逐一结论；4 家 READY（Qoder/CodeBuddy/Kimi/OpenClaw）、1 家 READY 待冒烟（fx）、1 家 NEEDS-PROBE（TRAE，账号门槛）、1 家 BLOCKED（WorkBuddy）；OpenClaw 与 fx 归属更正为非国产 |
+
+## 11. Lead 决策（2026-11-07）
+
+1. **TRAE（AGT-115）**：不采购旗舰版席位；先做无凭证安装探测（能装则检测、能 `--help` 则记录），
+   CI 端到端冒烟暂缓。状态：`BLOCKED（商业门槛）`，解除条件见 §2 硬门槛。
+2. **CI 账号**：协议勘察一律**无凭证**；不做真实账号冒烟，避免违反 SPEC §7.3 的「复用原账号、
+   不静默串用」要求。未来如需冒烟，使用专用 CI 账号并在证据里标注「验证账号 ≠ 用户账号」。
+3. **WorkBuddy（AGT-116）**：官方只有 WMA 云 OpenAPI/A2A/MCP 与 IM Bot，没有本地 CLI/ACP/app-server；
+   `workbuddy2api` 是非官方桌面端网关且上游停更，**不作为生产依赖**。状态：`BLOCKED（无可编程本地入口）`。
+4. **归类修正**：OpenClaw（AGT-127）与 fx（AGT-129）不是国产产品（OpenClaw 是开源项目，fx 属 Vercel Labs）；
+   适配不受影响，`REFERENCE-PROJECTS.md` 已同步。
+5. **probe runner 约定**：接受 `package: null`（curl 安装）、`needsAuth`（无凭证判 SKIP）、
+   `expectTimeoutStdout`（`--serve`/`kimi web` 预期不退出，看 banner）三个字段。
+6. **CodeBuddy（AGT-117）**：先 ACP（稳定），HTTP API（Beta）作为后续扩展；国内/国际只差
+   `CODEBUDDY_INTERNET_ENVIRONMENT`，不拆两套适配器。
+7. **优先级**：CodeBuddy → Qoder → Kimi（都只差 CI 复核 + 协议录制）。

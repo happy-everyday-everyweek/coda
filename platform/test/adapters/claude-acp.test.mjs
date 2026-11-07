@@ -107,14 +107,21 @@ test("Claude 适配器：未登录失败回合不伪造成功", async (t) => {
   await adapter.dispose();
 });
 
-test("ACP 画像：六个 Agent 的命令与任务映射完整", () => {
+test("ACP 画像：国际与国产 Agent 的命令与任务映射完整", () => {
   const ids = Object.keys(ACP_PROFILES);
-  assert.deepEqual(ids.sort(), ["antigravity", "fx", "gemini", "grok", "hermes", "opencode"]);
-  assert.deepEqual(ACP_PROFILES.grok.args, ["agent", "stdio"]);
+  assert.deepEqual(ids.sort(), ["antigravity", "codebuddy", "fx", "gemini", "grok", "hermes", "kimi", "openclaw", "opencode", "qoder"]);
+  assert.deepEqual(ACP_PROFILES.grok.args, ["--no-auto-update", "agent", "--no-leader", "stdio"]);
   assert.deepEqual(ACP_PROFILES.opencode.args, ["acp"]);
   assert.equal(ACP_PROFILES.gemini.taskId, "AGT-122");
   assert.equal(ACP_PROFILES.opencode.taskId, "AGT-121");
   assert.equal(ACP_PROFILES.fx.taskId, "AGT-129");
+  assert.equal(ACP_PROFILES.qoder.taskId, "AGT-114");
+  assert.equal(ACP_PROFILES.qoder.command, "qodercn");
+  assert.equal(ACP_PROFILES.codebuddy.taskId, "AGT-117");
+  assert.equal(ACP_PROFILES.kimi.taskId, "AGT-128");
+  assert.equal(ACP_PROFILES.kimi.args[0], "acp");
+  assert.equal(ACP_PROFILES.openclaw.domestic, false);
+  assert.equal(ACP_PROFILES.codebuddy.domestic, true);
   assert.throws(() => getAcpProfile("nope"), AcpProfileError);
   const adapter = createAcpProfileAdapter({ profileId: "opencode", instanceId: "ai_oc" });
   assert.ok(adapter instanceof AcpAdapter);

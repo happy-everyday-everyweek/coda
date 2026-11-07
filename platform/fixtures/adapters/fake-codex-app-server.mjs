@@ -55,12 +55,14 @@ reader.on("line", (line) => {
       send({ id, result: { turn: { id: turnId, threadId: params.threadId ?? THREAD } } });
       const threadId = params.threadId ?? THREAD;
       setTimeout(() => {
-        notify("agentMessage/delta", { threadId, turnId, delta: "po" });
-        notify("reasoning/delta", { threadId, turnId, delta: "思考中" });
+        notify("turn/started", { threadId, turn: { id: turnId, status: "inProgress" } });
+        notify("item/agentMessage/delta", { threadId, turnId, itemId: "msg-1", delta: "po" });
+        notify("item/reasoning/textDelta", { threadId, turnId, itemId: "r-1", delta: "思考中" });
         notify("item/started", { threadId, turnId, item: { id: "item-1", type: "commandExecution", command: "echo hi" } });
+        notify("item/commandExecution/outputDelta", { threadId, turnId, itemId: "item-1", delta: "hi" });
         notify("item/completed", { threadId, turnId, item: { id: "item-1", type: "commandExecution", command: "echo hi", exitCode: 0, aggregatedOutput: "hi" } });
-        notify("agentMessage/delta", { threadId, turnId, delta: "ng" });
-        notify("turn/completed", { threadId, turnId });
+        notify("item/agentMessage/delta", { threadId, turnId, itemId: "msg-1", delta: "ng" });
+        notify("turn/completed", { threadId, turn: { id: turnId, status: "completed" } });
       }, 20);
       break;
     }
@@ -70,7 +72,7 @@ reader.on("line", (line) => {
     case "turn/interrupt": {
       send({ id, result: {} });
       const turnId = params.turnId ?? "turn-fake-1";
-      setTimeout(() => notify("turn/aborted", { threadId: params.threadId ?? THREAD, turnId }), 10);
+      setTimeout(() => notify("turn/completed", { threadId: params.threadId ?? THREAD, turn: { id: turnId, status: "interrupted" } }), 10);
       break;
     }
     default:

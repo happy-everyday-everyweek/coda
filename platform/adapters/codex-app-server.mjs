@@ -109,6 +109,7 @@ export class CodexAppServerAdapter extends BaseAdapter {
     this._turns = new Map();        // coreSessionId → turnId
     this._pendingTurns = new Map(); // coreSessionId → resolve fn
     this._textBySession = new Map();
+    this._failureBySession = new Map();
   }
 
   async probe() {
@@ -202,23 +203,32 @@ export class CodexAppServerAdapter extends BaseAdapter {
   _onNotification(msg) {
     if (!msg || typeof msg.method !== "string") return;
     const params = msg.params ?? {};
-    const threadId = params.threadId ?? params.thread_id ?? null;
+    const threadId = params.threadId ?? null;
     const sessionId = threadId ? this._threadToSession.get(threadId) ?? null : null;
-    const turnId = params.turnId ?? params.turn_id ?? null;
     switch (msg.method) {
-      case "agentMessage/delta":
+      case "turn/started":
+        if (sessionId) this.emitStatus(sessionId, "running", { phase: "turn_start", turnId: params.turn?.id ?? null });
+        break;
       case "item/agentMessage/delta": {
-        const delta = params.delta ?? params.textDelta ?? "";
+        const delta = params.delta ?? "";
         if (sessionId && delta) {
           this._textBySession.set(sessionId, `${this._textBySession.get(sessionId) ?? ""}${delta}`);
           this.emitEvent({ kind: "message", sessionId, payload: { role: "assistant", text: String(delta), delta: true } });
         }
         break;
       }
-      case "reasoning/delta":
-      case "item/reasoning/delta": {
-        const delta = params.delta ?? params.textDelta ?? "";
-        if (sessionId && delta) this.emitEvent({ kind: "reasoning", sessionId, payload: { text: String(delta) } });
+      case "item/reasoning/textDelta":
+      case "item/reasoning/summaryTextDelta": {
+        const delta = params.delta ?? "";
+        if (sessionId && delta) this.emitEvent({ kind: "reasoning", sessionId, payload: { text: String(delta), summary: msg.method.endsWith("summaryTextDelta") } });
+        break;
+      }
+      case "item/plan/delta": {
+        if (sessionId && params.delta) this.emitEvent({ kind: "plan", sessionId, payload: { text: String(params.delta), delta: true } });
+        break;
+      }
+      case "item/commandExecution/outputDelta": {
+        if (sessionId && params.delta) this.emitEvent({ kind: "tool", sessionId, payload: { tool: { id: params.itemId ?? null, state: "output", output: String(params.delta) } } });
         break;
       }
       case "item/started":
@@ -233,18 +243,31 @@ export class CodexAppServerAdapter extends BaseAdapter {
         break;
       }
       case "thread/tokenUsage/updated":
+      case "thread/status/changed":
         break;
-      case "turn/completed":
-        this._settleTurn(sessionId, { state: "succeeded" });
+      case "error": {
+        // willRetry=true 表示上游会重试，是进度不是最终错误（Zeron 同款处理）
+        if (sessionId) {
+          if (params.willRetry) this.emitStatus(sessionId, "running", { retry: true, message: params.error?.message ?? null });
+          else this._failureBySession.set(sessionId, { message: String(params.error?.message ?? "codex error"), code: params.error?.code ?? null });
+        }
         break;
-      case "turn/failed":
-        this._settleTurn(sessionId, { state: "failed", error: params.error ?? { message: "turn failed" } });
+      }
+      case "turn/completed": {
+        if (!sessionId) break;
+        const turn = params.turn ?? {};
+        const status = turn.status ?? "completed";
+        if (status === "completed") this._settleTurn(sessionId, { state: "succeeded" });
+        else if (status === "interrupted") this._settleTurn(sessionId, { state: "stopped" });
+        else {
+          const failure = this._failureBySession.get(sessionId) ?? { message: String(turn.error?.message ?? `turn ${status}`), code: turn.error?.code ?? null };
+          this._settleTurn(sessionId, { state: "failed", error: failure });
+        }
+        this._failureBySession.delete(sessionId);
         break;
-      case "turn/aborted":
-        this._settleTurn(sessionId, { state: "stopped" });
-        break;
+      }
       default:
-        if (this.diagnostics.unknownFrames.length < 20) this.diagnostics.unknownFrames.push({ method: msg.method, threadId, turnId });
+        if (this.diagnostics.unknownFrames.length < 20) this.diagnostics.unknownFrames.push({ method: msg.method, threadId });
     }
   }
 
@@ -375,6 +398,7 @@ export class CodexAppServerAdapter extends BaseAdapter {
     this._turns.clear();
     this._pendingTurns.clear();
     this._textBySession.clear();
+    this._failureBySession.clear();
     await super.dispose();
   }
 }

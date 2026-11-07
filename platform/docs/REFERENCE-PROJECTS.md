@@ -69,4 +69,7 @@ Rust + GPUI，本环境无法构建）。
 | AGT-121 | OpenCode | 原生 HTTP+SSE（参考 Zeron，不用 ACP）：无需逆向 |
 | AGT-119/120/126/129 | Antigravity/Grok/Hermes/fx | ACP 统一接入（参考 Zeron 的命令与握手）：无需逆向 |
 | AGT-118/125 | Cursor/Pi | 原生 CLI 驱动，需补 CI 协议勘察 |
-| AGT-114/115/116/117/127/128 | Qoder/TRAE/WorkBuddy/CodeBuddy/OpenClaw/Kimi | **国产，公开可编程接口未确认**：需要 CI 安装后协议勘察（WorkBuddy 可先走 workbuddy2api-panel 的 HTTP 接口） |
+| AGT-114/117/128 | Qoder/CodeBuddy/Kimi | **国产，官方有 ACP（Qoder 另有 headless stream-json，CodeBuddy 另有 HTTP API）**：按 ACP 画像接入，CI 复核 |
+| AGT-115 | TRAE/SOLO | 协议齐全但企业版旗舰套餐才可用 CLI：BLOCKED（商业门槛） |
+| AGT-116 | WorkBuddy | 官方无本地可编程入口（只有 WMA 云）：BLOCKED |
+| AGT-127/129 | OpenClaw/fx | **不是国产**（开源 / Vercel Labs）：ACP 画像已接 |

@@ -11,11 +11,19 @@ import { AcpAdapter, acpCapabilityDeclaration } from "./acp.mjs";
 
 export const ACP_PROFILES = Object.freeze({
   gemini: { provider: "gemini-cli", command: "gemini", args: ["--acp"], taskId: "AGT-122", docs: "https://github.com/google-gemini/gemini-cli" },
-  opencode: { provider: "opencode", command: "opencode", args: ["acp"], taskId: "AGT-121", docs: "https://opencode.ai/docs/" },
-  grok: { provider: "grok-build", command: "grok", args: ["agent", "stdio"], taskId: "AGT-120", docs: "https://x.ai/cli" },
+  opencode: { provider: "opencode", command: "opencode", args: ["acp"], taskId: "AGT-121", docs: "https://opencode.ai/docs/", note: "ACP 仅为实验路径；主链路应为 HTTP+SSE（opencode serve），见 AGENT-PROTOCOLS.md" },
+  grok: { provider: "grok-build", command: "grok", args: ["--no-auto-update", "agent", "--no-leader", "stdio"], taskId: "AGT-120", docs: "https://x.ai/cli" },
   hermes: { provider: "hermes", command: "hermes", args: ["acp"], taskId: "AGT-126", docs: "https://hermes-agent.nousresearch.com/docs/" },
   fx: { provider: "fx", command: "fx", args: ["acp"], taskId: "AGT-129", docs: "https://fx.sh/docs" },
   antigravity: { provider: "antigravity", command: "agy_acp_server", args: [], taskId: "AGT-119", docs: "https://antigravity.google/" },
+
+  // ── 国产（官方 ACP 入口，CI 待复核；见 platform/docs/DOMESTIC-AGENTS.md）──
+  qoder: { provider: "qoder", command: "qodercn", args: ["--acp"], taskId: "AGT-114", docs: "阿里云 Qoder 文档", domestic: true, note: "安装文档 bin 名为 qoderclicn，需同时探测两个名字" },
+  codebuddy: { provider: "codebuddy", command: "codebuddy", args: ["--acp"], taskId: "AGT-117", docs: "腾讯云 CodeBuddy 文档", domestic: true, note: "也可 --serve 起 HTTP API（Beta）" },
+  kimi: { provider: "kimi", command: "kimi", args: ["acp"], taskId: "AGT-128", docs: "code.kimi.com/kimi-code", domestic: true },
+  openclaw: { provider: "openclaw", command: "openclaw", args: ["acp"], taskId: "AGT-127", docs: "OpenClaw 文档", domestic: false, note: "开源项目，原 Clawdbot/Moltbot" },
+  // TRAE（AGT-115）：企业版旗舰套餐才提供 CLI，暂不接入，见 DOMESTIC-AGENTS.md
+  // WorkBuddy（AGT-116）：官方无 CLI/ACP/app-server，BLOCKED
 });
 
 export class AcpProfileError extends Error {
