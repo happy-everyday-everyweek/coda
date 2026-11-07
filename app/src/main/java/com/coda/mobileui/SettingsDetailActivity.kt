@@ -85,6 +85,21 @@ class SettingsDetailActivity :
             androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
         ) { uri: Uri? -> if (uri != null) doImportBackup(uri) }
 
+    /** Coda Bot 本地图片：选图后写入 Bot 配置。 */
+    private val codaBotAvatarLauncher =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+        ) { uri: Uri? ->
+            if (uri != null) {
+                runCatching {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+                com.coda.mobileui.personal.CodaBotStore.setAvatar(this, profile.avatarSkinId, uri)
+                renderPage()
+            }
+        }
+
     /** 供应商配置防抖重启（连续保存合并为一次）。 */
     private val providerRestartHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingProviderRestart: Runnable? = null
@@ -187,6 +202,13 @@ class SettingsDetailActivity :
 
     /** 返回：子页先回上一层，根页才退出。 */
     private fun goBack() {
+        if (pageKey in CODA_BOT_SUB_PAGES) {
+            navigatePage(forward = false) {
+                pageKey = PAGE_CODA_BOT
+                renderPage()
+            }
+            return
+        }
         if (pageKey == PAGE_PROVIDERS_OF_KIND) {
             // 回到上一级：方向相反（旧页右滑出、新页从左推入）。
             navigatePage(forward = false) {
@@ -316,9 +338,31 @@ class SettingsDetailActivity :
                 SettingsData.pet(store, this)
             }
             PAGE_CODA_BOT -> {
-                startActivity(Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
-                finish()
-                SettingsData.system(this)
+                SettingsData.codaBot(this)
+            }
+
+            PAGE_CODA_BOT_APPEARANCE -> {
+                SettingsData.codaBotAppearance(this)
+            }
+
+            PAGE_CODA_BOT_PERSONA -> {
+                SettingsData.codaBotPersona(this)
+            }
+
+            PAGE_CODA_BOT_PROMPT -> {
+                SettingsData.codaBotPrompt(this)
+            }
+
+            PAGE_CODA_BOT_MEMORY -> {
+                SettingsData.codaBotMemory(this)
+            }
+
+            PAGE_CODA_BOT_MODELS -> {
+                SettingsData.codaBotModels(this)
+            }
+
+            PAGE_CODA_BOT_CHAT -> {
+                SettingsData.codaBotChat(this)
             }
 
             PAGE_WEB_UI -> {
@@ -377,8 +421,11 @@ class SettingsDetailActivity :
                         renderPage()
                     }
                 }
-                "coda_bot" -> {
-                    startActivity(Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
+                in CODA_BOT_PAGE_KEYS -> {
+                    navigatePage(forward = true) {
+                        pageKey = target
+                        renderPage()
+                    }
                 }
                 else -> {
                     Unit
@@ -388,6 +435,18 @@ class SettingsDetailActivity :
     }
 
     override fun onRadioSelect(key: String) {
+        if (key.startsWith("coda_bot_skin=")) {
+            com.coda.mobileui.personal.CodaBotStore.setAvatar(this, key.removePrefix("coda_bot_skin="))
+            renderPage()
+            return
+        }
+        if (key.startsWith("coda_bot_bubble=")) {
+            val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+            profile.bubbleStyle = key.removePrefix("coda_bot_bubble=").toIntOrNull() ?: 0
+            com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+            renderPage()
+            return
+        }
         // 宠物形象单选：key 是 pet_pick=<形象 id>，不是数字，单独处理。
         if (key.startsWith("pet_pick=")) {
             store.petSkinId = key.removePrefix("pet_pick=")
@@ -433,6 +492,13 @@ class SettingsDetailActivity :
                 WebUiHost.stop()
                 snack("Web UI 已关闭")
             }
+            renderPage()
+            return
+        }
+        if (key == "coda_bot_pet_animation") {
+            val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+            profile.petAnimation = checked
+            com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
             renderPage()
             return
         }
@@ -512,7 +578,10 @@ class SettingsDetailActivity :
 
     override fun onValueClick(key: String) {
         when {
-key == "backup_export" -> {
+            key.startsWith("coda_bot_") -> {
+                handleCodaBotKey(key)
+            }
+            key == "backup_export" -> {
                 backupExportLauncher.launch(DataBackup.defaultFileName())
             }
 
@@ -3665,6 +3734,170 @@ key == "backup_export" -> {
         }
     }
 
+    /** Coda Bot 分区的行点击。 */
+    private fun handleCodaBotKey(key: String) {
+        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        when (key) {
+            "coda_bot_avatar_pick" -> codaBotAvatarLauncher.launch(arrayOf("image/*"))
+
+            "coda_bot_avatar_clear" -> {
+                com.coda.mobileui.personal.CodaBotStore.setAvatar(this, profile.avatarSkinId)
+                renderPage()
+            }
+
+            "coda_bot_name" -> {
+                codaBotTextSheet("显示名称", "聊天页与聊天记录里显示的名字", profile.name, multiline = false) {
+                    profile.name = it
+                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    renderPage()
+                }
+            }
+
+            "coda_bot_persona_edit" -> {
+                codaBotTextSheet("人设", "描述它是谁、性格如何、如何和你说话", profile.persona, multiline = true) {
+                    profile.persona = it
+                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    renderPage()
+                }
+            }
+
+            "coda_bot_persona_reset" -> {
+                sheetConfirm("恢复默认人设？", "当前人设会被内置描述替换", "恢复") {
+                    profile.persona = com.coda.mobileui.personal.CodaBotProfile().persona
+                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    renderPage()
+                }
+            }
+
+            "coda_bot_prompt_edit" -> {
+                codaBotTextSheet("系统提示词", "与人设一起注入规划与回复模型", profile.systemPrompt, multiline = true) {
+                    profile.systemPrompt = it
+                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    renderPage()
+                }
+            }
+
+            "coda_bot_user_name" -> {
+                codaBotTextSheet("你的称呼", "Bot 在对话里怎么称呼你", profile.userName, multiline = false) {
+                    profile.userName = it
+                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    renderPage()
+                }
+            }
+
+            "coda_bot_user_about" -> {
+                codaBotTextSheet("关于你", "偏好、习惯和重要背景，会注入对话", profile.userAbout, multiline = true) {
+                    profile.userAbout = it
+                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    renderPage()
+                }
+            }
+
+            "coda_bot_planner" -> pickCodaBotModel(planner = true)
+
+            "coda_bot_reply" -> pickCodaBotModel(planner = false)
+
+            "coda_bot_open_providers" -> {
+                navigatePage(forward = true) {
+                    pageKey = PAGE_PROVIDERS
+                    renderPage()
+                }
+            }
+
+            "coda_bot_export" -> exportCodaBotMessages()
+
+            "coda_bot_clear" -> {
+                sheetConfirm("清除聊天记录？", "只清除 Coda Bot 的本地会话，不影响 Coding Agent", "清除") {
+                    com.coda.mobileui.personal.CodaBotStore.clearMessages(this)
+                    snack("已清除 Coda Bot 聊天记录")
+                    renderPage()
+                }
+            }
+        }
+    }
+
+    /** 标准半屏输入卡：Coda Bot 的文字类设置都走这里。 */
+    private fun codaBotTextSheet(
+        title: String,
+        subtitle: String,
+        initial: String,
+        multiline: Boolean,
+        onSave: (String) -> Unit,
+    ) {
+        val input =
+            EditText(this).apply {
+                setText(initial)
+                setSelection(initial.length)
+                if (multiline) {
+                    minLines = 4
+                    maxLines = 10
+                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                }
+            }
+        CodaSheet(this)
+            .compact()
+            .title(title)
+            .subtitle(subtitle)
+            .content { col ->
+                col.addView(
+                    input,
+                    LinearLayout
+                        .LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            if (multiline) dp(160) else ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { topMargin = dp(10) },
+                )
+            }.secondaryAction("取消") { it.dismiss() }
+            .primaryAction("保存") { sheet ->
+                sheet.dismiss()
+                onSave(input.text.toString().trim())
+            }.show()
+    }
+
+    /** 选规划或回复模型：选项来自模型设置里的 LLM 供应商。 */
+    private fun pickCodaBotModel(planner: Boolean) {
+        val providers = ProviderStore.load(this).filter { it.kind == ProviderStore.ProviderKind.LLM }
+        val options = mutableListOf<String>()
+        val targets = mutableListOf<Pair<String, String>>()
+        providers.forEach { provider ->
+            provider.models.forEach { model ->
+                options += "$model · ${provider.name}"
+                targets += provider.id to model
+            }
+        }
+        if (options.isEmpty()) {
+            snack("还没有可用的 LLM 供应商，请先到模型设置添加")
+            return
+        }
+        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        val currentProvider = if (planner) profile.plannerProviderId else profile.replyProviderId
+        val currentModel = if (planner) profile.plannerModel else profile.replyModel
+        val current = targets.indexOfFirst { it.first == currentProvider && it.second == currentModel }.coerceAtLeast(0)
+        sheetPickList(if (planner) "规划模型" else "回复模型", options, current) { which ->
+            val target = targets[which]
+            val fresh = com.coda.mobileui.personal.CodaBotStore.profile(this)
+            if (planner) {
+                fresh.plannerProviderId = target.first
+                fresh.plannerModel = target.second
+            } else {
+                fresh.replyProviderId = target.first
+                fresh.replyModel = target.second
+            }
+            com.coda.mobileui.personal.CodaBotStore.saveProfile(this, fresh)
+            renderPage()
+        }
+    }
+
+    private fun exportCodaBotMessages() {
+        val text = com.coda.mobileui.personal.CodaBotStore.exportMessages(this)
+        val intent =
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, text)
+            }
+        startActivity(Intent.createChooser(intent, "导出 Coda Bot 聊天记录"))
+    }
+
     private fun snack(text: String) {
         Snackbar.make(findViewById(android.R.id.content), text, Snackbar.LENGTH_LONG).show()
     }
@@ -3699,6 +3932,27 @@ key == "backup_export" -> {
         const val PAGE_BACKUP = "backup"
         const val PAGE_PET = "pet"
         const val PAGE_CODA_BOT = "coda_bot"
+        const val PAGE_CODA_BOT_APPEARANCE = "coda_bot_appearance"
+        const val PAGE_CODA_BOT_PERSONA = "coda_bot_persona"
+        const val PAGE_CODA_BOT_PROMPT = "coda_bot_prompt"
+        const val PAGE_CODA_BOT_MEMORY = "coda_bot_memory"
+        const val PAGE_CODA_BOT_MODELS = "coda_bot_models"
+        const val PAGE_CODA_BOT_CHAT = "coda_bot_chat"
+
+        /** Coda Bot 分区：二级入口加它自己的三级页面，返回时统一回二级入口。 */
+        val CODA_BOT_PAGE_KEYS =
+            setOf(
+                PAGE_CODA_BOT,
+                PAGE_CODA_BOT_APPEARANCE,
+                PAGE_CODA_BOT_PERSONA,
+                PAGE_CODA_BOT_PROMPT,
+                PAGE_CODA_BOT_MEMORY,
+                PAGE_CODA_BOT_MODELS,
+                PAGE_CODA_BOT_CHAT,
+            )
+
+        /** Coda Bot 的三级页面。 */
+        val CODA_BOT_SUB_PAGES = CODA_BOT_PAGE_KEYS - PAGE_CODA_BOT
         const val PAGE_WEB_UI = "webui"
         const val PAGE_PET_APPEARANCE = "pet_appearance"
         const val PAGE_PET_PLACES = "pet_places"

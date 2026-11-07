@@ -34,11 +34,9 @@ import com.google.android.material.color.MaterialColors
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.radiobutton.MaterialRadioButton
 
-/** Personal Agent 的唯一页面：聊天态和 Coda Bot 设置态共用同一入口。 */
+/** Coda Bot 聊天页：只负责对话，设置放在设置的 Coda Bot 分区里。 */
 class CodaBotActivity : BaseActivity() {
-    private enum class Page { CHAT, ROOT, APPEARANCE, PERSONA, PROMPT, MEMORY, MODELS, CHAT_SETTINGS }
     private lateinit var profile: CodaBotProfile
-    private var page = Page.CHAT
     private lateinit var root: FrameLayout
     private lateinit var messages: LinearLayout
     private lateinit var scroll: ScrollView
@@ -55,18 +53,15 @@ class CodaBotActivity : BaseActivity() {
         profile = CodaBotStore.profile(this)
         runtime = createRuntime()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (page == Page.CHAT) finish() else render(Page.CHAT)
-            }
+            override fun handleOnBackPressed() = finish()
         })
-        render(Page.CHAT)
+        renderChat()
     }
 
     override fun onResume() {
         super.onResume()
         profile = CodaBotStore.profile(this)
         refreshRuntimeIfNeeded()
-        if (page == Page.APPEARANCE) render(page)
     }
 
     /** 当前运行时对应的配置指纹；人设、提示词、模型一变就需要重建。 */
@@ -106,26 +101,18 @@ class CodaBotActivity : BaseActivity() {
         super.onDestroy()
     }
 
-    private fun render(next: Page) {
-        page = next
-        // 从设置态回到聊天态时，人设/提示词/模型可能刚被改过，先对齐运行时再画界面。
-        if (next == Page.CHAT) refreshRuntimeIfNeeded()
+    private fun renderChat() {
+        // 人设、提示词、模型可能在设置里刚改过，先对齐运行时再画界面。
+        refreshRuntimeIfNeeded()
         root = FrameLayout(this)
         root.setBackgroundColor(attr(com.google.android.material.R.attr.colorSurface))
         setContentView(root)
-        when (next) {
-            Page.CHAT -> renderChat()
-            else -> renderSettings(next)
-        }
-    }
-
-    private fun renderChat() {
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, 0)
         }
         root.addView(column, match())
-        column.addView(topBar(profile.name, "Coda Bot") { render(Page.ROOT) }, LinearLayout.LayoutParams(-1, dp(56) + statusBarHeight()))
+        column.addView(topBar(profile.name, "Coda Bot"), LinearLayout.LayoutParams(-1, dp(56) + statusBarHeight()))
         scroll = ScrollView(this).apply { isFillViewport = true }
         messages = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -235,10 +222,10 @@ class CodaBotActivity : BaseActivity() {
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
+    /** 聊天页顶栏：返回退出，右侧进入设置里的 Coda Bot 分区。 */
     private fun topBar(
         title: String,
         subtitle: String,
-        action: () -> Unit,
     ): View {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -250,15 +237,13 @@ class CodaBotActivity : BaseActivity() {
             setImageResource(R.drawable.ic_arrow_back)
             setColorFilter(attr(com.google.android.material.R.attr.colorOnSurface))
             background = null
-            setOnClickListener { if (page == Page.CHAT) finish() else render(Page.CHAT) }
+            contentDescription = "返回"
+            setOnClickListener { finish() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val labels = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(4), dp(12), dp(4))
-            setBackgroundResource(R.drawable.bg_pill)
-            isClickable = true
-            setOnClickListener { action() }
         }
         labels.addView(TextView(this).apply {
             text = title
@@ -275,177 +260,21 @@ class CodaBotActivity : BaseActivity() {
         })
         bar.addView(labels, LinearLayout.LayoutParams(0, -1, 1f))
         bar.addView(ImageButton(this).apply {
-            setImageResource(if (page == Page.CHAT) R.drawable.ic_phone else R.drawable.ic_settings)
+            setImageResource(R.drawable.ic_settings)
             setColorFilter(attr(com.google.android.material.R.attr.colorOnSurface))
             background = null
+            contentDescription = "Coda Bot 设置"
             setOnClickListener {
-                if (page == Page.CHAT) toast("电话功能将在后续接入")
-                else action()
+                startActivity(
+                    Intent(this@CodaBotActivity, com.coda.mobileui.SettingsDetailActivity::class.java)
+                        .putExtra(
+                            com.coda.mobileui.SettingsDetailActivity.EXTRA_PAGE,
+                            com.coda.mobileui.SettingsDetailActivity.PAGE_CODA_BOT,
+                        ),
+                )
             }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         return bar
-    }
-
-    private fun renderSettings(current: Page) {
-        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(column, match())
-        column.addView(topBar("Coda Bot", "独立于 Coding Agent", {}) , LinearLayout.LayoutParams(-1, dp(56) + statusBarHeight()))
-        val scroll = ScrollView(this)
-        val body = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(32))
-        }
-        scroll.addView(body, ViewGroup.LayoutParams(-1, -2))
-        column.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        when (current) {
-            Page.ROOT -> settingsRoot(body)
-            Page.APPEARANCE -> settingsAppearance(body)
-            Page.PERSONA -> settingsPersona(body)
-            Page.PROMPT -> settingsPrompt(body)
-            Page.MEMORY -> settingsMemory(body)
-            Page.MODELS -> settingsModels(body)
-            Page.CHAT_SETTINGS -> settingsChat(body)
-            else -> Unit
-        }
-    }
-
-    private fun settingsRoot(body: LinearLayout) {
-        val hero = MaterialCardView(this).apply {
-            radius = dp(24).toFloat()
-            setCardBackgroundColor(attr(com.google.android.material.R.attr.colorPrimaryContainer))
-            strokeWidth = 0
-            cardElevation = 0f
-        }
-        val heroRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(18))
-        }
-        heroRow.addView(CodaBotAvatar(this).apply {
-            load(profile)
-            background = GradientDrawable().apply { cornerRadius = dp(22).toFloat() }
-        }, LinearLayout.LayoutParams(dp(76), dp(76)))
-        val heroText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        heroText.addView(label(profile.name, 24f, com.google.android.material.R.attr.colorOnPrimaryContainer))
-        heroText.addView(label("你的 Coda Bot", 13f, com.google.android.material.R.attr.colorOnPrimaryContainer, 0.72f))
-        heroRow.addView(heroText, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(16) })
-        hero.addView(heroRow)
-        body.addView(hero, LinearLayout.LayoutParams(-1, -2))
-        section(body, "Bot")
-        row(body, "形象与名称", "五个动画形象、本地图片", "appearance") { render(Page.APPEARANCE) }
-        row(body, "人设", profile.persona.take(24), "persona") { render(Page.PERSONA) }
-        row(body, "系统提示词", if (profile.systemPrompt.isBlank()) "自由编辑附加指令" else profile.systemPrompt.take(24), "prompt") { render(Page.PROMPT) }
-        row(body, "了解你", "${profile.userName} · ${if (profile.userAbout.isBlank()) "补充你的资料" else profile.userAbout.take(16)}", "memory") { render(Page.MEMORY) }
-        section(body, "模型与对话")
-        row(body, "规划模型", modelLabel(profile.plannerProviderId, profile.plannerModel, "未选择"), "planner") { render(Page.MODELS) }
-        row(body, "回复模型", modelLabel(profile.replyProviderId, profile.replyModel, "未选择"), "reply") { render(Page.MODELS) }
-        row(body, "聊天与数据", "气泡、动画、导出和清除", "chat") { render(Page.CHAT_SETTINGS) }
-    }
-
-    private fun settingsAppearance(body: LinearLayout) {
-        section(body, "名称")
-        inputRow(body, "显示名称", profile.name) { value ->
-            profile.name = value
-            CodaBotStore.saveProfile(this, profile)
-            render(Page.APPEARANCE)
-        }
-        section(body, "动画形象")
-        PetSkins.all(this).forEach { skin ->
-            choice(body, skin.title, profile.avatarSkinId == skin.id && profile.avatarUri.isEmpty()) {
-                CodaBotStore.setAvatar(this, skin.id)
-                profile = CodaBotStore.profile(this)
-                render(Page.APPEARANCE)
-            }
-        }
-        row(body, "本地图片", if (profile.avatarUri.isBlank()) "从相册选择" else "已设置，点击更换", "pick") {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "image/*"
-            }, REQ_AVATAR)
-        }
-        if (profile.avatarUri.isNotBlank()) {
-            row(body, "恢复动画形象", "移除本地图片", "clear") {
-                CodaBotStore.setAvatar(this, profile.avatarSkinId)
-                profile = CodaBotStore.profile(this)
-                render(Page.APPEARANCE)
-            }
-        }
-        section(body, "动画")
-        toggle(body, "显示动画形象", profile.petAnimation) {
-            profile.petAnimation = it
-            CodaBotStore.saveProfile(this, profile)
-            render(Page.APPEARANCE)
-        }
-    }
-
-    private fun settingsPersona(body: LinearLayout) {
-        section(body, "Bot 人设")
-        textArea(body, "描述它是谁、性格如何、如何和你说话。", profile.persona) {
-            profile.persona = it
-            CodaBotStore.saveProfile(this, profile)
-            toast("人设已保存")
-        }
-    }
-
-    private fun settingsPrompt(body: LinearLayout) {
-        section(body, "系统提示词")
-        text(body, "完全由你编辑。保存后与 Bot 人设一起注入规划与回复模型；Coda 只额外保留“读文件/终端仅用于补充上下文与核验”的安全边界。")
-        textArea(body, "例如回复长度、语气、边界、规划方式等。", profile.systemPrompt) {
-            profile.systemPrompt = it
-            CodaBotStore.saveProfile(this, profile)
-            toast("系统提示词已保存")
-        }
-    }
-
-    private fun settingsMemory(body: LinearLayout) {
-        section(body, "了解你")
-        inputRow(body, "你的称呼", profile.userName) {
-            profile.userName = it
-            CodaBotStore.saveProfile(this, profile)
-            render(Page.MEMORY)
-        }
-        textArea(body, "可写你的偏好、习惯和重要背景，会注入对话。", profile.userAbout) {
-            profile.userAbout = it
-            CodaBotStore.saveProfile(this, profile)
-        }
-        section(body, "本地记忆")
-        val count = CodaBotStore.messages(this).size
-        text(body, "本机保存了 $count 条聊天记录。当前长期记忆仍由 MaiBot 的轻量存储范围决定，A_memorix 未接入。")
-        row(body, "聊天记录", "分享为文本", "export") { exportMessages() }
-        row(body, "清除聊天记录", "只清除 Coda Bot 的本地会话", "clear") { clearMessages() }
-    }
-
-    private fun settingsModels(body: LinearLayout) {
-        val all = ProviderStore.load(this).filter { it.kind == ProviderStore.ProviderKind.LLM }
-        if (all.isEmpty()) {
-            text(body, "还没有可用的 LLM 供应商。请先到设置 → 模型设置添加。")
-            return
-        }
-        section(body, "规划模型")
-        text(body, "负责拆解你的需求、决定是否调用 Coding Agent 工具。")
-        all.forEach { p -> p.models.forEach { m -> choice(body, "$m · ${p.name}", profile.plannerProviderId == p.id && profile.plannerModel == m) {
-            profile.plannerProviderId = p.id
-            profile.plannerModel = m
-            CodaBotStore.saveProfile(this, profile)
-            render(Page.MODELS)
-        } } }
-        section(body, "回复模型")
-        text(body, "只负责把规划结果说成自然的陪伴式回复。")
-        all.forEach { p -> p.models.forEach { m -> choice(body, "$m · ${p.name}", profile.replyProviderId == p.id && profile.replyModel == m) {
-            profile.replyProviderId = p.id
-            profile.replyModel = m
-            CodaBotStore.saveProfile(this, profile)
-            render(Page.MODELS)
-        } } }
-    }
-
-    private fun settingsChat(body: LinearLayout) {
-        section(body, "聊天气泡")
-        choice(body, "标准", profile.bubbleStyle == 0) { profile.bubbleStyle = 0; saveAndRender() }
-        choice(body, "紧凑", profile.bubbleStyle == 1) { profile.bubbleStyle = 1; saveAndRender() }
-        section(body, "数据")
-        row(body, "导出聊天记录", "分享给其它应用", "export") { exportMessages() }
-        row(body, "清除聊天记录", "不影响 Coding Agent", "clear") { clearMessages() }
     }
 
     private fun startVoiceInput() {
@@ -584,166 +413,6 @@ class CodaBotActivity : BaseActivity() {
         }, LinearLayout.LayoutParams(-1, -2))
     }
 
-    private fun exportMessages() {
-        val text = CodaBotStore.exportMessages(this)
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, text)
-        }
-        startActivity(Intent.createChooser(intent, "导出聊天记录"))
-    }
-
-    private fun clearMessages() {
-        AlertDialog.Builder(this)
-            .setTitle("清除聊天记录？")
-            .setMessage("只清除 Coda Bot 的消息，不影响 Coding Agent 会话。")
-            .setNegativeButton("取消", null)
-            .setPositiveButton("清除") { _, _ ->
-                CodaBotStore.clearMessages(this)
-                toast("已清除")
-                if (page == Page.CHAT) render(Page.CHAT) else render(Page.MEMORY)
-            }.show()
-    }
-
-    private fun saveAndRender() {
-        CodaBotStore.saveProfile(this, profile)
-        render(page)
-    }
-
-    private fun section(body: LinearLayout, title: String) {
-        body.addView(TextView(this).apply {
-            text = title
-            textSize = 13f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setTextColor(attr(androidx.appcompat.R.attr.colorPrimary))
-            setPadding(dp(6), dp(20), dp(6), dp(7))
-        })
-    }
-
-    private fun text(body: LinearLayout, value: String) {
-        body.addView(TextView(this).apply {
-            text = value
-            textSize = 13f
-            setPadding(dp(18), dp(12), dp(18), dp(12))
-            setTextColor(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
-        }, LinearLayout.LayoutParams(-1, -2))
-    }
-
-    private fun row(
-        body: LinearLayout,
-        title: String,
-        subtitle: String,
-        tag: String,
-        click: () -> Unit,
-    ) {
-        body.addView(MaterialCardView(this).apply {
-            radius = dp(16).toFloat()
-            strokeWidth = 0
-            cardElevation = 0f
-            this.tag = tag
-            setCardBackgroundColor(attr(com.google.android.material.R.attr.colorSurfaceContainerLow))
-            setOnClickListener { click() }
-            addView(LinearLayout(this@CodaBotActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(18), dp(13), dp(18), dp(13))
-                addView(label(title, 15.5f, com.google.android.material.R.attr.colorOnSurface))
-                if (subtitle.isNotEmpty()) addView(label(subtitle, 12.5f, com.google.android.material.R.attr.colorOnSurfaceVariant))
-            })
-        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
-    }
-
-    private fun choice(
-        body: LinearLayout,
-        title: String,
-        selected: Boolean,
-        click: () -> Unit,
-    ) {
-        body.addView(MaterialCardView(this).apply {
-            radius = dp(16).toFloat()
-            strokeWidth = 0
-            cardElevation = 0f
-            setCardBackgroundColor(attr(com.google.android.material.R.attr.colorSurfaceContainerLow))
-            setOnClickListener { click() }
-            addView(LinearLayout(this@CodaBotActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(18), dp(6), dp(12), dp(6))
-                addView(label(title, 15f, com.google.android.material.R.attr.colorOnSurface), LinearLayout.LayoutParams(0, -2, 1f))
-                addView(MaterialRadioButton(this@CodaBotActivity).apply {
-                    isChecked = selected
-                    isClickable = false
-                    isFocusable = false
-                })
-            })
-        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
-    }
-
-    private fun toggle(
-        body: LinearLayout,
-        title: String,
-        checked: Boolean,
-        change: (Boolean) -> Unit,
-    ) {
-        val switch = MaterialSwitch(this).apply {
-            isChecked = checked
-            setOnCheckedChangeListener { _, value -> change(value) }
-        }
-        body.addView(MaterialCardView(this).apply {
-            radius = dp(16).toFloat()
-            strokeWidth = 0
-            cardElevation = 0f
-            setCardBackgroundColor(attr(com.google.android.material.R.attr.colorSurfaceContainerLow))
-            setOnClickListener { switch.toggle() }
-            addView(LinearLayout(this@CodaBotActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(18), dp(6), dp(12), dp(6))
-                addView(label(title, 15f, com.google.android.material.R.attr.colorOnSurface), LinearLayout.LayoutParams(0, -2, 1f))
-                addView(switch)
-            })
-        }, LinearLayout.LayoutParams(-1, -2))
-    }
-
-    private fun inputRow(
-        body: LinearLayout,
-        title: String,
-        value: String,
-        save: (String) -> Unit,
-    ) {
-        row(body, title, value.ifEmpty { "未设置" }, title) {
-            val edit = EditText(this).apply {
-                setText(value)
-                setSelection(value.length)
-                inputType = InputType.TYPE_CLASS_TEXT
-                setPadding(dp(20), dp(8), dp(20), dp(8))
-            }
-            AlertDialog.Builder(this).setTitle(title).setView(edit)
-                .setNegativeButton("取消", null)
-                .setPositiveButton("保存") { _, _ -> save(edit.text.toString().trim()) }.show()
-        }
-    }
-
-    private fun textArea(
-        body: LinearLayout,
-        hint: String,
-        value: String,
-        save: (String) -> Unit,
-    ) {
-        val edit = EditText(this).apply {
-            setText(value)
-            this.hint = hint
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            minLines = 5
-            gravity = Gravity.TOP
-            setPadding(dp(18), dp(12), dp(18), dp(12))
-        }
-        body.addView(edit, LinearLayout.LayoutParams(-1, dp(170)))
-        body.addView(android.widget.Button(this).apply {
-            text = "保存"
-            setOnClickListener { save(edit.text.toString().trim()) }
-        }, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.END })
-    }
-
     private fun label(
         value: String,
         size: Float,
@@ -760,23 +429,12 @@ class CodaBotActivity : BaseActivity() {
     private fun match() = FrameLayout.LayoutParams(-1, -1)
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density + .5f).toInt()
     private fun statusBarHeight(): Int = topSafeInsetPx()
-    private fun modelLabel(provider: String, model: String, fallback: String): String =
-        if (model.isBlank()) fallback else "$model · $provider"
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != Activity.RESULT_OK) return
         when (requestCode) {
-            REQ_AVATAR -> {
-                val uri = data?.data ?: return
-                runCatching {
-                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                CodaBotStore.setAvatar(this, profile.avatarSkinId, uri)
-                profile = CodaBotStore.profile(this)
-                render(Page.APPEARANCE)
-            }
             REQ_VOICE -> {
                 val text = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
                 if (text.isNotBlank()) {
@@ -790,7 +448,6 @@ class CodaBotActivity : BaseActivity() {
     }
 
     companion object {
-        private const val REQ_AVATAR = 7101
         private const val REQ_VOICE = 7102
         private const val REQ_ATTACHMENT = 7103
     }
