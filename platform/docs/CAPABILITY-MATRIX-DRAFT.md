@@ -6,7 +6,7 @@
 
 - 对应任务：QA-106（生成并发布能力矩阵）、AGT-103（能力矩阵生成与校验）
 - 对应验收：QA-006、ADP-017、DOC-003、AGT-ACP-GENERIC
-- 编写时点证据（2026-11-07 文件快照）：`adapters/capability-matrix.mjs` 已实现矩阵生成/校验库，`adapters/fixtures.mjs` 已实现 fixture 录制与回放；但**无任何真实 fixture、无冒烟记录、无 Markdown 渲染与 CLI**。故本草案全部真实行为 `UNVERIFIED`，`QA-106` 状态为 **IN PROGRESS（草案已交）/ BLOCKED（真实证据缺失）**。
+- 更新（2026-11-07 晚）：`tools/capability-matrix.mjs` 已能从 `fixtures/adapters/probes/*.json` 与真实录制自动生成矩阵，输出 `capability-matrix.json` 与 `CAPABILITY-MATRIX-GENERATED.md`；CI 用 `--check` 防止证据漂移。真实 Agent 的成功回合仍缺账号，因此所有 release 最高 `experimental`，本草案继续只作规则说明。
 
 ## 1. 生成规则
 
