@@ -24,6 +24,9 @@ import {
 import { createMockCore } from "../shared/mock-core.mjs";
 import {
   safeText,
+  resolveUiOptions,
+  renderHeader,
+  renderFooter,
   renderSessions,
   renderSessionHeader,
   renderMessages,
@@ -454,20 +457,22 @@ export async function runTui({
             const p = projection();
             const view = step.view ?? "status";
             let text;
-            if (view === "sessions") text = renderSessions(p, { selectedSessionId });
-            else if (view === "messages") text = renderMessages(p, step.sessionId ?? ensureSession(), { limit: step.limit ?? 200 });
-            else if (view === "status") text = renderStatus(p, { selectedSessionId });
-            else if (view === "interactions") text = renderInteractions(p, { sessionId: step.sessionId ?? null });
+            if (view === "sessions") text = renderSessions(p, { ...uiOptions(), selectedSessionId });
+            else if (view === "messages") text = renderMessages(p, step.sessionId ?? ensureSession(), { ...uiOptions(), limit: step.limit ?? 200 });
+            else if (view === "status") text = renderStatus(p, { ...uiOptions(), selectedSessionId });
+            else if (view === "interactions") text = renderInteractions(p, { ...uiOptions(), sessionId: step.sessionId ?? null });
             else if (view === "terminal") text = renderTerminal(findTerminal(p, step.id ?? step.terminalId), {
+              ...uiOptions(),
               maxLines: step.maxLines ?? 20,
               maxChars: step.maxChars ?? 12_000,
             });
             else if (view === "diff") text = renderDiff(findArtifact(p, step.id ?? step.artifactId), {
+              ...uiOptions(),
               maxLines: step.maxLines ?? 200,
             });
             else if (view === "artifacts") text = renderArtifacts(p, { sessionId: step.sessionId ?? null });
             else if (view === "attachments") text = renderMessageAttachments(p, step.sessionId ?? ensureSession());
-            else if (view === "help") text = renderHelp();
+            else if (view === "help") text = renderHelp(uiOptions());
             else text = `未知视图: ${view}`;
             record({ type: "render", view, id: step.id ?? step.terminalId ?? step.artifactId ?? null, text });
             break;
@@ -512,26 +517,34 @@ export async function runTui({
   }
 
   // 交互模式
+  function uiOptions() {
+    return resolveUiOptions({
+      width: stdout.columns ?? process.stdout.columns,
+      isTTY: stdout.isTTY === true,
+      color: useAnsi ?? color,
+    });
+  }
   const ansi = useAnsi ?? (color ?? (stdout.isTTY === true && process.env.NO_COLOR === undefined));
   let renderTimer = null;
   let closed = false;
 
   function renderInteractive() {
     const p = projection();
+    const ui = uiOptions();
     const lines = [
-      renderSessions(p, { selectedSessionId }),
+      renderHeader(p, ui),
       "",
-      selectedSessionId ? renderSessionHeader(p, selectedSessionId) : "（未选择会话）",
+      renderSessions(p, { ...ui, selectedSessionId }),
       "",
-      selectedSessionId ? renderMessages(p, selectedSessionId, { limit: 80 }) : "",
+      selectedSessionId ? renderMessages(p, selectedSessionId, { ...ui, limit: 80 }) : "（未选择会话）",
       "",
-      renderInteractions(p, { sessionId: selectedSessionId }),
+      renderInteractions(p, { ...ui, sessionId: selectedSessionId }),
       "",
-      renderTerminalList(p, { sessionId: selectedSessionId }),
+      renderTerminalList(p, { ...ui, sessionId: selectedSessionId }),
       "",
-      renderArtifacts(p, { sessionId: selectedSessionId }),
+      renderArtifacts(p, { ...ui, sessionId: selectedSessionId }),
       "",
-      "输入 /help 查看命令；直接输入文本发送。",
+      renderFooter(p, { ...ui }),
     ];
     if (ansi) write("\u001B[2J\u001B[H");
     write(`${lines.join("\n")}\n`);
@@ -577,12 +590,12 @@ export async function runTui({
       return;
     }
     if (line === "/help") {
-      write(`${renderHelp()}\n`);
+      write(`${renderHelp(uiOptions())}\n`);
       write("coda> ");
       return;
     }
     if (line === "/sessions") {
-      write(`${renderSessions(projection(), { selectedSessionId })}\n`);
+      write(`${renderSessions(projection(), { ...uiOptions(), selectedSessionId })}\n`);
       write("coda> ");
       return;
     }
@@ -596,7 +609,7 @@ export async function runTui({
       return;
     }
     if (line === "/status") {
-      write(`${renderStatus(projection(), { selectedSessionId })}\n`);
+      write(`${renderStatus(projection(), { ...uiOptions(), selectedSessionId })}\n`);
       write("coda> ");
       return;
     }

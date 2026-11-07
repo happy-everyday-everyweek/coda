@@ -111,6 +111,10 @@ jobs:
           # 实验性 Web UI 的前端资产：不打进 APK，作为 Release 附件由 App 运行时拉取。
           cd webui && zip -q ../coda-webui.zip index.html && cd ..
 
+      - name: 构建平台参考实现产物
+        id: platform
+        uses: ./.github/actions/build-platform
+
       # 应用内更新读取的版本清单。App 走 releases/download/<tag>/update-dev.json 静态下载，
       # 不消耗 GitHub API 的 60 次/小时限额，并且带 sha256 供下载后校验。
       - name: 生成更新清单
@@ -192,6 +196,9 @@ jobs:
 
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" coda-dev.apk coda-webui.zip sha256.txt update-dev.json \
+            "${{ steps.platform.outputs.tgz }}" \
+            "${{ steps.platform.outputs.webzip }}" \
+            "${{ steps.platform.outputs.manifest }}" \
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "开发预览版" \

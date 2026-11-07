@@ -8,10 +8,12 @@ on:
     paths:
       - "platform/**"
       - ".github/workflows/platform.yml"
+      - ".github/actions/build-platform/**"
   pull_request:
     paths:
       - "platform/**"
       - ".github/workflows/platform.yml"
+      - ".github/actions/build-platform/**"
   workflow_dispatch:
 
 permissions:

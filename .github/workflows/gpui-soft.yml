@@ -1,0 +1,82 @@
+name: GPUI Software Render
+
+# 无独显场景验证：CI runner 没有 GPU 时，Mesa 的 Vulkan 软件实现（lavapipe）+
+# Xvfb 能否让 GPUI 初始化并出第一帧。对应 TODO 里 GUI-101（GPUI 可行性）。
+#
+# 这是参考验证，不是产品构建：失败只报警、不阻塞 Platform 与 Release。
+on:
+  push:
+    paths:
+      - "platform/gui-smoke/**"
+      - ".github/workflows/gpui-soft.yml"
+  pull_request:
+    paths:
+      - "platform/gui-smoke/**"
+      - ".github/workflows/gpui-soft.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpui-soft-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装软件 GPU 与窗系统依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            mesa-vulkan-drivers vulkan-tools xvfb libgl1-mesa-dri mesa-utils \
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev libxcb1-dev libxkbcommon-x11-dev \
+            libzstd-dev pkg-config clang cmake
+
+      - name: 记录 GPU 后端（软件 Vulkan）
+        run: |
+          xvfb-run -a vulkaninfo --summary 2>&1 | tee /tmp/vulkan.txt | \
+            grep -E "deviceName|driverName|apiVersion|GPU id" | head -12 || true
+          xvfb-run -a glxinfo -B 2>&1 | grep -E "OpenGL renderer|OpenGL version|direct rendering" || true
+          {
+            echo "### GPUI 软件 GPU 环境"
+            echo '```'
+            grep -E "deviceName|driverName|apiVersion" /tmp/vulkan.txt | head -8 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 编译 GPUI 冒烟程序
+        working-directory: platform/gui-smoke
+        env:
+          CARGO_TERM_COLOR: always
+        run: cargo build 2>&1 | tee /tmp/gpui-build.log
+
+      - name: Xvfb 下出帧
+        working-directory: platform/gui-smoke
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WGPU_BACKEND: vulkan
+          WINIT_UNIX_BACKEND: x11
+        run: |
+          set -o pipefail
+          xvfb-run -a --server-args="-screen 0 1280x800x24" \
+            timeout 120 cargo run --quiet 2>&1 | tee /tmp/gpui-run.log
+          grep -q "GPUI_SMOKE_OK" /tmp/gpui-run.log
+
+      - name: 上传日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpui-soft-logs
+          if-no-files-found: ignore
+          path: |
+            /tmp/gpui-build.log
+            /tmp/gpui-run.log
+            /tmp/vulkan.txt

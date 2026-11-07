@@ -3,10 +3,12 @@
 跨端 Agent 控制与协同平台的**参考实现切片**：共享核心、适配器、PA、同步、安全与客户端。
 产品规格、验收与任务在 `../docs/desktop-agent-platform/`；模块契约见 [`CONTRACT.md`](./CONTRACT.md)。
 
-> 当前状态（2026-11-07）：**开发预览，不可发布**。参考实现可运行、契约测试全绿（363 项），
-> 但真实 Agent 适配（19 个）、Windows/macOS/Linux 安装器、WSL、GPUI GUI、Android 节点桥
-> 在本环境无法验证，任务状态见 `../docs/desktop-agent-platform/TODO.md`，证据见
-> `../artifacts/acceptance/`。G0–G5 发布门槛**未通过**，不得据此发布。
+> 当前状态（2026-11-07）：**开发预览，不可发布**。参考实现可运行、契约测试全绿（374 项），
+> 19 个 Agent 的适配器与探测证据已落地，但真实成功回合仍缺凭据；Windows/macOS/Linux 安装器、
+> WSL、GPUI 产品 GUI、Android 节点桥受本机与 CI 环境限制。GPUI 的软件渲染可行性已在
+> `.github/workflows/gpui-soft.yml` 中单独验证（不阻塞主流水线）。任务状态见
+> `../docs/desktop-agent-platform/TODO.md`，证据见 `../artifacts/acceptance/`。
+> G0–G5 发布门槛**未通过**，不得据此发布。
 
 ## 1. 边界（摘自 CONTRACT.md 第 1 节）
 
@@ -58,7 +60,7 @@ platform/
 ```bash
 cd platform
 
-# 全量测试（Node 24；363 项，含端到端）
+# 全量测试（Node 24；374 项，含端到端）
 npm test
 # 或分模块
 node --test "test/core/**/*.test.mjs"
@@ -87,22 +89,43 @@ node -e "import('./sync/perf.mjs').then(m=>m.runBenchmarks({quick:true}).then(co
 TUI-101/102、WEB-101/102、UI-101、PA-101..106/108、SYNC-101..108/111/112、
 SEC-101..104、REL-101/102、PERF-101、ADR-0001..0005、追溯/发布/许可文档。
 
-**明确阻塞（环境或真实上游缺失）**：AGT-111/112（Claude Code/Codex 无真实二进制与协议录制）、
-AGT-113..130（其余 Agent 未实现）、INST-102..104、WSL-101..105、GUI-101..107、PA-107、
-SYNC-109、PERF-102、QA-104。原因与解除条件见 `docs/SPEC-CHANGE-PROPOSAL.md`、
+**明确阻塞（环境或真实上游缺失）**：真实 Agent 成功回合缺凭据（Claude Code/Codex/Kimi 等
+只能验证握手与错误路径）、WorkBuddy 无本地入口、TRAE 企业门禁、INST-102..104、
+WSL-101..105、GUI-101..107（软件渲染可行，产品 GUI 未做）、PA-107、SYNC-109、PERF-102、QA-104。原因与解除条件见 `docs/SPEC-CHANGE-PROPOSAL.md`、
 `adapters/BLOCKED.md`、`pa/BLOCKED.md`、`sync/BLOCKED.md`、`clients/GUI-BLOCKED.md`。
 
 **已知限制**：无真 PTY（resize unsupported）；排队回合在当前回合结束后由核心派发，但**重启后需有新回合触发才会继续派发**；
 模型目录为空（需适配器能力发现）；core 认证令牌需部署层注入；快照与事件有界（20k/100 条等上限）。
 
-## 6. 文档
+## 6. 构建产物与 CI
+
+| 工作流 | 触发 | 产物 |
+|---|---|---|
+| `.github/workflows/platform.yml` | `platform/**` 变更 | ubuntu/macos 全量、windows 冒烟 |
+| `.github/workflows/build.yml` | 任意 push/PR | `coda-platform-<ver>.tgz`、Web 资产、发布清单（Actions 产物） |
+| `.github/workflows/gpui-soft.yml` | `platform/gui-smoke/**` | GPUI + 软件 Vulkan 出帧冒烟（失败不阻塞） |
+| `.github/workflows/dev-prerelease.yml` | `dev` 分支 | dev-latest 预发行，附平台三件套 |
+| `.github/workflows/release.yml` | `v*` Tag | 正式发行，附平台三件套 |
+
+打包复用 `.github/actions/build-platform`：先校验能力矩阵/证据索引，再生成 Web 资产、
+`release-manifest.json`、`npm pack`。`package.json` 的 `files` 与清单覆盖范围一致，
+避免测试和文档混入发布包。
+
+## 7. TUI 视觉参考与仿冒鉴别
+
+TUI 布局参考社区插件 **`ccch1mneyyy/dsh-TUI`**（npm `@deepseek-harness-tui/dsh-tui`，MIT）。
+它是 DSH 官方**推荐**的社区插件，**不是官方包**；npm 上存在 `@tomowang/dsh-tui`、
+`@huiliyi37/dsh-tianshu-tui`、`@xp266/dshtui` 等仿冒/变体，引用前先核对仓库与发布者。
+本项目只借鉴布局、配色语义与信息层级，不复制其代码。
+
+## 8. 文档
 
 ADR-0001（核心语言）、ADR-0002（PA/HLC 同步）、ADR-0003（后台服务）、ADR-0004（Web 访问）、
 ADR-0005（能力矩阵）；`SPEC-CHANGE-PROPOSAL.md`（v0.3 规格变更）、`LICENSE-AUDIT.md`、
 `CAPABILITY-MATRIX-DRAFT.md`、`TRACEABILITY.md`、`RELEASE-NOTES-DRAFT.md`、
 `KNOWN-LIMITATIONS.md`、`TODO-STATUS-PROPOSAL.md`。
 
-## 7. 贡献规则
+## 9. 贡献规则
 
 1. 先读 `CONTRACT.md` 与对应 ADR，再改代码；跨模块形状变更必须同步 `contracts/`。
 2. 每个任务按 `TODO.md` 的 DoD 交付：实现 + 测试 + 证据；`BLOCKED` 必须写原因与解除条件。

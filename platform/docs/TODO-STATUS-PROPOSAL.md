@@ -1,5 +1,6 @@
 # TODO 状态建议表（给 Lead）
 
+- 状态：**历史快照，已被 `docs/desktop-agent-platform/TODO.md` 的现行状态取代**。
 - 用途：供 Lead 在合并后**一次性**更新 `docs/desktop-agent-platform/TODO.md` 的状态列。**本文件不修改 `TODO.md`。**
 - 编制时点：2026-11-07 21:10 (+08:00)
 - 判定依据：`platform/CONTRACT.md`、`platform/package.json`、`platform/contracts/*.mjs`、`platform/core/*.mjs`、`platform/adapters/*.mjs`、`platform/pa/*.mjs`、`platform/security/*.mjs`、`platform/clients/shared/*.mjs`、`platform/test/contracts/contracts.test.mjs`，以及该时点 `platform/` 的完整文件清单

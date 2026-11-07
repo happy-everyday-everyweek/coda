@@ -3,3 +3,5 @@ data/
 *.sqlite
 *.sqlite-journal
 *.log
+dist/
+target/

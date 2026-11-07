@@ -4,6 +4,17 @@
   "private": true,
   "type": "module",
   "description": "Coda 跨端 Agent 控制与协同平台：共享核心、适配器、TUI/Web 客户端、同步与 PA（参考实现）",
+  "files": [
+    "adapters",
+    "contracts",
+    "core",
+    "sync",
+    "pa",
+    "security",
+    "clients",
+    "tools",
+    "CONTRACT.md"
+  ],
   "engines": {
     "node": ">=24"
   },

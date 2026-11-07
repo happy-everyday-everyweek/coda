@@ -1,0 +1,20 @@
+[package]
+name = "coda-gpui-smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# 与参考项目 Zeron 完全一致的 gpui 固定版本（zeronsh/zui，Zed 衍生）。
+# 只用于验证「无独显的 CI runner 上 GPUI 能否初始化 GPU 后端并出帧」，
+# 不承担产品构建；失败不阻塞主流水线（见 workflow 的 continue-on-error）。
+[dependencies]
+gpui = { git = "https://github.com/zeronsh/zui", rev = "b564a34413bb7ef1da04121c4a287758f94993d9" }
+gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "b564a34413bb7ef1da04121c4a287758f94993d9", features = [
+    "wayland",
+    "x11",
+    "font-kit",
+    "runtime_shaders",
+] }
+
+[profile.dev]
+opt-level = 1

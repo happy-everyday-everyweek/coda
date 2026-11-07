@@ -63,6 +63,31 @@ jobs:
         working-directory: kernel/maibot-lite
         run: python -m pytest tests/test_lite_coding_tool.py -q
 
+  # platform/ 参考实现的通用构建：每次 push/PR 都产出 npm 包、Web 资产和发布清单。
+  # 只作为 Actions 产物；正式/预发行附件由 release.yml 与 dev-prerelease.yml 生成。
+  platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: ./.github/actions/build-platform
+        id: platform
+      - name: 平台契约测试
+        working-directory: platform
+        run: node --test "test/**/*.test.mjs"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coda-platform-${{ steps.platform.outputs.version }}
+          if-no-files-found: error
+          path: |
+            ${{ steps.platform.outputs.tgz }}
+            ${{ steps.platform.outputs.webzip }}
+            ${{ steps.platform.outputs.manifest }}
+            platform/dist/web-version.json
+
   # 只有手动触发并勾选 build_apk 时才打包：分支构建不产可安装产物，更不会进 Release。
   apk:
     if: github.event_name == 'workflow_dispatch' && inputs.build_apk

@@ -214,7 +214,7 @@ ART / SEC / REL / PERF / QA / 发布
 
 | ID | 状态 | 优先级 | 任务与产出 | 依赖 | 验收 |
 |---|---|---|---|---|---|
-| GUI-101 | BLOCKED | P0 | GPUI 应用壳、核心连接、设备/会话导航与错误态 | CORE-103, DOC-102 | UI-001, UI-003 |
+| GUI-101 | IN PROGRESS | P0 | GPUI 应用壳、核心连接、设备/会话导航与错误态（CI 已完成软件渲染可行性冒烟，产品壳未做） | CORE-103, DOC-102 | UI-001, UI-003 |
 | GUI-102 | BLOCKED | P0 | 虚拟化会话流、Markdown、工具分组、流式跟随与历史浏览 | GUI-101 | UI-002, PERF-002~003 |
 | GUI-103 | BLOCKED | P0 | Composer、发送/排队/插话/停止、草稿、附件 | GUI-102, AGT-107 | ADP-003, ADP-007~009, UI-004 |
 | GUI-104 | BLOCKED | P0 | 审批/提问面板、原生选项、过期与多端结果 | GUI-101, AGT-108 | ADP-010~011, SYNC-007 |
