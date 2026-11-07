@@ -1,6 +1,6 @@
 # Agent 证据索引（自动生成，勿手改）
 
-> probes=15 recordings=12 handwritten=3。
+> probes=14 recordings=12 handwritten=3。
 > 规则：SPEC 14.3 脱敏；录制必须 redaction.applied=true；手写 fixture 必须说明来源。
 
 | Agent | 版本 | 类型 | 任务 | 帧/探测数 | 路径 |
@@ -11,7 +11,6 @@
 | auggie | 0.37.0 | probe | - | 3 | fixtures/adapters/probes/auggie.json |
 | claude-code | 2.1.319 | recording | AGT-111 | 3 | fixtures/adapters/claude-stream-json-noauth.fixture.json |
 | claude | 2.1.319 | probe | AGT-111 | 5 | fixtures/adapters/probes/claude.json |
-| codebuddy-openapi | - | probe | - | 0 | fixtures/adapters/probes/codebuddy-openapi.json |
 | codebuddy | 2.181.0 | recording | AGT-117 | 2 | fixtures/adapters/codebuddy-acp-auth-gate.fixture.json |
 | codebuddy | 2.181.0 | recording | AGT-117 | 5 | fixtures/adapters/codebuddy-headless-stream-json.fixture.json |
 | codebuddy | 2.181.0 | probe | - | 7 | fixtures/adapters/probes/codebuddy.json |

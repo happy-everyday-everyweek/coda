@@ -196,8 +196,8 @@ ART / SEC / REL / PERF / QA / 发布
 | INST-102 | BLOCKED | P0 | Windows 用户级后台安装、登录启动、退出 UI 不停止 | DOC-104, CORE-107 | PLAT-001, LIFE-004 |
 | INST-103 | BLOCKED | P0 | macOS 后台项/登录启动、退出 UI 不停止 | DOC-104, CORE-107 | PLAT-002, LIFE-004 |
 | INST-104 | BLOCKED | P0 | Linux user service、登录启动、退出 UI 不停止 | DOC-104, CORE-107 | PLAT-003, LIFE-004 |
-| INST-105 | OPEN | P0 | 核心/UI 升级、迁移、回滚与运行任务保护 | CORE-104, CORE-107 | LIFE-006, QA-005 |
-| INST-106 | OPEN | P1 | 卸载 UI/核心的交互与数据保留策略 | INST-101 | LIFE-007~008 |
+| INST-105 | IN PROGRESS | P0 | 核心/UI 升级、迁移、回滚与运行任务保护 | CORE-104, CORE-107 | LIFE-006, QA-005 |
+| INST-106 | IN PROGRESS | P1 | 卸载 UI/核心的交互与数据保留策略 | INST-101 | LIFE-007~008 |
 | INST-107 | IN PROGRESS | P0 | Web UI 本地资产安装、托管和版本管理 | CORE-103 | LIFE-009, WEB-001 |
 
 ### 6.2 WSL

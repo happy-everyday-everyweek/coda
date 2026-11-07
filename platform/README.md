@@ -3,7 +3,7 @@
 跨端 Agent 控制与协同平台的**参考实现切片**：共享核心、适配器、PA、同步、安全与客户端。
 产品规格、验收与任务在 `../docs/desktop-agent-platform/`；模块契约见 [`CONTRACT.md`](./CONTRACT.md)。
 
-> 当前状态（2026-11-07）：**开发预览，不可发布**。参考实现可运行、契约测试全绿（357 项），
+> 当前状态（2026-11-07）：**开发预览，不可发布**。参考实现可运行、契约测试全绿（361 项），
 > 但真实 Agent 适配（19 个）、Windows/macOS/Linux 安装器、WSL、GPUI GUI、Android 节点桥
 > 在本环境无法验证，任务状态见 `../docs/desktop-agent-platform/TODO.md`，证据见
 > `../artifacts/acceptance/`。G0–G5 发布门槛**未通过**，不得据此发布。
@@ -58,7 +58,7 @@ platform/
 ```bash
 cd platform
 
-# 全量测试（Node 24；357 项，含端到端）
+# 全量测试（Node 24；361 项，含端到端）
 npm test
 # 或分模块
 node --test "test/core/**/*.test.mjs"

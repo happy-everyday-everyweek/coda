@@ -27,6 +27,7 @@ import { createDiagnostics } from "./diagnostics.mjs";
 import { ClosedError, ConflictError, ValidationError } from "./errors.mjs";
 import { createEventBus } from "./eventbus.mjs";
 import { Journal } from "./journal.mjs";
+import { writeVersionMarker } from "./maintenance.mjs";
 import { createLifecycle } from "./lifecycle.mjs";
 import { createMockAdapter, runUiScenario } from "./mock.mjs";
 import { createNotificationService } from "./notifications.mjs";
@@ -98,6 +99,7 @@ export function createCore({
   const journal = new Journal({ dataDir: resolvedDataDir, clock });
   journal.open();
   journal.setMeta("core_version", CORE_VERSION);
+  writeVersionMarker(resolvedDataDir, { schemaVersion: journal.schemaVersion(), coreVersion: CORE_VERSION, clock });
 
   const diagnosticsService = createDiagnostics({ clock, version: CORE_VERSION, logger });
   const receipts = new ReceiptStore({ journal, clock });
@@ -443,3 +445,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
 }
 
 export { ConflictError, ClosedError };
+
+export {
+  MAINTENANCE_VERSION,
+  MaintenanceError,
+  backupDataDir,
+  planUpgrade,
+  readVersionMarker,
+  rollbackFromBackup,
+  uninstallCoreData,
+  uninstallPreview,
+  writeVersionMarker,
+} from "./maintenance.mjs";

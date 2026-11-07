@@ -62,16 +62,6 @@
       "redactionApplied": true
     },
     {
-      "kind": "probe",
-      "agentId": "codebuddy-openapi",
-      "taskId": null,
-      "version": null,
-      "path": "fixtures/adapters/probes/codebuddy-openapi.json",
-      "generatedAt": null,
-      "probes": 0,
-      "redactionApplied": true
-    },
-    {
       "kind": "recording",
       "agentId": "codebuddy",
       "taskId": "AGT-117",
@@ -303,7 +293,7 @@
     }
   ],
   "counts": {
-    "probe": 15,
+    "probe": 14,
     "recording": 12,
     "handwritten": 3
   }

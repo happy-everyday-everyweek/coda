@@ -577,7 +577,7 @@ Qoder 的 headless 在无登录时不输出 JSONL（stderr 报 `NonInteractiveAu
 ## 16. CodeBuddy HTTP API（run 42380252448 抓取完整 OpenAPI）
 
 `codebuddy --serve` 的 `/api/openapi.json` 可匿名读取（OpenAPI 3.1.0，27KB+，已存
-`platform/fixtures/adapters/probes/codebuddy-openapi.json`）。核心端点：
+`platform/fixtures/adapters/codebuddy-openapi.json`）。核心端点：
 
 - `POST /api/v1/jobs`：派发智能体 `{prompt,cwd,agent,model,effort,permissionMode}` → `AgentJob{id,sessionId,state}`
 - `GET /api/v1/jobs/{id}`：状态；`GET /api/v1/jobs/{id}/stream`：SSE（event=message，先回放后尾随 JSONL）
