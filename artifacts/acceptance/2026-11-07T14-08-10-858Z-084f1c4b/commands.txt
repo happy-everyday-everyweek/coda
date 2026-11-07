@@ -1,0 +1,2 @@
+node --test "test/**/*.test.mjs"
+# cwd: /root/workspace/coda/platform

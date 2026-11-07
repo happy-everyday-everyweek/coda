@@ -278,7 +278,7 @@ ART / SEC / REL / PERF / QA / 发布
 | SEC-104 | DONE | P0 | 多账号实例隔离、ambient credentials 清理 | AGT-102 | SEC-003, ADP-002 |
 | REL-101 | DONE | P0 | 核心重启、Agent 崩溃、结果未知和终端恢复 | CORE-108, CORE-111 | REL-001~004 |
 | REL-102 | DONE | P0 | 故障注入 harness：断网、断电模拟、旧版本、Agent 退出 | CORE-106, CORE-108 | REL-001~004 |
-| REL-103 | OPEN | P1 | 长稳与资源泄漏测试：重连、终端、附件、长会话 | REL-101 | REL-005, PERF-006 |
+| REL-103 | DONE | P1 | 长稳与资源泄漏测试：重连、终端、附件、长会话 | REL-101 | REL-005, PERF-006 |
 | PERF-101 | DONE | P0 | 性能基准框架与指标归档：启动、事件延迟、空闲资源、大文件 | CORE-107, CORE-112 | PERF-001~005 |
 | PERF-102 | BLOCKED | P0 | GPUI 长列表/流式渲染 profiling 与预算检查 | GUI-102 | PERF-002~003 |
 
