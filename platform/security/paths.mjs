@@ -112,11 +112,20 @@ export function realpathOfNearestExisting(p) {
  * 不存在的尾部保留字面量（写入新文件时常见）。
  */
 export function resolveWithinRoot(workspaceRoot, candidate) {
-  const rootReal = realpathOrNull(resolve(workspaceRoot));
+  const rootRaw = trimTrailingSep(resolve(workspaceRoot));
+  const rootReal = realpathOrNull(rootRaw);
   if (!rootReal) return fail(PATH_ERRORS.NOT_FOUND, workspaceRoot, "workspace root does not exist");
-  const abs = trimTrailingSep(isAbsolute(candidate) ? resolve(candidate) : resolve(rootReal, candidate));
+  const absRaw = trimTrailingSep(isAbsolute(candidate) ? resolve(candidate) : resolve(rootReal, candidate));
+  // macOS 的 /tmp → /private/tmp 等系统符号链接：先做真实路径规范化再比较包含关系，
+  // 否则「字面在根内、真实也在根内」的路径会被误判为越界。
+  const abs = realpathOfNearestExisting(absRaw) ?? absRaw;
   if (!isPathInside(rootReal, abs)) {
-    return fail(PATH_ERRORS.OUTSIDE_WORKSPACE, abs, "path escapes workspace");
+    const literalInside = isPathInside(rootRaw, absRaw) || isPathInside(rootReal, absRaw);
+    return fail(
+      literalInside ? PATH_ERRORS.SYMLINK_ESCAPE : PATH_ERRORS.OUTSIDE_WORKSPACE,
+      absRaw,
+      literalInside ? "symlink resolves outside workspace" : "path escapes workspace",
+    );
   }
   const rel = relative(rootReal, abs);
   let cur = rootReal;
