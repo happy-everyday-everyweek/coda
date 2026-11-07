@@ -36,8 +36,8 @@ export const HEADLESS_PROFILES = Object.freeze({
     provider: "codebuddy",
     command: "codebuddy",
     baseArgs: ["-p", "--output-format", "stream-json", "--verbose"],
-    evidence: "fixtures/adapters/probes/codebuddy.json（CI 版本与入口）",
-    protocolConfirmed: false,
+    evidence: "fixtures/adapters/codebuddy-headless-stream-json.fixture.json（真实帧：与 Claude 同族）",
+    protocolConfirmed: true,
     note: "另有 --acp（stdio）与 --serve（HTTP+SSE ACP），ACP 路径见 acp-profiles.mjs",
   },
 });

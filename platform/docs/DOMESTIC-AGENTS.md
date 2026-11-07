@@ -557,3 +557,10 @@ OpenClaw/fx 走 ACP 画像；Kimi 待安装路径修复后复核。
 结论：国产三家的**协议门槛**都已摸清——Kimi/CodeBuddy/fx 的 ACP 握手可达但需要各自凭据；
 Qoder 走 headless stream-json；WorkBuddy 官方无入口；TRAE 卡企业版。真实回合录制需要凭据，
 在「CI 一律无凭证」的决策下只能做到握手/错误帧证据。
+
+## 14. CodeBuddy headless 帧形状（run 42379101425）
+
+`codebuddy -p --output-format stream-json "..."` 在无凭据下仍输出与 **Claude Code 同族** 的 JSONL：
+`system(init)` → `system(status)` → `assistant` → `system(usage_update)` → `result(error_during_execution)`。
+因此 `adapters/claude-stream-json.mjs` 的帧映射可直接复用于 CodeBuddy（`headless-profiles.mjs` 已标 protocolConfirmed）。
+Qoder 的 headless 在无登录时不输出 JSONL（stderr 报 `NonInteractiveAuthRequiredError`），需登录后才可录制。

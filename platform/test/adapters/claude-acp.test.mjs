@@ -170,3 +170,25 @@ test("headless 画像：Claude/Qoder/CodeBuddy 命令与能力诚实", async () 
   assert.deepEqual(noSupportedValues(decl.capabilities), []);
   await adapter.dispose();
 });
+
+test("CodeBuddy 真实录制：与 Claude 同族（system init/assistant/result），映射器可解析", () => {
+  const { mapClaudeFrame } = { mapClaudeFrame: null };
+  // 用 Claude 适配器导出的映射器校验 CodeBuddy 帧形状
+  return import("../../adapters/claude-stream-json.mjs").then(({ mapClaudeFrame }) => {
+    const fixture = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "fixtures", "adapters", "codebuddy-headless-stream-json.fixture.json"), "utf8"));
+    assert.equal(fixture.source, "recording");
+    assert.equal(fixture.agentId, "codebuddy");
+    const types = fixture.frames.map((f) => f.type);
+    assert.deepEqual(types, ["system", "system", "assistant", "system", "result"]);
+    const init = fixture.frames[0];
+    const events = [];
+    const mapped = mapClaudeFrame(init, { sessionId: "ses_cb", emit: (e) => events.push(e) });
+    assert.equal(mapped.sessionId, init.session_id);
+    assert.ok(events.some((e) => e.kind === "session"));
+    const result = fixture.frames.at(-1);
+    const events2 = [];
+    const done = mapClaudeFrame(result, { sessionId: "ses_cb", emit: (e) => events2.push(e) });
+    assert.equal(done.finished, true);
+    assert.ok(events2.some((e) => e.kind === "error"));
+  });
+});

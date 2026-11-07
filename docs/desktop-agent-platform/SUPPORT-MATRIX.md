@@ -82,7 +82,7 @@
 | grok / hermes / fx / antigravity | acp-profile | 未安装 | host | UNVERIFIED（ACP 命令来自 Zeron README；未在本环境安装验证） | `platform/adapters/acp-profiles.mjs`、`platform/docs/REFERENCE-PROJECTS.md` |
 | qwen / copilot / auggie / crush | 各自 CLI | CI 探测版本见 probes | host | IN PROGRESS（入口已验证，未实现适配器） | `fixtures/adapters/probes/*.json` |
 | qoder | headless（Claude 同族） | CI 实测 1.1.85 | host | experimental（headless 入口已验证；无真实回合录制；ACP 待复核） | `fixtures/adapters/probes/qoder-cn.json`、`platform/adapters/headless-profiles.mjs` |
-| codebuddy | acp-profile / headless | CI 实测 2.181.0 | host | experimental（ACP initialize 成功；session/new 需 `CODEBUDDY_API_KEY`，已录认证门槛帧） | `fixtures/adapters/codebuddy-acp-auth-gate.fixture.json`、`platform/adapters/{acp-profiles,headless-profiles}.mjs` |
+| codebuddy | acp-profile / headless | CI 实测 2.181.0 | host | experimental（ACP initialize 成功；headless 与 Claude 同族真实帧已录制；ACP session/new 需 `CODEBUDDY_API_KEY`） | `fixtures/adapters/codebuddy-headless-stream-json.fixture.json`、`fixtures/adapters/codebuddy-acp-auth-gate.fixture.json` |
 | openclaw | acp-profile | CI 实测 2026.11.1 | host | experimental（`openclaw acp` 存在；需 Gateway 凭据） | `fixtures/adapters/probes/openclaw.json` |
 | fx | acp-profile | CI 实测 0.0.16 | host | experimental（ACP initialize 返回需 Vercel AI Gateway 凭据，已录门槛帧） | `fixtures/adapters/fx-acp-auth-gate.fixture.json` |
 | kimi | acp-profile / headless | CI 实测 2.5.2 | host | experimental（`kimi acp` 已确认；需 Kimi 登录） | `fixtures/adapters/probes/kimi.json`、`platform/adapters/acp-profiles.mjs` |
