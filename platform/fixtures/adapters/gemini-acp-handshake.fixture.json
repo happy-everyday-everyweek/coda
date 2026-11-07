@@ -79,5 +79,6 @@
         "message": "Gemini API key is missing or not configured."
       }
     }
-  ]
+  ],
+  "taskId": "AGT-122"
 }

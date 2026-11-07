@@ -33,6 +33,7 @@ jobs:
         working-directory: platform
         run: |
           node tools/capability-matrix.mjs --check
+          node tools/fixture-index.mjs --check
       - name: 契约测试
         working-directory: platform
         run: |

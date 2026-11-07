@@ -9,21 +9,31 @@
   "recordedAt": "2026-11-07T12:00:00.000Z",
   "redaction": {
     "applied": true,
-    "rules": ["linux-home", "root-home"]
+    "rules": [
+      "linux-home",
+      "root-home"
+    ]
   },
   "notes": "失败场景：回合进行中上游报错（配额/限流），已产生的部分输出保留，回合进入 failed，错误码可用于 UI 分类。",
   "events": [
     {
       "kind": "status",
       "sessionId": "ses_fixture_error",
-      "payload": { "state": "running", "turnId": "turn_fixture_error" },
+      "payload": {
+        "state": "running",
+        "turnId": "turn_fixture_error"
+      },
       "seq": 1,
       "ts": "2026-11-07T12:00:00.000Z"
     },
     {
       "kind": "message",
       "sessionId": "ses_fixture_error",
-      "payload": { "role": "assistant", "text": "Let me check the failing test", "delta": true },
+      "payload": {
+        "role": "assistant",
+        "text": "Let me check the failing test",
+        "delta": true
+      },
       "seq": 2,
       "ts": "2026-11-07T12:00:00.100Z"
     },
@@ -35,7 +45,10 @@
         "message": "model unavailable: rate limit exceeded (retry after 30s)",
         "retryable": true,
         "rpcCode": -32007,
-        "details": { "rpcCode": -32000, "data": null },
+        "details": {
+          "rpcCode": -32000,
+          "data": null
+        },
         "turnId": "turn_fixture_error"
       },
       "seq": 3,
@@ -56,9 +69,15 @@
     {
       "kind": "status",
       "sessionId": "ses_fixture_error",
-      "payload": { "state": "failed", "turnId": "turn_fixture_error", "error": "QUOTA_EXCEEDED" },
+      "payload": {
+        "state": "failed",
+        "turnId": "turn_fixture_error",
+        "error": "QUOTA_EXCEEDED"
+      },
       "seq": 5,
       "ts": "2026-11-07T12:00:00.400Z"
     }
-  ]
+  ],
+  "agentId": "acp-generic",
+  "taskId": "AGT-104"
 }

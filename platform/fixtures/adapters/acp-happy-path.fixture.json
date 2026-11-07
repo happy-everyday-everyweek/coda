@@ -9,7 +9,12 @@
   "recordedAt": "2026-11-07T10:00:00.000Z",
   "redaction": {
     "applied": true,
-    "rules": ["linux-home", "root-home", "email", "phone-cn"]
+    "rules": [
+      "linux-home",
+      "root-home",
+      "email",
+      "phone-cn"
+    ]
   },
   "notes": "正常流式：会话创建 → 正文增量 → 工具开始/结束 → 计划 → 回合完成 → 空闲。",
   "events": [
@@ -28,21 +33,32 @@
     {
       "kind": "status",
       "sessionId": "ses_fixture_happy",
-      "payload": { "state": "running", "turnId": "turn_fixture_happy" },
+      "payload": {
+        "state": "running",
+        "turnId": "turn_fixture_happy"
+      },
       "seq": 2,
       "ts": "2026-11-07T10:00:00.100Z"
     },
     {
       "kind": "message",
       "sessionId": "ses_fixture_happy",
-      "payload": { "role": "assistant", "text": "I will inspect the repository.", "delta": true },
+      "payload": {
+        "role": "assistant",
+        "text": "I will inspect the repository.",
+        "delta": true
+      },
       "seq": 3,
       "ts": "2026-11-07T10:00:00.200Z"
     },
     {
       "kind": "message",
       "sessionId": "ses_fixture_happy",
-      "payload": { "role": "assistant", "text": " Running the test suite now.", "delta": true },
+      "payload": {
+        "role": "assistant",
+        "text": " Running the test suite now.",
+        "delta": true
+      },
       "seq": 4,
       "ts": "2026-11-07T10:00:00.300Z"
     },
@@ -55,7 +71,9 @@
         "toolKind": "execute",
         "status": "pending",
         "started": true,
-        "rawInput": { "command": "npm test" }
+        "rawInput": {
+          "command": "npm test"
+        }
       },
       "seq": 5,
       "ts": "2026-11-07T10:00:00.400Z"
@@ -76,7 +94,13 @@
       "kind": "plan",
       "sessionId": "ses_fixture_happy",
       "payload": {
-        "entries": [{ "content": "run tests", "status": "completed", "priority": "high" }]
+        "entries": [
+          {
+            "content": "run tests",
+            "status": "completed",
+            "priority": "high"
+          }
+        ]
       },
       "seq": 7,
       "ts": "2026-11-07T10:00:00.600Z"
@@ -96,9 +120,15 @@
     {
       "kind": "status",
       "sessionId": "ses_fixture_happy",
-      "payload": { "state": "idle", "turnId": "turn_fixture_happy", "stopReason": "end_turn" },
+      "payload": {
+        "state": "idle",
+        "turnId": "turn_fixture_happy",
+        "stopReason": "end_turn"
+      },
       "seq": 9,
       "ts": "2026-11-07T10:00:00.800Z"
     }
-  ]
+  ],
+  "agentId": "acp-generic",
+  "taskId": "AGT-104"
 }
