@@ -77,8 +77,8 @@
 | claude-code | claude-stream-json | CI 探测 2.1.319 | host | experimental（真实 init/assistant/result 帧已录制；成功模型回合未录制） | `fixtures/adapters/claude-stream-json-noauth.fixture.json`、`platform/adapters/claude-stream-json.mjs` |
 | codex | codex-app-server / codex-exec | CI 探测 0.167.0 | host | experimental（initialize 握手 + `exec --json` 真实失败路径录制；app-server 会话方法按参考项目方法表实现，成功回合未录制） | `fixtures/adapters/probes/codex.json`、`fixtures/adapters/codex-exec-noauth.fixture.json`、`platform/adapters/{codex-app-server,codex-exec}.mjs` |
 | deepseek-harness | deepseek-harness | 0.2.2-rc.1 | host | experimental（真实录制失败路径；成功路径无模型凭据） | `fixtures/adapters/deepseek-harness-headless-error.fixture.json`、`platform/adapters/deepseek-harness.mjs` |
-| gemini | acp-profile | CI 探测 0.67.0 | host | experimental（ACP initialize 握手已验证；session/new 需要凭据） | `fixtures/adapters/gemini-acp-handshake.fixture.json`、`platform/adapters/acp-profiles.mjs` |
-| opencode | acp-profile（原生 HTTP+SSE 待接） | CI 探测 1.19.5 | host | experimental（ACP initialize + session/new 匿名成功；prompt 待录制） | `fixtures/adapters/opencode-acp-handshake.fixture.json`、`platform/adapters/acp-profiles.mjs` |
+| gemini | acp-profile | CI 探测 0.67.0 | host | experimental（ACP initialize 握手已验证；session/new 因缺 API key 失败，已录制） | `fixtures/adapters/gemini-acp-handshake.fixture.json`、`platform/adapters/acp-profiles.mjs` |
+| opencode | acp-profile（原生 HTTP+SSE 待接） | CI 探测 1.19.5 | host | experimental（ACP initialize + session/new 匿名成功；session/prompt 需登录，超时已录制） | `fixtures/adapters/opencode-acp-flow.fixture.json`、`platform/adapters/acp-profiles.mjs` |
 | grok / hermes / fx / antigravity | acp-profile | 未安装 | host | UNVERIFIED（ACP 命令来自 Zeron README；未在本环境安装验证） | `platform/adapters/acp-profiles.mjs`、`platform/docs/REFERENCE-PROJECTS.md` |
 | qwen / copilot / auggie / crush | 各自 CLI | CI 探测版本见 probes | host | IN PROGRESS（入口已验证，未实现适配器） | `fixtures/adapters/probes/*.json` |
 | Qoder / TRAE / WorkBuddy / CodeBuddy / OpenClaw / Kimi / Coda 宿主桥 | — | — | — | UNVERIFIED（国产，需协议勘察或走官方/参考项目接口） | `platform/docs/REFERENCE-PROJECTS.md` §3 |
