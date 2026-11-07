@@ -118,7 +118,8 @@ export function acpCapabilityDeclaration({ agentCapabilities = null } = {}) {
 
 /** 行分隔 JSON-RPC 连接（stdio）。 */
 export class JsonRpcConnection {
-  constructor({ child, label = "acp", maxFrameBytes = MAX_FRAME_BYTES, onRequest = null, onNotification = null, onDiagnostic = null } = {}) {
+  constructor({ child, label = "acp", maxFrameBytes = MAX_FRAME_BYTES, requireJsonrpc = true, onRequest = null, onNotification = null, onDiagnostic = null } = {}) {
+    this.requireJsonrpc = requireJsonrpc;
     this.child = child;
     this.label = label;
     this.maxFrameBytes = maxFrameBytes;
@@ -174,7 +175,7 @@ export class JsonRpcConnection {
       this.onDiagnostic?.({ kind: "unparsable-frame", error: err.message });
       return;
     }
-    if (message && typeof message === "object" && message.jsonrpc !== "2.0") {
+    if (this.requireJsonrpc && message && typeof message === "object" && message.jsonrpc !== "2.0") {
       this.onDiagnostic?.({ kind: "non-jsonrpc-frame", message: Object.keys(message).slice(0, 8) });
       return;
     }

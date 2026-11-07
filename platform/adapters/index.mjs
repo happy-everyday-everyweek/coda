@@ -162,3 +162,39 @@ export async function buildMatrixFromAdapters(adapters = [], { generatedAt = und
     generatedAt ? { generatedAt } : {},
   );
 }
+
+export {
+  DEEPSEEK_HARNESS_TASK_ID,
+  DSH_HEADLESS_PROTOCOL,
+  DeepSeekHarnessAdapter,
+  createDeepSeekHarnessAdapter,
+  deepseekHarnessCapabilityDeclaration,
+} from "./deepseek-harness.mjs";
+
+export {
+  CODEX_APP_SERVER_TASK_ID,
+  CODEX_APP_SERVER_PROTOCOL,
+  CodexAppServerAdapter,
+  codexAppServerCapabilityDeclaration,
+  createCodexAppServerAdapter,
+} from "./codex-app-server.mjs";
+
+export {
+  KNOWN_FLAGS,
+  PROBES_DIR,
+  PROBE_TASK_IDS,
+  ProbeEvidenceError,
+  listProbeEvidence,
+  listRecordings,
+  loadProbeEvidence,
+  probeEvidenceForMatrix,
+  validateProbeEvidence,
+} from "./probe-evidence.mjs";
+
+export {
+  CODEX_EXEC_TASK_ID,
+  CODEX_EXEC_PROTOCOL,
+  CodexExecAdapter,
+  codexExecCapabilityDeclaration,
+  createCodexExecAdapter,
+} from "./codex-exec.mjs";

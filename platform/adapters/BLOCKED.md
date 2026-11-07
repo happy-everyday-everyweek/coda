@@ -82,3 +82,15 @@ node -e 'import("./platform/adapters/codex.mjs").then(async m=>{const a=new m.Co
 - AGT-113..AGT-130（DeepSeek Harness / Qoder / TRAE / WorkBuddy / CodeBuddy / Cursor /
   Antigravity / Grok / OpenCode / Gemini / Copilot / Kiro / Pi / Hermes / OpenClaw / Kimi / fx /
   Coda 宿主桥）本次**未实现**，仍为 `OPEN`，不因本文件而改变状态。
+
+## 参考实现结论（2026-11-07 更新）
+
+- Claude Code / Codex / OpenCode / Cursor / Pi 都有**公开可编程接口**，属于「照参考实现接入」而非逆向：
+  - Claude：`claude -p --output-format stream-json --input-format stream-json`（Zeron `crates/harness/src/claude`）。
+  - Codex：`codex app-server` JSON-RPC（`initialize/initialized`、`thread/start|resume`、
+    `turn/start|interrupt|steer`，见 Zeron `crates/harness/src/codex/mod.rs` 与 T3 `CodexProvider.ts`）。
+  - OpenCode：原生 HTTP+SSE（`opencode serve`），不用 ACP（Zeron 记录的 ACP 缺陷）。
+  - Cursor：`cursor.com/install` 后 `agent` CLI；Pi：`pi.dev/install.sh`。
+- 真正需要协议勘察的是**国产产品**：Qoder、TRAE/SOLO、WorkBuddy、CodeBuddy、Kimi、fx 之外的
+  国产 Agent 等。WorkBuddy 可优先走 `workbuddy2api-panel` 的 HTTP 接口，再考虑 CLI 协议。
+- 安装命令表见 `platform/docs/REFERENCE-PROJECTS.md` §2（摘自 Zeron README，2026-09-21 核对）。

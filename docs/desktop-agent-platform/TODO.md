@@ -150,25 +150,25 @@ ART / SEC / REL / PERF / QA / 发布
 
 | ID | 状态 | 优先级 | Agent / 目标 | 依赖 | 验收 |
 |---|---|---|---|---|---|
-| AGT-111 | BLOCKED | P0 | Claude Code 专项适配 | AGT-101~110 | AGT-CLAUDE, ADP-001~019 |
-| AGT-112 | BLOCKED | P0 | Codex 专项适配 | AGT-101~110 | AGT-CODEX, ADP-001~019 |
-| AGT-113 | OPEN | P0 | DeepSeek Harness 接口调研与适配 | AGT-101~110 | AGT-DSH, ADP-001~019 |
+| AGT-111 | IN PROGRESS | P0 | Claude Code 专项适配 | AGT-101~110 | AGT-CLAUDE, ADP-001~019 |
+| AGT-112 | IN PROGRESS | P0 | Codex 专项适配 | AGT-101~110 | AGT-CODEX, ADP-001~019 |
+| AGT-113 | IN PROGRESS | P0 | DeepSeek Harness 接口调研与适配 | AGT-101~110 | AGT-DSH, ADP-001~019 |
 | AGT-114 | OPEN | P0 | Qoder Agent 接口调研与适配 | AGT-101~110 | AGT-QODER, ADP-001~019 |
 | AGT-115 | OPEN | P0 | TRAE / SOLO Agent 接口调研与适配 | AGT-101~110 | AGT-TRAE, ADP-001~019 |
 | AGT-116 | OPEN | P0 | WorkBuddy（wb）接口调研与适配 | AGT-101~110 | AGT-WB, ADP-001~019 |
 | AGT-117 | OPEN | P0 | CodeBuddy（cb）国内/国际接口调研与适配 | AGT-101~110 | AGT-CB, ADP-001~019 |
-| AGT-118 | OPEN | P0 | Cursor Agent/CLI 调研与适配 | AGT-101~110 | AGT-CURSOR, ADP-001~019 |
-| AGT-119 | OPEN | P0 | Antigravity ACP/账户差异适配 | AGT-101~110, AGT-104 | AGT-ANTIGRAVITY, ADP-001~019 |
-| AGT-120 | OPEN | P0 | Grok Build 适配 | AGT-101~110 | AGT-GROK, ADP-001~019 |
-| AGT-121 | OPEN | P0 | OpenCode 适配 | AGT-101~110 | AGT-OPENCODE, ADP-001~019 |
-| AGT-122 | OPEN | P0 | Gemini CLI 适配 | AGT-101~110 | AGT-GEMINI, ADP-001~019 |
-| AGT-123 | OPEN | P0 | GitHub Copilot 可编程 Agent 入口适配 | AGT-101~110 | AGT-COPILOT, ADP-001~019 |
-| AGT-124 | OPEN | P0 | Kiro CLI 适配 | AGT-101~110 | AGT-KIRO, ADP-001~019 |
-| AGT-125 | OPEN | P0 | Pi Coding Agent 适配 | AGT-101~110 | AGT-PI, ADP-001~019 |
-| AGT-126 | OPEN | P0 | Hermes Agent 适配 | AGT-101~110 | AGT-HERMES, ADP-001~019 |
+| AGT-118 | IN PROGRESS | P0 | Cursor Agent/CLI 调研与适配 | AGT-101~110 | AGT-CURSOR, ADP-001~019 |
+| AGT-119 | IN PROGRESS | P0 | Antigravity ACP/账户差异适配 | AGT-101~110, AGT-104 | AGT-ANTIGRAVITY, ADP-001~019 |
+| AGT-120 | IN PROGRESS | P0 | Grok Build 适配 | AGT-101~110 | AGT-GROK, ADP-001~019 |
+| AGT-121 | IN PROGRESS | P0 | OpenCode 适配 | AGT-101~110 | AGT-OPENCODE, ADP-001~019 |
+| AGT-122 | IN PROGRESS | P0 | Gemini CLI 适配 | AGT-101~110 | AGT-GEMINI, ADP-001~019 |
+| AGT-123 | IN PROGRESS | P0 | GitHub Copilot 可编程 Agent 入口适配 | AGT-101~110 | AGT-COPILOT, ADP-001~019 |
+| AGT-124 | IN PROGRESS | P0 | Kiro CLI 适配 | AGT-101~110 | AGT-KIRO, ADP-001~019 |
+| AGT-125 | IN PROGRESS | P0 | Pi Coding Agent 适配 | AGT-101~110 | AGT-PI, ADP-001~019 |
+| AGT-126 | IN PROGRESS | P0 | Hermes Agent 适配 | AGT-101~110 | AGT-HERMES, ADP-001~019 |
 | AGT-127 | OPEN | P0 | OpenClaw 可编程入口调研与适配 | AGT-101~110 | AGT-OPENCLAW, ADP-001~019 |
 | AGT-128 | OPEN | P0 | Kimi CLI / Kimi Code 可编程入口适配 | AGT-101~110 | AGT-KIMI, ADP-001~019 |
-| AGT-129 | OPEN | P0 | fx 适配 | AGT-101~110 | AGT-FX, ADP-001~019 |
+| AGT-129 | IN PROGRESS | P0 | fx 适配 | AGT-101~110 | AGT-FX, ADP-001~019 |
 | AGT-130 | OPEN | P0 | Coda Android Coding Agent 受认证宿主桥 | CORE-101, SYNC-101 | AGT-CODA, ADP-001~019 |
 | AGT-131 | IN PROGRESS | P1 | 未知 ACP Registry Agent 的自动发现与能力提示 | AGT-104 | AGT-ACP-GENERIC |
 

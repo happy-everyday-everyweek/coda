@@ -74,9 +74,11 @@
 |---|---|---|---|---|---|
 | mock-agent | mock | 1.0.0 | host | experimental（Test-only，仅契约测试） | `platform/adapters/mock.mjs`、`platform/test/adapters/` |
 | acp-generic | acp | 协议 v1（fake ACP server） | host | experimental（Test-only，无真实 Agent 录制） | `platform/adapters/acp.mjs`、`platform/fixtures/adapters/` |
-| claude-code | claude-code | 未安装 | host | BLOCKED | `platform/adapters/BLOCKED.md` |
-| codex | codex | 未安装 | host | BLOCKED | `platform/adapters/BLOCKED.md` |
-| 其余 17 个 Agent（AGT-113..130） | — | — | — | UNVERIFIED（本切片未实现） | `platform/docs/CAPABILITY-MATRIX-DRAFT.md` |
+| claude-code | claude-code | CI 探测 2.1.319 | host | IN PROGRESS（协议已定位：stream-json；未录制真实会话） | `fixtures/adapters/probes/claude.json`、`platform/docs/REFERENCE-PROJECTS.md` |
+| codex | codex-app-server / codex-exec | CI 探测 0.167.0 | host | experimental（app-server initialize 握手已验证；exec --json 有真实失败路径录制；会话成功路径未录制） | `fixtures/adapters/probes/codex.json`、`fixtures/adapters/codex-exec-noauth.fixture.json`、`platform/adapters/{codex-app-server,codex-exec}.mjs` |
+| deepseek-harness | deepseek-harness | 0.2.2-rc.1 | host | experimental（真实录制失败路径；成功路径无模型凭据） | `fixtures/adapters/deepseek-harness-headless-error.fixture.json`、`platform/adapters/deepseek-harness.mjs` |
+| gemini / opencode / qwen / copilot / auggie / crush | 各自 CLI | CI 探测版本见 probes | host | IN PROGRESS（入口已验证：ACP / stream-json / serve） | `fixtures/adapters/probes/*.json` |
+| Qoder / TRAE / WorkBuddy / CodeBuddy / OpenClaw / Kimi / Coda 宿主桥 | — | — | — | UNVERIFIED（国产，需协议勘察或走官方/参考项目接口） | `platform/docs/REFERENCE-PROJECTS.md` §3 |
 
 生成与校验规则见 `platform/docs/adr/ADR-0005-agent-capability-matrix.md` 与
 `platform/adapters/capability-matrix.mjs`；界面只能通过 `supportsCapability()` 读取矩阵。
