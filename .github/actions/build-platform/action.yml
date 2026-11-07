@@ -55,8 +55,10 @@ runs:
 
         # 清单与磁盘一致；npm 包只允许包含平台目录内的文件
         node tools/release-manifest.mjs --check
-        tar -tzf "$TGZ" | grep -q '^package/adapters/index.mjs$'
-        tar -tzf "$TGZ" | grep -q '^package/contracts/ids.mjs$'
+        # 先落盘再检查，避免 grep -q 提前关闭管道触发 tar 的 SIGPIPE。
+        tar -tzf "$TGZ" > /tmp/coda-platform-tar.txt
+        grep -q '^package/adapters/index.mjs$' /tmp/coda-platform-tar.txt
+        grep -q '^package/contracts/ids.mjs$' /tmp/coda-platform-tar.txt
 
         {
           echo "### Coda Platform $VERSION"

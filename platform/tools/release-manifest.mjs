@@ -13,7 +13,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -31,7 +31,8 @@ export function hashFile(path) {
 function listFiles() {
   const files = [];
   const add = (full) => {
-    const rel = relative(platformDir, full);
+    // 清单跨平台可比：统一用 /，Windows 也输出 POSIX 路径。
+    const rel = relative(platformDir, full).split(sep).join("/");
     files.push({ path: rel, bytes: statSync(full).size, sha256: hashFile(full) });
   };
   for (const file of RELEASE_FILES) {
