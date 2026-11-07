@@ -717,7 +717,13 @@ class MainActivity : BaseActivity() {
         )
         val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
         val botRow = createActionRow(inflater, actions, R.drawable.ic_ring, botProfile.name) {
+                // 与「新对话」「设置」一致：先收起抽屉、退出可能开着的设置页，
+                // 再进 Bot 页；否则返回时会落在设置页上，看起来像层级没退。
+                drawerLayout.closeDrawer(Gravity.LEFT)
+                hideSettingsPage()
                 startActivity(android.content.Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
+                // 与设置页一致：抽屉 → 页面用淡入，返回时对称淡出。
+                overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
             }
         botRow.tag = "drawer_bot"
         actions.addView(
@@ -4415,7 +4421,7 @@ class MainActivity : BaseActivity() {
         SettingsViewBuilder.render(
             this,
             container,
-            SettingsData.home,
+            SettingsData.home(this),
         ) { target ->
             startActivity(
                 Intent(this, SettingsDetailActivity::class.java)

@@ -92,8 +92,9 @@ data class SettingsPage(
  * 外观页已接入真实设置（主题模式、主色、自动取色、界面字号、代码显示）。
  */
 object SettingsData {
-    val home: List<SettingRow> =
-        listOf(
+    fun home(ctx: Context): List<SettingRow> {
+        val profile = codaBotProfile(ctx)
+        return listOf(
             SettingRow.Header("基础设置"),
             SettingRow.Category("system", "系统", "运行状态、存储与日志", R.drawable.ic_settings),
             SettingRow.Category("general", "通用", "界面语言与交互行为", R.drawable.ic_chat),
@@ -111,7 +112,43 @@ object SettingsData {
             SettingRow.Category("automations", "定时任务", "按计划自动运行任务", R.drawable.ic_clock),
             SettingRow.Category("hooks", "钩子", "任务生命周期内自动执行命令", R.drawable.ic_anchor),
             SettingRow.Category("systemprompt", "系统提示词", "编辑内核内置的提示词段落", R.drawable.ic_edit),
-            SettingRow.Category("coda_bot", "Coda Bot", "形象、人设、记忆与陪伴设置", R.drawable.ic_person),
+            SettingRow.Header("Coda Bot"),
+            SettingRow.Category(
+                "coda_bot_appearance",
+                "形象与名称",
+                "${profile.name} · ${codaBotSkinTitle(ctx, profile.avatarSkinId)}",
+                R.drawable.ic_person,
+            ),
+            SettingRow.Category(
+                "coda_bot_persona",
+                "人设",
+                codaBotBrief(profile.persona, "描述它是谁、如何说话"),
+                R.drawable.ic_chat,
+            ),
+            SettingRow.Category(
+                "coda_bot_prompt",
+                "系统提示词",
+                codaBotBrief(profile.systemPrompt, "未设置"),
+                R.drawable.ic_edit,
+            ),
+            SettingRow.Category(
+                "coda_bot_memory",
+                "了解你",
+                "${profile.userName} · ${codaBotBrief(profile.userAbout, "补充你的资料")}",
+                R.drawable.ic_person,
+            ),
+            SettingRow.Category(
+                "coda_bot_models",
+                "规划与回复模型",
+                "${codaBotModelBrief(profile.plannerModel)} / ${codaBotModelBrief(profile.replyModel)}",
+                R.drawable.ic_logo_spark,
+            ),
+            SettingRow.Category(
+                "coda_bot_chat",
+                "聊天与数据",
+                "气泡样式、导出与清除聊天记录",
+                R.drawable.ic_layers,
+            ),
             // 实验性功能：默认全部关闭，开启即代表用户知情尝试。Web UI 的前端资产
             // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
             SettingRow.Header("实验性功能"),
@@ -123,6 +160,7 @@ object SettingsData {
             SettingRow.Category("backup", "数据备份", "整体导出与导入设置、供应商与提示词", R.drawable.ic_archive),
             SettingRow.Category("about", "关于", "版本、开源许可与项目主页", R.drawable.ic_info),
         )
+    }
 
     /** 通用页：界面语言与交互行为。 */
     fun general(store: SettingsStore): SettingsPage =
@@ -1054,60 +1092,6 @@ object SettingsData {
     ): String = value.trim().replace('\n', ' ').take(24).ifEmpty { fallback }
 
     private fun codaBotModelBrief(model: String): String = if (model.isBlank()) "未选择" else model
-
-    /**
-     * Coda Bot 分区。
-     *
-     * 它是设置里的二级分区，形象、人设、提示词、模型等是它的三级页面；
-     * 聊天页只是功能入口，不再自带一套独立设置界面。
-     */
-    fun codaBot(ctx: Context): SettingsPage {
-        val profile = codaBotProfile(ctx)
-        return SettingsPage(
-            "Coda Bot",
-            listOf(
-                SettingRow.Header("Bot"),
-                SettingRow.Category(
-                    "coda_bot_appearance",
-                    "形象与名称",
-                    "${profile.name} · ${codaBotSkinTitle(ctx, profile.avatarSkinId)}",
-                    R.drawable.ic_person,
-                ),
-                SettingRow.Category(
-                    "coda_bot_persona",
-                    "人设",
-                    codaBotBrief(profile.persona, "描述它是谁、如何说话"),
-                    R.drawable.ic_chat,
-                ),
-                SettingRow.Category(
-                    "coda_bot_prompt",
-                    "系统提示词",
-                    codaBotBrief(profile.systemPrompt, "未设置"),
-                    R.drawable.ic_edit,
-                ),
-                SettingRow.Category(
-                    "coda_bot_memory",
-                    "了解你",
-                    "${profile.userName} · ${codaBotBrief(profile.userAbout, "补充你的资料")}",
-                    R.drawable.ic_person,
-                ),
-                SettingRow.Header("模型"),
-                SettingRow.Category(
-                    "coda_bot_models",
-                    "规划与回复模型",
-                    "${codaBotModelBrief(profile.plannerModel)} / ${codaBotModelBrief(profile.replyModel)}",
-                    R.drawable.ic_logo_spark,
-                ),
-                SettingRow.Header("对话与数据"),
-                SettingRow.Category(
-                    "coda_bot_chat",
-                    "聊天与数据",
-                    "气泡样式、导出与清除聊天记录",
-                    R.drawable.ic_layers,
-                ),
-            ),
-        )
-    }
 
     /** Coda Bot → 形象与名称。 */
     fun codaBotAppearance(ctx: Context): SettingsPage {

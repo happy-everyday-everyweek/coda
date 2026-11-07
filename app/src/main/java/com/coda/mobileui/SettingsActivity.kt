@@ -28,7 +28,7 @@ class SettingsActivity : BaseActivity() {
         SettingsViewBuilder.render(
             this,
             findViewById<LinearLayout>(R.id.settings_container),
-            SettingsData.home,
+            SettingsData.home(this),
         ) { page ->
             startActivity(
                 Intent(this, SettingsDetailActivity::class.java)

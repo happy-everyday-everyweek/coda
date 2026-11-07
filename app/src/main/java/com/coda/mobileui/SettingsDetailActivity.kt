@@ -202,13 +202,6 @@ class SettingsDetailActivity :
 
     /** 返回：子页先回上一层，根页才退出。 */
     private fun goBack() {
-        if (pageKey in CODA_BOT_SUB_PAGES) {
-            navigatePage(forward = false) {
-                pageKey = PAGE_CODA_BOT
-                renderPage()
-            }
-            return
-        }
         if (pageKey == PAGE_PROVIDERS_OF_KIND) {
             // 回到上一级：方向相反（旧页右滑出、新页从左推入）。
             navigatePage(forward = false) {
@@ -337,10 +330,6 @@ class SettingsDetailActivity :
             PAGE_PET -> {
                 SettingsData.pet(store, this)
             }
-            PAGE_CODA_BOT -> {
-                SettingsData.codaBot(this)
-            }
-
             PAGE_CODA_BOT_APPEARANCE -> {
                 SettingsData.codaBotAppearance(this)
             }
@@ -418,12 +407,6 @@ class SettingsDetailActivity :
                     providerKind = ProviderStore.ProviderKind.ASR
                     navigatePage(forward = true) {
                         pageKey = PAGE_PROVIDERS_OF_KIND
-                        renderPage()
-                    }
-                }
-                in CODA_BOT_PAGE_KEYS -> {
-                    navigatePage(forward = true) {
-                        pageKey = target
                         renderPage()
                     }
                 }
@@ -3931,28 +3914,12 @@ class SettingsDetailActivity :
         const val PAGE_SYSTEM_PROMPT = "systemprompt"
         const val PAGE_BACKUP = "backup"
         const val PAGE_PET = "pet"
-        const val PAGE_CODA_BOT = "coda_bot"
         const val PAGE_CODA_BOT_APPEARANCE = "coda_bot_appearance"
         const val PAGE_CODA_BOT_PERSONA = "coda_bot_persona"
         const val PAGE_CODA_BOT_PROMPT = "coda_bot_prompt"
         const val PAGE_CODA_BOT_MEMORY = "coda_bot_memory"
         const val PAGE_CODA_BOT_MODELS = "coda_bot_models"
         const val PAGE_CODA_BOT_CHAT = "coda_bot_chat"
-
-        /** Coda Bot 分区：二级入口加它自己的三级页面，返回时统一回二级入口。 */
-        val CODA_BOT_PAGE_KEYS =
-            setOf(
-                PAGE_CODA_BOT,
-                PAGE_CODA_BOT_APPEARANCE,
-                PAGE_CODA_BOT_PERSONA,
-                PAGE_CODA_BOT_PROMPT,
-                PAGE_CODA_BOT_MEMORY,
-                PAGE_CODA_BOT_MODELS,
-                PAGE_CODA_BOT_CHAT,
-            )
-
-        /** Coda Bot 的三级页面。 */
-        val CODA_BOT_SUB_PAGES = CODA_BOT_PAGE_KEYS - PAGE_CODA_BOT
         const val PAGE_WEB_UI = "webui"
         const val PAGE_PET_APPEARANCE = "pet_appearance"
         const val PAGE_PET_PLACES = "pet_places"

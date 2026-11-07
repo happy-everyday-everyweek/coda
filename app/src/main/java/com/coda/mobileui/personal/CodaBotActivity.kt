@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.speech.RecognizerIntent
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
@@ -46,6 +47,9 @@ class CodaBotActivity : BaseActivity() {
     private var pendingReply: CodaBotMessage? = null
     private lateinit var replyBar: LinearLayout
     private lateinit var replyLabel: TextView
+    private var swipeStartX = 0f
+    private var swipeStartY = 0f
+    private var swipeArmed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,7 +57,7 @@ class CodaBotActivity : BaseActivity() {
         profile = CodaBotStore.profile(this)
         runtime = createRuntime()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = finish()
+            override fun handleOnBackPressed() = closePage()
         })
         renderChat()
     }
@@ -222,7 +226,7 @@ class CodaBotActivity : BaseActivity() {
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
-    /** 聊天页顶栏：返回退出，右侧进入设置里的 Coda Bot 分区。 */
+    /** 聊天页顶栏：只有返回，逐层关系与工作台一致（抽屉 → 本页 → 抽屉）。 */
     private fun topBar(
         title: String,
         subtitle: String,
@@ -238,7 +242,7 @@ class CodaBotActivity : BaseActivity() {
             setColorFilter(attr(com.google.android.material.R.attr.colorOnSurface))
             background = null
             contentDescription = "返回"
-            setOnClickListener { finish() }
+            setOnClickListener { closePage() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val labels = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -259,21 +263,6 @@ class CodaBotActivity : BaseActivity() {
             gravity = Gravity.CENTER
         })
         bar.addView(labels, LinearLayout.LayoutParams(0, -1, 1f))
-        bar.addView(ImageButton(this).apply {
-            setImageResource(R.drawable.ic_settings)
-            setColorFilter(attr(com.google.android.material.R.attr.colorOnSurface))
-            background = null
-            contentDescription = "Coda Bot 设置"
-            setOnClickListener {
-                startActivity(
-                    Intent(this@CodaBotActivity, com.coda.mobileui.SettingsDetailActivity::class.java)
-                        .putExtra(
-                            com.coda.mobileui.SettingsDetailActivity.EXTRA_PAGE,
-                            com.coda.mobileui.SettingsDetailActivity.PAGE_CODA_BOT,
-                        ),
-                )
-            }
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
         return bar
     }
 
@@ -445,6 +434,48 @@ class CodaBotActivity : BaseActivity() {
             }
             REQ_ATTACHMENT -> data?.data?.let(::importAttachment)
         }
+    }
+
+    /** 与工作台一致：左缘右滑退出本页，回到抽屉所在的主界面。 */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                swipeStartX = ev.x
+                swipeStartY = ev.y
+                swipeArmed = ev.x <= dp(28)
+            }
+
+            MotionEvent.ACTION_UP -> {
+                if (swipeArmed) {
+                    val dx = ev.x - swipeStartX
+                    val dy = kotlin.math.abs(ev.y - swipeStartY)
+                    if (dx > dp(72) && dx > dy * 2) slideOut()
+                }
+                swipeArmed = false
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                swipeArmed = false
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun slideOut() {
+        root
+            .animate()
+            .translationX(root.width.toFloat())
+            .setDuration(180)
+            .withEndAction {
+                root.translationX = 0f
+                closePage()
+            }.start()
+    }
+
+    /** 退出本页：转场与设置页一致，返回主界面。 */
+    private fun closePage() {
+        finish()
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
     companion object {
