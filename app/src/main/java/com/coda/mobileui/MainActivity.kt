@@ -432,6 +432,24 @@ class MainActivity : BaseActivity() {
         chatView = findViewById(R.id.chat_view)
         // 首帧也走统一空态渲染：核心启动/解包期间同样能选择或创建工作区。
         showEmptyState()
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : androidx.activity.OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (showingBot) {
+                        hideBotPage()
+                        return
+                    }
+                    if (showingSettings || showingBot) {
+                        hideSettingsPage()
+                        return
+                    }
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            },
+        )
         // 初始态：新会话且未选工作区时胶囊是「运行位置」，否则是模型名。
         syncHeaderPill()
         updateSendAvailability()
@@ -693,6 +711,7 @@ class MainActivity : BaseActivity() {
                 inputMessage.text?.clear()
                 drawerLayout.closeDrawer(Gravity.LEFT)
                 hideSettingsPage()
+                hideBotPage()
                 liveText.clear()
                 messageViews.clear()
                 liveReasoning.clear()
@@ -717,13 +736,10 @@ class MainActivity : BaseActivity() {
         )
         val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
         val botRow = createActionRow(inflater, actions, R.drawable.ic_ring, botProfile.name) {
-                // 与「新对话」「设置」一致：先收起抽屉、退出可能开着的设置页，
-                // 再进 Bot 页；否则返回时会落在设置页上，看起来像层级没退。
+                // 与会话、设置同级：只在内容区换页，不新开页面。
                 drawerLayout.closeDrawer(Gravity.LEFT)
                 hideSettingsPage()
-                startActivity(android.content.Intent(this, com.coda.mobileui.personal.CodaBotActivity::class.java))
-                // 与设置页一致：抽屉 → 页面用淡入，返回时对称淡出。
-                overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+                showBotPage()
             }
         botRow.tag = "drawer_bot"
         actions.addView(
@@ -789,6 +805,9 @@ class MainActivity : BaseActivity() {
 
     // 当前是否停留在设置页（配置变更后需要恢复）。
     private var showingSettings = false
+    /** 是否停留在 Bot 页：它与会话、设置同级，只占用内容区。 */
+    private var showingBot = false
+    private var botPage: com.coda.mobileui.personal.CodaBotPage? = null
 
     /** 当前选中的会话 id（同样在配置变更后恢复）。 */
     private var currentConversationId: String? = null
@@ -1472,7 +1491,14 @@ class MainActivity : BaseActivity() {
         }
     // ------------------------------------------------------------ 运行时对接
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        botPage?.handleActivityResult(requestCode, resultCode, data)
+    }
+
     override fun onDestroy() {
+        botPage?.close()
+        botPage = null
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
@@ -1820,10 +1846,7 @@ class MainActivity : BaseActivity() {
      * 界面卡住了、或者输入后点了发送没反应。
      */
     private fun updateReadOnlyBanner() {
-        val banner = findViewById<View>(R.id.readonly_banner)
-        if (banner != null) {
-            banner.visibility = if (zc.cacheOnly) View.VISIBLE else View.GONE
-        }
+        // 缓存内容按原样展示，不再额外加提示条。
         updateSendAvailability()
     }
 
@@ -3231,6 +3254,7 @@ class MainActivity : BaseActivity() {
                 chatView.visibility = View.VISIBLE
                 emptyState.visibility = View.GONE
                 hideSettingsPage()
+                hideBotPage()
             }
         }
         // 长按进入会话的次级操作（目前是变更所属工作区）。
@@ -4224,7 +4248,7 @@ class MainActivity : BaseActivity() {
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
                 // 设置页：右滑打开抽屉（回到上一级），左滑不做任何事。
                 // 设置页没有自己的会话内容，绝不能复用主界面的"左滑进工作台"。
-                if (showingSettings) {
+                if (showingSettings || showingBot) {
                     if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                         drawerLayout.openDrawer(Gravity.LEFT)
                         swipeConsumed = true
@@ -4269,7 +4293,7 @@ class MainActivity : BaseActivity() {
                 val dx = ev.x - edgeSwipeStartX
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
                 // 设置页：抬手也不进入工作台，只允许右滑打开抽屉
-                if (showingSettings) {
+                if (showingSettings || showingBot) {
                     if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                         drawerLayout.openDrawer(Gravity.LEFT)
                     }
@@ -4288,7 +4312,7 @@ class MainActivity : BaseActivity() {
                 } else if (dx < -dp(48) && -dx > dy) {
                     if (drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                         drawerLayout.closeDrawer(Gravity.LEFT)
-                    } else if (!showingSettings && -dx > dp(60)) {
+                    } else if (!showingSettings && !showingBot && -dx > dp(60)) {
                         // 主界面左滑进入工作台：拖动过程中已经画了跟手预览，
                         // 这里提交或弹回，比例交给 WorkspaceActivity 接着展开。
                         finishWorkspaceDrag()
@@ -4380,6 +4404,7 @@ class MainActivity : BaseActivity() {
 
     /** 打开设置：主区域换页 + 抽屉收起（与新对话同一层级，不新开页面）。 */
     private fun openSettingsPage() {
+        hideBotPage()
         showingSettings = true
         drawerLayout.closeDrawer(Gravity.LEFT)
         emptyState.visibility = View.GONE
@@ -4432,11 +4457,46 @@ class MainActivity : BaseActivity() {
             // 在转场期间完成初始布局，位移叠加后看起来一顿一顿的。
             // 方向性动画只保留给一级页 → 二级页（同一 Activity 内的
             // navigatePage，那段只动 View，开销小、也更需要方向感）。
-            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
         }
     }
 
-    /** 设置页挂在内容区容器里（同层级换页）；顶栏由调用处单独隐藏。 */
+        /** 进入 Bot 页：与设置页一样在内容区换页，不新开页面。 */
+    private fun showBotPage() {
+        if (showingBot) return
+        drawerLayout.closeDrawer(Gravity.LEFT)
+        emptyState.visibility = View.GONE
+        chatView.visibility = View.GONE
+        findViewById<View>(R.id.composer_container).visibility = View.GONE
+        (findViewById<View>(R.id.header_pill)?.parent as? ViewGroup)?.visibility = View.GONE
+        val area = findViewById<FrameLayout>(R.id.content_area) ?: return
+        val page =
+            botPage
+                ?: com.coda.mobileui.personal.CodaBotPage(this) { hideBotPage() }.also { botPage = it }
+        area.addView(page, FrameLayout.LayoutParams(-1, -1))
+        page.open()
+        showingBot = true
+    }
+
+    /** 退出 Bot 页：回到原来的会话或空态，仍停在主界面。 */
+    private fun hideBotPage() {
+        if (!showingBot) return
+        showingBot = false
+        botPage?.let { page ->
+            page.close()
+            (page.parent as? ViewGroup)?.removeView(page)
+        }
+        (findViewById<View>(R.id.header_pill)?.parent as? ViewGroup)?.visibility = View.VISIBLE
+        findViewById<View>(R.id.composer_container).visibility = View.VISIBLE
+        if (messageViews.isNotEmpty() || zc.currentSessionId != null) {
+            chatView.visibility = View.VISIBLE
+            emptyState.visibility = View.GONE
+        } else {
+            showEmptyState()
+        }
+        applyPetSettings()
+    }
+
+/** 设置页挂在内容区容器里（同层级换页）；顶栏由调用处单独隐藏。 */
     private fun settingsPage(): LinearLayout {
         val parent = chatView.parent as? ViewGroup ?: return LinearLayout(this)
         parent.findViewWithTag<LinearLayout>("settings_page")?.let {
@@ -4973,7 +5033,6 @@ class MainActivity : BaseActivity() {
                                     SettingsDetailActivity.PAGE_PROVIDERS,
                                 ),
                         )
-                        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                         showModels(false)
                     }
                 },

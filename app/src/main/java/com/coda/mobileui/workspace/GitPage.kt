@@ -80,6 +80,9 @@ class GitPage(
 
     override fun build(): View {
         stage = FrameLayout(host)
+        // 工作区底栏叠在内容上，Git 画布与底部控制卡要给它留出高度，
+        // 否则靠底的内容会落在底栏下面看不见。
+        stage.setPadding(0, 0, 0, host.bottomBarHeight())
         base =
             FrameLayout(host).apply {
                 setBackgroundColor(surface)
@@ -109,6 +112,7 @@ class GitPage(
     }
 
     override fun onShown() {
+        stage.setPadding(0, 0, 0, host.bottomBarHeight())
         if (detailOpen) return
         refresh()
     }

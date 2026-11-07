@@ -213,7 +213,6 @@ class SettingsDetailActivity :
         finish()
         // 与进入成对：进来是淡入，退回去也要淡出。若这里仍用带位移的
         // settings_pop_*，返回时会跟进入的方向感对不上，看起来又是一次顿挫。
-        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
     override fun onResume() {
