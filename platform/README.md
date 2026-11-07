@@ -3,7 +3,7 @@
 跨端 Agent 控制与协同平台的**参考实现切片**：共享核心、适配器、PA、同步、安全与客户端。
 产品规格、验收与任务在 `../docs/desktop-agent-platform/`；模块契约见 [`CONTRACT.md`](./CONTRACT.md)。
 
-> 当前状态（2026-11-07）：**开发预览，不可发布**。参考实现可运行、契约测试全绿（341 项），
+> 当前状态（2026-11-07）：**开发预览，不可发布**。参考实现可运行、契约测试全绿（343 项），
 > 但真实 Agent 适配（19 个）、Windows/macOS/Linux 安装器、WSL、GPUI GUI、Android 节点桥
 > 在本环境无法验证，任务状态见 `../docs/desktop-agent-platform/TODO.md`，证据见
 > `../artifacts/acceptance/`。G0–G5 发布门槛**未通过**，不得据此发布。
@@ -58,7 +58,7 @@ platform/
 ```bash
 cd platform
 
-# 全量测试（Node 24；341 项，含端到端）
+# 全量测试（Node 24；343 项，含端到端）
 npm test
 # 或分模块
 node --test "test/core/**/*.test.mjs"
@@ -92,7 +92,7 @@ AGT-113..130（其余 Agent 未实现）、INST-102..104、WSL-101..105、GUI-10
 SYNC-109、PERF-102、QA-104。原因与解除条件见 `docs/SPEC-CHANGE-PROPOSAL.md`、
 `adapters/BLOCKED.md`、`pa/BLOCKED.md`、`sync/BLOCKED.md`、`clients/GUI-BLOCKED.md`。
 
-**已知限制**：无真 PTY（resize unsupported）；`turn.send` 的排队语义未实现（需 AGT-107 持久队列）；
+**已知限制**：无真 PTY（resize unsupported）；排队回合在当前回合结束后由核心派发，但**重启后需有新回合触发才会继续派发**；
 模型目录为空（需适配器能力发现）；core 认证令牌需部署层注入；快照与事件有界（20k/100 条等上限）。
 
 ## 6. 文档

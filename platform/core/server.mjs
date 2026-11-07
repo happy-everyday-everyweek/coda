@@ -470,6 +470,65 @@ export function createRpcServer(ctx) {
 
   /* --------------------------------------------------------------- helpers */
 
+  /** 从事件日志还原排队 turn 的文本（排队 turn 未写入 turn 表，文本在 queued 事件里）。 */
+  function queuedTurnText(sessionId, turnId) {
+    const events = journal.readSince(1, { limit: 100000, sessionId });
+    for (const event of events) {
+      const payload = event.payload ?? {};
+      if (payload?.turn?.id === turnId && typeof payload?.text === "string") return payload.text;
+    }
+    return null;
+  }
+
+  const draining = new Set();
+
+  /** AGT-107：把 queued turn 依次派发；同一会话避免重入。 */
+  async function drainQueue(sessionId) {
+    if (draining.has(sessionId)) return;
+    draining.add(sessionId);
+    try {
+      for (;;) {
+        const active = journal.findActiveTurn(sessionId);
+        // 注意 findActiveTurn 包含 queued；正在排队的那条不应阻止派发
+        if (active && ["running", "stopping"].includes(active.state)) break;
+        const queued = journal
+          .listTurns(sessionId, { states: ["queued"] })
+          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+        const next = queued[0];
+        if (!next) break;
+        const session = requireSession(sessionId);
+        const adapter = adapterForSession(session);
+        if (!adapter || typeof adapter.send !== "function") break;
+        const text = queuedTurnText(sessionId, next.id) ?? "";
+        const now = nowIso(clock);
+        const running = journal.upsertTurn({ ...next, state: "running", updatedAt: now });
+        const started = journal.transaction(() =>
+          append("turn", sessionId, { turn: running, state: "running", runId: next.runId, queuedDispatch: true }),
+        );
+        publish(started);
+        bindAdapter(adapter, sessionId);
+        try {
+          await adapter.send({ sessionId, turnId: next.id, runId: next.runId, text, attachments: [] });
+        } catch (err) {
+          const reason = redact(err?.message ?? String(err));
+          const failed = journal.transaction(() => {
+            const updated = journal.upsertTurn({
+              ...journal.getTurn(next.id),
+              state: "failed",
+              stopReason: "adapter-error",
+              updatedAt: nowIso(clock),
+              endedAt: nowIso(clock),
+            });
+            return append("turn", sessionId, { turn: updated, state: "failed", error: { message: reason } });
+          });
+          publish(failed);
+        }
+      }
+    } finally {
+      draining.delete(sessionId);
+    }
+  }
+
   function requireSession(sessionId) {
     const session = journal.getSession(sessionId);
     if (!session) throw new NotFoundError(`unknown session: ${sessionId}`, { sessionId });
@@ -632,6 +691,25 @@ export function createRpcServer(ctx) {
       const text = command.payload?.text ?? "";
       if (typeof text !== "string") throw new ValidationError("turn.send payload.text must be a string");
 
+      // AGT-107/C-14：忙碌时 mode=queue → 持久化排队，不打断当前回合；当前回合结束后按序派发。
+      const activeTurn = journal.findActiveTurn(sessionId);
+      if (activeTurn && command.payload?.mode === "queue") {
+        const now = nowIso(clock);
+        const activeRun =
+          journal.listRuns(sessionId).find((r) => ["queued", "running", "stopping"].includes(r.state)) ?? null;
+        const run = activeRun ?? createRun({ sessionId, state: "running", createdAt: now, updatedAt: now });
+        const index = journal.listTurns(sessionId).length + 1;
+        const turn = createTurn({ runId: run.id, sessionId, index, state: "queued", createdAt: now, updatedAt: now });
+        const persisted = journal.transaction(() => {
+          journal.upsertRun({ ...run, state: "running", updatedAt: nowIso(clock) });
+          journal.upsertTurn(turn);
+          return append("turn", sessionId, { turn, state: "queued", runId: run.id, text, queued: true });
+        });
+        publish(persisted);
+        const position = journal.listTurns(sessionId, { states: ["queued"] }).length;
+        return { sessionId, runId: run.id, turnId: turn.id, state: "queued", queued: true, queuePosition: position };
+      }
+
       let run = journal.listRuns(sessionId).find((r) => ["queued", "running", "stopping"].includes(r.state)) ?? null;
       const now = nowIso(clock);
       if (!run) {
@@ -670,6 +748,8 @@ export function createRpcServer(ctx) {
       }
 
       const current = journal.getTurn(turn.id);
+      // 当前回合结束后按序派发排队的 turn（不阻塞当前响应语义）
+      await drainQueue(sessionId);
       const awaiting = result?.state === "awaiting_interaction" || !!result?.requestId;
       return {
         sessionId,

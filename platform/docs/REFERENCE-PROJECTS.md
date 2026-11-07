@@ -73,3 +73,12 @@ Rust + GPUI，本环境无法构建）。
 | AGT-115 | TRAE/SOLO | 协议齐全但企业版旗舰套餐才可用 CLI：BLOCKED（商业门槛） |
 | AGT-116 | WorkBuddy | 官方无本地可编程入口（只有 WMA 云）：BLOCKED |
 | AGT-127/129 | OpenClaw/fx | **不是国产**（开源 / Vercel Labs）：ACP 画像已接 |
+
+## 4. 本轮实现进展（2026-11-07）
+
+- 已按参考实现落地：DSH headless、Codex app-server（schema 校准）与 exec --json、
+  Claude stream-json、ACP 画像（gemini/opencode/grok/hermes/fx/antigravity/qoder/codebuddy/kimi/openclaw）、
+  Qoder/CodeBuddy headless 画像、安装目录（INST-101/AGT-105 支撑）。
+- 已实现 AGT-107/C-14 的排队语义：忙碌时 `turn.send mode=queue` 持久化为 queued 事件，
+  当前回合结束后由核心按序派发（重启后需新回合触发，已知限制）。
+- 真实回合录制仍缺凭据：Codex/Claude/CodeBuddy 有失败路径真实帧，成功回合需账号。
