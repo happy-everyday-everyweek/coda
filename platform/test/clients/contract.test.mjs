@@ -983,3 +983,21 @@ test("WEB-102：终端有界回放、Diff/成果元数据与下载", async () =>
     await server.close();
   }
 });
+
+test("INST-107：/api/version 暴露核心/协议/Web 资产版本，未授权拒绝", async () => {
+  const core = createInlineCore();
+  const { server } = await startTestServer(core);
+  try {
+    const ok = await fetchJson(`${server.url}api/version`);
+    assert.equal(ok.status, 200);
+    assert.match(ok.json.coreVersion, /^\d+\.\d+\.\d+/);
+    assert.equal(ok.json.protocolVersion, 1);
+    assert.match(ok.json.webAssetVersion, /^\d+\.\d+\.\d+/);
+    assert.match(ok.json.node, /^v\d+\./);
+
+    const denied = await fetchJson(`${server.url}api/version`, { token: null });
+    assert.equal(denied.status, 401);
+  } finally {
+    await server.close();
+  }
+});

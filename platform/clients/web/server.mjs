@@ -20,7 +20,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { PROTOCOL_VERSION, RPC_ERRORS } from "../../contracts/rpc.mjs";
+import { CORE_VERSION, PROTOCOL_VERSION, RPC_ERRORS } from "../../contracts/rpc.mjs";
 import {
   RpcClient,
   createInProcessTransport,
@@ -31,6 +31,7 @@ import { createMockCore } from "../shared/mock-core.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = path.join(HERE, "public");
+const WEB_ASSET_VERSION = "0.1.0";
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_RECENT_EVENTS = 500;
 const SSE_HEARTBEAT_MS = 15_000;
@@ -438,6 +439,16 @@ export async function startWebServer({
           error: { code: access.code, message: access.message, mode: access.mode },
         });
       }
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/version") {
+      // INST-107：本地 Web 资产/核心/协议版本，供安装器与升级检查使用（需授权）
+      return sendJson(res, 200, {
+        coreVersion: CORE_VERSION,
+        protocolVersion: PROTOCOL_VERSION,
+        webAssetVersion: WEB_ASSET_VERSION,
+        node: process.version,
+      });
     }
 
     if (req.method === "GET" && url.pathname === "/api/events") {
