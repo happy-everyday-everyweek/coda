@@ -290,7 +290,7 @@ ART / SEC / REL / PERF / QA / 发布
 |---|---|---|---|---|---|
 | QA-101 | IN PROGRESS | P0 | 三平台 CI 构建、测试和安装包 artifacts | INST-102~104 | QA-001 |
 | QA-102 | DONE | P0 | Mock Core 契约测试覆盖三 UI | CORE-106, UI-101 | QA-002 |
-| QA-103 | IN PROGRESS | P0 | 所有 Agent fixture 与真实冒烟测试索引 | AGT-106, AGT-111~130 | QA-003 |
+| QA-103 | DONE | P0 | 所有 Agent fixture 与真实冒烟测试索引 | AGT-106, AGT-111~130 | QA-003 |
 | QA-104 | BLOCKED | P0 | 跨端 E2E：安装复用、WSL、PA、断连、命令去重、审批竞争 | INST, WSL, PA, SYNC | QA-004 |
 | QA-105 | OPEN | P0 | 升级/回滚/签名/未签名发布流程 | INST-105 | QA-005 |
 | QA-106 | DONE | P0 | 生成并发布 Agent 能力矩阵、支持版本、已知限制 | AGT-103 | QA-006 |
