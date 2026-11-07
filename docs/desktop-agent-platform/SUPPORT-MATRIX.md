@@ -66,6 +66,21 @@
 - 发布状态：UNVERIFIED
 ```
 
+## 平台参考实现覆盖（2026-11-07 平台切片）
+
+本节只记录 `platform/` 参考实现的证据，不改变上方真实 Agent 的 `UNVERIFIED` 状态。
+
+| 实例 | 适配器 | 版本 | 环境 | 状态 | 证据 |
+|---|---|---|---|---|---|
+| mock-agent | mock | 1.0.0 | host | experimental（Test-only，仅契约测试） | `platform/adapters/mock.mjs`、`platform/test/adapters/` |
+| acp-generic | acp | 协议 v1（fake ACP server） | host | experimental（Test-only，无真实 Agent 录制） | `platform/adapters/acp.mjs`、`platform/fixtures/adapters/` |
+| claude-code | claude-code | 未安装 | host | BLOCKED | `platform/adapters/BLOCKED.md` |
+| codex | codex | 未安装 | host | BLOCKED | `platform/adapters/BLOCKED.md` |
+| 其余 17 个 Agent（AGT-113..130） | — | — | — | UNVERIFIED（本切片未实现） | `platform/docs/CAPABILITY-MATRIX-DRAFT.md` |
+
+生成与校验规则见 `platform/docs/adr/ADR-0005-agent-capability-matrix.md` 与
+`platform/adapters/capability-matrix.mjs`；界面只能通过 `supportsCapability()` 读取矩阵。
+
 ## 更新规则
 
 1. 由对应 `AGT-1xx` 任务负责更新，不以 UI 名称替代产品入口。
