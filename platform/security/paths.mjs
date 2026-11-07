@@ -188,9 +188,11 @@ function grantCovers(grant, absPath, operation) {
   const ops = grant.operations ?? grant.ops ?? ["read"];
   if (!Array.isArray(ops) || !ops.includes(operation)) return false;
   if (typeof grant.path !== "string" || grant.path.length === 0) return false;
-  const grantAbs = isAbsolute(grant.path) ? resolve(grant.path) : null;
-  if (!grantAbs) return false;
-  return isPathInside(grantAbs, absPath);
+  if (!isAbsolute(grant.path)) return false;
+  // 授权路径与目标路径都先做真实路径规范化（macOS /tmp→/private/tmp 等系统符号链接）
+  const grantAbs = realpathOfNearestExisting(resolve(grant.path)) ?? resolve(grant.path);
+  const target = realpathOfNearestExisting(absPath) ?? absPath;
+  return isPathInside(grantAbs, target);
 }
 
 function fileSha256(path) {
@@ -266,14 +268,16 @@ export function checkRemoteFileRequest(req = {}) {
     if (typeof grant.path !== "string" || grant.path.length === 0) return false;
     let grantAbs;
     try {
-      grantAbs = isAbsolute(grant.path)
+      const literal = isAbsolute(grant.path)
         ? resolve(grant.path)
         : resolve(realpathSync(resolve(workspaceRoot)), grant.path);
+      // 授权路径同样做真实路径规范化（工作区根可能是符号链接，如 macOS /tmp）
+      grantAbs = realpathOfNearestExisting(literal) ?? literal;
       if (!isWithinWorkspace(workspaceRoot, grantAbs)) return false;
     } catch {
       return false;
     }
-    return isPathInside(grantAbs, resolved.path);
+    return isPathInside(grantAbs, realpathOfNearestExisting(resolved.path) ?? resolved.path);
   });
   if (!granted) {
     return fail(

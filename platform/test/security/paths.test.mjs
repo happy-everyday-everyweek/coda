@@ -177,3 +177,28 @@ test("远程写：基线哈希/mtime 不一致时返回写冲突", (t) => {
   });
   assert.equal(createNew.ok, true);
 });
+
+test("符号链接工作区根（macOS /tmp 场景）：授权与包含判断仍正确", (t) => {
+  const dir = makeTmpDir(t);
+  const realWs = join(dir, "real-ws");
+  mkdirSync(realWs, { recursive: true });
+  writeFileSync(join(realWs, "a.txt"), "hello");
+  const linkRoot = join(dir, "link-root");
+  symlinkSync(realWs, linkRoot, "dir");
+
+  const granted = checkRemoteFileRequest({
+    workspaceRoot: linkRoot,
+    requestPath: "a.txt",
+    operation: "read",
+    grants: [{ path: linkRoot, operations: ["read", "write"] }],
+  });
+  assert.equal(granted.ok, true, JSON.stringify(granted));
+
+  const outside = checkRemoteFileRequest({
+    workspaceRoot: linkRoot,
+    requestPath: "../escape.txt",
+    operation: "read",
+    grants: [{ path: linkRoot, operations: ["read"] }],
+  });
+  assert.equal(outside.ok, false);
+});
