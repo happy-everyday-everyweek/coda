@@ -564,3 +564,12 @@ Qoder 走 headless stream-json；WorkBuddy 官方无入口；TRAE 卡企业版�
 `system(init)` → `system(status)` → `assistant` → `system(usage_update)` → `result(error_during_execution)`。
 因此 `adapters/claude-stream-json.mjs` 的帧映射可直接复用于 CodeBuddy（`headless-profiles.mjs` 已标 protocolConfirmed）。
 Qoder 的 headless 在无登录时不输出 JSONL（stderr 报 `NonInteractiveAuthRequiredError`），需登录后才可录制。
+
+## 15. Kimi Code 复核（run 42379101425）
+
+- 安装路径：`~/.kimi-code/bin/kimi`（CI 默认 PATH 不含，需自行加）。
+- 版本：**2.5.2**。
+- ACP：`kimi acp` 的 `initialize` 成功（loadSession/promptCapabilities/sessionCapabilities.reset 等），
+  `session/new` 返回 `Authentication required`（设备码登录；`kimi acp --login`）。
+- headless：正确写法是 `kimi -p "<prompt>" --output-format stream-json`；
+  注意 `-p` 是**带值**参数，`kimi -p --output-format stream-json` 会把 `stream-json` 当子命令（CI 首次误报）。

@@ -20,7 +20,7 @@ export const ACP_PROFILES = Object.freeze({
   // ── 国产（官方 ACP 入口，CI 待复核；见 platform/docs/DOMESTIC-AGENTS.md）──
   qoder: { provider: "qoder", command: "qodercn", args: ["--acp"], taskId: "AGT-114", docs: "阿里云 Qoder 文档", domestic: true, note: "CI 1.1.85 实测 --help 未见 --acp；bin 名 qodercn/qoderclicn 都要探测" },
   codebuddy: { provider: "codebuddy", command: "codebuddy", args: ["--acp"], taskId: "AGT-117", docs: "腾讯云 CodeBuddy 文档", domestic: true, note: "CI 2.181.0 实测 --acp 与 --serve 均存在；--acp 为 stdio，--serve 为 HTTP+SSE" },
-  kimi: { provider: "kimi", command: "kimi", args: ["acp"], taskId: "AGT-128", docs: "code.kimi.com/kimi-code", domestic: true, note: "CI 安装后 kimi 未在 PATH（安装目录待确认）；命令来自官方文档" },
+  kimi: { provider: "kimi", command: "kimi", args: ["acp"], taskId: "AGT-128", docs: "code.kimi.com/kimi-code", domestic: true, note: "CI 2.5.2 实测：~/.kimi-code/bin/kimi；ACP initialize 成功，session/new 需设备码登录" },
   openclaw: { provider: "openclaw", command: "openclaw", args: ["acp"], taskId: "AGT-127", docs: "OpenClaw 文档", domestic: false, note: "开源项目，原 Clawdbot/Moltbot" },
   // TRAE（AGT-115）：企业版旗舰套餐才提供 CLI，暂不接入，见 DOMESTIC-AGENTS.md
   // WorkBuddy（AGT-116）：官方无 CLI/ACP/app-server，BLOCKED
