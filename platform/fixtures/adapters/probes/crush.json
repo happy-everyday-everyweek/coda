@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-07T13:09:44.675Z",
+  "generatedAt": "2026-11-07T13:29:10.073Z",
   "agent": {
     "id": "crush",
     "package": "@charmland/crush",
@@ -31,7 +31,7 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 257,
+      "durationMs": 273,
       "stdout": "crush version v0.100.0\n",
       "stderr": ""
     },
@@ -41,7 +41,7 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 244,
+      "durationMs": 250,
       "stdout": "\n  A glamorous, terminal-first AI assistant for software development and adjacent tasks                                  \n         \n  USAGE  \n         \n    crush [command] [--flags]                                                   \n            \n  EXAMPLES  \n            \n    # Run in interactive mode                                                   \n    crush                                                                       \n                                                                                \n    # Run non-interactively                                                     \n    crush run \"Guess my 5 favorite Pokémon\"                                     \n                                                                                \n    # Run a non-interactively with pipes and redirection                        \n    cat README.md | crush run \"make this more glamorous\" > GLAMOROUS_README.md  \n                                                                                \n    # Run with debug logging in a specific directory                            \n    crush --debug --cwd /path/to/project                                        \n                                                                                \n    # Run in yolo mode (skip permission prompts)                                \n    crush -y                                                                    \n                                                                                \n    # Run in sysadmin mode (skip prompts and the exec-time block list too)      \n    crush -yy                                                                   \n                                                                                \n    # Run with custom data directory                                            \n    crush --data-dir /path/to/custom/.crush                                     \n                                                                                \n    # Continue a previous session                                               \n    crush --session {session-id}                                                \n                                                                                \n    # Continue the most recent session                                          \n    crush --continue                                                            \n            \n  COMMANDS  \n            \n    completion [command]                      Generate the autocompletion script for the specified shell\n    dirs                                      Show config and data directories\n    help [command]                            Help about any command\n    login [platform] [--flags]                Login Crush to a platform\n    logout [platform] [--flags]               Logout Crush from a platform\n    logs [--flags]                            View crush logs\n    models                                    List all available models from known providers\n    projects [--flags]                        List project directories\n    run [prompt...] [--flags]                 Run a single non-interactive prompt\n    server [--flags]                          Start the Crush server\n    session [command]                         Manage sessions\n    stats [--flags]                           Show usage statistics\n    update-providers [path-or-url] [--flags]  Update providers\n         \n  FLAGS  \n         \n    -C --continue                             Continue the most recent session\n    -c --cwd                                  Current working directory\n    -D --data-dir                             Custom crush data directory\n    -d --debug                                Debug\n    -h --help                                 Help\n    -H --host                                 Connect to a specific crush server host (for advanced users) (unix:///run/user/1001/crush-1001.sock)\n    -s --session                              Continue a previous session by ID\n    -v --version                              Version for crush\n    -y --yolo                                 Skip permission prompts: -y to stop being asked, -yy to also drop the exec-time block list\n\n",
       "stderr": ""
     }

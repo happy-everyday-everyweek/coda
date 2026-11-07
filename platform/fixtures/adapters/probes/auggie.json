@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-07T13:09:42.574Z",
+  "generatedAt": "2026-11-07T13:29:10.329Z",
   "agent": {
     "id": "auggie",
     "package": "@augmentcode/auggie",
@@ -13,6 +13,10 @@
       {
         "cmd": "auggie --help",
         "timeoutMs": 20000
+      },
+      {
+        "cmd": "auggie -p --output-format json \"Reply with exactly one word: pong\"",
+        "timeoutMs": 60000
       }
     ]
   },
@@ -31,7 +35,7 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 1091,
+      "durationMs": 853,
       "stdout": "0.37.0 (commit 903418fc)\n",
       "stderr": ""
     },
@@ -41,9 +45,19 @@
       "exitCode": 0,
       "signal": null,
       "timedOut": false,
-      "durationMs": 1044,
+      "durationMs": 768,
       "stdout": "Usage: auggie [instruction] [options]\n\nAuggie — Augment CLI Agent. Run interactive or automated tasks in your terminal.\n\nInput\n  [instruction]                Positional instruction\n  -i, --instruction <text>     Instruction (mutually exclusive with --instruction-file)\n  --queue <text>               Queue additional instructions for sequential execution (repeatable, requires --print)\n  -if, --instruction-file <p>  Instruction file (mutually exclusive with --instruction)\n  --image <path...>            Image file(s) to attach (PNG, JPEG, GIF, WEBP)\n  --file <path...>             File(s) to attach (PDF)\n  --enhance-prompt             Enhance the prompt before sending (requires --print)\n\nOutput & Interaction\n  -p, --print                  Print mode (one-shot). Note that the indexing confirmation\n                               prompt is skipped in print mode. Only use --print from a\n                               workspace root that you want to index.\n  -q, --quiet                  Only show final assistant message\n  --output-format <format>     Output format (only works with --print): \"text\" (default) or \"json\"\n  --queue <text>               Queue additional instructions for sequential execution\n                               (repeatable, requires --print)\n  -a, --ask                    Enable ask mode for retrieval and non-editing tools only\n  --show-cost                  Show billing cost summary at end of --print session\n  --no-update-terminal-title   Disable automatic terminal title updates\n  --mcp                        Run as MCP tool server\n  --acp                        Enable ACP mode\n\nConfiguration Options\n  -m, --model <id>             Select model to use\n  --reasoning-effort <effort>  Set model reasoning effort for this session\n  --persona <id>               Select agent persona to use\n  -w, --workspace-root <path>  Workspace root (auto-detects git root if absent)\n  --add-workspace <path>       Additional workspace directory to index (repeatable)\n  --discover-workspaces[=depth] Force git-repo discovery under a non-git root; optional depth 1-5 (default 1, use =N for nested owner/repo)\n  --no-discover-workspaces     Disable git-repo auto-discovery entirely\n  --rules <path>               Additional rules file (repeatable)\n  --augment-cache-dir <path>   Cache directory (default: ~/.augment)\n  --retry-timeout <sec>        Timeout for rate-limit retries (seconds)\n  --max-turns <n>              Limit the number of agentic turns (only works with --print)\n  --allow-indexing             Skip the indexing confirmation screen in interactive mode\n  --wait-for-indexing          Wait for workspace indexing to complete before codebase retrieval executes\n\nSession Options\n  -c, --continue               Continue from the most recent session\n  -r, --resume [sessionId]     Resume a specific session by ID or prefix (omit to pick interactively)\n  --dont-save-session          Do not save conversation history\n\nAuthentication Options\n  --augment-session-json <json>  Session JSON or path to session file for authentication\n  --github-api-token <path>      Path to file containing GitHub API token\n\nTools & Integrations\n  --mcp-config <cfg>           MCP server configuration (repeatable)\n  --permission <rule>          Set tool permissions with 'tool-name:policy' format (repeatable)\n                               Command-line permissions take precedence over settings permissions\n                               Possible policies: allow, deny, ask-user, webhook-policy(url), script-policy(path)\n  --remove-tool <tool-name>    Remove a specific tool by name (repeatable)\n                               Command-line removed tools take precedence over settings\n  --shell <name>               Select shell: bash | zsh | fish | sh | powershell\n  --startup-script <script>    Inline startup script to run before each command\n  --startup-script-file <path> Load startup script from file\n  --plugin-dir <path>          Load plugins from a local marketplace directory (repeatable)\n\nEnvironment Variables\n  AUGMENT_SESSION_AUTH  OAuth session data (same format as ~/.augment/session.json)\n  GITHUB_API_TOKEN      GitHub API token\n\nFor more information, visit: https://docs.augmentcode.com\n\nCommands\n  login                        Authenticate with Augment using OAuth\n  logout                       Log out of Augment and remove stored OAuth session\n  token                        Manage authentication tokens\n  session                      Manage CLI sessions\n  model                        Model-related operations\n  account                      View account and billing information\n  context                      Context usage and token information\n  upgrade                      Upgrade auggie to the latest version\n  command                      Run, list, or get help for custom commands\n  mcp                          Manage MCP servers\n  tools                        Manage tool settings (list/enable/disable tools)\n\n  For more help on a command: auggie <command> --help\n",
       "stderr": ""
+    },
+    {
+      "cmd": "auggie -p --output-format json \"Reply with exactly one word: pong\"",
+      "timeoutMs": 60000,
+      "exitCode": 1,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 998,
+      "stdout": "",
+      "stderr": "❌ No auth provided. Please log in with `auggie login` or set the AUGMENT_SESSION_AUTH environment variable.\n❌ Failed to initialize API connection\n   Reason: Cannot create API setup: Authentication failed: No auth provided. Please log in with `auggie login` or set the AUGMENT_SESSION_AUTH environment variable.\n"
     }
   ]
 }

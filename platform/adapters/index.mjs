@@ -198,3 +198,21 @@ export {
   codexExecCapabilityDeclaration,
   createCodexExecAdapter,
 } from "./codex-exec.mjs";
+
+export {
+  CLAUDE_STREAM_TASK_ID,
+  CLAUDE_STREAM_PROTOCOL,
+  ClaudeStreamJsonAdapter,
+  claudeStreamCapabilityDeclaration,
+  createClaudeStreamJsonAdapter,
+  mapClaudeFrame,
+} from "./claude-stream-json.mjs";
+
+export {
+  ACP_PROFILES,
+  AcpProfileError,
+  agentCapabilitiesFromFixture,
+  capabilitiesFromAcpHandshake,
+  createAcpProfileAdapter,
+  getAcpProfile,
+} from "./acp-profiles.mjs";

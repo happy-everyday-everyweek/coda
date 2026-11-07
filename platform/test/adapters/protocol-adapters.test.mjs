@@ -25,6 +25,7 @@ import { CAPABILITY_KEYS } from "../../contracts/capabilities.mjs";
 
 const FAKE_DSH = join(import.meta.dirname, "..", "..", "fixtures", "adapters", "fake-dsh-headless.mjs");
 const FAKE_CODEX = join(import.meta.dirname, "..", "..", "fixtures", "adapters", "fake-codex-app-server.mjs");
+const CODEX_HANDSHAKE = join(import.meta.dirname, "..", "..", "fixtures", "adapters", "codex-app-server-initialize.fixture.json");
 const DSH_RECORDING = join(
   import.meta.dirname,
   "..", "..", "fixtures", "adapters",
@@ -57,11 +58,11 @@ test("勘察证据：8 个 agent 都有版本与入口记录，codex 的 initial
     assert.ok(item.totalProbes > 0);
   }
   const codex = loadProbeEvidence("codex");
-  const handshake = codex.probes.find((p) => p.cmd === "codex app-server");
-  assert.ok(handshake, "缺少 app-server 握手记录");
-  assert.equal(handshake.exitCode, 0);
-  const response = JSON.parse(handshake.stdout.trim());
-  assert.equal(response.id, 1);
+  assert.ok(codex.probes.some((p) => p.cmd === "codex app-server --help"), "缺少 app-server 帮助记录");
+  const handshake = JSON.parse(readFileSync(CODEX_HANDSHAKE, "utf8"));
+  assert.equal(handshake.source, "recording");
+  const response = handshake.frames.find((f) => f.id === 1);
+  assert.ok(response, "缺少 initialize 响应帧");
   assert.match(response.result.userAgent, /coda-probe/);
   assert.equal(response.result.platformFamily, "unix");
   assert.deepEqual(validateProbeEvidence(codex), []);
