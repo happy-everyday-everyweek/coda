@@ -151,7 +151,7 @@ test("DSH 适配器：无原生 steer/fork，必须显式报 UNSUPPORTED_CAPABIL
   await adapter.dispose();
 });
 
-test("Codex 适配器：probe 检测 app-server，initialize 握手返回真实形状", async () => {
+test("Codex app-server：probe 检测 app-server，initialize 握手返回真实形状", async () => {
   const adapter = new CodexAppServerAdapter({
     instanceId: "ai_codex",
     command: process.execPath,
@@ -165,16 +165,56 @@ test("Codex 适配器：probe 检测 app-server，initialize 握手返回真实�
   assert.match(handshake.userAgent, /codex-app-server/);
   assert.equal(handshake.platformFamily, "unix");
   const decl = adapter.capabilities();
-  assert.deepEqual(noSupportedValues(decl.capabilities), [], "握手成功也不能声明 supported");
-  await assert.rejects(adapter.createSession(), (err) => err.code === "BLOCKED");
-  await assert.rejects(adapter.send(), (err) => err.code === "BLOCKED");
+  assert.deepEqual(noSupportedValues(decl.capabilities), [], "握手/会话方法已验证也不能声明 supported");
   await adapter.dispose();
 });
 
-test("Codex 能力声明覆盖全部键且不伪造会话方法", () => {
-  const decl = codexAppServerCapabilityDeclaration({ handshakeOk: true });
+test("Codex app-server：thread/start → turn/start → 流式 delta → turn/completed", async () => {
+  const adapter = new CodexAppServerAdapter({
+    instanceId: "ai_codex2",
+    command: process.execPath,
+    baseArgs: [FAKE_CODEX],
+  });
+  await adapter.probe();
+  const events = capture(adapter);
+  await adapter.connect();
+  const created = await adapter.createSession({ sessionId: "ses_cx" });
+  assert.equal(created.providerThreadId, "thread-fake-1");
+  const result = await adapter.send({ sessionId: "ses_cx", text: "ping" });
+  assert.equal(result.state, "succeeded");
+  assert.equal(result.text, "pong");
+  assert.ok(events.some((e) => e.kind === "message" && e.payload.text === "po"));
+  assert.ok(events.some((e) => e.kind === "reasoning"));
+  assert.ok(events.some((e) => e.kind === "tool" && e.payload.tool.state === "completed"));
+  assert.ok(events.some((e) => e.kind === "status" && e.payload.state === "idle"));
+  assert.ok(events.some((e) => e.kind === "message" && e.payload.delta === false && e.payload.text === "pong"));
+  await adapter.dispose();
+});
+
+test("Codex app-server：steer 与 interrupt 走 turn/steer、turn/interrupt", async () => {
+  const adapter = new CodexAppServerAdapter({
+    instanceId: "ai_codex3",
+    command: process.execPath,
+    baseArgs: [FAKE_CODEX],
+  });
+  await adapter.probe();
+  await adapter.connect();
+  await adapter.createSession({ sessionId: "ses_cx3" });
+  const steerResult = await adapter.steer({ sessionId: "ses_cx3", text: "more", expectedTurnId: "turn-fake-1" });
+  assert.ok(steerResult && typeof steerResult === "object");
+  const stopped = await adapter.interrupt({ sessionId: "ses_cx3", turnId: "turn-fake-1" });
+  assert.equal(stopped.stopped, true);
+  assert.equal(stopped.trust, "upstream-confirmed");
+  await adapter.dispose();
+});
+
+test("Codex 能力声明覆盖全部键且只到 experimental", () => {
+  const decl = codexAppServerCapabilityDeclaration({ handshakeOk: true, sessionMethodsOk: true });
   assert.deepEqual(Object.keys(decl).sort(), [...CAPABILITY_KEYS].sort());
   assert.deepEqual(noSupportedValues(decl), []);
+  assert.equal(decl.turn.startEndEvents, "experimental");
+  assert.equal(decl.streaming.text, "experimental");
+  assert.equal(decl.turn.nativeSteer, "experimental");
 });
 
 test("DSH 能力声明覆盖全部键", () => {

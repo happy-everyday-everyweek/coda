@@ -75,7 +75,7 @@
 | mock-agent | mock | 1.0.0 | host | experimental（Test-only，仅契约测试） | `platform/adapters/mock.mjs`、`platform/test/adapters/` |
 | acp-generic | acp | 协议 v1（fake ACP server） | host | experimental（Test-only，无真实 Agent 录制） | `platform/adapters/acp.mjs`、`platform/fixtures/adapters/` |
 | claude-code | claude-stream-json | CI 探测 2.1.319 | host | experimental（真实 init/assistant/result 帧已录制；成功模型回合未录制） | `fixtures/adapters/claude-stream-json-noauth.fixture.json`、`platform/adapters/claude-stream-json.mjs` |
-| codex | codex-app-server / codex-exec | CI 探测 0.167.0 | host | experimental（app-server initialize 握手已验证；exec --json 有真实失败路径录制；会话成功路径未录制） | `fixtures/adapters/probes/codex.json`、`fixtures/adapters/codex-exec-noauth.fixture.json`、`platform/adapters/{codex-app-server,codex-exec}.mjs` |
+| codex | codex-app-server / codex-exec | CI 探测 0.167.0 | host | experimental（initialize 握手 + `exec --json` 真实失败路径录制；app-server 会话方法按参考项目方法表实现，成功回合未录制） | `fixtures/adapters/probes/codex.json`、`fixtures/adapters/codex-exec-noauth.fixture.json`、`platform/adapters/{codex-app-server,codex-exec}.mjs` |
 | deepseek-harness | deepseek-harness | 0.2.2-rc.1 | host | experimental（真实录制失败路径；成功路径无模型凭据） | `fixtures/adapters/deepseek-harness-headless-error.fixture.json`、`platform/adapters/deepseek-harness.mjs` |
 | gemini | acp-profile | CI 探测 0.67.0 | host | experimental（ACP initialize 握手已验证；session/new 需要凭据） | `fixtures/adapters/gemini-acp-handshake.fixture.json`、`platform/adapters/acp-profiles.mjs` |
 | opencode | acp-profile（原生 HTTP+SSE 待接） | CI 探测 1.19.5 | host | experimental（ACP initialize + session/new 匿名成功；prompt 待录制） | `fixtures/adapters/opencode-acp-handshake.fixture.json`、`platform/adapters/acp-profiles.mjs` |

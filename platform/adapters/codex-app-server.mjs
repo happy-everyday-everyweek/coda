@@ -26,33 +26,40 @@ export const CODEX_APP_SERVER_PROTOCOL = Object.freeze({
 });
 
 /** 只有 initialize 握手是已验证事实；其余保持 unverified。 */
-export function codexAppServerCapabilityDeclaration({ handshakeOk = false } = {}) {
+export function codexAppServerCapabilityDeclaration({ handshakeOk = false, sessionMethodsOk = false } = {}) {
   const unk = "unverified";
+  const exp = "experimental";
   return {
     session: {
       multiThread: unk,
-      modelSwitch: unk,
+      modelSwitch: sessionMethodsOk ? exp : unk,
       permissionModeSwitch: unk,
-      resume: handshakeOk ? unk : false,
+      resume: sessionMethodsOk ? exp : handshakeOk ? unk : false,
       requestDurability: unk,
     },
-    thread: { empty: unk, snapshot: unk, fork: unk, fromTurn: unk, nativeId: handshakeOk ? unk : false },
+    thread: { empty: unk, snapshot: unk, fork: unk, fromTurn: unk, nativeId: handshakeOk ? exp : false },
     turn: {
-      startEndEvents: unk,
-      interrupt: unk,
-      nativeSteer: unk,
-      stopThenAppend: false,
+      startEndEvents: sessionMethodsOk ? exp : unk,
+      interrupt: sessionMethodsOk ? exp : unk,
+      nativeSteer: sessionMethodsOk ? exp : unk,
+      stopThenAppend: unk,
       queue: unk,
       terminalTrust: unk,
     },
-    streaming: { text: unk, reasoning: unk, toolOutput: unk, planText: unk, messageCompleted: unk },
-    tools: unk,
+    streaming: {
+      text: sessionMethodsOk ? exp : unk,
+      reasoning: sessionMethodsOk ? exp : unk,
+      toolOutput: sessionMethodsOk ? exp : unk,
+      planText: unk,
+      messageCompleted: sessionMethodsOk ? exp : unk,
+    },
+    tools: sessionMethodsOk ? exp : unk,
     approvals: { command: unk, fileRead: unk, fileWrite: unk, patch: unk, subagent: unk, nativeRequestId: unk },
     plan: unk,
     subagent: unk,
     context: { system: unk, summary: unk, handoffFull: unk, handoffIncremental: unk },
     checkpoint: { filesystem: unk, sessionRollback: unk, consistent: unk },
-    identity: { thread: unk, turn: unk, item: unk, request: unk },
+    identity: { thread: handshakeOk ? exp : unk, turn: unk, item: unk, request: unk },
     attachments: { input: unk, output: unk },
   };
 }
@@ -67,6 +74,11 @@ export class CodexAppServerAdapter extends BaseAdapter {
     version = null,
     handshakeTimeoutMs = 20000,
     probeTimeoutMs = 15000,
+    promptTimeoutMs = 300000,
+    workspace = null,
+    model = null,
+    sandboxPolicy = "read-only",
+    approvalPolicy = "never",
     clock = () => new Date(),
   } = {}) {
     super({ instanceId, environment, provider: "codex", version, clock });
@@ -75,11 +87,21 @@ export class CodexAppServerAdapter extends BaseAdapter {
     this.spawnImpl = spawnImpl;
     this.handshakeTimeoutMs = handshakeTimeoutMs;
     this.probeTimeoutMs = probeTimeoutMs;
+    this.promptTimeoutMs = promptTimeoutMs;
+    this.workspace = workspace;
+    this.model = model;
+    this.sandboxPolicy = sandboxPolicy;
+    this.approvalPolicy = approvalPolicy;
     this.probing = { path: null, appServerDetected: false, helpHead: null };
     this._conn = null;
     this._child = null;
     this._handshake = null;
     this._connecting = null;
+    this._threads = new Map();      // coreSessionId → threadId
+    this._threadToSession = new Map(); // threadId → coreSessionId
+    this._turns = new Map();        // coreSessionId → turnId
+    this._pendingTurns = new Map(); // coreSessionId → resolve fn
+    this._textBySession = new Map();
   }
 
   async probe() {
@@ -139,7 +161,15 @@ export class CodexAppServerAdapter extends BaseAdapter {
         env: { ...process.env, NO_COLOR: "1", TERM: "dumb" },
       });
       this._child = child;
-      this._conn = new JsonRpcConnection({ child, label: "codex-app-server", requireJsonrpc: false });
+      this._conn = new JsonRpcConnection({
+        child,
+        label: "codex-app-server",
+        requireJsonrpc: false,
+        onNotification: (msg) => this._onNotification(msg),
+        onDiagnostic: (diag) => {
+          if (this.diagnostics.unknownFrames.length < 20) this.diagnostics.unknownFrames.push(diag);
+        },
+      });
       const result = await this._conn.request(
         "initialize",
         {
@@ -149,7 +179,12 @@ export class CodexAppServerAdapter extends BaseAdapter {
         { timeoutMs: this.handshakeTimeoutMs },
       );
       this._handshake = result ?? {};
-      this.declareCapabilities(codexAppServerCapabilityDeclaration({ handshakeOk: true }));
+      try {
+        this._conn.notify("initialized", {});
+      } catch {
+        /* 老版本可能不需要该通知 */
+      }
+      this.declareCapabilities(codexAppServerCapabilityDeclaration({ handshakeOk: true, sessionMethodsOk: true }));
       return this._handshake;
     })().finally(() => {
       this._connecting = null;
@@ -157,34 +192,158 @@ export class CodexAppServerAdapter extends BaseAdapter {
     return this._connecting;
   }
 
-  _blocked(operation) {
-    return new AdapterError(
-      "BLOCKED",
-      `codex app-server ${operation} 尚未固定协议方法；先跑 generate-json-schema 并录制真实会话`,
-      { details: { taskId: CODEX_APP_SERVER_TASK_ID, evidence: CODEX_APP_SERVER_PROTOCOL.evidence } },
-    );
+  _onNotification(msg) {
+    if (!msg || typeof msg.method !== "string") return;
+    const params = msg.params ?? {};
+    const threadId = params.threadId ?? params.thread_id ?? null;
+    const sessionId = threadId ? this._threadToSession.get(threadId) ?? null : null;
+    const turnId = params.turnId ?? params.turn_id ?? null;
+    switch (msg.method) {
+      case "agentMessage/delta":
+      case "item/agentMessage/delta": {
+        const delta = params.delta ?? params.textDelta ?? "";
+        if (sessionId && delta) {
+          this._textBySession.set(sessionId, `${this._textBySession.get(sessionId) ?? ""}${delta}`);
+          this.emitEvent({ kind: "message", sessionId, payload: { role: "assistant", text: String(delta), delta: true } });
+        }
+        break;
+      }
+      case "reasoning/delta":
+      case "item/reasoning/delta": {
+        const delta = params.delta ?? params.textDelta ?? "";
+        if (sessionId && delta) this.emitEvent({ kind: "reasoning", sessionId, payload: { text: String(delta) } });
+        break;
+      }
+      case "item/started":
+      case "item/completed": {
+        if (sessionId && params.item) {
+          this.emitEvent({
+            kind: "tool",
+            sessionId,
+            payload: { tool: { ...params.item, state: msg.method === "item/started" ? "started" : "completed" } },
+          });
+        }
+        break;
+      }
+      case "thread/tokenUsage/updated":
+        break;
+      case "turn/completed":
+        this._settleTurn(sessionId, { state: "succeeded" });
+        break;
+      case "turn/failed":
+        this._settleTurn(sessionId, { state: "failed", error: params.error ?? { message: "turn failed" } });
+        break;
+      case "turn/aborted":
+        this._settleTurn(sessionId, { state: "stopped" });
+        break;
+      default:
+        if (this.diagnostics.unknownFrames.length < 20) this.diagnostics.unknownFrames.push({ method: msg.method, threadId, turnId });
+    }
   }
 
-  async createSession() {
+  _settleTurn(sessionId, outcome) {
+    if (!sessionId) return;
+    const resolve = this._pendingTurns.get(sessionId);
+    if (!resolve) return;
+    this._pendingTurns.delete(sessionId);
+    resolve(outcome);
+  }
+
+  /** 会话创建：thread/start（参考 Zeron 方法表；参数以 CI schema 为准）。 */
+  async createSession({ sessionId, workspace = null, model = null } = {}) {
     await this.connect();
-    throw this._blocked("createSession");
+    if (!sessionId) throw new AdapterError("PROTOCOL_ERROR", "sessionId required");
+    if (workspace) this.workspace = workspace;
+    const params = { ...(this.workspace ? { cwd: this.workspace } : {}), ...(model ?? this.model ? { model: model ?? this.model } : {}) };
+    const result = await this._conn.request("thread/start", params);
+    const threadId = result?.thread?.id ?? result?.threadId ?? null;
+    if (!threadId) throw new AdapterError("PROTOCOL_ERROR", "thread/start returned no thread id");
+    this._threads.set(sessionId, threadId);
+    this._threadToSession.set(threadId, sessionId);
+    this.emitEvent({ kind: "session", sessionId, payload: { session: { id: sessionId, providerThreadId: threadId } } });
+    return { providerThreadId: threadId };
   }
-  async send() {
+
+  async _ensureThread(sessionId) {
+    let threadId = this._threads.get(sessionId);
+    if (!threadId) {
+      await this.connect();
+      const created = await this.createSession({ sessionId, workspace: this.workspace, model: this.model });
+      threadId = created.providerThreadId;
+    }
+    return threadId;
+  }
+
+  /** 回合：turn/start + 通知驱动，直到 turn/completed|failed|aborted。 */
+  async send({ sessionId, text, model = null }) {
+    this._assertUsable();
+    this.assertCapability("turn", "startEndEvents");
+    const body = String(text ?? "");
+    if (!body.trim()) throw new AdapterError("PROTOCOL_ERROR", "empty prompt");
+    const threadId = await this._ensureThread(sessionId);
+    this._textBySession.set(sessionId, "");
+    this.emitStatus(sessionId, "running", { phase: "turn_start" });
+    const settle = new Promise((resolve) => this._pendingTurns.set(sessionId, resolve));
+    const params = {
+      threadId,
+      input: [{ type: "text", text: body }],
+      approvalPolicy: this.approvalPolicy,
+      sandboxPolicy: this.sandboxPolicy,
+      ...(model ?? this.model ? { model: model ?? this.model } : {}),
+    };
+    const started = await this._conn.request("turn/start", params);
+    const turnId = started?.turn?.id ?? started?.turnId ?? null;
+    if (turnId) this._turns.set(sessionId, turnId);
+
+    const timeout = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ state: "unknown", error: { message: "turn timed out" } }), this.promptTimeoutMs);
+      timer.unref?.();
+    });
+    const outcome = await Promise.race([settle, timeout]);
+    this._pendingTurns.delete(sessionId);
+    const textOut = this._textBySession.get(sessionId) ?? "";
+
+    if (outcome.state !== "succeeded") {
+      const message = outcome.error?.message ?? `codex turn ${outcome.state}`;
+      if (outcome.state === "failed") this.emitError(sessionId, new AdapterError("PROCESS_EXIT", message, { details: outcome.error ?? null }));
+      this.emitStatus(sessionId, outcome.state === "stopped" ? "stopped" : "failed", { state: outcome.state });
+      return { state: outcome.state === "stopped" ? "stopped" : "failed", text: textOut, error: { message }, upstreamSessionId: threadId };
+    }
+    if (textOut) this.emitEvent({ kind: "message", sessionId, payload: { role: "assistant", text: textOut, delta: false } });
+    this.emitStatus(sessionId, "idle");
+    return { state: "succeeded", text: textOut, upstreamSessionId: threadId };
+  }
+
+  async steer({ sessionId, text, expectedTurnId = null }) {
+    this.assertCapability("turn", "nativeSteer");
+    const threadId = await this._ensureThread(sessionId);
+    const turnId = expectedTurnId ?? this._turns.get(sessionId) ?? null;
+    if (!turnId) throw new AdapterError("CONFLICT", "no active turn to steer");
+    return this._conn.request("turn/steer", { threadId, expectedTurnId: turnId, input: [{ type: "text", text: String(text ?? "") }] });
+  }
+
+  async interrupt({ sessionId, turnId = null }) {
+    this.assertCapability("turn", "interrupt");
+    const threadId = await this._ensureThread(sessionId);
+    const activeTurn = turnId ?? this._turns.get(sessionId) ?? null;
+    await this._conn.request("turn/interrupt", { threadId, ...(activeTurn ? { turnId: activeTurn } : {}) });
+    return { stopped: true, trust: "upstream-confirmed" };
+  }
+
+  async resume({ sessionId, upstreamSessionId = null }) {
     await this.connect();
-    throw this._blocked("send");
+    const threadId = upstreamSessionId ?? this._threads.get(sessionId) ?? null;
+    if (!threadId) throw new AdapterError("RESUME_FAILED", "no thread id to resume");
+    await this._conn.request("thread/resume", { threadId });
+    this._threads.set(sessionId, threadId);
+    this._threadToSession.set(threadId, sessionId);
+    return { providerThreadId: threadId };
   }
-  async steer() {
-    throw this._blocked("steer");
-  }
-  async interrupt() {
-    throw this._blocked("interrupt");
-  }
-  async resume() {
-    throw this._blocked("resume");
-  }
+
   async fork() {
-    throw this._blocked("fork");
+    throw new AdapterError("UNSUPPORTED_CAPABILITY", "codex app-server fork not verified yet");
   }
+
   async dispose() {
     try {
       this._conn?.close?.();
@@ -199,6 +358,11 @@ export class CodexAppServerAdapter extends BaseAdapter {
     this._conn = null;
     this._child = null;
     this._handshake = null;
+    this._threads.clear();
+    this._threadToSession.clear();
+    this._turns.clear();
+    this._pendingTurns.clear();
+    this._textBySession.clear();
     await super.dispose();
   }
 }
