@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "kind": "recording",
+  "agentId": "kimi",
+  "taskId": "AGT-128",
+  "source": "recording",
+  "sourceNote": "CI 真实运行 `kimi -p \"...\" --output-format stream-json`（2.5.2，无登录）：stdout 只有 system.version 元帧，stderr 报 No model configured/需要登录。",
+  "recordedAt": "2026-11-07T14:07:14.186Z",
+  "agentVersion": "2.5.2",
+  "command": [
+    "kimi",
+    "-p",
+    "Reply with exactly one word: pong",
+    "--output-format",
+    "stream-json"
+  ],
+  "redaction": {
+    "applied": true
+  },
+  "frames": [
+    {
+      "role": "meta",
+      "type": "system.version",
+      "version": "2.5.2"
+    }
+  ],
+  "stderr": "error: failed to run prompt: No model configured. Run `kimi` and use /login to sign in, then retry; or set default_model in config.toml.\nSee log: ~/.kimi-code/logs/kimi-code.log\n"
+}

@@ -238,3 +238,11 @@ export {
   codebuddyHttpCapabilityDeclaration,
   createCodeBuddyHttpAdapter,
 } from "./codebuddy-http.mjs";
+
+export {
+  KIMI_HEADLESS_TASK_ID,
+  KIMI_HEADLESS_PROTOCOL,
+  KimiHeadlessAdapter,
+  kimiHeadlessCapabilityDeclaration,
+  mapKimiFrame,
+} from "./kimi-headless.mjs";

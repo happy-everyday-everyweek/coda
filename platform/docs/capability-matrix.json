@@ -1,6 +1,6 @@
 {
   "matrixVersion": 1,
-  "generatedAt": "2026-11-07T14:02:40.177Z",
+  "generatedAt": "2026-11-07T14:11:47.648Z",
   "columns": [
     "session",
     "thread",
@@ -191,7 +191,7 @@
         {
           "kind": "protocol-trace",
           "ref": "fixtures/adapters/probes/codebuddy.json",
-          "note": "5 probes"
+          "note": "7 probes"
         },
         {
           "kind": "recording",
@@ -524,7 +524,7 @@
         {
           "kind": "protocol-trace",
           "ref": "fixtures/adapters/probes/kimi.json",
-          "note": "6 probes"
+          "note": "8 probes"
         },
         {
           "kind": "recording",

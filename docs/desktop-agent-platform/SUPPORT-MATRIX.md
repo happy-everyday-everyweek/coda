@@ -85,7 +85,7 @@
 | codebuddy | acp-profile / headless / http | CI 实测 2.181.0 | host | experimental（ACP initialize 成功；headless 与 Claude 同族；`--serve` 的 OpenAPI 可匿名读取，健康检查需 `x-codebuddy-request`） | `fixtures/adapters/codebuddy-headless-stream-json.fixture.json`、`platform/adapters/codebuddy-http.mjs` |
 | openclaw | acp-profile | CI 实测 2026.11.1 | host | experimental（`openclaw acp` 存在；需 Gateway 凭据） | `fixtures/adapters/probes/openclaw.json` |
 | fx | acp-profile | CI 实测 0.0.16 | host | experimental（ACP initialize 返回需 Vercel AI Gateway 凭据，已录门槛帧） | `fixtures/adapters/fx-acp-auth-gate.fixture.json` |
-| kimi | acp-profile / headless | CI 实测 2.5.2 | host | experimental（ACP initialize 成功、session/new 需设备码登录；headless 参数已确认） | `fixtures/adapters/kimi-acp-auth-gate.fixture.json`、`platform/adapters/acp-profiles.mjs` |
+| kimi | acp-profile / headless | CI 实测 2.5.2 | host | experimental（ACP initialize 成功；headless JSONL 真实 meta 帧已录制；需登录） | `fixtures/adapters/kimi-acp-auth-gate.fixture.json`、`fixtures/adapters/kimi-headless-stream-json.fixture.json`、`platform/adapters/kimi-headless.mjs` |
 | trae | — | — | — | BLOCKED（企业版旗舰套餐门槛） | `platform/docs/DOMESTIC-AGENTS.md` §2 |
 | workbuddy | — | — | — | BLOCKED（官方无本地可编程入口） | `platform/docs/DOMESTIC-AGENTS.md` §3 |
 | coda 宿主桥（AGT-130） | — | — | — | BLOCKED（需 Android 真机/ADB） | — |

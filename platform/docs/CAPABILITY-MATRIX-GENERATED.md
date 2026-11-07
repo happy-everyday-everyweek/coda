@@ -1,6 +1,6 @@
 # 能力矩阵（自动生成，勿手改）
 
-> 生成时间：2026-11-07T14:02:40.177Z；实例 17 个，可用（experimental）15 个。
+> 生成时间：2026-11-07T14:11:47.648Z；实例 17 个，可用（experimental）15 个。
 > 规则见 `platform/docs/adr/ADR-0005-agent-capability-matrix.md`；本文件不替代发布矩阵。
 > **任何行都不得当作 supported**：真实成功回合录制缺失，release 最高 experimental。
 
