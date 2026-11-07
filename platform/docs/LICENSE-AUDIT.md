@@ -15,7 +15,7 @@
 | 仓库根（Android App） | **AGPL-3.0** | 根 `LICENSE` 为 GNU AGPL v3；`README.md` 第 26–28 行声明 |
 | 内核载荷（`kernel/zcode`） | **Apache-2.0（自带 LICENSE）+ 第三方 NOTICE** | `kernel/zcode/LICENSE` 为 Apache License 2.0；第三方声明见 `kernel/zcode/THIRD-PARTY-NOTICES.md`（约 5 万行，由 `node scripts/licenses.mjs notices` 生成） |
 | 内核载荷（`kernel/maibot-lite`） | **GPL-3.0 + AGPL-3.0 混合，需核实** | `kernel/maibot-lite/LICENSE` 为 GPL-3.0；`src/A_memorix` 默认 AGPL-3.0，另有面向 MaiBot 项目的 GPL-3.0 附加授权（`LICENSE-MAIBOT-GPL.md`）；适用范围需 Lead/法务确认 |
-| GPUI / Rust 引入 | **未引入，前置检查清单见第 5 节** | 当前无 `Cargo.toml`、无 Rust 依赖树，`QA-007` 的 GPUI 部分为 `UNVERIFIED` |
+| GPUI / Rust 引入 | **仅 CI 冒烟引入，未发布二进制；前置检查清单见第 5 节** | `platform/gui-smoke/` 固定 zui rev 编译验证；许可/NOTICE 未完成，`QA-007` 的 GPUI 部分仍为 `UNVERIFIED` |
 | 总体 `QA-007` | **UNVERIFIED（部分静态 PASS）** | platform/ 部分可给出结论；GPUI revision、NOTICE 汇总、Android 侧逐项审核未完成 |
 
 **禁止表述**：在完成第 6 节全部检查项之前，不得在任何发布说明中写「许可已全部审核通过」。
@@ -77,11 +77,12 @@
 4. 引入字体、图标、截图、音频等资产（资产许可常与代码许可不同）。
 5. 打包 Node/Electron/GPUI 二进制或安装器（涉及再分发义务与 NOTICE 汇总）。
 
-## 5. GPUI / Rust 引入前置检查清单（未执行）
+## 5. GPUI / Rust 引入前置检查清单（部分执行：仅 CI 冒烟）
 
-`SPEC.md` 5.4 指定 GUI 采用 Rust + GPUI；`TODO.md` 的 `GUI-101` 与 `QA-007` 都要求先固定版本与许可。在**任何** Rust 代码进入仓库前，必须完成：
+`SPEC.md` 5.4 指定 GUI 采用 Rust + GPUI；`TODO.md` 的 `GUI-101` 与 `QA-007` 都要求先固定版本与许可。在**任何** Rust 代码进入仓库前，必须完成。当前只新增了不发布的 `platform/gui-smoke/`（CI 验证用），第 1 项已完成，其余仍未完成：
 
-- [ ] 固定 GPUI 与所有直接 crate 的**精确 revision**（git rev 或 `=x.y.z`），禁止 `*` 或浮动分支。
+- [x] 固定 GPUI 与所有直接 crate 的**精确 revision**（git rev 或 `=x.y.z`），禁止 `*` 或浮动分支。
+      `gpui` / `gpui_platform` = `zeronsh/zui@b564a34413bb7ef1da04121c4a287758f94993d9`。
 - [ ] 记录每个 crate 的 `license` 字段与 `LICENSE` 文件路径；`cargo metadata --format-version 1` 输出入库。
 - [ ] 运行 `cargo deny check licenses`（或 `cargo-license`）并把配置与输出归档到 `artifacts/acceptance/<run-id>/`。
 - [ ] 核对是否存在 `source-available` / 非 OSI 许可 / 商用限制 / 附加条款（"commons clause"、"SSPL"、"BUSL"）。
@@ -100,7 +101,7 @@
 | LIC-02 | 核实 `kernel/maibot-lite` 与 `src/A_memorix` 的附加授权是否覆盖 Coda | 需上游授权文本与法务判断，超出工程判断 | Lead / 法务 |
 | LIC-03 | 逐项核对内置载荷（PRoot、Alpine、Chaquopy、ripgrep、ugrep、jieba 等）的许可与 NOTICE 覆盖 | 未执行；体积大且需上游文本 | Lead |
 | LIC-04 | 校验 `node-*.19/14/22-LICENSE.txt` 与实际载荷版本一致 | 未执行 | 实现者 |
-| LIC-05 | GPUI/Rust 引入前的第 5 节清单 | 无 Rust 工具链，未引入 | 未来 GUI 任务 |
+| LIC-05 | GPUI/Rust 引入前的第 5 节清单 | 已引入 CI 冒烟 crate（未发布）；除 revision 固定外，许可/NOTICE/deny 检查未完成 | 未来 GUI 任务 |
 | LIC-06 | 在发布说明中加入「源码获取方式」（AGPL 第 13 节） | 依赖发布渠道确定 | QA-109 |
 
 ## 7. 局限与声明

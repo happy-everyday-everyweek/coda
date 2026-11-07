@@ -4,7 +4,7 @@
 - 日期：2026-11-07
 - 对应任务：GUI-101 ~ GUI-107
 - 对应验收：UI-001 ~ UI-005（GUI 侧）
-- 状态：**GUI-101 IN PROGRESS（仅 CI 可行性冒烟）**；GUI-102 ~ GUI-107 **BLOCKED**
+- 状态：**GUI-101 IN PROGRESS（CI 可行性冒烟已通过）**；GUI-102 ~ GUI-107 **BLOCKED**
 
 > 本文件不包含任何 GPUI 产品实现的冒充。`platform/gui-smoke/` 只验证
 > “无独显的 Linux CI 能否编译 GPUI 并用软件 Vulkan 出帧”，不是 GUI 应用壳。
@@ -21,6 +21,18 @@
 - `cargo build` 编译最小 GPUI 窗口；
 - `xvfb-run` 下运行，日志出现 `GPUI_SMOKE_OK` 即判定第一帧渲染成功；
 - 该 job `continue-on-error: true`，失败不阻塞 Platform / Release 主流水线。
+
+**实测结果（run [42386944351](https://github.com/happy-everyday-everyweek/coda/actions/runs/42386944351)，2026-11-07）**：
+
+| 项目 | 结果 |
+|---|---|
+| Vulkan 设备 | `llvmpipe (LLVM 21.1.8, 256 bits)`，driver `llvmpipe`，apiVersion `1.4.335` |
+| OpenGL | `llvmpipe`，direct rendering |
+| gpui 编译 | `Finished dev profile in 6m 22s`（固定 zui rev `b564a34`） |
+| 出帧 | `GPUI_SMOKE_OK: window rendered`（Xvfb，15s 内） |
+
+结论：**没有独显不影响 GPUI 的编译与软件渲染验证**；GPUI 需要的是可用的 GPU API，
+集显/软件 Vulkan（lavapipe）即可跑通。真实产品性能仍需在目标桌面环境测。
 
 **结论边界**：这证明 GPUI 依赖可构建、无独显时能拿到 GPU API（软件实现）并出帧；
 不证明产品 GUI 的交互、性能、IME、可访问性或三平台安装器可用。
