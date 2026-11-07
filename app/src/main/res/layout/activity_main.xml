@@ -118,7 +118,7 @@
                     android:id="@+id/workspace_picker_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/greeting"
+                    android:visibility="gone"
                     android:textAppearance="?attr/textAppearanceTitleMedium"
                     android:textColor="?attr/colorOnSurfaceVariant" />
 

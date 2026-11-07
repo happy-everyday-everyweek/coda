@@ -4538,13 +4538,14 @@ class MainActivity : BaseActivity() {
         list.removeAllViews()
         val chosen = composerWorkspace
         if (chosen != null) {
+            title.visibility = View.VISIBLE
             title.text = java.io.File(chosen).name
             list.addView(
                 pickerRow(getString(R.string.workspace_pick_title), onClick = { selectWorkspace(null) }),
             )
             return
         }
-        title.text = getString(R.string.greeting)
+        title.visibility = View.GONE
         val recents = recentWorkspaces()
         if (recents.isEmpty()) {
             list.addView(pickerHint(getString(R.string.workspace_none_hint)))
