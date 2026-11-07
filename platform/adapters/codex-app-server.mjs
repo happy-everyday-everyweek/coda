@@ -15,6 +15,13 @@ import { resolveExecutable, runProcess } from "./runtime.mjs";
 
 export const CODEX_APP_SERVER_TASK_ID = "AGT-112";
 
+/** SandboxMode("read-only"/"workspace-write"/"danger-full-access") → turn/start 的 SandboxPolicy 对象。 */
+export function sandboxPolicyFor(mode = "read-only") {
+  if (mode === "danger-full-access") return { type: "dangerFullAccess" };
+  if (mode === "workspace-write") return { type: "workspaceWrite" };
+  return { type: "readOnly" };
+}
+
 export const CODEX_APP_SERVER_PROTOCOL = Object.freeze({
   name: "codex-app-server",
   transport: "stdio",
@@ -77,7 +84,7 @@ export class CodexAppServerAdapter extends BaseAdapter {
     promptTimeoutMs = 300000,
     workspace = null,
     model = null,
-    sandboxPolicy = "read-only",
+    sandboxMode = "read-only",
     approvalPolicy = "never",
     clock = () => new Date(),
   } = {}) {
@@ -90,7 +97,7 @@ export class CodexAppServerAdapter extends BaseAdapter {
     this.promptTimeoutMs = promptTimeoutMs;
     this.workspace = workspace;
     this.model = model;
-    this.sandboxPolicy = sandboxPolicy;
+    this.sandboxMode = sandboxMode;
     this.approvalPolicy = approvalPolicy;
     this.probing = { path: null, appServerDetected: false, helpHead: null };
     this._conn = null;
@@ -174,7 +181,7 @@ export class CodexAppServerAdapter extends BaseAdapter {
         "initialize",
         {
           clientInfo: { name: "coda-core", version: "0.1.0" },
-          capabilities: {},
+          capabilities: { experimentalApi: true },
         },
         { timeoutMs: this.handshakeTimeoutMs },
       );
@@ -254,7 +261,12 @@ export class CodexAppServerAdapter extends BaseAdapter {
     await this.connect();
     if (!sessionId) throw new AdapterError("PROTOCOL_ERROR", "sessionId required");
     if (workspace) this.workspace = workspace;
-    const params = { ...(this.workspace ? { cwd: this.workspace } : {}), ...(model ?? this.model ? { model: model ?? this.model } : {}) };
+    const params = {
+      ...(this.workspace ? { cwd: this.workspace } : {}),
+      ...(model ?? this.model ? { model: model ?? this.model } : {}),
+      sandbox: this.sandboxMode,
+      approvalPolicy: this.approvalPolicy,
+    };
     const result = await this._conn.request("thread/start", params);
     const threadId = result?.thread?.id ?? result?.threadId ?? null;
     if (!threadId) throw new AdapterError("PROTOCOL_ERROR", "thread/start returned no thread id");
@@ -288,7 +300,7 @@ export class CodexAppServerAdapter extends BaseAdapter {
       threadId,
       input: [{ type: "text", text: body }],
       approvalPolicy: this.approvalPolicy,
-      sandboxPolicy: this.sandboxPolicy,
+      sandboxPolicy: sandboxPolicyFor(this.sandboxMode),
       ...(model ?? this.model ? { model: model ?? this.model } : {}),
     };
     const started = await this._conn.request("turn/start", params);
