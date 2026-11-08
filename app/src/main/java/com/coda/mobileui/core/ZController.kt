@@ -911,7 +911,16 @@ class ZController private constructor(
             refreshSessions { ok ->
                 val next = if (ok) sessions.firstOrNull()?.id else null
                 if (next == null) {
-                    cb?.invoke(false)
+                    // 一条会话都没有：用本地供应商配置兜底，否则模型面板是空的，
+                    // 用户既选不了模型、也建不了会话（互锁）。
+                    val local = configModelOptions()
+                    if (local.isNotEmpty()) {
+                        modelOptions = local
+                        notif { onStateChanged() }
+                        cb?.invoke(true)
+                    } else {
+                        cb?.invoke(false)
+                    }
                 } else {
                     readModelOptions(next) { ok2 -> if (ok2) cb?.invoke(true) else readModelOptionsAfterResume(next, cb) }
                 }
@@ -920,6 +929,25 @@ class ZController private constructor(
         }
         readModelOptions(sid) { ok -> if (ok) cb?.invoke(true) else readModelOptionsAfterResume(sid, cb) }
     }
+
+    /** 从本地供应商配置拼出模型清单：没有会话时也能选模型。 */
+    private fun configModelOptions(): List<ZModelOption> =
+        ProviderStore
+            .load(app)
+            .filter { it.kind == ProviderStore.ProviderKind.LLM }
+            .flatMap { provider ->
+                provider.models.map { model ->
+                    ZModelOption(
+                        providerId = provider.id,
+                        modelId = model,
+                        label = model,
+                        providerLabel = provider.name,
+                        contextWindow = 0,
+                        levels = emptyList(),
+                        defaultLevel = null,
+                    )
+                }
+            }
 
     /** 冷会话读取失败：先恢复（resume）再读一次（与桌面端冷恢复语义一致）。 */
     private fun readModelOptionsAfterResume(
@@ -1757,8 +1785,10 @@ class ZController private constructor(
         cb: ((Boolean, String) -> Unit)? = null,
     ) {
         val sid = currentSessionId
+        // 还没有会话：选择只记到本地，等创建会话时随 session/create 一起下发。
         if (sid == null) {
-            cb?.invoke(false, "无会话")
+            selectModelLocally(providerId, modelId, level)
+            cb?.invoke(true, "ok")
             return
         }
         val lv =
@@ -1793,6 +1823,22 @@ class ZController private constructor(
     }
 
     // ---------------------------------------------------------------- 选择与偏好
+
+    /**
+     * 只把模型选择记到本地，不下发内核。
+     *
+     * 用在新会话尚未创建（或用户刚点新对话）时：真正生效的时机是 session/create，
+     * 由 [buildModelSelection] 带上；已有会话时请用 [setModel]。
+     */
+    fun selectModelLocally(
+        providerId: String,
+        modelId: String,
+        level: String? = null,
+    ) {
+        rememberSelection(providerId, modelId, level)
+        currentModel = Triple(providerId, modelId, level)
+        post { notif { onStateChanged() } }
+    }
 
     private fun rememberSelection(
         providerId: String,

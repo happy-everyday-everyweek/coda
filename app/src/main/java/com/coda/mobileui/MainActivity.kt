@@ -730,18 +730,12 @@ class MainActivity : BaseActivity() {
                 reasoningStart.clear()
                 reasoningDone.clear()
                 runningSince = null
-                zc.newSession(workspaceOverride = composerWorkspace) { ok, msg ->
-                    if (ok) {
-                        // 工作区已随会话绑定；清掉选择，下次新会话重新选。
-                        composerWorkspace = null
-                        syncHeaderPill()
-                        updateSendAvailability()
-                        chatView.visibility = View.VISIBLE
-                        emptyState.visibility = View.GONE
-                    } else {
-                        snack("新建会话失败: $msg")
-                    }
-                }
+                // 新对话不立刻建会话：先回到空态选运行位置，选定后由首次发送建会话。
+                pendingNewSession = true
+                composerWorkspace = null
+                showEmptyState()
+                syncHeaderPill()
+                updateSendAvailability()
             },
         )
         val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
@@ -1129,6 +1123,10 @@ class MainActivity : BaseActivity() {
             return
         }
         // 新会话必须先有工作区。输入框本身不拦（用户可以先写再选），只拦发送。
+        if (pendingNewSession && composerWorkspace == null) {
+            snack("先选择或创建一个工作区")
+            return
+        }
         if (zc.currentSessionId == null && composerWorkspace == null) {
             snack("先选择或创建一个工作区")
             return
@@ -1155,9 +1153,10 @@ class MainActivity : BaseActivity() {
         }
         // 先设置发送模式（确保工具审批等策略在消息发出前生效），完成后再发送（设置失败也继续发送）
         zc.setMode(protocolMode) { _, _ ->
-            if (zc.currentSessionId == null) {
+            if (pendingNewSession || zc.currentSessionId == null) {
                 zc.newSession(workspaceOverride = composerWorkspace) { ok, msg ->
                     if (ok) {
+                        pendingNewSession = false
                         composerWorkspace = null
                         doSend()
                     } else {
@@ -1608,6 +1607,8 @@ class MainActivity : BaseActivity() {
 
                 override fun onSessionOpened(sessionId: String) {
                     todoStatusCache.clear()
+                    // 会话已经建好/切好，待建态结束。
+                    pendingNewSession = false
                     // 换会话等于换上下文：上一回合的"在跑/刚结束"不能带过来，
                     // 否则会一出场就误报"做完了"。
                     petWasRunning = false
@@ -3374,6 +3375,7 @@ class MainActivity : BaseActivity() {
         bindSessionPull(row, git)
         row.setOnClickListener {
             SettingsStore.get(this).markSessionSeen(session.id)
+            pendingNewSession = false
             collapseFullDrawerThen {
                 liveText.clear()
                 messageViews.clear()
@@ -4274,7 +4276,11 @@ class MainActivity : BaseActivity() {
                     collapseFullDrawerThen {
                         inputMessage.text?.clear()
                         hideSettingsPage()
+                        pendingNewSession = true
+                        composerWorkspace = null
                         showEmptyState()
+                        syncHeaderPill()
+                        updateSendAvailability()
                     }
                 }
             }
@@ -4840,6 +4846,14 @@ class MainActivity : BaseActivity() {
         renderWorkspacePicker()
         syncHeaderPill()
         updateSendAvailability()
+        if (path != null) {
+            // 选完工作区把焦点交给输入框，用户可以直接开始写。
+            inputMessage.requestFocus()
+            inputMessage.post {
+                val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                imm.showSoftInput(inputMessage, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
     }
 
     /**
@@ -4929,7 +4943,8 @@ class MainActivity : BaseActivity() {
      */
     private fun updateSendAvailability() {
         val remote = composerDeviceId != com.coda.mobileui.core.DeviceStore.LOCAL_ID
-        val ready = remote || (!zc.cacheOnly && (zc.currentSessionId != null || composerWorkspace != null))
+        val hasTarget = if (pendingNewSession) composerWorkspace != null else (zc.currentSessionId != null || composerWorkspace != null)
+        val ready = remote || (!zc.cacheOnly && hasTarget)
         findViewById<View>(R.id.btn_send)?.apply {
             alpha = if (ready) 1f else 0.4f
         }
@@ -4963,10 +4978,19 @@ class MainActivity : BaseActivity() {
     /** 顶部面板当前是运行地点还是模型：两者复用同一张 scrim。 */
     private var runTargetPanelOpen = false
 
-    /** 当前是否处于「运行位置」态：新会话且没选工作区。 */
-    private fun isRunTargetMode(): Boolean = zc.currentSessionId == null && composerWorkspace == null
+    /**
+     * 是否处于「刚点新对话、还没建会话」的待建态。
+     *
+     * 这时旧会话可能还开着，但用户面对的是新对话，所以运行位置与发送门禁
+     * 都按「没有会话」处理，等首次发送时再真正 session/create。
+     */
+    private var pendingNewSession = false
 
-    /** 按当前状态刷新胶囊文案。两种态只差文案，其它地方不用管。 */
+    /** 当前是否处于「运行位置」态：新对话且还没选工作区。 */
+    private fun isRunTargetMode(): Boolean =
+        composerWorkspace == null && (pendingNewSession || zc.currentSessionId == null)
+
+    /** 按当前状态刷新胶囊文案：新对话显示运行地点，已有会话显示模型。 */
     private fun syncHeaderPill() {
         val label = findViewById<TextView>(R.id.tv_header_pill) ?: return
         label.text =
@@ -5335,6 +5359,13 @@ class MainActivity : BaseActivity() {
                             findViewById<ImageView>(R.id.model_check).visibility =
                                 if (option.key == curKey) View.VISIBLE else View.GONE
                             setOnClickListener {
+                                if (pendingNewSession) {
+                                    // 新对话还没建会话：只记本地，建会话时随 model 下发。
+                                    zc.selectModelLocally(option.providerId, option.modelId)
+                                    refreshItems()
+                                    syncHeaderPill()
+                                    return@setOnClickListener
+                                }
                                 zc.setModel(option.providerId, option.modelId) { ok, msg ->
                                     if (!ok) {
                                         snack("切换模型失败: $msg")
