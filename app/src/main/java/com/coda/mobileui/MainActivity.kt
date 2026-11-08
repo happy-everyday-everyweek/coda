@@ -497,7 +497,7 @@ class MainActivity : BaseActivity() {
 
         findViewById<LinearLayout>(R.id.header_pill).setOnClickListener {
             // 双态：新会话且未选工作区时是运行位置选择器，其余情况是模型选择器。
-            if (isRunTargetMode()) showRunTargetSheet() else toggleModelPanel()
+            if (isRunTargetMode()) toggleRunTargetPanel() else toggleModelPanel()
         }
         findViewById<LinearLayout>(R.id.header_pill).setOnLongClickListener {
             // 模型面板始终有入口：运行位置态时长按也能改模型。
@@ -507,7 +507,7 @@ class MainActivity : BaseActivity() {
 
         // 点击面板以外的区域收起面板
         findViewById<View>(R.id.model_panel_scrim).setOnClickListener {
-            toggleModelPanel()
+            if (runTargetPanelOpen) toggleRunTargetPanel() else toggleModelPanel()
         }
 
         findViewById<ImageButton>(R.id.btn_workspace).setOnClickListener {
@@ -3182,9 +3182,48 @@ class MainActivity : BaseActivity() {
                 tag = "sessions_host"
                 orientation = LinearLayout.VERTICAL
             }
-        zc.sessions.forEachIndexed { index, s ->
+        // 本机会话 + 其他设备的缓存会话，平铺成一条列表，按更新时间排；不按设备分组。
+        data class Entry(
+            val session: ZSessionInfo,
+            val deviceId: String,
+            val deviceLabel: String?,
+            val cached: Boolean,
+        )
+        val entries = mutableListOf<Entry>()
+        for (s in zc.sessions) entries.add(Entry(s, com.coda.mobileui.core.DeviceStore.LOCAL_ID, null, false))
+        for (device in com.coda.mobileui.core.DeviceStore.paired(this)) {
+            val array = com.coda.mobileui.core.DeviceStore.cachedSessions(this, device.id)
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val id = obj.optString("id", "").ifBlank { continue }
+                entries.add(
+                    Entry(
+                        ZSessionInfo(
+                            id = id,
+                            title = obj.optString("title", ""),
+                            status = obj.optString("status", "idle"),
+                            mode = obj.optString("mode", ""),
+                            updatedAt = obj.optLong("updatedAt", 0L),
+                            workspacePath = obj.optString("workspace", "").ifBlank { null },
+                            titleSource = null,
+                        ),
+                        device.id,
+                        device.label.ifBlank { device.name },
+                        true,
+                    ),
+                )
+            }
+        }
+        entries.sortByDescending { it.session.updatedAt }
+        entries.forEachIndexed { index, entry ->
+            val row =
+                if (entry.cached) {
+                    createCachedSessionRow(inflater, list, entry.session, entry.deviceLabel ?: "其他设备")
+                } else {
+                    createSessionRow(inflater, list, entry.session)
+                }
             list.addView(
-                createSessionRow(inflater, list, s),
+                row,
                 LinearLayout
                     .LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -3196,6 +3235,24 @@ class MainActivity : BaseActivity() {
             list,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
         )
+    }
+
+    /** 缓存会话行：只读投影，未连接时不允许继续执行。 */
+    private fun createCachedSessionRow(
+        inflater: LayoutInflater,
+        container: LinearLayout,
+        session: ZSessionInfo,
+        deviceLabel: String,
+    ): View {
+        val row = inflater.inflate(R.layout.view_drawer_conversation, container, false)
+        row.tag = "cached:${session.id}"
+        row.findViewById<TextView>(R.id.conv_status).visibility = View.GONE
+        row.findViewById<TextView>(R.id.conv_title).text = session.title.ifEmpty { "未命名会话" }
+        row.findViewById<TextView>(R.id.conv_summary).text = "$deviceLabel · 缓存"
+        row.setOnClickListener {
+            snack("$deviceLabel 未连接，缓存会话暂不能继续")
+        }
+        return row
     }
 
     /** 一条真实会话行。 */
@@ -4785,6 +4842,12 @@ class MainActivity : BaseActivity() {
      */
     private var composerWorkspace: String? = null
 
+    /** 新对话选中的运行地点；目前只有本机可真正执行。 */
+    private var composerDeviceId: String = com.coda.mobileui.core.DeviceStore.LOCAL_ID
+
+    /** 顶部面板当前是运行地点还是模型：两者复用同一张 scrim。 */
+    private var runTargetPanelOpen = false
+
     /** 当前是否处于「运行位置」态：新会话且没选工作区。 */
     private fun isRunTargetMode(): Boolean = zc.currentSessionId == null && composerWorkspace == null
 
@@ -4793,50 +4856,170 @@ class MainActivity : BaseActivity() {
         val label = findViewById<TextView>(R.id.tv_header_pill) ?: return
         label.text =
             if (isRunTargetMode()) {
-                getString(R.string.run_target_this_device)
+                com.coda.mobileui.core.DeviceStore
+                    .all(this)
+                    .firstOrNull { it.id == composerDeviceId }
+                    ?.name
+                    ?: getString(R.string.run_target_this_device)
             } else {
                 modelPillLabel.ifEmpty { getString(R.string.default_model) }
             }
     }
 
     /**
-     * 运行位置弹层。
-     *
-     * 跨端还没接，这里只列出本机一项并置为选中；以后有远程设备时往这个列表里加。
+     * 运行地点面板：与模型选择器复用同一张卡片和动画。
+     * 只列设备与「添加设备」，历史会话在侧边栏抽屉里。
      */
-    private fun showRunTargetSheet() {
-        val sheet = CodaSheet(this).title(getString(R.string.run_target_title))
-        sheet.content { col ->
-            val row =
-                TextView(this).apply {
-                    text = getString(R.string.run_target_this_device)
-                    textSize = 15f
-                    setTextColor(
-                        com.google.android.material.color.MaterialColors.getColor(
-                            this,
-                            com.google.android.material.R.attr.colorOnSurface,
-                            0xFF000000.toInt(),
-                        ),
-                    )
-                    setPadding(dp(4), dp(14), dp(4), dp(14))
-                }
-            col.addView(row)
-            col.addView(
-                TextView(this).apply {
-                    text = getString(R.string.run_target_local_note)
-                    textSize = 12f
-                    setTextColor(
-                        com.google.android.material.color.MaterialColors.getColor(
-                            this,
-                            com.google.android.material.R.attr.colorOnSurfaceVariant,
-                            android.graphics.Color.GRAY,
-                        ),
-                    )
-                    setPadding(dp(4), 0, dp(4), dp(8))
+    private fun toggleRunTargetPanel() {
+        val scrim = findViewById<View>(R.id.model_panel_scrim)
+        val card = scrim.findViewById<View>(R.id.model_panel_card)
+        if (scrim.visibility == View.VISIBLE) {
+            runTargetPanelOpen = false
+            card.animate().translationY(-dp(8).toFloat()).alpha(0.6f).setDuration(140).start()
+            scrim.animate().alpha(0f).setDuration(140).withEndAction {
+                scrim.visibility = View.GONE
+                scrim.alpha = 1f
+                card.alpha = 1f
+                updateSwipeIntercept()
+            }.start()
+        } else {
+            runTargetPanelOpen = true
+            buildRunTargetPanel()
+            scrim.alpha = 0f
+            scrim.visibility = View.VISIBLE
+            card.translationY = -dp(14).toFloat()
+            scrim.animate().alpha(1f).setDuration(180).start()
+            card.animate().translationY(0f).setDuration(240)
+                .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f)).start()
+        }
+    }
+
+    private fun buildRunTargetPanel() {
+        val container = findViewById<LinearLayout>(R.id.model_panel_content)
+        container.removeAllViews()
+        container.addView(
+            TextView(this).apply {
+                text = getString(R.string.run_target_title)
+                textSize = 14f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(
+                    com.google.android.material.color.MaterialColors.getColor(
+                        this@MainActivity,
+                        com.google.android.material.R.attr.colorOnSurface,
+                        0xFF000000.toInt(),
+                    ),
+                )
+                setPadding(dp(20), dp(12), dp(20), dp(6))
+            },
+        )
+        val devices = com.coda.mobileui.core.DeviceStore.all(this)
+        for (device in devices) {
+            container.addView(
+                deviceOptionRow(device, device.id == composerDeviceId) {
+                    if (device.id == com.coda.mobileui.core.DeviceStore.LOCAL_ID) {
+                        composerDeviceId = device.id
+                        syncHeaderPill()
+                        buildRunTargetPanel()
+                    } else {
+                        snack("${device.name} 尚未连接；远程运行待接通")
+                    }
                 },
             )
         }
-        sheet.secondaryAction("关闭") { sheet.dismiss() }
+        container.addView(
+            deviceOptionRow(
+                com.coda.mobileui.core.DeviceStore.Device(
+                    id = "add",
+                    name = getString(R.string.run_target_add_device),
+                    host = "",
+                    port = 0,
+                    token = "",
+                    label = getString(R.string.run_target_add_device_hint),
+                ),
+                false,
+            ) {
+                toggleRunTargetPanel()
+                showAddDeviceSheet()
+            },
+        )
+    }
+
+    /** 设备行：主名称正常字重，机器名/备注灰色低字重。 */
+    private fun deviceOptionRow(
+        device: com.coda.mobileui.core.DeviceStore.Device,
+        selected: Boolean,
+        onClick: () -> Unit,
+    ): View =
+        LayoutInflater.from(this).inflate(R.layout.view_device_option, null, false).apply {
+            findViewById<TextView>(R.id.device_name).text = device.name
+            val detail = findViewById<TextView>(R.id.device_detail)
+            val text =
+                when {
+                    device.id == com.coda.mobileui.core.DeviceStore.LOCAL_ID -> "本机"
+                    device.label.isNotBlank() -> device.label
+                    device.address.isNotBlank() -> device.address
+                    else -> ""
+                }
+            detail.text = text
+            detail.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
+            detail.alpha = 0.72f
+            findViewById<ImageView>(R.id.device_check).visibility = if (selected) View.VISIBLE else View.GONE
+            setOnClickListener { onClick() }
+        }
+
+    /** 添加设备：先落配对信息；连接状态由后续传输层更新，不在这里伪造在线。 */
+    private fun showAddDeviceSheet() {
+        val sheet = CodaSheet(this).title(getString(R.string.run_target_add_device))
+        var nameInput: EditText? = null
+        var labelInput: EditText? = null
+        var hostInput: EditText? = null
+        var portInput: EditText? = null
+        var tokenInput: EditText? = null
+        sheet.content { col ->
+            fun field(hint: String, value: String = ""): EditText =
+                EditText(this).apply {
+                    this.hint = hint
+                    setText(value)
+                    textSize = 15f
+                    setSingleLine()
+                    setPadding(dp(4), dp(10), dp(4), dp(10))
+                }
+            nameInput = field("设备名称，例如 Codex abc")
+            labelInput = field("灰色小字，例如 abc 的电脑")
+            hostInput = field("电脑地址或 IP")
+            portInput = field("端口，默认 17654", "17654")
+            tokenInput = field("配对令牌")
+            col.addView(nameInput)
+            col.addView(labelInput)
+            col.addView(hostInput)
+            col.addView(portInput)
+            col.addView(tokenInput)
+        }
+        sheet.primaryAction(getString(R.string.run_target_add_device)) {
+            val name = nameInput?.text?.toString()?.trim().orEmpty()
+            val host = hostInput?.text?.toString()?.trim().orEmpty()
+            val token = tokenInput?.text?.toString()?.trim().orEmpty()
+            if (name.isBlank() || host.isBlank() || token.isBlank()) {
+                snack("设备名称、地址和令牌都要填写")
+                return@primaryAction
+            }
+            val port = portInput?.text?.toString()?.trim()?.toIntOrNull()?.takeIf { it in 1024..65535 } ?: 17654
+            com.coda.mobileui.core.DeviceStore.add(
+                this,
+                com.coda.mobileui.core.DeviceStore.Device(
+                    id = "dev_" + System.currentTimeMillis(),
+                    name = name,
+                    host = host,
+                    port = port,
+                    token = token,
+                    label = labelInput?.text?.toString()?.trim().orEmpty(),
+                ),
+            )
+            sheet.dismiss()
+            snack("已添加 $name；连接成功后即可作为运行地点")
+            if (runTargetPanelOpen) buildRunTargetPanel()
+        }
+        sheet.secondaryAction("取消") { sheet.dismiss() }
         sheet.show()
     }
 
