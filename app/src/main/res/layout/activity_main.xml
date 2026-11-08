@@ -49,7 +49,7 @@
                     android:id="@+id/tv_header_pill"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/run_target_this_device"
+                    android:text="@string/default_model"
                     android:textAppearance="?attr/textAppearanceTitleMedium"
                     android:textColor="?attr/colorOnSurface" />
 

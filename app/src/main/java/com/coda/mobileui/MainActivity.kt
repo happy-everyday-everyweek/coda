@@ -497,8 +497,8 @@ class MainActivity : BaseActivity() {
         }
 
         findViewById<LinearLayout>(R.id.header_pill).setOnClickListener {
-            // 双态：新会话且未选工作区时是运行位置选择器，其余情况是模型选择器。
-            if (isRunTargetMode()) showRunTargetSheet() else toggleModelPanel()
+            // 运行位置固定是本机，胶囊只负责模型选择。
+            toggleModelPanel()
         }
         findViewById<LinearLayout>(R.id.header_pill).setOnLongClickListener {
             // 模型面板始终有入口：运行位置态时长按也能改模型。
@@ -721,18 +721,12 @@ class MainActivity : BaseActivity() {
                 reasoningStart.clear()
                 reasoningDone.clear()
                 runningSince = null
-                zc.newSession(workspaceOverride = composerWorkspace) { ok, msg ->
-                    if (ok) {
-                        // 工作区已随会话绑定；清掉选择，下次新会话重新选。
-                        composerWorkspace = null
-                        syncHeaderPill()
-                        updateSendAvailability()
-                        chatView.visibility = View.VISIBLE
-                        emptyState.visibility = View.GONE
-                    } else {
-                        snack("新建会话失败: $msg")
-                    }
-                }
+                // 新对话不立刻建会话：先回到空态选运行位置，选定后由首次发送建会话。
+                pendingNewSession = true
+                composerWorkspace = null
+                showEmptyState()
+                syncHeaderPill()
+                updateSendAvailability()
             },
         )
         val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
@@ -1107,6 +1101,10 @@ class MainActivity : BaseActivity() {
             return
         }
         // 新会话必须先有工作区。输入框本身不拦（用户可以先写再选），只拦发送。
+        if (pendingNewSession && composerWorkspace == null) {
+            snack("先选择或创建一个工作区")
+            return
+        }
         if (zc.currentSessionId == null && composerWorkspace == null) {
             snack("先选择或创建一个工作区")
             return
@@ -1133,9 +1131,10 @@ class MainActivity : BaseActivity() {
         }
         // 先设置发送模式（确保工具审批等策略在消息发出前生效），完成后再发送（设置失败也继续发送）
         zc.setMode(protocolMode) { _, _ ->
-            if (zc.currentSessionId == null) {
+            if (pendingNewSession || zc.currentSessionId == null) {
                 zc.newSession(workspaceOverride = composerWorkspace) { ok, msg ->
                     if (ok) {
+                        pendingNewSession = false
                         composerWorkspace = null
                         doSend()
                     } else {
@@ -1586,6 +1585,8 @@ class MainActivity : BaseActivity() {
 
                 override fun onSessionOpened(sessionId: String) {
                     todoStatusCache.clear()
+                    // 会话已经建好/切好，待建态结束。
+                    pendingNewSession = false
                     // 换会话等于换上下文：上一回合的"在跑/刚结束"不能带过来，
                     // 否则会一出场就误报"做完了"。
                     petWasRunning = false
@@ -3246,6 +3247,7 @@ class MainActivity : BaseActivity() {
         bindSessionPull(row, git)
         row.setOnClickListener {
             SettingsStore.get(this).markSessionSeen(session.id)
+            pendingNewSession = false
             collapseFullDrawerThen {
                 liveText.clear()
                 messageViews.clear()
@@ -4114,7 +4116,11 @@ class MainActivity : BaseActivity() {
                     collapseFullDrawerThen {
                         inputMessage.text?.clear()
                         hideSettingsPage()
+                        pendingNewSession = true
+                        composerWorkspace = null
                         showEmptyState()
+                        syncHeaderPill()
+                        updateSendAvailability()
                     }
                 }
             }
@@ -4680,6 +4686,14 @@ class MainActivity : BaseActivity() {
         renderWorkspacePicker()
         syncHeaderPill()
         updateSendAvailability()
+        if (path != null) {
+            // 选完工作区把焦点交给输入框，用户可以直接开始写。
+            inputMessage.requestFocus()
+            inputMessage.post {
+                val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                imm.showSoftInput(inputMessage, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
     }
 
     /**
@@ -4768,7 +4782,8 @@ class MainActivity : BaseActivity() {
      * 不应该因为没选工作区就整个输不进去。
      */
     private fun updateSendAvailability() {
-        val ready = !zc.cacheOnly && (zc.currentSessionId != null || composerWorkspace != null)
+        val hasTarget = if (pendingNewSession) composerWorkspace != null else (zc.currentSessionId != null || composerWorkspace != null)
+        val ready = !zc.cacheOnly && hasTarget
         findViewById<View>(R.id.btn_send)?.apply {
             alpha = if (ready) 1f else 0.4f
         }
@@ -4796,59 +4811,18 @@ class MainActivity : BaseActivity() {
      */
     private var composerWorkspace: String? = null
 
-    /** 当前是否处于「运行位置」态：新会话且没选工作区。 */
-    private fun isRunTargetMode(): Boolean = zc.currentSessionId == null && composerWorkspace == null
+    /**
+     * 是否处于「刚点新对话、还没建会话」的待建态。
+     *
+     * 这时旧会话可能还开着，但用户面对的是新对话，所以运行位置与发送门禁
+     * 都按「没有会话」处理，等首次发送时再真正 session/create。
+     */
+    private var pendingNewSession = false
 
-    /** 按当前状态刷新胶囊文案。两种态只差文案，其它地方不用管。 */
+    /** 按当前状态刷新胶囊文案：运行位置固定为本机，胶囊始终显示模型。 */
     private fun syncHeaderPill() {
         val label = findViewById<TextView>(R.id.tv_header_pill) ?: return
-        label.text =
-            if (isRunTargetMode()) {
-                getString(R.string.run_target_this_device)
-            } else {
-                modelPillLabel.ifEmpty { getString(R.string.default_model) }
-            }
-    }
-
-    /**
-     * 运行位置弹层。
-     *
-     * 跨端还没接，这里只列出本机一项并置为选中；以后有远程设备时往这个列表里加。
-     */
-    private fun showRunTargetSheet() {
-        val sheet = CodaSheet(this).title(getString(R.string.run_target_title))
-        sheet.content { col ->
-            val row =
-                TextView(this).apply {
-                    text = getString(R.string.run_target_this_device)
-                    textSize = 15f
-                    setTextColor(
-                        com.google.android.material.color.MaterialColors.getColor(
-                            this,
-                            com.google.android.material.R.attr.colorOnSurface,
-                            0xFF000000.toInt(),
-                        ),
-                    )
-                    setPadding(dp(4), dp(14), dp(4), dp(14))
-                }
-            col.addView(row)
-            col.addView(
-                TextView(this).apply {
-                    text = getString(R.string.run_target_local_note)
-                    textSize = 12f
-                    setTextColor(
-                        com.google.android.material.color.MaterialColors.getColor(
-                            this,
-                            com.google.android.material.R.attr.colorOnSurfaceVariant,
-                            android.graphics.Color.GRAY,
-                        ),
-                    )
-                    setPadding(dp(4), 0, dp(4), dp(8))
-                },
-            )
-        }
-        sheet.secondaryAction("关闭") { sheet.dismiss() }
-        sheet.show()
+        label.text = modelPillLabel.ifEmpty { getString(R.string.default_model) }
     }
 
     private fun toggleModelPanel() {
@@ -5035,6 +5009,13 @@ class MainActivity : BaseActivity() {
                             findViewById<ImageView>(R.id.model_check).visibility =
                                 if (option.key == curKey) View.VISIBLE else View.GONE
                             setOnClickListener {
+                                if (pendingNewSession) {
+                                    // 新对话还没建会话：只记本地，建会话时随 model 下发。
+                                    zc.selectModelLocally(option.providerId, option.modelId)
+                                    refreshItems()
+                                    syncHeaderPill()
+                                    return@setOnClickListener
+                                }
                                 zc.setModel(option.providerId, option.modelId) { ok, msg ->
                                     if (!ok) {
                                         snack("切换模型失败: $msg")
