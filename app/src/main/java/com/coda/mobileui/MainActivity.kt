@@ -95,6 +95,14 @@ private data class ChatMessage(
     val changes: ChangeSummary? = null,
 )
 
+/** 抽屉排序用的会话条目：本机或缓存设备。 */
+private data class DrawerSessionEntry(
+    val session: ZSessionInfo,
+    val deviceId: String,
+    val deviceLabel: String?,
+    val cached: Boolean,
+)
+
 /** 抽屉里的历史会话：每条会话持有自己的消息、工具调用、模型与强度（为接后端预留）。 */
 private data class DrawerConversation(
     val id: String,
@@ -3182,22 +3190,16 @@ class MainActivity : BaseActivity() {
                 tag = "sessions_host"
                 orientation = LinearLayout.VERTICAL
             }
-        // 本机会话 + 其他设备的缓存会话，平铺成一条列表，按更新时间排；不按设备分组。
-        data class Entry(
-            val session: ZSessionInfo,
-            val deviceId: String,
-            val deviceLabel: String?,
-            val cached: Boolean,
-        )
-        val entries = mutableListOf<Entry>()
-        for (s in zc.sessions) entries.add(Entry(s, com.coda.mobileui.core.DeviceStore.LOCAL_ID, null, false))
+        // 本机会话 + 其他设备的缓存会话，平铺成一条列表；不按设备分组。
+        val entries = mutableListOf<DrawerSessionEntry>()
+        for (s in zc.sessions) entries.add(DrawerSessionEntry(s, com.coda.mobileui.core.DeviceStore.LOCAL_ID, null, false))
         for (device in com.coda.mobileui.core.DeviceStore.paired(this)) {
             val array = com.coda.mobileui.core.DeviceStore.cachedSessions(this, device.id)
             for (i in 0 until array.length()) {
                 val obj = array.optJSONObject(i) ?: continue
                 val id = obj.optString("id", "").ifBlank { continue }
                 entries.add(
-                    Entry(
+                    DrawerSessionEntry(
                         ZSessionInfo(
                             id = id,
                             title = obj.optString("title", ""),
@@ -3214,8 +3216,8 @@ class MainActivity : BaseActivity() {
                 )
             }
         }
-        entries.sortByDescending { it.session.updatedAt }
-        entries.forEachIndexed { index, entry ->
+        val ordered = orderDrawerSessions(entries)
+        ordered.forEachIndexed { index, entry ->
             val row =
                 if (entry.cached) {
                     createCachedSessionRow(inflater, list, entry.session, entry.deviceLabel ?: "其他设备")
@@ -3418,8 +3420,10 @@ class MainActivity : BaseActivity() {
     }
 
     /** 真实会话状态 → 抽屉状态：运行中、待您操作、已完成未读，其余不显示。 */
-    private fun sessionConvStatus(session: ZSessionInfo): ConvStatus =
-        when (session.status) {
+    private fun sessionConvStatus(session: ZSessionInfo): ConvStatus {
+        // 有未审批请求时优先显示「待处理」，即使内核状态仍是 running。
+        if (!session.id.startsWith("cached:") && zc.hasPendingApproval(session.id)) return ConvStatus.WAITING
+        return when (session.status) {
             "running" -> {
                 ConvStatus.WORKING
             }
@@ -3440,6 +3444,74 @@ class MainActivity : BaseActivity() {
                 ConvStatus.NONE
             }
         }
+    }
+
+    /**
+     * 抽屉排序：
+     *   1. 状态分层（审批挂起 > 待处理 > 运行中 > 完成未读 > 普通），层间分差大于时间分；
+     *   2. 同层按最近更新时间做 0–240 的衰减分；
+     *   3. 只在同层、同设备、同工作区、分差 ≤150 的前 6 个候选内聚类，最多 3 个一组。
+     * 聚类不会跨层，因此不会把待审/运行中的会话挤到普通会话后面。
+     */
+    private fun orderDrawerSessions(entries: List<DrawerSessionEntry>): List<DrawerSessionEntry> {
+        data class Scored(
+            val entry: DrawerSessionEntry,
+            val tier: Int,
+            val score: Int,
+            val updatedAt: Long,
+        )
+        val now = System.currentTimeMillis()
+        val pending = zc.pendingApprovalSessionIds()
+        val scored = entries.map { entry ->
+            val session = entry.session
+            val tier =
+                when {
+                    entry.deviceId == com.coda.mobileui.core.DeviceStore.LOCAL_ID && session.id in pending -> 4
+                    sessionConvStatus(session) == ConvStatus.WAITING -> 3
+                    sessionConvStatus(session) == ConvStatus.WORKING -> 2
+                    sessionConvStatus(session) == ConvStatus.DONE_UNREAD -> 1
+                    else -> 0
+                }
+            val ageHours = ((now - session.updatedAt).coerceAtLeast(0L)) / 3_600_000.0
+            val recency =
+                when {
+                    ageHours <= 1 -> 240
+                    ageHours <= 6 -> 200
+                    ageHours <= 24 -> 160
+                    ageHours <= 72 -> 100
+                    ageHours <= 168 -> 50
+                    else -> 10
+                }
+            val base = when (tier) { 4 -> 2000; 3 -> 1600; 2 -> 1200; 1 -> 800; else -> 0 }
+            Scored(entry, tier, base + recency, session.updatedAt)
+        }.sortedWith(compareByDescending<Scored> { it.score }.thenByDescending { it.updatedAt })
+            .toMutableList()
+
+        val result = mutableListOf<DrawerSessionEntry>()
+        while (scored.isNotEmpty()) {
+            val anchor = scored.removeAt(0)
+            result.add(anchor.entry)
+            var added = 1
+            var i = 0
+            while (added < 3 && i < scored.size && i < 6) {
+                val candidate = scored[i]
+                val sameGroup =
+                    candidate.tier == anchor.tier &&
+                        candidate.entry.deviceId == anchor.entry.deviceId &&
+                        !candidate.entry.session.workspacePath.isNullOrBlank() &&
+                        candidate.entry.session.workspacePath == anchor.entry.session.workspacePath &&
+                        (anchor.score - candidate.score) <= 150
+                if (sameGroup) {
+                    result.add(candidate.entry)
+                    scored.removeAt(i)
+                    added++
+                } else {
+                    i++
+                }
+            }
+        }
+        return result
+    }
 
     /** 右侧 PR 标记：工作区有远端仓库且已登录 GitHub 时，按当前分支查关联 PR。 */
     private fun bindSessionPull(

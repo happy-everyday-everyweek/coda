@@ -1819,6 +1819,16 @@ class ZController private constructor(
         return o
     }
 
+    /** 当前仍挂起审批的会话 id 集合（用于抽屉排序与待处理标记）。 */
+    fun pendingApprovalSessionIds(): Set<String> =
+        synchronized(pendingPermissionParams) {
+            pendingPermissionParams.values
+                .mapNotNull { it.optString("sessionId", "").takeIf { sid -> sid.isNotBlank() } }
+                .toSet()
+        }
+
+    fun hasPendingApproval(sessionId: String): Boolean = sessionId in pendingApprovalSessionIds()
+
     /** 应答一条交互式权限请求；allow 为 true 放行，false 拒绝。 */
     fun respondPermission(requestId: Any, allow: Boolean) {
         val params = pendingPermissionParams.remove(requestId.toString()) ?: JSONObject()
