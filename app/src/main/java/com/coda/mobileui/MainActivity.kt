@@ -3447,71 +3447,33 @@ class MainActivity : BaseActivity() {
         }
     }
 
-    /**
-     * 抽屉排序：
-     *   1. 状态分层（审批挂起 > 待处理 > 运行中 > 完成未读 > 普通），层间分差大于时间分；
-     *   2. 同层按最近更新时间做 0–240 的衰减分；
-     *   3. 只在同层、同设备、同工作区、分差 ≤150 的前 6 个候选内聚类，最多 3 个一组。
-     * 聚类不会跨层，因此不会把待审/运行中的会话挤到普通会话后面。
-     */
+    /** 抽屉排序：把会话状态映射成纯函数输入，规则见 core/DrawerOrdering.kt。 */
     private fun orderDrawerSessions(entries: List<DrawerSessionEntry>): List<DrawerSessionEntry> {
-        data class Scored(
-            val entry: DrawerSessionEntry,
-            val tier: Int,
-            val score: Int,
-            val updatedAt: Long,
-        )
-        val now = System.currentTimeMillis()
         val pending = zc.pendingApprovalSessionIds()
-        val scored = entries.map { entry ->
+        val items = entries.map { entry ->
             val session = entry.session
-            val tier =
+            val state =
                 when {
-                    entry.deviceId == com.coda.mobileui.core.DeviceStore.LOCAL_ID && session.id in pending -> 4
-                    sessionConvStatus(session) == ConvStatus.WAITING -> 3
-                    sessionConvStatus(session) == ConvStatus.WORKING -> 2
-                    sessionConvStatus(session) == ConvStatus.DONE_UNREAD -> 1
-                    else -> 0
+                    entry.deviceId == com.coda.mobileui.core.DeviceStore.LOCAL_ID && session.id in pending ->
+                        com.coda.mobileui.core.DrawerOrdering.State.APPROVAL
+                    sessionConvStatus(session) == ConvStatus.WAITING ->
+                        com.coda.mobileui.core.DrawerOrdering.State.WAITING
+                    sessionConvStatus(session) == ConvStatus.WORKING ->
+                        com.coda.mobileui.core.DrawerOrdering.State.RUNNING
+                    sessionConvStatus(session) == ConvStatus.DONE_UNREAD ->
+                        com.coda.mobileui.core.DrawerOrdering.State.UNREAD
+                    else -> com.coda.mobileui.core.DrawerOrdering.State.IDLE
                 }
-            val ageHours = ((now - session.updatedAt).coerceAtLeast(0L)) / 3_600_000.0
-            val recency =
-                when {
-                    ageHours <= 1 -> 240
-                    ageHours <= 6 -> 200
-                    ageHours <= 24 -> 160
-                    ageHours <= 72 -> 100
-                    ageHours <= 168 -> 50
-                    else -> 10
-                }
-            val base = when (tier) { 4 -> 2000; 3 -> 1600; 2 -> 1200; 1 -> 800; else -> 0 }
-            Scored(entry, tier, base + recency, session.updatedAt)
-        }.sortedWith(compareByDescending<Scored> { it.score }.thenByDescending { it.updatedAt })
-            .toMutableList()
-
-        val result = mutableListOf<DrawerSessionEntry>()
-        while (scored.isNotEmpty()) {
-            val anchor = scored.removeAt(0)
-            result.add(anchor.entry)
-            var added = 1
-            var i = 0
-            while (added < 3 && i < scored.size && i < 6) {
-                val candidate = scored[i]
-                val sameGroup =
-                    candidate.tier == anchor.tier &&
-                        candidate.entry.deviceId == anchor.entry.deviceId &&
-                        !candidate.entry.session.workspacePath.isNullOrBlank() &&
-                        candidate.entry.session.workspacePath == anchor.entry.session.workspacePath &&
-                        (anchor.score - candidate.score) <= 150
-                if (sameGroup) {
-                    result.add(candidate.entry)
-                    scored.removeAt(i)
-                    added++
-                } else {
-                    i++
-                }
-            }
+            com.coda.mobileui.core.DrawerOrdering.Item(
+                id = "${entry.deviceId}|${session.id}",
+                deviceId = entry.deviceId,
+                workspace = session.workspacePath,
+                state = state,
+                updatedAt = session.updatedAt,
+            )
         }
-        return result
+        val byId = entries.associateBy { "${it.deviceId}|${it.session.id}" }
+        return com.coda.mobileui.core.DrawerOrdering.order(items).mapNotNull { byId[it.id] }
     }
 
     /** 右侧 PR 标记：工作区有远端仓库且已登录 GitHub 时，按当前分支查关联 PR。 */
