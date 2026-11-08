@@ -9,6 +9,7 @@ test("证据索引：全部 fixture 通过脱敏与来源校验", () => {
   assert.ok(index.entries.length >= 20, `条目过少: ${index.entries.length}`);
   assert.ok(index.counts.probe >= 10);
   assert.ok(index.counts.recording >= 5);
+  assert.ok(index.counts.liveTurn >= 7, `live 回合过少: ${index.counts.liveTurn}`);
   for (const entry of index.entries) {
     assert.ok(entry.agentId, `${entry.path} 缺 agentId`);
     if (entry.kind === "recording") assert.equal(entry.redactionApplied, true, `${entry.path} 未脱敏`);
@@ -23,7 +24,7 @@ test("证据索引：全部 fixture 通过脱敏与来源校验", () => {
 
 test("证据索引 Markdown 含类型计数与路径", () => {
   const md = indexToMarkdown(buildFixtureIndex());
-  assert.match(md, /probes=\d+/);
+  assert.match(md, /probes=\d+.*live=\d+/);
   assert.match(md, /fixtures\/adapters\/probes\/claude\.json/);
   assert.match(md, /redaction|脱敏/);
 });

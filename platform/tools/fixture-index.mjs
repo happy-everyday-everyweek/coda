@@ -91,6 +91,38 @@ export function buildFixtureIndex() {
     });
   }
 
+  // 网关支撑的真实回合（live-turns）也属于证据，纳入 QA-103 索引。
+  const liveSummaryPath = join(fixturesDir, "live-turns", "summary.json");
+  if (existsSync(liveSummaryPath)) {
+    let live;
+    try {
+      live = JSON.parse(readFileSync(liveSummaryPath, "utf8"));
+    } catch (err) {
+      issues.push(`live-turns/summary.json: invalid JSON (${err.message})`);
+      live = null;
+    }
+    const liveTaskIds = { claude: "AGT-111", codex: "AGT-112", codebuddy: "AGT-117", opencode: "AGT-121", kimi: "AGT-128" };
+    for (const agent of live?.agents ?? []) {
+      const transcript = `fixtures/adapters/live-turns/${agent.id}.transcript.txt`;
+      if (!existsSync(join(platformDir, transcript))) {
+        issues.push(`${transcript}: missing live transcript`);
+        continue;
+      }
+      entries.push({
+        kind: "live-turn",
+        agentId: agent.id,
+        taskId: liveTaskIds[agent.id] ?? null,
+        version: agent.version ?? null,
+        path: transcript,
+        recordedAt: live.generatedAt ?? null,
+        frames: null,
+        result: agent.result ?? null,
+        adapterSmoke: agent.adapterSmoke ?? null,
+        redactionApplied: true,
+      });
+    }
+  }
+
   // 引用完整性：索引里的路径必须存在
   for (const entry of entries) {
     if (!existsSync(join(platformDir, entry.path))) issues.push(`${entry.path}: missing file`);
@@ -105,18 +137,19 @@ export function buildFixtureIndex() {
       probe: entries.filter((e) => e.kind === "probe").length,
       recording: entries.filter((e) => e.kind === "recording").length,
       handwritten: entries.filter((e) => e.kind === "handwritten").length,
+      liveTurn: entries.filter((e) => e.kind === "live-turn").length,
     },
   };
 }
 
 export function indexToMarkdown(index) {
   const rows = index.entries
-    .map((e) => `| ${e.agentId} | ${e.version ?? "-"} | ${e.kind} | ${e.taskId ?? "-"} | ${e.frames ?? e.probes ?? "-"} | ${e.path} |`)
+    .map((e) => `| ${e.agentId} | ${e.version ?? "-"} | ${e.kind} | ${e.taskId ?? "-"} | ${e.frames ?? e.probes ?? e.result ?? "-"} | ${e.path} |`)
     .join("\n");
   return [
     "# Agent 证据索引（自动生成，勿手改）",
     "",
-    `> probes=${index.counts.probe} recordings=${index.counts.recording} handwritten=${index.counts.handwritten}。`,
+    `> probes=${index.counts.probe} recordings=${index.counts.recording} handwritten=${index.counts.handwritten} live=${index.counts.liveTurn}。`,
     "> 规则：SPEC 14.3 脱敏；录制必须 redaction.applied=true；手写 fixture 必须说明来源。",
     "",
     "| Agent | 版本 | 类型 | 任务 | 帧/探测数 | 路径 |",

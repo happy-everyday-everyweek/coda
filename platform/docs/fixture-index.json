@@ -52,6 +52,18 @@
       "redactionApplied": true
     },
     {
+      "kind": "live-turn",
+      "agentId": "claude",
+      "taskId": "AGT-111",
+      "version": "2.1.319",
+      "path": "fixtures/adapters/live-turns/claude.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": "pass",
+      "redactionApplied": true
+    },
+    {
       "kind": "probe",
       "agentId": "claude",
       "taskId": "AGT-111",
@@ -79,6 +91,18 @@
       "path": "fixtures/adapters/codebuddy-headless-stream-json.fixture.json",
       "recordedAt": "2026-11-07T13:55:23.924Z",
       "frames": 5,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "codebuddy",
+      "taskId": "AGT-117",
+      "version": "2.181.0",
+      "path": "fixtures/adapters/live-turns/codebuddy.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": null,
       "redactionApplied": true
     },
     {
@@ -112,6 +136,18 @@
       "redactionApplied": true
     },
     {
+      "kind": "live-turn",
+      "agentId": "codex",
+      "taskId": "AGT-112",
+      "version": "codex-cli 0.167.0",
+      "path": "fixtures/adapters/live-turns/codex.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": "pass",
+      "redactionApplied": true
+    },
+    {
       "kind": "probe",
       "agentId": "codex",
       "taskId": "AGT-112",
@@ -129,6 +165,18 @@
       "path": "fixtures/adapters/probes/copilot.json",
       "generatedAt": "2026-11-07T13:29:14.922Z",
       "probes": 3,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "crush",
+      "taskId": null,
+      "version": "0.100.0",
+      "path": "fixtures/adapters/live-turns/crush.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": null,
       "redactionApplied": true
     },
     {
@@ -212,6 +260,18 @@
       "redactionApplied": true
     },
     {
+      "kind": "live-turn",
+      "agentId": "kimi",
+      "taskId": "AGT-128",
+      "version": "2.5.2",
+      "path": "fixtures/adapters/live-turns/kimi.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": "pass",
+      "redactionApplied": true
+    },
+    {
       "kind": "probe",
       "agentId": "kimi",
       "taskId": null,
@@ -229,6 +289,18 @@
       "path": "fixtures/adapters/probes/openclaw.json",
       "generatedAt": "2026-11-07T13:52:31.477Z",
       "probes": 4,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "opencode",
+      "taskId": "AGT-121",
+      "version": "1.19.5",
+      "path": "fixtures/adapters/live-turns/opencode.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": null,
       "redactionApplied": true
     },
     {
@@ -272,6 +344,18 @@
       "redactionApplied": true
     },
     {
+      "kind": "live-turn",
+      "agentId": "qwen",
+      "taskId": null,
+      "version": "0.27.0",
+      "path": "fixtures/adapters/live-turns/qwen.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": null,
+      "redactionApplied": true
+    },
+    {
       "kind": "probe",
       "agentId": "qwen",
       "taskId": null,
@@ -295,6 +379,7 @@
   "counts": {
     "probe": 14,
     "recording": 12,
-    "handwritten": 3
+    "handwritten": 3,
+    "liveTurn": 7
   }
 }
