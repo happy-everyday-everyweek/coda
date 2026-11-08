@@ -134,5 +134,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: coda-debug-${{ replace(github.ref_name, '/', '-') }}-${{ github.sha }}
+          name: coda-debug-${{ github.run_id }}-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
