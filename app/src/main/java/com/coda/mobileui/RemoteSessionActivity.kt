@@ -249,6 +249,9 @@ class RemoteSessionActivity : BaseActivity() {
     }
 
     private fun onEvent(payload: JSONObject) {
+        // 同一节点可能还有别的会话在跑，事件按会话过滤。
+        val eventSession = payload.optString("sessionId", "")
+        if (eventSession.isNotBlank() && sessionId.isNotBlank() && eventSession != sessionId) return
         when (payload.optString("type")) {
             "message.delta" -> {
                 val id = payload.optString("messageId", "live")
