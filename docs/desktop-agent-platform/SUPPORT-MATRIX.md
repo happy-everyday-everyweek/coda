@@ -74,18 +74,19 @@
 |---|---|---|---|---|---|
 | mock-agent | mock | 1.0.0 | host | experimental（Test-only，仅契约测试） | `platform/adapters/mock.mjs`、`platform/test/adapters/` |
 | acp-generic | acp | 协议 v1（fake ACP server） | host | experimental（Test-only，无真实 Agent 录制） | `platform/adapters/acp.mjs`、`platform/fixtures/adapters/` |
-| claude-code | claude-stream-json | CI 探测 2.1.319 | host | experimental（真实 init/assistant/result 帧已录制；成功模型回合未录制） | `fixtures/adapters/claude-stream-json-noauth.fixture.json`、`platform/adapters/claude-stream-json.mjs` |
-| codex | codex-app-server / codex-exec | CI 探测 0.167.0 | host | experimental（initialize 握手 + `exec --json` 真实失败路径录制；app-server 会话方法按参考项目方法表实现，成功回合未录制） | `fixtures/adapters/probes/codex.json`、`fixtures/adapters/codex-exec-noauth.fixture.json`、`platform/adapters/{codex-app-server,codex-exec}.mjs` |
+| claude-code | claude-stream-json | CI 探测 2.1.319 | host | experimental（真实 init/assistant/result 帧 + 网关支撑真实回合已通过；真实服务商凭据未接） | `fixtures/adapters/live-turns/`、`fixtures/adapters/claude-stream-json-noauth.fixture.json`、`platform/adapters/claude-stream-json.mjs` |
+| codex | codex-app-server / codex-exec | CI 探测 0.167.0 | host | experimental（initialize 握手 + 网关支撑的真实回合已通过；app-server 会话方法按参考项目方法表实现，真实服务商凭据未接） | `fixtures/adapters/live-turns/`、`fixtures/adapters/probes/codex.json`、`platform/adapters/{codex-app-server,codex-exec}.mjs` |
 | deepseek-harness | deepseek-harness | 0.2.2-rc.1 | host | experimental（真实录制失败路径；成功路径无模型凭据） | `fixtures/adapters/deepseek-harness-headless-error.fixture.json`、`platform/adapters/deepseek-harness.mjs` |
 | gemini | acp-profile | CI 探测 0.67.0 | host | experimental（ACP initialize 握手已验证；session/new 因缺 API key 失败，已录制） | `fixtures/adapters/gemini-acp-handshake.fixture.json`、`platform/adapters/acp-profiles.mjs` |
-| opencode | acp-profile（原生 HTTP+SSE 待接） | CI 探测 1.19.5 | host | experimental（ACP initialize + session/new 匿名成功；session/prompt 需登录，超时已录制） | `fixtures/adapters/opencode-acp-flow.fixture.json`、`platform/adapters/acp-profiles.mjs` |
+| opencode | acp-profile（原生 HTTP+SSE 待接） | CI 探测 1.19.5 | host | experimental（ACP 握手 + 网关支撑的真实回合已通过；原生 HTTP 适配未接） | `fixtures/adapters/live-turns/`、`fixtures/adapters/opencode-acp-flow.fixture.json`、`platform/adapters/acp-profiles.mjs` |
 | grok / hermes / fx / antigravity | acp-profile | 未安装 | host | UNVERIFIED（ACP 命令来自 Zeron README；未在本环境安装验证） | `platform/adapters/acp-profiles.mjs`、`platform/docs/REFERENCE-PROJECTS.md` |
-| qwen / copilot / auggie / crush | 各自 CLI | CI 探测版本见 probes | host | IN PROGRESS（入口已验证，未实现适配器） | `fixtures/adapters/probes/*.json` |
+| qwen | OpenAI 兼容 CLI（适配器未实现） | CI 实测 0.27.0 | host | IN PROGRESS（网关支撑真实回合已通过；统一事件适配器未实现） | `fixtures/adapters/live-turns/qwen.*`、`fixtures/adapters/probes/qwen.json` |
+| copilot / auggie / crush | 各自 CLI | CI 探测版本见 probes | host | IN PROGRESS（入口已验证，未实现适配器） | `fixtures/adapters/probes/*.json` |
 | qoder | headless（Claude 同族） | CI 实测 1.1.85 | host | experimental（headless 入口已验证；无真实回合录制；ACP 待复核） | `fixtures/adapters/probes/qoder-cn.json`、`platform/adapters/headless-profiles.mjs` |
 | codebuddy | acp-profile / headless / http | CI 实测 2.181.0 | host | experimental（ACP/headless 已验证；HTTP 按完整 OpenAPI 实现 job 派发/SSE/停止/回复，真实调用需 API key） | `fixtures/adapters/codebuddy-headless-stream-json.fixture.json`、`platform/adapters/codebuddy-http.mjs` |
 | openclaw | acp-profile | CI 实测 2026.11.1 | host | experimental（`openclaw acp` 存在；需 Gateway 凭据） | `fixtures/adapters/probes/openclaw.json` |
 | fx | acp-profile | CI 实测 0.0.16 | host | experimental（ACP initialize 返回需 Vercel AI Gateway 凭据，已录门槛帧） | `fixtures/adapters/fx-acp-auth-gate.fixture.json` |
-| kimi | acp-profile / headless | CI 实测 2.5.2 | host | experimental（ACP initialize 成功；headless JSONL 真实 meta 帧已录制；需登录） | `fixtures/adapters/kimi-acp-auth-gate.fixture.json`、`fixtures/adapters/kimi-headless-stream-json.fixture.json`、`platform/adapters/kimi-headless.mjs` |
+| kimi | acp-profile / headless | CI 实测 2.5.2 | host | experimental（ACP 握手 + 网关支撑真实回合已通过；真实服务商凭据未接） | `fixtures/adapters/live-turns/`、`fixtures/adapters/kimi-acp-auth-gate.fixture.json`、`platform/adapters/kimi-headless.mjs` |
 | trae | — | — | — | BLOCKED（企业版旗舰套餐门槛） | `platform/docs/DOMESTIC-AGENTS.md` §2 |
 | workbuddy | — | — | — | BLOCKED（官方无本地可编程入口） | `platform/docs/DOMESTIC-AGENTS.md` §3 |
 | coda 宿主桥（AGT-130） | — | — | — | BLOCKED（需 Android 真机/ADB） | — |

@@ -64,6 +64,7 @@ CORE-101 / CORE-102 / CORE-103 / CORE-104
 AGT-101 / AGT-102 / AGT-103 / CORE-105
   ↓
 AGT-111（Claude Code） / AGT-112（Codex） / WSL-101..104
+  ↓  （网关支撑的真实回合已验证：claude/codex/opencode/qwen/kimi，见 platform/fixtures/adapters/live-turns/）
   ↓
 GUI/TUI/WEB / LIFE / PLAT
   ↓
