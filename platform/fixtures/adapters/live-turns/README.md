@@ -20,17 +20,17 @@ CLI 启动 → 请求本地 LLM 网关 → 解析流式响应 → 输出结果 �
 | CodeBuddy | 2.181.0 | OpenAI Chat SSE（`/chat/completions`） | PASS |
 | Crush | 0.100.0 | OpenAI Responses SSE | PASS |
 
-运行记录：[42433324654](https://github.com/happy-everyday-everyweek/coda/actions/runs/42433324654)（七个矩阵任务全部 success）。
+运行记录：[42433802182](https://github.com/happy-everyday-everyweek/coda/actions/runs/42433802182)（七个矩阵任务全部 success）。
 
-其中 Claude Code 与 Codex 还额外跑了**适配器级**验证：用 `platform/adapters/` 里的
-`claude-stream-json.mjs` / `codex-exec.mjs` 驱动真实 CLI，断言收到 `message` 与 `status`
+其中 Claude Code、Codex、Kimi 还额外跑了**适配器级**验证：用 `platform/adapters/` 里的
+`claude-stream-json.mjs` / `codex-exec.mjs` / `kimi-headless.mjs` 驱动真实 CLI，断言收到 `message` 与 `status`
 统一事件，报告见 `<agent>.adapter.json`。
 每个目录文件：
 
 - `<agent>.transcript.txt`：CLI 原始输出的脱敏副本
 - `<agent>.gateway.jsonl`：网关收到的请求摘要
 - `<agent>.version.txt`：CLI 版本
-- `<agent>.adapter.json`：适配器级回合报告（仅 claude/codex）
+- `<agent>.adapter.json`：适配器级回合报告（claude/codex/kimi）
 - `summary.json`：运行 ID、版本、协议与边界说明
 
 ## 边界（不要误读）

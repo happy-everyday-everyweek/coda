@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "kind": "gateway-backed-live-turn",
-  "generatedAt": "2026-11-08T01:15:00Z",
-  "runId": 42433324654,
-  "runUrl": "https://github.com/happy-everyday-everyweek/coda/actions/runs/42433324654",
+  "generatedAt": "2026-11-08T01:20:00Z",
+  "runId": 42433802182,
+  "runUrl": "https://github.com/happy-everyday-everyweek/coda/actions/runs/42433802182",
   "workflow": ".github/workflows/agent-live.yml",
   "gateway": {
     "command": "node platform/tools/mock-llm-gateway.mjs --port 18080",
@@ -57,7 +57,8 @@
       "package": "@moonshot-ai/kimi-code",
       "version": "2.5.2",
       "transport": "OpenAI Chat Completions SSE + stream-json",
-      "result": "pass"
+      "result": "pass",
+      "adapterSmoke": "pass"
     },
     {
       "id": "codebuddy",
@@ -94,6 +95,15 @@
         "status",
         "session",
         "tool",
+        "message"
+      ]
+    },
+    "kimi": {
+      "adapter": "platform/adapters/kimi-headless.mjs",
+      "state": "succeeded",
+      "events": [
+        "status",
+        "session",
         "message"
       ]
     }

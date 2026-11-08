@@ -1,0 +1,61 @@
+{
+  "agent": "kimi",
+  "gateway": "http://127.0.0.1:18080",
+  "prompt": "Reply with exactly CODA_GATEWAY_OK. Do not use tools.",
+  "startedAt": "2026-11-08T01:20:41.912Z",
+  "events": [
+    {
+      "kind": "status",
+      "payload": {
+        "state": "running"
+      }
+    },
+    {
+      "kind": "status",
+      "payload": {
+        "state": "running",
+        "version": "2.5.2"
+      }
+    },
+    {
+      "kind": "message",
+      "payload": {
+        "role": "assistant",
+        "text": "CODA_GATEWAY_OK",
+        "delta": false
+      }
+    },
+    {
+      "kind": "status",
+      "payload": {
+        "state": "running",
+        "version": null
+      }
+    },
+    {
+      "kind": "status",
+      "payload": {
+        "state": "idle"
+      }
+    }
+  ],
+  "probe": {
+    "installed": true,
+    "version": "2.5.2",
+    "path": "/opt/hostedtoolcache/node/24.22.2/x64/bin/kimi"
+  },
+  "result": {
+    "state": "succeeded",
+    "text": "CODA_GATEWAY_OK",
+    "finished": false
+  },
+  "eventKinds": [
+    "status",
+    "status",
+    "message",
+    "status",
+    "status"
+  ],
+  "ok": true,
+  "finishedAt": "2026-11-08T01:20:46.642Z"
+}

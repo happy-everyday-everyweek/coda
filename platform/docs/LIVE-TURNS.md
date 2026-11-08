@@ -38,7 +38,7 @@
 3. **不能替代真实凭据回归**：拿到真实 key 后仍需跑一次真实服务商回合并录制。
 4. 证据表里写「网关支撑真实回合」，不要写成「真实模型回合」。
 
-## 4. 结果（2026-11-08，run 42433324654）
+## 4. 结果（2026-11-08，run 42433802182）
 
 | Agent | 版本 | 协议 | 结果 |
 |---|---|---|---|
@@ -52,7 +52,7 @@
 
 详见 `platform/fixtures/adapters/live-turns/README.md`。
 
-Claude Code 与 Codex 还通过了**适配器级**验证：`platform/adapters/{claude-stream-json,codex-exec}.mjs`
+Claude Code、Codex、Kimi 还通过了**适配器级**验证：`platform/adapters/{claude-stream-json,codex-exec,kimi-headless}.mjs`
 直接驱动真实 CLI，产生 `message`/`status`/`tool` 统一事件（见 `<agent>.adapter.json`）。
 
 ## 5. 扩到更多 Agent
