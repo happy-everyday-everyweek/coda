@@ -3197,7 +3197,8 @@ class MainActivity : BaseActivity() {
             val array = com.coda.mobileui.core.DeviceStore.cachedSessions(this, device.id)
             for (i in 0 until array.length()) {
                 val obj = array.optJSONObject(i) ?: continue
-                val id = obj.optString("id", "").ifBlank { continue }
+                val id = obj.optString("id", "")
+                if (id.isBlank()) continue
                 entries.add(
                     DrawerSessionEntry(
                         ZSessionInfo(
