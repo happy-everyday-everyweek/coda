@@ -353,6 +353,9 @@ class SettingsDetailActivity :
                 SettingsData.codaBotChat(this)
             }
 
+            PAGE_NODE_BRIDGE -> {
+                SettingsData.nodeBridge(this)
+            }
             PAGE_WEB_UI -> {
                 SettingsData.webUi(store, this)
             }
@@ -590,6 +593,33 @@ class SettingsDetailActivity :
             key == "webui_stop" -> {
                 WebUiHost.stop()
                 snack("Web UI 已停止")
+                renderPage()
+            }
+
+            key == "node_start" -> {
+                com.coda.mobileui.core.NodeBridgeService.start(this)
+                snack("节点桥启动中，首次连接请在桌面端输入设置页令牌")
+                renderPage()
+            }
+
+            key == "node_stop" -> {
+                com.coda.mobileui.core.NodeBridgeService.stop(this)
+                snack("节点桥已停止")
+                renderPage()
+            }
+
+            key == "node_copy" -> {
+                val addresses = com.coda.mobileui.core.NodeBridge.localAddresses()
+                val address = addresses.firstOrNull() ?: "127.0.0.1"
+                val text = "coda-node://${address}:${com.coda.mobileui.core.NodeBridge.configuredPort(this)}?token=${com.coda.mobileui.core.NodeBridge.token(this)}"
+                val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("Coda 节点配对信息", text))
+                snack("配对信息已复制（含令牌，请勿外传）")
+            }
+
+            key == "node_reset" -> {
+                com.coda.mobileui.core.NodeBridge.resetToken(this)
+                snack("令牌已重置，桌面端需要重新配对")
                 renderPage()
             }
 
@@ -3919,6 +3949,7 @@ class SettingsDetailActivity :
         const val PAGE_CODA_BOT_MEMORY = "coda_bot_memory"
         const val PAGE_CODA_BOT_MODELS = "coda_bot_models"
         const val PAGE_CODA_BOT_CHAT = "coda_bot_chat"
+        const val PAGE_NODE_BRIDGE = "node_bridge"
         const val PAGE_WEB_UI = "webui"
         const val PAGE_PET_APPEARANCE = "pet_appearance"
         const val PAGE_PET_PLACES = "pet_places"

@@ -153,6 +153,7 @@ object SettingsData {
             // 不打进 APK，运行时从 GitHub Release 拉取（见 WebUiHost）。
             SettingRow.Header("实验性功能"),
             SettingRow.Category("webui", "Web UI", "局域网网页端，运行时从 GitHub 拉取", R.drawable.ic_globe),
+            SettingRow.Category("node_bridge", "节点桥", "让已配对的 Coda 桌面端连接本机 Agent", R.drawable.ic_server),
             SettingRow.Header("数据与统计"),
             SettingRow.Category("usage", "使用统计", "会话活跃度与模型用量", R.drawable.ic_chart),
             // 日志是诊断入口，和"使用统计"同属"看清应用在做什么"这一类，归到数据与统计下。
@@ -898,6 +899,47 @@ object SettingsData {
      * filesDir/webui/dist/，再由内置 HTTP 服务承载。这一页只编排状态展示与入口，
      * 动作处理在 SettingsDetailActivity（webui_download / webui_start / webui_stop）。
      */
+    /**
+     * 桌面节点桥设置页（实验性）：显示配对所需地址与令牌，控制前台服务。
+     * 动作在 SettingsDetailActivity（node_start / node_stop / node_copy / node_reset）。
+     */
+    fun nodeBridge(ctx: Context): SettingsPage {
+        val running = com.coda.mobileui.core.NodeBridge.isRunning()
+        val rows = mutableListOf<SettingRow>()
+        val port = com.coda.mobileui.core.NodeBridge.port().takeIf { it > 0 } ?: com.coda.mobileui.core.NodeBridge.configuredPort(ctx)
+        rows.add(SettingRow.Header("实验性功能"))
+        rows.add(
+            SettingRow.Value(
+                "功能状态",
+                "实验性：让已配对的 Coda 桌面端连接本机 Coding Agent",
+            ),
+        )
+        rows.add(SettingRow.Value("服务状态", if (running) "运行中" else "未启动"))
+        rows.add(SettingRow.Value("客户端", "${com.coda.mobileui.core.NodeBridge.clientCount()} 个已认证连接"))
+        rows.add(SettingRow.Value("监听端口", "$port"))
+        val addresses = com.coda.mobileui.core.NodeBridge.localAddresses()
+        rows.add(
+            SettingRow.Value(
+                "连接地址",
+                if (addresses.isEmpty()) "未检测到局域网地址（可先连 Wi-Fi）" else addresses.joinToString(" / ") { "$it:$port" },
+            ),
+        )
+        rows.add(SettingRow.Value("配对令牌", com.coda.mobileui.core.NodeBridge.token(ctx)))
+        rows.add(SettingRow.Value("设备 ID", com.coda.mobileui.core.NodeBridge.deviceId(ctx)))
+        rows.add(SettingRow.Header("操作"))
+        if (running) {
+            rows.add(SettingRow.Value("停止节点桥", "断开桌面端，停止前台服务", "node_stop"))
+        } else {
+            rows.add(SettingRow.Value("启动节点桥", "启动前台服务并监听局域网", "node_start"))
+        }
+        rows.add(SettingRow.Value("复制配对信息", "地址、端口与令牌", "node_copy"))
+        rows.add(SettingRow.Value("重置令牌", "断开所有连接，旧令牌立即失效", "node_reset"))
+        rows.add(SettingRow.Header("安全边界"))
+        rows.add(SettingRow.Value("令牌等同密码", "只发给可信设备；不要在公共 Wi-Fi 开启"))
+        rows.add(SettingRow.Value("数据范围", "会话列表、发送、停止、审批；暂不开放终端与附件"))
+        return SettingsPage("节点桥", rows)
+    }
+
     fun webUi(
         store: SettingsStore,
         ctx: Context,

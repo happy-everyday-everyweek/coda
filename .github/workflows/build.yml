@@ -51,6 +51,9 @@ jobs:
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
 
+      - name: 安卓宿主桥单测
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
       - name: 安装 Personal Agent 测试依赖
         working-directory: kernel/maibot-lite
         run: |
