@@ -106,7 +106,6 @@ object NodeBridge {
     fun start(ctx: Context): String? {
         if (running.get()) return null
         lastError = null
-        attach(ctx)
         token(ctx)
         val ctl = ZController.get(ctx)
         ctl.ensureStarted { _, _ -> }
@@ -135,7 +134,7 @@ object NodeBridge {
                     } catch (_: Exception) {
                         break
                     }
-                val client = Client(socketClient)
+                val client = Client(socketClient, ctx.applicationContext)
                 clients.add(client)
                 Thread({ serve(client) }, "coda-node-client").apply { isDaemon = true }.start()
             }
@@ -410,11 +409,10 @@ object NodeBridge {
         return array
     }
 
-    private inner class Client(val socket: Socket) {
+    private class Client(val socket: Socket, val context: Context) {
         val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
         private val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
         @Volatile var authenticated = false
-        val context: Context get() = appContext ?: throw IllegalStateException("bridge has no context")
 
         fun send(frame: JSONObject) {
             synchronized(writer) {
@@ -429,9 +427,4 @@ object NodeBridge {
         }
     }
 
-    private var appContext: Context? = null
-
-    fun attach(ctx: Context) {
-        appContext = ctx.applicationContext
-    }
 }
