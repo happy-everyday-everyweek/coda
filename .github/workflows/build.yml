@@ -96,6 +96,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.build_apk
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write
     env:
       PYO3_CROSS: "1"
       PYO3_CROSS_PYTHON_VERSION: "3.12"
@@ -136,3 +138,17 @@ jobs:
         with:
           name: coda-debug-${{ github.run_id }}-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: 发布到 android-latest（便于国内镜像下载）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          if ! gh release view android-latest -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create android-latest -R "$GITHUB_REPOSITORY" \
+              --title "Android 最新构建" \
+              --notes "由 Build 工作流自动构建，含节点桥双向能力；仅作真机验证用。" \
+              --prerelease
+          fi
+          gh release upload android-latest -R "$GITHUB_REPOSITORY" \
+            app/build/outputs/apk/debug/*.apk --clobber
