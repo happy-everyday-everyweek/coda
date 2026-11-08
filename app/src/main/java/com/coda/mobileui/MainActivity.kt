@@ -4774,6 +4774,9 @@ class MainActivity : BaseActivity() {
     /** 正在拉全量模型清单，用于阻止 buildModelPanel 递归。 */
     private var modelFetching = false
 
+    /** 只刷新模型列表的回调；整卡重建会把滑杆与点击一起打碎，所以单独留一个。 */
+    private var refreshModelItems: (() -> Unit)? = null
+
     /** 模型名（模型态下显示在胶囊里）。与工作区状态互不干扰，各记一份。 */
     private var modelPillLabel: CharSequence = ""
 
@@ -4858,6 +4861,8 @@ class MainActivity : BaseActivity() {
                     scrim.visibility = View.GONE
                     scrim.alpha = 1f
                     card.alpha = 1f
+                    // 面板已收起：丢弃列表刷新回调，避免回来时改到已拆掉的卡片
+                    refreshModelItems = null
                     // 面板已收起，解除手势拦截
                     updateSwipeIntercept()
                 }.start()
@@ -4899,8 +4904,11 @@ class MainActivity : BaseActivity() {
                 modelFetching = false
                 if (ok) {
                     runOnUiThread {
-                        val scrim = findViewById<View>(R.id.model_panel_scrim)
-                        if (scrim.visibility == View.VISIBLE) buildModelPanel()
+                        // 只刷新模型列表，不整卡重建：
+                        // 整卡重建会重置滑杆档位（表现为点一下闪回），
+                        // 而且重建后再走进本方法会无限循环拉取+重建，
+                        // 卡片一直在重新 inflate，点击就永远落不到它上面。
+                        refreshModelItems?.invoke()
                     }
                 }
             }
@@ -5040,6 +5048,7 @@ class MainActivity : BaseActivity() {
         }
 
         refreshItems()
+        refreshModelItems = { refreshItems() }
 
         // 点模型页标题回到强度页
         card.findViewById<View>(R.id.model_title).setOnClickListener { showModels(false) }
