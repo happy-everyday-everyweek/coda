@@ -18,7 +18,8 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:orientation="vertical">
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
         <TextView
             android:id="@+id/model_name"
@@ -27,7 +28,20 @@
             android:textAppearance="?attr/textAppearanceTitleMedium"
             android:textColor="?attr/colorOnSurface" />
 
+        <!-- 供应商：跟在模型名后面，灰色、字重更轻。 -->
+        <TextView
+            android:id="@+id/model_provider"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:visibility="gone" />
     </LinearLayout>
+
     <ImageView
         android:id="@+id/model_check"
         android:layout_width="20dp"

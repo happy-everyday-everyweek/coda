@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.text.SpannableString
@@ -1889,6 +1890,10 @@ class MainActivity : BaseActivity() {
                     ?.label
             modelPillLabel = label ?: pair.second
             syncHeaderPill()
+        }
+        // 面板开着时，模型清单或当前选择变了就只刷列表，保持滚动位置与卡片本身。
+        if (findViewById<View>(R.id.model_panel_scrim)?.visibility == View.VISIBLE) {
+            refreshModelItems?.invoke()
         }
         strengthLevel = controllerStrengthIndex()
         if (zc.currentSessionId != null) {
@@ -4935,6 +4940,12 @@ class MainActivity : BaseActivity() {
     /** 正在拉全量模型清单，用于阻止 buildModelPanel 递归。 */
     private var modelFetching = false
 
+    /** 只刷新模型列表的回调；整卡重建会把滑杆与点击一起打碎，所以单独留一个。 */
+    private var refreshModelItems: (() -> Unit)? = null
+
+    /** 上一次模型列表的内容指纹，用于避免无变化时重复重建。 */
+    private var lastModelListSignature: String = ""
+
     /** 模型名（模型态下显示在胶囊里）。与工作区状态互不干扰，各记一份。 */
     private var modelPillLabel: CharSequence = ""
 
@@ -5158,6 +5169,8 @@ class MainActivity : BaseActivity() {
                     scrim.visibility = View.GONE
                     scrim.alpha = 1f
                     card.alpha = 1f
+                    // 面板已收起：丢弃列表刷新回调，避免回来时改到已拆掉的卡片
+                    refreshModelItems = null
                     // 面板已收起，解除手势拦截
                     updateSwipeIntercept()
                 }.start()
@@ -5199,8 +5212,11 @@ class MainActivity : BaseActivity() {
                 modelFetching = false
                 if (ok) {
                     runOnUiThread {
-                        val scrim = findViewById<View>(R.id.model_panel_scrim)
-                        if (scrim.visibility == View.VISIBLE) buildModelPanel()
+                        // 只刷新模型列表，不整卡重建：
+                        // 整卡重建会重置滑杆档位（表现为点一下闪回），
+                        // 而且重建后再走进本方法会无限循环拉取+重建，
+                        // 卡片一直在重新 inflate，点击就永远落不到它上面。
+                        refreshModelItems?.invoke()
                     }
                 }
             }
@@ -5270,6 +5286,7 @@ class MainActivity : BaseActivity() {
         val strengthContent = card.findViewById<View>(R.id.strength_content)
         val modelContent = card.findViewById<View>(R.id.model_content)
         val items = card.findViewById<LinearLayout>(R.id.model_items)
+        card.findViewById<MaxHeightScrollView>(R.id.model_items_scroll)?.maxHeightPx = dp(320)
 
         fun showModels(show: Boolean) {
             TransitionManager.beginDelayedTransition(card as ViewGroup, AutoTransition().setDuration(220))
@@ -5277,12 +5294,17 @@ class MainActivity : BaseActivity() {
             modelContent.visibility = if (show) View.VISIBLE else View.GONE
         }
 
-        /** 重建模型列表：按供应商分组展示真实模型，高亮当前模型，并附供应商管理入口。 */
+        /** 重建模型列表：逐条展示「模型名 供应商」，高亮当前模型，并附供应商管理入口。 */
         fun refreshItems() {
-            items.removeAllViews()
             val curSel = zc.currentModel
             val curKey = curSel?.let { "${it.first}/${it.second}" }
             val options = zc.modelOptions
+            // 状态 patch 在流式输出期间很频繁；内容没变就不重建，
+            // 否则列表会被反复清空重填，滚动位置一直弹回顶部。
+            val signature = curKey + "|" + options.joinToString(",") { it.key + ":" + it.label }
+            if (signature == lastModelListSignature && items.childCount > 0) return
+            lastModelListSignature = signature
+            items.removeAllViews()
             if (options.isEmpty()) {
                 items.addView(
                     TextView(this@MainActivity).apply {
@@ -5299,25 +5321,32 @@ class MainActivity : BaseActivity() {
                     },
                 )
             } else {
-                options.groupBy { it.providerLabel ?: it.providerId }.forEach { (_, group) ->
-                    group.forEach { option ->
-                        items.addView(
-                            inflater.inflate(R.layout.view_model_option, items, false).apply {
-                                findViewById<TextView>(R.id.model_name).text = option.label
-                                findViewById<ImageView>(R.id.model_check).visibility =
-                                    if (option.key == curKey) View.VISIBLE else View.GONE
-                                setOnClickListener {
-                                    zc.setModel(option.providerId, option.modelId) { ok, msg ->
-                                        if (!ok) {
-                                            snack("切换模型失败: $msg")
-                                        } else {
-                                            buildModelPanel()
-                                        }
+                // 不分组：每行就是「模型名 供应商」，供应商同字号、灰色、字重更轻。
+                options.forEach { option ->
+                    items.addView(
+                        inflater.inflate(R.layout.view_model_option, items, false).apply {
+                            findViewById<TextView>(R.id.model_name).text = option.label
+                            findViewById<TextView>(R.id.model_provider).apply {
+                                val provider = option.providerLabel ?: option.providerId
+                                text = provider
+                                visibility = if (provider.isBlank()) View.GONE else View.VISIBLE
+                                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+                            }
+                            findViewById<ImageView>(R.id.model_check).visibility =
+                                if (option.key == curKey) View.VISIBLE else View.GONE
+                            setOnClickListener {
+                                zc.setModel(option.providerId, option.modelId) { ok, msg ->
+                                    if (!ok) {
+                                        snack("切换模型失败: $msg")
+                                    } else {
+                                        // 切换成功只刷新列表与胶囊，不整卡重建，保持滚动位置
+                                        refreshItems()
+                                        syncHeaderPill()
                                     }
                                 }
-                            },
-                        )
-                    }
+                            }
+                        },
+                    )
                 }
             }
             items.addView(
@@ -5340,6 +5369,7 @@ class MainActivity : BaseActivity() {
         }
 
         refreshItems()
+        refreshModelItems = { refreshItems() }
 
         // 点模型页标题回到强度页
         card.findViewById<View>(R.id.model_title).setOnClickListener { showModels(false) }
