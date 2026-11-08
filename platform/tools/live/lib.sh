@@ -23,6 +23,10 @@ NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 log() { echo "[$AGENT] $*" >&2; }
 
 install_npm() {
+  if [ "${LIVE_SKIP_INSTALL:-0}" = "1" ]; then
+    log "跳过安装（LIVE_SKIP_INSTALL=1）：$1"
+    return 0
+  fi
   log "安装 $1"
   npm install -g --registry="$NPM_REGISTRY" "$1" >"$OUT/npm-install.log" 2>&1 || {
     cat "$OUT/npm-install.log" >&2
