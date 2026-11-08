@@ -26,3 +26,7 @@ HOME="$OUT/home" KIMI_CODE_HOME="$KIMI_HOME" \
   </dev/null >"$OUT/transcript.jsonl" 2>"$OUT/stderr.log"
 finish "$OUT/transcript.jsonl"
 kimi --version >"$OUT/version.txt" 2>&1 || true
+
+# 适配器级：用 platform/adapters/kimi-headless 驱动真实 CLI
+HOME="$OUT/home" node "$ROOT/platform/tools/live/adapter-smoke.mjs" \
+  --agent kimi --gateway "$GATEWAY_URL" --kimi-home "$KIMI_HOME" --out "$OUT/adapter.json"

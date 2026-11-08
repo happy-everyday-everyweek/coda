@@ -24,7 +24,7 @@ const gateway = option("--gateway", "http://127.0.0.1:18080");
 const out = option("--out", `adapter-${agent}.json`);
 const prompt = option("--prompt", "Reply with exactly CODA_GATEWAY_OK. Do not use tools.");
 
-if (!["claude", "codex"].includes(agent)) {
+if (!["claude", "codex", "kimi"].includes(agent)) {
   console.error(`unsupported --agent: ${agent}`);
   process.exit(2);
 }
@@ -42,6 +42,13 @@ async function run() {
     process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
     const { createClaudeStreamJsonAdapter } = await import("../../adapters/claude-stream-json.mjs");
     adapter = createClaudeStreamJsonAdapter({ command: "claude", model: "claude-sonnet-4-5" });
+  } else if (agent === "kimi") {
+    const kimiHome = option("--kimi-home");
+    if (!kimiHome) throw new Error("kimi 需要 --kimi-home（已导入 coda provider 的配置目录）");
+    process.env.KIMI_CODE_HOME = kimiHome;
+    process.env.HOME = option("--home", process.env.HOME);
+    const { createKimiHeadlessAdapter } = await import("../../adapters/kimi-headless.mjs");
+    adapter = createKimiHeadlessAdapter({ command: "kimi" });
   } else {
     const home = mkdtempSync(join(tmpdir(), "coda-codex-home-"));
     writeFileSync(
