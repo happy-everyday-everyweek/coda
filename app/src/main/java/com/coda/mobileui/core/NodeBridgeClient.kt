@@ -33,6 +33,8 @@ class NodeBridgeClient private constructor(
     private val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
     private val pending = ConcurrentHashMap<Int, CompletableFuture<JSONObject>>()
     private val nextId = AtomicInteger(1)
+    /** 远端事件回调（在读取线程上调用，调用方自行切主线程）。 */
+    @Volatile var onEvent: ((JSONObject) -> Unit)? = null
     @Volatile private var closed = false
     private val readerThread =
         Thread({
@@ -42,7 +44,11 @@ class NodeBridgeClient private constructor(
                     val line = reader.readLine() ?: break
                     if (line.isBlank()) continue
                     val frame = runCatching { JSONObject(line) }.getOrNull() ?: continue
-                    if (frame.optString("method") == NodeBridgeProtocol.EVENT) continue
+                    if (frame.optString("method") == NodeBridgeProtocol.EVENT) {
+                        val payload = frame.optJSONObject("params")
+                        if (payload != null) onEvent?.invoke(payload)
+                        continue
+                    }
                     val id = frame.optInt("id", -1)
                     val future = pending.remove(id) ?: continue
                     if (frame.has("error")) {
@@ -85,6 +91,34 @@ class NodeBridgeClient private constructor(
     fun messages(sessionId: String, timeoutMs: Long = 8000): JSONArray =
         request(NodeBridgeProtocol.METHOD_MESSAGES, JSONObject().put("sessionId", sessionId), timeoutMs)
             .optJSONArray("messages") ?: JSONArray()
+
+    fun sessionNew(workspace: String?, timeoutMs: Long = 30000): String {
+        val params = JSONObject()
+        if (!workspace.isNullOrBlank()) params.put("workspace", workspace)
+        return request(NodeBridgeProtocol.METHOD_SESSION_NEW, params, timeoutMs).optString("sessionId", "")
+    }
+
+    fun sessionOpen(sessionId: String, timeoutMs: Long = 15000): Boolean =
+        request(NodeBridgeProtocol.METHOD_SESSION_OPEN, JSONObject().put("sessionId", sessionId), timeoutMs)
+            .optBoolean("ok", false)
+
+    fun sendTurn(sessionId: String, text: String, timeoutMs: Long = 15000): Boolean =
+        request(
+            NodeBridgeProtocol.METHOD_TURN_SEND,
+            JSONObject().put("sessionId", sessionId).put("text", text),
+            timeoutMs,
+        ).optBoolean("ok", false)
+
+    fun turnStop(sessionId: String, timeoutMs: Long = 15000): Boolean =
+        request(NodeBridgeProtocol.METHOD_TURN_STOP, JSONObject().put("sessionId", sessionId), timeoutMs)
+            .optBoolean("ok", false)
+
+    fun answerInteraction(requestId: String, allow: Boolean, timeoutMs: Long = 15000): Boolean =
+        request(
+            NodeBridgeProtocol.METHOD_INTERACTION_ANSWER,
+            JSONObject().put("requestId", requestId).put("allow", allow),
+            timeoutMs,
+        ).optBoolean("ok", false)
 
     private fun request(method: String, params: JSONObject, timeoutMs: Long): JSONObject {
         if (closed) throw NodeBridgeException("连接已关闭")

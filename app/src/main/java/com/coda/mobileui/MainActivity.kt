@@ -1101,6 +1101,19 @@ class MainActivity : BaseActivity() {
                 ?.toString()
                 ?.trim()
                 .orEmpty()
+        // 选中了远端设备：把这一轮交给对方节点的会话页，不落本机运行时。
+        if (composerDeviceId != com.coda.mobileui.core.DeviceStore.LOCAL_ID && text.isNotEmpty()) {
+            val target = composerDeviceId
+            inputMessage.text?.clear()
+            hideSettingsPage()
+            startActivity(
+                android.content.Intent(this, RemoteSessionActivity::class.java)
+                    .putExtra(RemoteSessionActivity.EXTRA_DEVICE_ID, target)
+                    .putExtra(RemoteSessionActivity.EXTRA_TEXT, text)
+                    .putExtra(RemoteSessionActivity.EXTRA_WORKSPACE, composerWorkspace),
+            )
+            return
+        }
         if (text.isEmpty() && pendingAttachments.isEmpty()) {
             if (zc.running) {
                 zc.stop { ok, msg ->
@@ -3304,7 +3317,11 @@ class MainActivity : BaseActivity() {
         row.findViewById<TextView>(R.id.conv_title).text = session.title.ifEmpty { "未命名会话" }
         row.findViewById<TextView>(R.id.conv_summary).text = "$deviceLabel · 缓存"
         row.setOnClickListener {
-            showCachedConversation(session, deviceId, deviceLabel)
+            startActivity(
+                android.content.Intent(this, RemoteSessionActivity::class.java)
+                    .putExtra(RemoteSessionActivity.EXTRA_DEVICE_ID, deviceId)
+                    .putExtra(RemoteSessionActivity.EXTRA_SESSION_ID, session.id),
+            )
         }
         return row
     }
@@ -4906,7 +4923,8 @@ class MainActivity : BaseActivity() {
      * 不应该因为没选工作区就整个输不进去。
      */
     private fun updateSendAvailability() {
-        val ready = !zc.cacheOnly && (zc.currentSessionId != null || composerWorkspace != null)
+        val remote = composerDeviceId != com.coda.mobileui.core.DeviceStore.LOCAL_ID
+        val ready = remote || (!zc.cacheOnly && (zc.currentSessionId != null || composerWorkspace != null))
         findViewById<View>(R.id.btn_send)?.apply {
             alpha = if (ready) 1f else 0.4f
         }
@@ -4928,7 +4946,7 @@ class MainActivity : BaseActivity() {
      */
     private var composerWorkspace: String? = null
 
-    /** 新对话选中的运行地点；目前只有本机可真正执行。 */
+    /** 新对话选中的运行地点；远端设备会打开独立远端会话页执行。 */
     private var composerDeviceId: String = com.coda.mobileui.core.DeviceStore.LOCAL_ID
 
     /** 顶部面板当前是运行地点还是模型：两者复用同一张 scrim。 */
