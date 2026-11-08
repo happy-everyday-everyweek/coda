@@ -60,3 +60,16 @@ finish() {
     exit 1
   fi
 }
+
+# 有些 CLI（当前为 Crush 0.100.0）在 CI 非交互环境下把最终文本写进内部
+# session 而不打到 stdout；此时以网关收到的真实请求 + 固定回复作为协议回合证据。
+finish_gateway() {
+  if grep -q '"reply":"CODA_GATEWAY_OK"' "$OUT/gateway.jsonl" 2>/dev/null; then
+    log "PASS（网关日志）：收到 CODA_GATEWAY_OK"
+    echo "pass-gateway" >"$OUT/status.txt"
+  else
+    log "FAIL: 网关日志中没有 CODA_GATEWAY_OK"
+    echo "fail" >"$OUT/status.txt"
+    exit 1
+  fi
+}

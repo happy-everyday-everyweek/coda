@@ -24,5 +24,10 @@ CONFIG
 cd "$WORK"
 HOME="$OUT/home" XDG_CONFIG_HOME="$OUT/home/.config" XDG_DATA_HOME="$OUT/home/.local/share" timeout 180 crush run -m coda/coda-gateway "$PROMPT" \
   </dev/null >"$OUT/transcript.txt" 2>"$OUT/stderr.log"
-finish "$OUT/transcript.txt"
+if [ -s "$OUT/transcript.txt" ]; then
+  finish "$OUT/transcript.txt"
+else
+  log "stdout 为空，回退到网关日志判定"
+  finish_gateway
+fi
 crush --version >"$OUT/version.txt" 2>&1 || true
