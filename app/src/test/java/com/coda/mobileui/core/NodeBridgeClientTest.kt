@@ -11,6 +11,9 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 class NodeBridgeClientTest {
@@ -45,6 +48,11 @@ class NodeBridgeClientTest {
                                     .put("sessions", JSONArray().put(JSONObject().put("id", "s1").put("title", "demo")))
                             }
                             NodeBridgeProtocol.METHOD_SNAPSHOT -> JSONObject().put("sessions", JSONArray().put(JSONObject().put("id", "s1")))
+                            NodeBridgeProtocol.METHOD_SESSION_NEW -> JSONObject().put("ok", true).put("sessionId", "s2")
+                            NodeBridgeProtocol.METHOD_SESSION_OPEN,
+                            NodeBridgeProtocol.METHOD_TURN_SEND,
+                            NodeBridgeProtocol.METHOD_TURN_STOP,
+                            NodeBridgeProtocol.METHOD_INTERACTION_ANSWER -> JSONObject().put("ok", true)
                             NodeBridgeProtocol.METHOD_MESSAGES -> JSONObject().put(
                                 "messages",
                                 JSONArray().put(JSONObject().put("id", "m1").put("role", "assistant").put("text", "hello")),
@@ -59,6 +67,15 @@ class NodeBridgeClientTest {
                         }
                     writer.write(response.toString() + "\n")
                     writer.flush()
+                    if (method == NodeBridgeProtocol.METHOD_TURN_SEND) {
+                        writer.write(
+                            NodeBridgeProtocol.event(
+                                "message.delta",
+                                JSONObject().put("sessionId", "s2").put("messageId", "m2").put("text", "hi"),
+                            ).toString() + "\n",
+                        )
+                        writer.flush()
+                    }
                 }
             } catch (_: Exception) {
             }
@@ -77,6 +94,30 @@ class NodeBridgeClientTest {
             assertEquals(1, hello.getInt("protocolVersion"))
             assertEquals("s1", client.snapshot().getJSONObject(0).getString("id"))
             assertEquals("hello", client.messages("s1").getJSONObject(0).getString("text"))
+        }
+        server.close()
+    }
+
+    @Test
+    fun `远端会话可创建发送停止并收到事件`() {
+        val (server, _) = fakeServer()
+        NodeBridgeClient.connect(device(server.localPort)).use { client ->
+            client.hello("secret")
+            val eventText = AtomicReference<String>()
+            val latch = CountDownLatch(1)
+            client.onEvent = { payload ->
+                if (payload.optString("type") == "message.delta") {
+                    eventText.set(payload.optString("text"))
+                    latch.countDown()
+                }
+            }
+            assertEquals("s2", client.sessionNew(null))
+            assertEquals(true, client.sessionOpen("s2"))
+            assertEquals(true, client.sendTurn("s2", "你好"))
+            assertEquals(true, client.turnStop("s2"))
+            assertEquals(true, client.answerInteraction("req1", true))
+            assertEquals(true, latch.await(3, TimeUnit.SECONDS))
+            assertEquals("hi", eventText.get())
         }
         server.close()
     }

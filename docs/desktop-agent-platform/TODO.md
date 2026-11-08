@@ -170,7 +170,7 @@ ART / SEC / REL / PERF / QA / 发布
 | AGT-127 | IN PROGRESS | P0 | OpenClaw 可编程入口调研与适配 | AGT-101~110 | AGT-OPENCLAW, ADP-001~019 |
 | AGT-128 | IN PROGRESS | P0 | Kimi CLI / Kimi Code 可编程入口适配 | AGT-101~110 | AGT-KIMI, ADP-001~019 |
 | AGT-129 | IN PROGRESS | P0 | fx 适配 | AGT-101~110 | AGT-FX, ADP-001~019 |
-| AGT-130 | IN PROGRESS | P0 | Coda Android Coding Agent 受认证宿主桥（第一版已实现：TCP+NDJSON 鉴权桥、设置页开关、桌面客户端；待真机验收） | CORE-101, SYNC-101 | AGT-CODA, ADP-001~019 |
+| AGT-130 | IN PROGRESS | P0 | Coda Android Coding Agent 受认证宿主桥（已实现：TCP+NDJSON 鉴权桥、设置页开关、桌面客户端、Android 反向客户端与远端会话页；待真机双端验收） | CORE-101, SYNC-101 | AGT-CODA, ADP-001~019 |
 | AGT-131 | IN PROGRESS | P1 | 未知 ACP Registry Agent 的自动发现与能力提示 | AGT-104 | AGT-ACP-GENERIC |
 
 ### 5.4 接口调研阻塞处理
@@ -262,7 +262,7 @@ ART / SEC / REL / PERF / QA / 发布
 | SYNC-106 | DONE | P0 | 命令投递、收据、过期/取代、目标离线队列 | CORE-105, SYNC-103 | SYNC-006, SYNC-008 |
 | SYNC-107 | DONE | P0 | 审批/提问跨端同步与单结果竞争 | AGT-108, SYNC-106 | SYNC-007 |
 | SYNC-108 | DONE | P0 | 分区、重复、乱序、分叉、重连收敛测试 | SYNC-104~107 | SYNC-005, SYNC-013 |
-| SYNC-109 | BLOCKED | P0 | Coda Android 节点受认证宿主桥与双向控制 | AGT-130, SYNC-103 | AGT-CODA, PA-008 |
+| SYNC-109 | BLOCKED | P0 | Coda Android 节点受认证宿主桥与双向控制（双向代码均已完成，缺真机端到端验收） | AGT-130, SYNC-103 | AGT-CODA, PA-008 |
 | SYNC-110 | OPEN | P1 | 可选加密中继/内网穿透，不成为硬依赖 | SYNC-103 | SYNC-011, SYNC-015 |
 | SYNC-111 | DONE | P0 | 无中心服务拓扑验收：断公网仍可局域网工作 | SYNC-102 | SYNC-011 |
 | SYNC-112 | DONE | P0 | 成果/附件按需传输，不触发工作区镜像 | CORE-112, SYNC-103 | ART-001~003, SYNC-012 |
