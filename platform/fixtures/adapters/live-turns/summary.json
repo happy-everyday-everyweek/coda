@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "kind": "gateway-backed-live-turn",
-  "generatedAt": "2026-11-08T00:35:00Z",
-  "runId": 42430290147,
-  "runUrl": "https://github.com/happy-everyday-everyweek/coda/actions/runs/42430290147",
+  "generatedAt": "2026-11-08T01:00:00Z",
+  "runId": 42432533468,
+  "runUrl": "https://github.com/happy-everyday-everyweek/coda/actions/runs/42432533468",
   "workflow": ".github/workflows/agent-live.yml",
   "gateway": {
     "command": "node platform/tools/mock-llm-gateway.mjs --port 18080",
@@ -55,6 +55,22 @@
       "package": "@moonshot-ai/kimi-code",
       "version": "2.5.2",
       "transport": "OpenAI Chat Completions SSE + stream-json",
+      "result": "pass"
+    },
+    {
+      "id": "codebuddy",
+      "cli": "CodeBuddy",
+      "package": "@tencent-ai/codebuddy-code",
+      "version": "2.181.0",
+      "transport": "OpenAI Chat Completions SSE (/chat/completions)",
+      "result": "pass"
+    },
+    {
+      "id": "crush",
+      "cli": "Crush",
+      "package": "@charmland/crush",
+      "version": "0.100.0",
+      "transport": "OpenAI Responses SSE",
       "result": "pass"
     }
   ],

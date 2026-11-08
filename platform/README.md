@@ -3,8 +3,8 @@
 跨端 Agent 控制与协同平台的**参考实现切片**：共享核心、适配器、PA、同步、安全与客户端。
 产品规格、验收与任务在 `../docs/desktop-agent-platform/`；模块契约见 [`CONTRACT.md`](./CONTRACT.md)。
 
-> 当前状态（2026-11-08）：**开发预览，不可发布**。参考实现可运行、契约测试全绿（379 项），
-> 19 个 Agent 的适配器与探测证据已落地；其中 5 个已通过本地 LLM 网关跑通真实回合，但真实服务商凭据仍缺；Windows/macOS/Linux 安装器、
+> 当前状态（2026-11-08）：**开发预览，不可发布**。参考实现可运行、契约测试全绿（380 项），
+> 19 个 Agent 的适配器与探测证据已落地；其中 7 个已通过本地 LLM 网关跑通真实回合，但真实服务商凭据仍缺；Windows/macOS/Linux 安装器、
 > WSL、GPUI 产品 GUI、Android 节点桥受本机与 CI 环境限制。GPUI 的软件渲染可行性已在
 > `.github/workflows/gpui-soft.yml` 中单独验证（不阻塞主流水线）。任务状态见
 > `../docs/desktop-agent-platform/TODO.md`，证据见 `../artifacts/acceptance/`。
@@ -60,7 +60,7 @@ platform/
 ```bash
 cd platform
 
-# 全量测试（Node 24；379 项，含端到端）
+# 全量测试（Node 24；380 项，含端到端）
 npm test
 # 或分模块
 node --test "test/core/**/*.test.mjs"
@@ -104,7 +104,7 @@ WSL-101..105、GUI-101..107（软件渲染可行，产品 GUI 未做）、PA-107
 | `.github/workflows/platform.yml` | `platform/**` 变更 | ubuntu/macos 全量、windows 冒烟 |
 | `.github/workflows/build.yml` | 任意 push/PR | `coda-platform-<ver>.tgz`、Web 资产、发布清单（Actions 产物） |
 | `.github/workflows/gpui-soft.yml` | `platform/gui-smoke/**` | GPUI + 软件 Vulkan 出帧冒烟（失败不阻塞） |
-| `.github/workflows/agent-live.yml` | `platform/tools/live/**` | 5 个真实 Agent 的完整回合（本地网关） |
+| `.github/workflows/agent-live.yml` | `platform/tools/live/**` | 7 个真实 Agent 的完整回合（本地网关） |
 | `.github/workflows/dev-prerelease.yml` | `dev` 分支 | dev-latest 预发行，附平台三件套 |
 | `.github/workflows/release.yml` | `v*` Tag | 正式发行，附平台三件套 |
 

@@ -81,9 +81,10 @@
 | opencode | acp-profile（原生 HTTP+SSE 待接） | CI 探测 1.19.5 | host | experimental（ACP 握手 + 网关支撑的真实回合已通过；原生 HTTP 适配未接） | `fixtures/adapters/live-turns/`、`fixtures/adapters/opencode-acp-flow.fixture.json`、`platform/adapters/acp-profiles.mjs` |
 | grok / hermes / fx / antigravity | acp-profile | 未安装 | host | UNVERIFIED（ACP 命令来自 Zeron README；未在本环境安装验证） | `platform/adapters/acp-profiles.mjs`、`platform/docs/REFERENCE-PROJECTS.md` |
 | qwen | OpenAI 兼容 CLI（适配器未实现） | CI 实测 0.27.0 | host | IN PROGRESS（网关支撑真实回合已通过；统一事件适配器未实现） | `fixtures/adapters/live-turns/qwen.*`、`fixtures/adapters/probes/qwen.json` |
-| copilot / auggie / crush | 各自 CLI | CI 探测版本见 probes | host | IN PROGRESS（入口已验证，未实现适配器） | `fixtures/adapters/probes/*.json` |
+| copilot / auggie | 各自 CLI | CI 探测版本见 probes | host | IN PROGRESS（入口已验证，未实现适配器） | `fixtures/adapters/probes/*.json` |
+| crush | OpenAI 兼容 CLI（适配器未实现） | CI 实测 0.100.0 | host | IN PROGRESS（网关支撑真实回合已通过；统一事件适配器未实现） | `fixtures/adapters/live-turns/crush.*`、`fixtures/adapters/probes/crush.json` |
 | qoder | headless（Claude 同族） | CI 实测 1.1.85 | host | experimental（headless 入口已验证；无真实回合录制；ACP 待复核） | `fixtures/adapters/probes/qoder-cn.json`、`platform/adapters/headless-profiles.mjs` |
-| codebuddy | acp-profile / headless / http | CI 实测 2.181.0 | host | experimental（ACP/headless 已验证；HTTP 按完整 OpenAPI 实现 job 派发/SSE/停止/回复，真实调用需 API key） | `fixtures/adapters/codebuddy-headless-stream-json.fixture.json`、`platform/adapters/codebuddy-http.mjs` |
+| codebuddy | acp-profile / headless / http | CI 实测 2.181.0 | host | experimental（ACP/headless + 网关支撑真实回合均已通过；HTTP 按完整 OpenAPI 实现 job 派发/SSE/停止/回复，真实调用需 API key） | `fixtures/adapters/live-turns/`、 `fixtures/adapters/codebuddy-headless-stream-json.fixture.json`、`platform/adapters/codebuddy-http.mjs` |
 | openclaw | acp-profile | CI 实测 2026.11.1 | host | experimental（`openclaw acp` 存在；需 Gateway 凭据） | `fixtures/adapters/probes/openclaw.json` |
 | fx | acp-profile | CI 实测 0.0.16 | host | experimental（ACP initialize 返回需 Vercel AI Gateway 凭据，已录门槛帧） | `fixtures/adapters/fx-acp-auth-gate.fixture.json` |
 | kimi | acp-profile / headless | CI 实测 2.5.2 | host | experimental（ACP 握手 + 网关支撑真实回合已通过；真实服务商凭据未接） | `fixtures/adapters/live-turns/`、`fixtures/adapters/kimi-acp-auth-gate.fixture.json`、`platform/adapters/kimi-headless.mjs` |

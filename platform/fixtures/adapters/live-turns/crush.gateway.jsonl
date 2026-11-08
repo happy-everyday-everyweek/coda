@@ -1,0 +1,2 @@
+{"ts":"2026-11-08T01:03:37.888Z","path":"/v1/responses","model":"coda-gateway","stream":true,"lastUser":"Generate a concise title for the following content:\n\nReply with exactly CODA_GATEWAY_OK. Do not use tools.\n <think>\n\n</think>","reply":"CODA_GATEWAY_OK"}
+{"ts":"2026-11-08T01:03:37.890Z","path":"/v1/responses","model":"coda-gateway","stream":true,"lastUser":"Reply with exactly CODA_GATEWAY_OK. Do not use tools.","reply":"CODA_GATEWAY_OK"}

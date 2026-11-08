@@ -38,7 +38,7 @@
 3. **不能替代真实凭据回归**：拿到真实 key 后仍需跑一次真实服务商回合并录制。
 4. 证据表里写「网关支撑真实回合」，不要写成「真实模型回合」。
 
-## 4. 结果（2026-11-08，run 42430290147）
+## 4. 结果（2026-11-08，run 42432533468）
 
 | Agent | 版本 | 协议 | 结果 |
 |---|---|---|---|
@@ -47,6 +47,8 @@
 | OpenCode | 1.19.5 | OpenAI Chat SSE | PASS |
 | Qwen Code | 0.27.0 | OpenAI Chat SSE | PASS |
 | Kimi Code | 2.5.2 | registry + OpenAI Chat SSE | PASS |
+| CodeBuddy | 2.181.0 | OpenAI Chat SSE（`/chat/completions`） | PASS |
+| Crush | 0.100.0 | OpenAI Responses SSE | PASS |
 
 详见 `platform/fixtures/adapters/live-turns/README.md`。
 

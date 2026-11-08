@@ -17,8 +17,10 @@ CLI 启动 → 请求本地 LLM 网关 → 解析流式响应 → 输出结果 �
 | OpenCode | 1.19.5 | OpenAI Chat Completions SSE | PASS |
 | Qwen Code | 0.27.0 | OpenAI Chat Completions SSE + stream-json | PASS |
 | Kimi Code CLI | 2.5.2 | 自定义 registry + OpenAI Chat SSE | PASS |
+| CodeBuddy | 2.181.0 | OpenAI Chat SSE（`/chat/completions`） | PASS |
+| Crush | 0.100.0 | OpenAI Responses SSE | PASS |
 
-运行记录：[42430290147](https://github.com/happy-everyday-everyweek/coda/actions/runs/42430290147)（五个矩阵任务全部 success）。
+运行记录：[42432533468](https://github.com/happy-everyday-everyweek/coda/actions/runs/42432533468)（七个矩阵任务全部 success）。
 每个目录文件：
 
 - `<agent>.transcript.txt`：CLI 原始输出的脱敏副本
