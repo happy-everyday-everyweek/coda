@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "kind": "gateway-backed-live-turn",
-  "generatedAt": "2026-11-08T01:00:00Z",
-  "runId": 42432533468,
-  "runUrl": "https://github.com/happy-everyday-everyweek/coda/actions/runs/42432533468",
+  "generatedAt": "2026-11-08T01:15:00Z",
+  "runId": 42433324654,
+  "runUrl": "https://github.com/happy-everyday-everyweek/coda/actions/runs/42433324654",
   "workflow": ".github/workflows/agent-live.yml",
   "gateway": {
     "command": "node platform/tools/mock-llm-gateway.mjs --port 18080",
@@ -23,7 +23,8 @@
       "package": "@anthropic-ai/claude-code",
       "version": "2.1.319",
       "transport": "Anthropic Messages SSE + stream-json",
-      "result": "pass"
+      "result": "pass",
+      "adapterSmoke": "pass"
     },
     {
       "id": "codex",
@@ -31,7 +32,8 @@
       "package": "@openai/codex",
       "version": "codex-cli 0.167.0",
       "transport": "OpenAI Responses SSE + JSONL",
-      "result": "pass"
+      "result": "pass",
+      "adapterSmoke": "pass"
     },
     {
       "id": "opencode",
@@ -74,5 +76,26 @@
       "result": "pass"
     }
   ],
-  "caveat": "真实 Agent 二进制与真实协议栈，但模型后端是固定回复的本地网关；这验证回合协议与退出路径，不代表模型质量或已接通真实模型服务商。"
+  "caveat": "真实 Agent 二进制与真实协议栈，但模型后端是固定回复的本地网关；这验证回合协议与退出路径，不代表模型质量或已接通真实模型服务商。",
+  "adapterSmoke": {
+    "claude": {
+      "adapter": "platform/adapters/claude-stream-json.mjs",
+      "state": "succeeded",
+      "events": [
+        "status",
+        "session",
+        "message"
+      ]
+    },
+    "codex": {
+      "adapter": "platform/adapters/codex-exec.mjs",
+      "state": "succeeded",
+      "events": [
+        "status",
+        "session",
+        "tool",
+        "message"
+      ]
+    }
+  }
 }
