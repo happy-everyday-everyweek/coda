@@ -71,6 +71,8 @@
 - 2026-11-08：`Build` 工作流在 `feat/desktop-agent-platform` 全绿（compile + JVM 单测 + platform 契约测试），
   APK 由 `workflow_dispatch -f build_apk=true` 产出：run `42448322414`，artifact
   `coda-debug-42448322414-3e4c91830af92675d697b1f32cb8fa625645c53a`（约 218 MB，debug 签名）。
+- 后续 APK 构建会自动发布到预发布 `android-latest`（资产 `app-debug.apk`），
+  国内可直接用镜像下载：`https://ghfast.top/https://github.com/happy-everyday-everyweek/coda/releases/download/android-latest/app-debug.apk`。
 - JVM 单测覆盖：协议解析、抽屉排序（分层/同层聚类上限 3）、节点客户端（握手、快照、正文、
   远端建会话/发送/停止/审批、流式事件、密钥错误）。
 - 尚未在真机上安装该 APK 验收。
