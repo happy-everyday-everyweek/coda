@@ -3272,8 +3272,7 @@ class MainActivity : BaseActivity() {
                 val role = if (message.optString("role") == "user") "你" else "Agent"
                 col.addView(
                     TextView(this).apply {
-                        text = "$role
-${message.optString("text", "")}"
+                        text = "$role\n${message.optString("text", "")}"
                         textSize = 14f
                         setPadding(dp(4), dp(8), dp(4), dp(8))
                         setTextColor(
