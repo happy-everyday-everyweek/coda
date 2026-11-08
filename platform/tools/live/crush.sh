@@ -5,7 +5,7 @@ source "$(dirname "$0")/lib.sh"
 install_npm @charmland/crush
 start_gateway
 WORK="$(mktemp -d)"
-mkdir -p "$OUT/home/.config/crush" "$OUT/home"
+mkdir -p "$OUT/home/.config/crush" "$OUT/home/.local/share"
 cat >"$OUT/home/.config/crush/crush.json" <<CONFIG
 {
   "\$schema": "https://charm.land/crush.json",
@@ -22,7 +22,7 @@ cat >"$OUT/home/.config/crush/crush.json" <<CONFIG
 }
 CONFIG
 cd "$WORK"
-HOME="$OUT/home" timeout 180 crush run --quiet -m coda/coda-gateway "$PROMPT" \
+HOME="$OUT/home" XDG_CONFIG_HOME="$OUT/home/.config" XDG_DATA_HOME="$OUT/home/.local/share" timeout 180 crush run -m coda/coda-gateway "$PROMPT" \
   </dev/null >"$OUT/transcript.txt" 2>"$OUT/stderr.log"
 finish "$OUT/transcript.txt"
 crush --version >"$OUT/version.txt" 2>&1 || true
