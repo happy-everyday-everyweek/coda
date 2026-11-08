@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.text.SpannableString
@@ -4993,7 +4994,7 @@ class MainActivity : BaseActivity() {
             modelContent.visibility = if (show) View.VISIBLE else View.GONE
         }
 
-        /** 重建模型列表：按供应商分组展示真实模型，高亮当前模型，并附供应商管理入口。 */
+        /** 重建模型列表：逐条展示「模型名 供应商」，高亮当前模型，并附供应商管理入口。 */
         fun refreshItems() {
             val curSel = zc.currentModel
             val curKey = curSel?.let { "${it.first}/${it.second}" }
@@ -5020,38 +5021,32 @@ class MainActivity : BaseActivity() {
                     },
                 )
             } else {
-                // 按供应商 id 分组（供应商名可能重名，不能拿它当 key），
-                // 每组先给一行供应商标题，再列这家供应商的全部模型。
-                options.groupBy { it.providerId }.forEach { (providerId, group) ->
-                    val providerName =
-                        group.firstOrNull()?.providerLabel
-                            ?: group.firstOrNull()?.providerId
-                            ?: providerId
+                // 不分组：每行就是「模型名 供应商」，供应商同字号、灰色、字重更轻。
+                options.forEach { option ->
                     items.addView(
-                        inflater.inflate(R.layout.view_model_group, items, false).apply {
-                            findViewById<TextView>(R.id.model_group_title).text = providerName
-                        },
-                    )
-                    group.forEach { option ->
-                        items.addView(
-                            inflater.inflate(R.layout.view_model_option, items, false).apply {
-                                findViewById<TextView>(R.id.model_name).text = option.label
-                                findViewById<ImageView>(R.id.model_check).visibility =
-                                    if (option.key == curKey) View.VISIBLE else View.GONE
-                                setOnClickListener {
-                                    zc.setModel(option.providerId, option.modelId) { ok, msg ->
-                                        if (!ok) {
-                                            snack("切换模型失败: $msg")
-                                        } else {
-                                            // 切换成功只刷新列表与胶囊，不整卡重建，保持滚动位置
-                                            refreshItems()
-                                            syncHeaderPill()
-                                        }
+                        inflater.inflate(R.layout.view_model_option, items, false).apply {
+                            findViewById<TextView>(R.id.model_name).text = option.label
+                            findViewById<TextView>(R.id.model_provider).apply {
+                                val provider = option.providerLabel ?: option.providerId
+                                text = provider
+                                visibility = if (provider.isBlank()) View.GONE else View.VISIBLE
+                                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+                            }
+                            findViewById<ImageView>(R.id.model_check).visibility =
+                                if (option.key == curKey) View.VISIBLE else View.GONE
+                            setOnClickListener {
+                                zc.setModel(option.providerId, option.modelId) { ok, msg ->
+                                    if (!ok) {
+                                        snack("切换模型失败: $msg")
+                                    } else {
+                                        // 切换成功只刷新列表与胶囊，不整卡重建，保持滚动位置
+                                        refreshItems()
+                                        syncHeaderPill()
                                     }
                                 }
-                            },
-                        )
-                    }
+                            }
+                        },
+                    )
                 }
             }
             items.addView(
