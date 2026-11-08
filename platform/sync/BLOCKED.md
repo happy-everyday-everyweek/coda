@@ -9,8 +9,9 @@
 
 **原因**
 
-1. Coda Android 节点（AGT-130）不在本仓库内，也没有可用的 APK/AAR、协议文档或
-   宿主接口；无法在本机启动 Android 宿主、验证认证桥或双向控制。
+1. Android 宿主桥第一版已在仓库内实现（`app/.../NodeBridge.kt` +
+   `platform/sync/android-node.mjs`，协议见 `docs/ANDROID-NODE-BRIDGE.md`），
+   但没有真机/模拟器可启动 App、验证前台服务、认证与双向控制。
 2. 需要真机上的 Android 前台服务、通知权限、Keystore/StrongBox 与进程存活策略；
    proot Ubuntu 模拟器不能代表这些行为。
 3. 验收条目 AGT-CODA / PA-008 需要真实 Android 节点参与，本机没有对端可测。
@@ -20,7 +21,8 @@
 - `identity.mjs`：ed25519 设备身份、deviceId/指纹、二维码/短码配对、设备撤销；
 - `crypto.mjs`：X25519 + HKDF + ChaCha20-Poly1305 加密帧、序号防重放、版本协商；
 - `transport.mjs`：局域网 TCP 通道（Android 端可复用 NDJSON 分帧约定）；
-- `sync-service.mjs`：快照/增量、命令队列、审批竞争、成果按需传输。
+- `sync-service.mjs`：快照/增量、命令队列、审批竞争、成果按需传输；
+- `android-node.mjs`：Android 宿主桥的桌面客户端（令牌认证、快照、发送、停止、审批、事件流）。
 
 **明确没有做的事**
 

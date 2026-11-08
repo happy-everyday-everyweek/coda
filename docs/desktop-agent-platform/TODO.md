@@ -170,7 +170,7 @@ ART / SEC / REL / PERF / QA / 发布
 | AGT-127 | IN PROGRESS | P0 | OpenClaw 可编程入口调研与适配 | AGT-101~110 | AGT-OPENCLAW, ADP-001~019 |
 | AGT-128 | IN PROGRESS | P0 | Kimi CLI / Kimi Code 可编程入口适配 | AGT-101~110 | AGT-KIMI, ADP-001~019 |
 | AGT-129 | IN PROGRESS | P0 | fx 适配 | AGT-101~110 | AGT-FX, ADP-001~019 |
-| AGT-130 | OPEN | P0 | Coda Android Coding Agent 受认证宿主桥 | CORE-101, SYNC-101 | AGT-CODA, ADP-001~019 |
+| AGT-130 | IN PROGRESS | P0 | Coda Android Coding Agent 受认证宿主桥（第一版已实现：TCP+NDJSON 鉴权桥、设置页开关、桌面客户端；待真机验收） | CORE-101, SYNC-101 | AGT-CODA, ADP-001~019 |
 | AGT-131 | IN PROGRESS | P1 | 未知 ACP Registry Agent 的自动发现与能力提示 | AGT-104 | AGT-ACP-GENERIC |
 
 ### 5.4 接口调研阻塞处理

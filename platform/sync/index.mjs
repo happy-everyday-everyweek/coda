@@ -83,6 +83,7 @@ export {
 } from "./discovery.mjs";
 
 export { createMemoryTransportPair, createTcpServer, connectTcp, TransportError } from "./transport.mjs";
+export { AndroidNodeClient, AndroidNodeError, ANDROID_NODE_PROTOCOL_VERSION, NODE_METHODS, NODE_ERRORS } from "./android-node.mjs";
 
 export {
   CURSOR_SCHEMA_VERSION,

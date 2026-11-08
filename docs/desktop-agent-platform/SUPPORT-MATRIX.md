@@ -90,7 +90,7 @@
 | kimi | acp-profile / headless | CI 实测 2.5.2 | host | experimental（ACP 握手 + 网关支撑真实回合已通过；真实服务商凭据未接） | `fixtures/adapters/live-turns/`、`fixtures/adapters/kimi-acp-auth-gate.fixture.json`、`platform/adapters/kimi-headless.mjs` |
 | trae | — | — | — | BLOCKED（企业版旗舰套餐门槛） | `platform/docs/DOMESTIC-AGENTS.md` §2 |
 | workbuddy | — | — | — | BLOCKED（官方无本地可编程入口） | `platform/docs/DOMESTIC-AGENTS.md` §3 |
-| coda 宿主桥（AGT-130） | — | — | — | BLOCKED（需 Android 真机/ADB） | — |
+| coda 宿主桥（AGT-130） | Android TCP+NDJSON | 第一版 | Android | IN PROGRESS（受认证桥 + 桌面客户端 + 假节点测试；待真机验收） | `app/src/main/java/com/coda/mobileui/core/NodeBridge.kt`、`platform/sync/android-node.mjs`、`platform/docs/ANDROID-NODE-BRIDGE.md` |
 
 生成与校验规则见 `platform/docs/adr/ADR-0005-agent-capability-matrix.md` 与
 `platform/adapters/capability-matrix.mjs`；界面只能通过 `supportsCapability()` 读取矩阵。
