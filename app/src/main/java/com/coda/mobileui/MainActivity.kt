@@ -1868,6 +1868,10 @@ class MainActivity : BaseActivity() {
             modelPillLabel = label ?: pair.second
             syncHeaderPill()
         }
+        // 面板开着时，模型清单或当前选择变了就只刷列表，保持滚动位置与卡片本身。
+        if (findViewById<View>(R.id.model_panel_scrim)?.visibility == View.VISIBLE) {
+            refreshModelItems?.invoke()
+        }
         strengthLevel = controllerStrengthIndex()
         if (zc.currentSessionId != null) {
             chatView.visibility = View.VISIBLE
@@ -4978,6 +4982,7 @@ class MainActivity : BaseActivity() {
         val strengthContent = card.findViewById<View>(R.id.strength_content)
         val modelContent = card.findViewById<View>(R.id.model_content)
         val items = card.findViewById<LinearLayout>(R.id.model_items)
+        card.findViewById<MaxHeightScrollView>(R.id.model_items_scroll)?.maxHeightPx = dp(320)
 
         fun showModels(show: Boolean) {
             TransitionManager.beginDelayedTransition(card as ViewGroup, AutoTransition().setDuration(220))
@@ -5007,7 +5012,18 @@ class MainActivity : BaseActivity() {
                     },
                 )
             } else {
-                options.groupBy { it.providerLabel ?: it.providerId }.forEach { (_, group) ->
+                // 按供应商 id 分组（供应商名可能重名，不能拿它当 key），
+                // 每组先给一行供应商标题，再列这家供应商的全部模型。
+                options.groupBy { it.providerId }.forEach { (providerId, group) ->
+                    val providerName =
+                        group.firstOrNull()?.providerLabel
+                            ?: group.firstOrNull()?.providerId
+                            ?: providerId
+                    items.addView(
+                        inflater.inflate(R.layout.view_model_group, items, false).apply {
+                            findViewById<TextView>(R.id.model_group_title).text = providerName
+                        },
+                    )
                     group.forEach { option ->
                         items.addView(
                             inflater.inflate(R.layout.view_model_option, items, false).apply {
@@ -5019,7 +5035,9 @@ class MainActivity : BaseActivity() {
                                         if (!ok) {
                                             snack("切换模型失败: $msg")
                                         } else {
-                                            buildModelPanel()
+                                            // 切换成功只刷新列表与胶囊，不整卡重建，保持滚动位置
+                                            refreshItems()
+                                            syncHeaderPill()
                                         }
                                     }
                                 }

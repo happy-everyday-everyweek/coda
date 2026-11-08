@@ -111,12 +111,21 @@
                 android:textAppearance="?attr/textAppearanceTitleSmall"
                 android:textColor="?attr/colorOnSurfaceVariant" />
 
-            <LinearLayout
-                android:id="@+id/model_items"
+            <!-- 限高滚动：同一供应商可能有很多模型，不限高就会超出屏幕看不见。 -->
+            <com.coda.mobileui.MaxHeightScrollView
+                android:id="@+id/model_items_scroll"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:orientation="vertical" />
+                android:overScrollMode="ifContentScrolls"
+                android:scrollbars="vertical">
+
+                <LinearLayout
+                    android:id="@+id/model_items"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </com.coda.mobileui.MaxHeightScrollView>
         </LinearLayout>
     </FrameLayout>
 </com.google.android.material.card.MaterialCardView>
