@@ -386,18 +386,6 @@ class CodaBotPage(
         }, LinearLayout.LayoutParams(-1, -2))
     }
 
-    private fun label(
-        value: String,
-        size: Float,
-        colorAttr: Int,
-        alpha: Float = 1f,
-    ): TextView = TextView(host).apply {
-        text = value
-        textSize = size
-        setTextColor(attr(colorAttr))
-        this.alpha = alpha
-    }
-
     private fun attr(id: Int): Int = MaterialColors.getColor(this, id, Color.GRAY)
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density + .5f).toInt()
     private fun statusBarHeight(): Int = context.topSafeInsetPx()
