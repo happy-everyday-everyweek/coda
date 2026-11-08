@@ -64,7 +64,7 @@ class RemoteSessionActivity : BaseActivity() {
         val surface = MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurface, Color.BLACK)
         val onSurface = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface, Color.WHITE)
         val subtle = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
-        val primary = MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary, Color.CYAN)
+        val primary = MaterialColors.getColor(this, android.R.attr.colorAccent, Color.CYAN)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

@@ -47,14 +47,32 @@
 - Android：`app/src/main/java/com/coda/mobileui/core/NodeBridge.kt`、`NodeBridgeService.kt`、
   `NodeBridgeProtocol.kt`；设置页「实验性功能 → 节点桥」。
 - 桌面客户端：`platform/sync/android-node.mjs`（`AndroidNodeClient`）。
-- 测试：`app/src/test/.../NodeBridgeProtocolTest.kt`、`platform/test/sync/android-node.test.mjs`。
+- Android 客户端（反方向：本机去连别的节点）：`core/NodeBridgeClient.kt`、
+  `core/RemoteNodeSync.kt`；会话页 `RemoteSessionActivity.kt`。
+- 测试：`app/src/test/.../NodeBridgeProtocolTest.kt`、`NodeBridgeClientTest.kt`、
+  `DrawerOrderingTest.kt`、`platform/test/sync/android-node.test.mjs`。
 
-## 5. 仍未完成（不能声称 AGT-130 / SYNC-109 完成）
+## 5. 反方向：Android 连接其它节点
+
+手机既能当被控节点，也能当控制端：
+
+1. 输入框上方「运行地点 → 添加设备」填入名称、地址、端口、令牌，保存后立即握手，
+   拉取对方 `node.snapshot` 与各会话正文，写入 `DeviceStore` 缓存。
+2. 选中远端设备后发送：打开 `RemoteSessionActivity`，在对方节点上 `node.session.new`
+   （未选工作区时用对方默认值）并 `node.turn.send`；流式 `message.delta` 直接回显，
+   `turn.finished` 后重取一次权威消息。可停止、可应答审批（`interaction.request`）。
+3. 抽屉里的远端缓存会话不再只读：点开同样进入 `RemoteSessionActivity`，
+   在线时恢复真实会话并继续对话；连不上时回退为缓存只读展示。
+4. 排序：本地与远端会话平铺在同一抽屉，按状态分层（审批 > 等待 > 运行 > 未读 > 空闲），
+   同层内按最近活跃度加权；同设备同工作区最多 3 条相邻，不跨层聚合。
+
+## 6. 仍未完成（不能声称 AGT-130 / SYNC-109 完成）
 
 1. 真机验证：前台服务在后台/锁屏/杀进程后的行为、通知权限、Keystore/StrongBox。
 2. 设备身份与配对：当前是预共享令牌，不是 ed25519 设备身份 + 二维码配对；
    应复用 `platform/sync/identity.mjs` 的配对/撤销模型。
-3. 端到端：桌面核心 → 节点桥 → 内核 → 事件回传的完整 PA 单会话（SYNC-109 / PA-008）。
+3. 端到端：桌面核心 → 节点桥 → 内核 → 事件回传的完整 PA 单会话（SYNC-109 / PA-008）；
+   Android → Android 的远端会话已实现但同样缺真机双端验收。
 4. 断连重连、离线队列、多客户端并发与限流。
 
 在这些完成并通过真机/双端测试前，`SYNC-109` 保持 `BLOCKED`，`AGT-130` 只能是
