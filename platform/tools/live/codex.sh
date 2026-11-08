@@ -22,3 +22,7 @@ CODEX_HOME="$CODEX_HOME" HOME="$OUT/home" OPENAI_API_KEY=test-token \
   </dev/null >"$OUT/transcript.jsonl" 2>"$OUT/stderr.log"
 finish "$OUT/transcript.jsonl"
 codex --version >"$OUT/version.txt" 2>&1 || true
+
+# 适配器级：用 platform/adapters/codex-exec 驱动真实 CLI
+node "$ROOT/platform/tools/live/adapter-smoke.mjs" \
+  --agent codex --gateway "$GATEWAY_URL" --out "$OUT/adapter.json"

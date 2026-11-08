@@ -16,3 +16,7 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
   >"$OUT/transcript.jsonl" 2>"$OUT/stderr.log"
 finish "$OUT/transcript.jsonl"
 claude --version >"$OUT/version.txt" 2>&1 || true
+
+# 适配器级：用 platform/adapters/claude-stream-json 驱动真实 CLI
+HOME="$OUT/home" node "$ROOT/platform/tools/live/adapter-smoke.mjs" \
+  --agent claude --gateway "$GATEWAY_URL" --out "$OUT/adapter.json"
