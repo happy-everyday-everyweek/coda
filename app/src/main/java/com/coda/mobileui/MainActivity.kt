@@ -4781,6 +4781,9 @@ class MainActivity : BaseActivity() {
     /** 只刷新模型列表的回调；整卡重建会把滑杆与点击一起打碎，所以单独留一个。 */
     private var refreshModelItems: (() -> Unit)? = null
 
+    /** 上一次模型列表的内容指纹，用于避免无变化时重复重建。 */
+    private var lastModelListSignature: String = ""
+
     /** 模型名（模型态下显示在胶囊里）。与工作区状态互不干扰，各记一份。 */
     private var modelPillLabel: CharSequence = ""
 
@@ -4992,10 +4995,15 @@ class MainActivity : BaseActivity() {
 
         /** 重建模型列表：按供应商分组展示真实模型，高亮当前模型，并附供应商管理入口。 */
         fun refreshItems() {
-            items.removeAllViews()
             val curSel = zc.currentModel
             val curKey = curSel?.let { "${it.first}/${it.second}" }
             val options = zc.modelOptions
+            // 状态 patch 在流式输出期间很频繁；内容没变就不重建，
+            // 否则列表会被反复清空重填，滚动位置一直弹回顶部。
+            val signature = curKey + "|" + options.joinToString(",") { it.key + ":" + it.label }
+            if (signature == lastModelListSignature && items.childCount > 0) return
+            lastModelListSignature = signature
+            items.removeAllViews()
             if (options.isEmpty()) {
                 items.addView(
                     TextView(this@MainActivity).apply {
