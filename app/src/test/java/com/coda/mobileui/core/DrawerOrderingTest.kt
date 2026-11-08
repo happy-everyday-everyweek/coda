@@ -50,7 +50,7 @@ class DrawerOrderingTest {
         )
         val ordered = DrawerOrdering.order(items, now).map { it.id }
         assertEquals("run", ordered.first())
-        assertEquals(4, ordered.size)
+        assertEquals(5, ordered.size)
         // 普通组最多 3 个：a/b/c 聚在一起，第 4 个 d 留在后面。
         assertEquals(listOf("a", "b", "c"), ordered.drop(1).take(3))
         assertTrue(ordered.contains("d"))
