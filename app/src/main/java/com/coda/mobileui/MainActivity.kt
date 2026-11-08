@@ -523,6 +523,7 @@ class MainActivity : BaseActivity() {
         }
 
         buildDrawer()
+        refreshPairedDevices()
         // 宠物动画已迁到 Personal Agent 页面，Coding Agent 会话不再创建宠物栏。
         findViewById<android.view.View>(R.id.pet_bar_host)?.visibility = android.view.View.GONE
         attachZController()
@@ -3221,7 +3222,7 @@ class MainActivity : BaseActivity() {
         ordered.forEachIndexed { index, entry ->
             val row =
                 if (entry.cached) {
-                    createCachedSessionRow(inflater, list, entry.session, entry.deviceLabel ?: "其他设备")
+                    createCachedSessionRow(inflater, list, entry.session, entry.deviceId, entry.deviceLabel ?: "其他设备")
                 } else {
                     createSessionRow(inflater, list, entry.session)
                 }
@@ -3240,11 +3241,62 @@ class MainActivity : BaseActivity() {
         )
     }
 
+    /** 启动时刷新所有已配对设备；失败只记录，不打扰用户。 */
+    private fun refreshPairedDevices() {
+        val devices = com.coda.mobileui.core.DeviceStore.paired(this)
+        if (devices.isEmpty()) return
+        com.coda.mobileui.core.RemoteNodeSync.refreshAll(this, devices) { ok, _ ->
+            if (ok > 0) runOnUiThread {
+                renderDrawerSessions()
+                if (runTargetPanelOpen) buildRunTargetPanel()
+            }
+        }
+    }
+
+    /** 缓存会话只读查看：显示已缓存的消息正文；不伪造远端可继续执行。 */
+    private fun showCachedConversation(
+        session: ZSessionInfo,
+        deviceId: String,
+        deviceLabel: String,
+    ) {
+        val messages = com.coda.mobileui.core.DeviceStore.cachedMessages(this, deviceId, session.id)
+        if (messages.length() == 0) {
+            snack("$deviceLabel 的「${session.title}」还没有缓存正文")
+            return
+        }
+        val sheet = CodaSheet(this).title(session.title.ifEmpty { "缓存会话" })
+        sheet.subtitle("$deviceLabel · 只读缓存")
+        sheet.content { col ->
+            for (i in 0 until messages.length()) {
+                val message = messages.optJSONObject(i) ?: continue
+                val role = if (message.optString("role") == "user") "你" else "Agent"
+                col.addView(
+                    TextView(this).apply {
+                        text = "$role
+${message.optString("text", "")}"
+                        textSize = 14f
+                        setPadding(dp(4), dp(8), dp(4), dp(8))
+                        setTextColor(
+                            com.google.android.material.color.MaterialColors.getColor(
+                                this@MainActivity,
+                                com.google.android.material.R.attr.colorOnSurface,
+                                0xFF000000.toInt(),
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+        sheet.secondaryAction("关闭") { sheet.dismiss() }
+        sheet.show()
+    }
+
     /** 缓存会话行：只读投影，未连接时不允许继续执行。 */
     private fun createCachedSessionRow(
         inflater: LayoutInflater,
         container: LinearLayout,
         session: ZSessionInfo,
+        deviceId: String,
         deviceLabel: String,
     ): View {
         val row = inflater.inflate(R.layout.view_drawer_conversation, container, false)
@@ -3253,7 +3305,7 @@ class MainActivity : BaseActivity() {
         row.findViewById<TextView>(R.id.conv_title).text = session.title.ifEmpty { "未命名会话" }
         row.findViewById<TextView>(R.id.conv_summary).text = "$deviceLabel · 缓存"
         row.setOnClickListener {
-            snack("$deviceLabel 未连接，缓存会话暂不能继续")
+            showCachedConversation(session, deviceId, deviceLabel)
         }
         return row
     }
@@ -4991,9 +5043,11 @@ class MainActivity : BaseActivity() {
             val text =
                 when {
                     device.id == com.coda.mobileui.core.DeviceStore.LOCAL_ID -> "本机"
-                    device.label.isNotBlank() -> device.label
-                    device.address.isNotBlank() -> device.address
-                    else -> ""
+                    else -> {
+                        val base = device.label.ifBlank { device.address }
+                        val state = if (com.coda.mobileui.core.RemoteNodeSync.isOnline(device)) "在线" else "未连接"
+                        "$base · $state"
+                    }
                 }
             detail.text = text
             detail.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
@@ -5051,8 +5105,19 @@ class MainActivity : BaseActivity() {
                 ),
             )
             sheet.dismiss()
-            snack("已添加 $name；连接成功后即可作为运行地点")
-            if (runTargetPanelOpen) buildRunTargetPanel()
+            val added = com.coda.mobileui.core.DeviceStore.paired(this).firstOrNull { it.name == name }
+            snack("已添加 $name，正在连接…")
+            if (added != null) {
+                com.coda.mobileui.core.RemoteNodeSync.refresh(this, added) { ok, message ->
+                    runOnUiThread {
+                        snack(message)
+                        if (runTargetPanelOpen) buildRunTargetPanel()
+                        if (ok) renderDrawerSessions()
+                    }
+                }
+            } else if (runTargetPanelOpen) {
+                buildRunTargetPanel()
+            }
         }
         sheet.secondaryAction("取消") { sheet.dismiss() }
         sheet.show()

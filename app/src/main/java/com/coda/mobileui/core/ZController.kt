@@ -640,6 +640,20 @@ class ZController private constructor(
      * 拉取当前会话的子代理清单（session/subagents）。
      * 子代理卡靠 toolCallId 把 Agent 工具调用与子会话对齐，从而能展示「子代理正在进行的事」。
      */
+    /** 读取任意会话的消息（宿主桥缓存/远程浏览用，不改变当前打开的会话）。 */
+    fun loadMessages(
+        sessionId: String,
+        cb: (Boolean, List<ZMessage>) -> Unit,
+    ) {
+        if (sessionId.isBlank()) {
+            cb(false, emptyList())
+            return
+        }
+        runtime.call("session/messages", JSONObject().put("sessionId", sessionId)) { ok, body ->
+            cb(ok, if (ok) ZParse.parseMessages(body) else emptyList())
+        }
+    }
+
     fun refreshSubagents() {
         val sid = currentSessionId ?: return
         val params =

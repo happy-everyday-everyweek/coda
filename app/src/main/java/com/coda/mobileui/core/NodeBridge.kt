@@ -345,6 +345,31 @@ object NodeBridge {
                     }
                 }
             }
+            NodeBridgeProtocol.METHOD_MESSAGES -> {
+                val sessionId = params.optString("sessionId", "")
+                if (sessionId.isBlank()) {
+                    client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_PARAMS, "sessionId required"))
+                } else {
+                    ctl.loadMessages(sessionId) { ok, messages ->
+                        if (!ok) {
+                            client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_NOT_FOUND, "cannot read messages"))
+                        } else {
+                            val array = JSONArray()
+                            for (message in messages) {
+                                array.put(
+                                    JSONObject()
+                                        .put("id", message.id)
+                                        .put("role", message.role)
+                                        .put("text", message.text())
+                                        .put("createdAt", message.createdAt)
+                                        .put("completedAt", message.completedAt),
+                                )
+                            }
+                            client.send(NodeBridgeProtocol.result(id, JSONObject().put("messages", array)))
+                        }
+                    }
+                }
+            }
             NodeBridgeProtocol.METHOD_TURN_STOP -> {
                 val sessionId = params.optString("sessionId", "")
                 if (sessionId.isBlank()) {

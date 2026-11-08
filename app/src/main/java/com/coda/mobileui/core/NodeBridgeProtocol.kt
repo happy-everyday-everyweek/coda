@@ -17,6 +17,7 @@ object NodeBridgeProtocol {
     const val METHOD_SESSION_OPEN = "node.session.open"
     const val METHOD_TURN_SEND = "node.turn.send"
     const val METHOD_TURN_STOP = "node.turn.stop"
+    const val METHOD_MESSAGES = "node.messages"
     const val METHOD_INTERACTION_ANSWER = "node.interaction.answer"
     const val METHOD_PING = "node.ping"
     const val EVENT = "node.event"

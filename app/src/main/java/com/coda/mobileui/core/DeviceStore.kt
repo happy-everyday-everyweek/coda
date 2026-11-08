@@ -109,6 +109,25 @@ object DeviceStore {
 
     fun cachedAt(ctx: Context, deviceId: String): Long = prefs(ctx).getLong(sessionsAtKey(deviceId), 0L)
 
+    /** 缓存某个远程会话的消息正文；离线点开时只读展示。 */
+    fun cacheMessages(ctx: Context, deviceId: String, sessionId: String, messages: JSONArray) {
+        prefs(ctx)
+            .edit()
+            .putString(messagesKey(deviceId, sessionId), messages.toString())
+            .putLong(messagesAtKey(deviceId, sessionId), System.currentTimeMillis())
+            .apply()
+    }
+
+    fun cachedMessages(ctx: Context, deviceId: String, sessionId: String): JSONArray {
+        val raw = prefs(ctx).getString(messagesKey(deviceId, sessionId), null) ?: return JSONArray()
+        return runCatching { JSONArray(raw) }.getOrElse { JSONArray() }
+    }
+
+    fun messagesCachedAt(ctx: Context, deviceId: String, sessionId: String): Long =
+        prefs(ctx).getLong(messagesAtKey(deviceId, sessionId), 0L)
+
+    private fun messagesKey(deviceId: String, sessionId: String) = "messages_${deviceId}_$sessionId"
+    private fun messagesAtKey(deviceId: String, sessionId: String) = "messages_at_${deviceId}_$sessionId"
     private fun sessionsKey(id: String) = "sessions_$id"
     private fun sessionsAtKey(id: String) = "sessions_at_$id"
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
