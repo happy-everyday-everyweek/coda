@@ -163,13 +163,16 @@ export function createGateway(options = {}) {
     const userText = lastUserText(body);
     record({ ts: new Date().toISOString(), path, model, stream, lastUser: userText.slice(0, 200), reply }, body);
 
-    if (path === "/v1/messages/count_tokens") {
+    // 有些 CLI（如 CodeBuddy）把 base_url 直接当根，请求 /chat/completions；
+    // 这里同时接受带 /v1 与不带 /v1 的形式。
+    const bare = path.replace(/^\/v1(?=\/)/, "");
+    if (bare === "/messages/count_tokens") {
       return json(res, 200, { input_tokens: Math.max(1, Math.ceil(userText.length / 4)) });
     }
 
-    if (path === "/v1/messages") return anthropic(res, body, { model, stream, reply, delayMs });
-    if (path === "/v1/chat/completions") return chatCompletions(res, body, { model, stream, reply, delayMs });
-    if (path === "/v1/responses") return responses(res, body, { model, stream, reply, delayMs });
+    if (bare === "/messages") return anthropic(res, body, { model, stream, reply, delayMs });
+    if (bare === "/chat/completions") return chatCompletions(res, body, { model, stream, reply, delayMs });
+    if (bare === "/responses") return responses(res, body, { model, stream, reply, delayMs });
     return json(res, 404, { error: { message: `unsupported path: ${path}` } });
   };
 

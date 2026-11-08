@@ -111,6 +111,23 @@ test("网关：Kimi registry 与模型 id", async (t) => {
   assert.match(registry.coda.api, /\/v1$/);
 });
 
+test("网关：兼容无 /v1 前缀的 OpenAI 路径", async (t) => {
+  const { server, base } = await start();
+  t.after(() => server.close());
+  const response = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "x", stream: true, messages: [{ role: "user", content: "hi" }] }),
+  });
+  assert.equal(response.status, 200);
+  const events = await readSse(response);
+  const text = events
+    .filter((e) => e.data !== "[DONE]")
+    .map((e) => e.data.choices?.[0]?.delta?.content ?? "")
+    .join("");
+  assert.equal(text, DEFAULT_REPLY);
+});
+
 test("lastUserText：兼容三种请求体", () => {
   assert.equal(lastUserText({ messages: [{ role: "user", content: "a" }] }), "a");
   assert.equal(lastUserText({ messages: [{ role: "user", content: [{ type: "text", text: "b" }] }] }), "b");

@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude, codex, opencode, qwen, kimi]
+        agent: [claude, codex, opencode, qwen, kimi, codebuddy, crush]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
