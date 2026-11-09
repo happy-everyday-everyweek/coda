@@ -7,6 +7,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.radiobutton.MaterialRadioButton
 import com.google.android.material.shape.ShapeAppearanceModel
@@ -251,14 +252,40 @@ object SettingsViewBuilder {
             // 自定义视图行：按 kind 造控件，由页面决定具体长什么样。
             is SettingRow.Custom -> {
                 if (row.kind == SettingRow.Custom.KIND_HEATMAP) {
-                    inflater.inflate(R.layout.view_settings_heatmap, container, false).apply {
-                        val heat = findViewById<UsageHeatmapView>(R.id.heatmap_view)
-                        val detail = findViewById<TextView>(R.id.heatmap_detail)
+                    // 直接复用标准设置行卡片：外距、圆角、底色、宽度与高度自适应
+                    // 都已经由 view_settings_row 定义好，这里只把内容区换成热力图。
+                    inflater.inflate(R.layout.view_settings_row, container, false).apply {
+                        val inner = findViewById<LinearLayout>(R.id.row_inner)
+                        inner.removeAllViews()
+                        inner.orientation = LinearLayout.VERTICAL
+                        inner.gravity = android.view.Gravity.NO_GRAVITY
+                        val heat = UsageHeatmapView(container.context)
                         // 点格子把这一天的用量写到下面那行字里。
+                        val detail =
+                            TextView(container.context).apply {
+                                text = "点方格查看当天用量"
+                                setTextColor(
+                                    MaterialColors.getColor(
+                                        this,
+                                        com.google.android.material.R.attr.colorOnSurfaceVariant,
+                                        android.graphics.Color.GRAY,
+                                    ),
+                                )
+                                textSize = 11.5f
+                                setPadding(0, (8f * resources.displayMetrics.density).toInt(), 0, 0)
+                            }
                         heat.setOnClickListener {
                             val cell = heat.cellAt(it.x, it.y)
                             detail.text = heat.describe(cell) ?: "点方格查看当天用量"
                         }
+                        // 热力图宽度随周数变化，放横向滚动里，避免窄屏被压缩。
+                        inner.addView(
+                            android.widget.HorizontalScrollView(container.context).apply {
+                                isHorizontalScrollBarEnabled = false
+                                addView(heat)
+                            },
+                        )
+                        inner.addView(detail)
                         heat.bind(row.data)
                     }
                 } else {
