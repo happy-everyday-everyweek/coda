@@ -871,10 +871,10 @@ class SettingsDetailActivity :
         title: String,
         message: String,
         confirmText: String,
-        onConfirm: () -> Unit,
         // 从另一张半屏卡片进来时传它：就地换页，不关卡片再开一张，
         // 这样走的是标准换页动画，而不是「先沉下去再升起来」。
         into: CodaSheet? = null,
+        onConfirm: () -> Unit,
     ) {
         if (into != null) {
             into.navigate {
