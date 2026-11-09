@@ -172,30 +172,21 @@ class SettingsDetailActivity :
         block: () -> Unit,
     ) {
         val container = findViewById<LinearLayout>(R.id.page_container)
-        val width =
-            (container.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels).toFloat()
-        // 参数对齐 NextPlayer 的页面过渡：总 200ms、线性缓动、行程 30% 屏宽。
-        // 写成本页自己的值，不去借工作区的 Motion，两处互不影响。
-        val shift = width * 0.3f
-        val half = 100L
-        val linear = android.view.animation.LinearInterpolator()
-        container.animate().cancel()
+        val out = if (forward) -dp(12).toFloat() else dp(12).toFloat()
+        val inFrom = if (forward) dp(16).toFloat() else -dp(16).toFloat()
         container
             .animate()
             .alpha(0f)
-            .translationX(if (forward) -shift else shift)
-            .setDuration(half)
-            .setInterpolator(linear)
+            .translationX(out)
+            .setDuration(110)
             .withEndAction {
                 block()
-                container.translationX = if (forward) shift else -shift
-                container.alpha = 0f
+                container.translationX = inFrom
                 container
                     .animate()
                     .alpha(1f)
                     .translationX(0f)
-                    .setDuration(half)
-                    .setInterpolator(linear)
+                    .setDuration(150)
                     .start()
             }.start()
     }
