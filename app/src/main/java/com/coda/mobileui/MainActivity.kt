@@ -486,8 +486,24 @@ class MainActivity : BaseActivity() {
         // 抽屉被直接收起（返回键、点空白、手势）时把全屏状态复位，保证下次打开仍是半屏
         drawerLayout.addDrawerListener(
             object : DrawerLayout.SimpleDrawerListener() {
+                override fun onDrawerSlide(
+                    drawerView: View,
+                    slideOffset: Float,
+                ) {
+                    // 参考 dsh-Go 的抽屉开合：位移全程跟手，主内容只做轻微让位，
+                    // 不做缩放/淡出——那会在滑动中途改变层级观感。
+                    val shift = dp(24) * slideOffset
+                    findViewById<View>(R.id.main_content)?.translationX = shift
+                }
+
                 override fun onDrawerClosed(drawerView: View) {
+                    findViewById<View>(R.id.main_content)?.translationX = 0f
                     resetDrawerToCompact()
+                }
+
+                override fun onDrawerOpened(drawerView: View) {
+                    // 落位后把位移归零交给布局自己，避免后续窗口变化把内容顶偏。
+                    findViewById<View>(R.id.main_content)?.translationX = 0f
                 }
             },
         )
@@ -3854,7 +3870,7 @@ class MainActivity : BaseActivity() {
         val screenWidth = resources.displayMetrics.widthPixels
         view.visibility = View.VISIBLE
         view.alpha = 1f
-        animateDrawerWidth(dp(304), screenWidth, 240)
+        animateDrawerWidth(dp(304), screenWidth, Motion.EMPHASIZED)
         setDrawerRounded(false)
 
         // 半屏顶部的两个动作行在全屏里变成右上角图标：高度塌陷 + 淡出（避免下方列表突跳）
@@ -3897,7 +3913,8 @@ class MainActivity : BaseActivity() {
         val host = findViewById<View>(R.id.nav_view) ?: return
         ValueAnimator.ofInt(from, to).apply {
             this.duration = duration
-            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            // 抽屉开合是「跟手后落位」：用 glide 的长尾减速收住，避免线性走完的硬停。
+            interpolator = Motion.GLIDE
             addUpdateListener { anim ->
                 val params = host.layoutParams
                 params.width = anim.animatedValue as Int

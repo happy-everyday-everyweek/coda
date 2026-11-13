@@ -265,42 +265,23 @@ class WorkspaceActivity : BaseActivity() {
     private fun enterFromDrawerShape() {
         val screenWidth = resources.displayMetrics.widthPixels
         if (screenWidth <= 0) return
-        // 跟手：调用方在主界面拖动时就把进度传进来，这里从那个宽度继续补完，
-        // 不再从 0 重新长一遍，观感才是"我一直跟着手指在展开"。
-        val from = startWidthFraction.coerceIn(0f, 1f).let { (it * screenWidth).toInt() }
-        container.layoutParams = container.layoutParams.apply { width = from }
+        // 之前逐帧改 layoutParams.width 并 requestLayout，等于每帧重排整页，内容会边展开边重新折行。
+        // 现在容器始终全宽、只布局一次，用平移来展开：从手指已经拖出的比例接着滑到 0。
+        val fraction = startWidthFraction.coerceIn(0f, 1f)
+        container.layoutParams = container.layoutParams.apply { width = MATCH }
         container.requestLayout()
-        if (from >= screenWidth) {
-            container.layoutParams = container.layoutParams.apply { width = MATCH }
-            container.requestLayout()
+        if (fraction >= 1f) {
+            container.translationX = 0f
             startWidthFraction = 0f
             return
         }
-        // 已经被手指拖了一段，剩余距离按比例缩短时长，避免松手后还要等满时长
-        val remaining = 1f - from.toFloat() / screenWidth
-        val anim =
-            ValueAnimator.ofInt(from, screenWidth).apply {
-                duration = (ENTER_EXPAND_DURATION_MS * remaining).toLong().coerceAtLeast(90L)
-                interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
-                addUpdateListener { a ->
-                    container.layoutParams =
-                        container.layoutParams.apply {
-                            this.width = a.animatedValue as Int
-                        }
-                    container.requestLayout()
-                }
-            }
-        anim.addListener(
-            object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    // 展开到位后把宽度交回匹配父布局，避免旋转或分屏后尺寸被固定值锁死。
-                    container.layoutParams = container.layoutParams.apply { width = MATCH }
-                    container.requestLayout()
-                    startWidthFraction = 0f
-                }
-            },
-        )
-        anim.start()
+        container.translationX = screenWidth * (1f - fraction)
+        container.animate()
+            .translationX(0f)
+            .setDuration((ENTER_EXPAND_DURATION_MS * (1f - fraction)).toLong().coerceAtLeast(90L))
+            .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
+            .withEndAction { startWidthFraction = 0f }
+            .start()
     }
 
     private fun buildContainer(): View {
