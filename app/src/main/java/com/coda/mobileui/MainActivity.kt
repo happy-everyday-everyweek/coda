@@ -3204,7 +3204,14 @@ class MainActivity : BaseActivity() {
                 tag = "sessions_host"
                 orientation = LinearLayout.VERTICAL
             }
-        zc.sessions.forEachIndexed { index, s ->
+        val query = sessionQuery.trim()
+        val visible =
+            if (query.isEmpty()) {
+                zc.sessions
+            } else {
+                zc.sessions.filter { it.title.contains(query, ignoreCase = true) }
+            }
+        visible.forEachIndexed { index, s ->
             list.addView(
                 createSessionRow(inflater, list, s),
                 LinearLayout
@@ -3858,7 +3865,10 @@ class MainActivity : BaseActivity() {
     private var edgeSwipeStartX = 0f
     private var edgeSwipeStartY = 0f
 
-    /** 全屏抽屉（抽屉已打开时再右滑进入）：底部搜索栏 + 右上角两个按钮 + 会话列表。 */
+    /** 全屏抽屉：下拉搜索 + 右上角两个按钮 + 会话列表。 */
+
+    /** 抽屉搜索的当前关键词；空串表示不过滤。 */
+    private var sessionQuery: String = ""
     private var fullDrawer: View? = null
 
     /** 抽屉向右展开为全屏：同一个面板变宽；会话列表沿用同一份，直接移动到新位置。 */
@@ -3877,20 +3887,13 @@ class MainActivity : BaseActivity() {
         host.findViewWithTag<View>("drawer_actions")?.let { actions ->
             collapseDrawerActions(actions, show = false)
         }
-        // 列表底部为搜索框让出空间（平滑过渡）
-        animateDrawerContentPadding(host, dp(96))
-
-        // 搜索框上浮出现
+        // 搜索不常驻：默认隐藏，列表下拉才出现（对齐 Claude 移动端）。
+        animateDrawerContentPadding(host, dp(16))
         view.findViewWithTag<View>("full_search")?.let { search ->
-            search.visibility = View.VISIBLE
-            search.alpha = 0f
-            search.translationY = dp(28).toFloat()
-            search
-                .animate()
-                .alpha(1f)
-                .translationY(0f)
-                .setDuration(260)
-                .start()
+            search.animate().cancel()
+            search.visibility = View.GONE
+            search.alpha = 1f
+            search.translationY = 0f
         }
         // 新对话与设置从左侧移动到右上角
         shiftHeaderButtons(view, fromLeft = true)
@@ -4165,7 +4168,7 @@ class MainActivity : BaseActivity() {
             ),
         )
 
-        // 底部：搜索栏
+        // 顶部：搜索胶囊。默认不占位，列表下拉才出现（对齐 Claude 移动端）。
         val searchCard =
             com.google.android.material.card.MaterialCardView(this).apply {
                 tag = "full_search"
@@ -4175,11 +4178,11 @@ class MainActivity : BaseActivity() {
                         .LayoutParams(
                             FrameLayout.LayoutParams.MATCH_PARENT,
                             FrameLayout.LayoutParams.WRAP_CONTENT,
-                            Gravity.BOTTOM,
+                            Gravity.TOP,
                         ).apply {
+                            topMargin = topSafeInset() + dp(64)
                             leftMargin = dp(16)
                             rightMargin = dp(16)
-                            bottomMargin = dp(16) + systemNavigationBarHeight()
                         }
                 setCardBackgroundColor(
                     com.google.android.material.color.MaterialColors.getColor(
@@ -4206,6 +4209,7 @@ class MainActivity : BaseActivity() {
         )
         searchRow.addView(
             EditText(this).apply {
+                id = R.id.drawer_search_input
                 hint = getString(R.string.drawer_search_hint)
                 background = null
                 setTextColor(onSurface)
@@ -4218,12 +4222,106 @@ class MainActivity : BaseActivity() {
                 )
                 inputType = android.text.InputType.TYPE_CLASS_TEXT
                 setPadding(dp(10), dp(12), 0, dp(12))
+                addTextChangedListener(
+                    object : android.text.TextWatcher {
+                        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+                        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+
+                        override fun afterTextChanged(s: android.text.Editable?) {
+                            val next = s?.toString().orEmpty()
+                            if (next == sessionQuery) return
+                            sessionQuery = next
+                            renderDrawerSessions()
+                        }
+                    },
+                )
             },
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
         searchCard.addView(searchRow)
         root.addView(searchCard)
+        attachDrawerPullSearch(searchCard)
         return root
+    }
+
+    /**
+     * 下拉展开搜索（对齐 Claude 移动端）。
+     *
+     * Claude 的做法是：搜索不常驻占位，列表处在顶部时往下拉才把输入胶囊带出来，
+     * 松手按拉出距离落位；输入即过滤，清空后收起。这里按同一交互实现。
+     */
+    private fun attachDrawerPullSearch(search: View) {
+        val scroll = findViewById<ScrollView>(R.id.drawer_scroll) ?: return
+        val input = search.findViewById<EditText>(R.id.drawer_search_input)
+        val revealPx = dp(56)
+        var startY = 0f
+        var armed = false
+        var dragging = false
+
+        fun showSearch(animate: Boolean) {
+            search.visibility = View.VISIBLE
+            if (!animate) {
+                search.alpha = 1f
+                search.translationY = 0f
+                return
+            }
+            search.animate().alpha(1f).translationY(0f).setDuration(Motion.QUICK).start()
+        }
+
+        fun hideSearch() {
+            search.animate()
+                .alpha(0f)
+                .translationY(-dp(12).toFloat())
+                .setDuration(Motion.QUICK)
+                .withEndAction {
+                    search.visibility = View.GONE
+                    if (sessionQuery.isNotEmpty()) {
+                        sessionQuery = ""
+                        input?.setText("")
+                        renderDrawerSessions()
+                    }
+                }.start()
+        }
+
+        scroll.setOnTouchListener { _, ev ->
+            if (fullDrawer?.visibility != View.VISIBLE) return@setOnTouchListener false
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startY = ev.y
+                    armed = !scroll.canScrollVertically(-1)
+                    dragging = false
+                    false
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    if (!armed) return@setOnTouchListener false
+                    val dy = ev.y - startY
+                    if (dy <= dp(8)) return@setOnTouchListener dragging
+                    dragging = true
+                    if (search.visibility != View.VISIBLE) showSearch(animate = false)
+                    val p = (dy / revealPx).coerceIn(0f, 1f)
+                    search.alpha = p
+                    search.translationY = -dp(12) * (1f - p)
+                    true
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!dragging) return@setOnTouchListener false
+                    dragging = false
+                    armed = false
+                    if (search.alpha >= 0.5f) {
+                        showSearch(animate = true)
+                        input?.requestFocus()
+                    } else {
+                        hideSearch()
+                    }
+                    true
+                }
+
+                else -> false
+            }
+        }
     }
 
     /** 是否拦截右滑手势：由模型面板是否打开、输入框是否正在输入共同决定。 */
