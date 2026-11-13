@@ -73,8 +73,8 @@ class SessionSearchPage(
                 setTextColor(color(com.google.android.material.R.attr.colorOnSurface))
                 setHintTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant))
                 background = null
-                singleLine = true
-                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+                isSingleLine = true
+                layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
                 addTextChangedListener(
                     object : TextWatcher {
                         override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
@@ -88,7 +88,7 @@ class SessionSearchPage(
                 )
             }
         bar.addView(input)
-        root.addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP))
+        root.addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 
         val scroll =
             ScrollView(host).apply {
@@ -99,7 +99,7 @@ class SessionSearchPage(
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(8f), dp(4f), dp(8f), dp(24f))
             }
-        scroll.addView(results, ScrollView.LayoutParams(MATCH_PARENT, WRAP))
+        scroll.addView(results, android.view.ViewGroup.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         root.addView(scroll)
         hint =
             TextView(host).apply {
@@ -109,7 +109,7 @@ class SessionSearchPage(
                 setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
                 visibility = View.GONE
             }
-        root.addView(hint, LinearLayout.LayoutParams(MATCH_PARENT, WRAP))
+        root.addView(hint, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         render("")
         return root
     }
@@ -196,10 +196,13 @@ class SessionSearchPage(
         }
     }
 
-    private fun color(attr: Int): Int =
-        com.google.android.material.color.MaterialColors.getColor(
-            host,
-            attr,
-            android.graphics.Color.GRAY,
-        )
+    private fun color(attr: Int): Int {
+        val value = android.util.TypedValue()
+        host.theme.resolveAttribute(attr, value, true)
+        return if (value.resourceId != 0) {
+            androidx.core.content.ContextCompat.getColor(host, value.resourceId)
+        } else {
+            value.data
+        }
+    }
 }

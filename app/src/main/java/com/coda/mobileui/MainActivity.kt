@@ -3237,7 +3237,7 @@ class MainActivity : BaseActivity() {
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextColor(
                 com.google.android.material.color.MaterialColors.getColor(
-                    this@MainActivity,
+                    window.decorView,
                     com.google.android.material.R.attr.colorOnSurfaceVariant,
                     android.graphics.Color.GRAY,
                 ),
