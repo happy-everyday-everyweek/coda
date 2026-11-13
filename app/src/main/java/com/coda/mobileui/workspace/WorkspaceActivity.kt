@@ -3,6 +3,7 @@ package com.coda.mobileui.workspace
 import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
+import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -469,10 +470,101 @@ class WorkspaceActivity : BaseActivity() {
     private fun createPage(data: WorkspaceTab): WorkspacePage =
         when (data.kind) {
             WorkspaceTabs.FILES -> FilesPage(this, data.state)
+            WorkspaceTabs.EDITOR -> EditorPage(this, data.state)
             WorkspaceTabs.GIT -> GitPage(this, data.state)
             WorkspaceTabs.TERMINAL -> TerminalPage(this, data.state)
             else -> OverviewPage(this, data.state)
         }
+
+    /**
+     * 打开一个文件到编辑器标签页。
+     *
+     * 浏览与编辑是两种页面：文件页只负责列表，编辑器单独成页。单点文件给的是预览标签，
+     * 同一时间只留一个，再点别的文件就在原位置换掉；改动或保存后转成常驻。
+     */
+    fun openEditor(
+        path: String,
+        preview: Boolean = true,
+        markdown: Boolean = false,
+    ) {
+        val existing =
+            tabs.firstOrNull {
+                it.data.kind == WorkspaceTabs.EDITOR && it.data.state.optString("path") == path
+            }
+        if (existing != null) {
+            if (!preview) promoteTab(existing.data.id)
+            selectTab(existing.data.id)
+            hideOverview()
+            return
+        }
+        val state = JSONObject().put("path", path).put("markdown", markdown)
+        // 预览标签在原位置替换，标签顺序不跳。
+        val slot = if (preview) tabs.indexOfFirst { it.data.preview } else -1
+        if (slot >= 0) {
+            val old = tabs.removeAt(slot)
+            pageHost.removeView(old.page.view)
+            old.page.onClosed()
+            history.remove(old.data.id)
+            ahead.remove(old.data.id)
+            // 被顶替的就是当前页：先把 activeId 清掉，免得历史里留一个不存在的 id。
+            if (activeId == old.data.id) activeId = null
+            val entry = attach(WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.EDITOR, state, preview))
+            tabs.add(slot, entry)
+            selectTab(entry.data.id)
+            updateBar()
+            persist()
+            hideOverview()
+            return
+        }
+        val entry = attach(WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.EDITOR, state, preview))
+        tabs += entry
+        selectTab(entry.data.id)
+        hideOverview()
+    }
+
+    /** 只读预览的正文不进 JSON 状态，按标签 key 暂存在内存里。 */
+    private val editorBuffers = mutableMapOf<String, String>()
+
+    /** 打开一段只读文本（压缩包内预览等），同样占一个编辑器标签。 */
+    fun openReadOnlyEditor(
+        name: String,
+        content: String,
+    ) {
+        val key = "ro:$name:${content.length}"
+        editorBuffers[key] = content
+        val state =
+            JSONObject()
+                .put("readonly", true)
+                .put("name", name)
+                .put("bufferKey", key)
+        val entry = attach(WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.EDITOR, state, preview = true))
+        tabs += entry
+        selectTab(entry.data.id)
+        hideOverview()
+    }
+
+    /** 编辑器页取只读正文。 */
+    fun editorBuffer(key: String): String? = editorBuffers[key]
+
+    /** 预览标签转常驻。 */
+    fun promoteTab(id: String) {
+        val entry = tabs.firstOrNull { it.data.id == id } ?: return
+        if (!entry.data.preview) return
+        entry.data.preview = false
+        updateBar()
+        if (overview != null) fillGrid()
+        persist()
+    }
+
+    /** 页面用：把自己从预览转成常驻。 */
+    fun promotePage(page: WorkspacePage) {
+        tabs.firstOrNull { it.page === page }?.let { promoteTab(it.data.id) }
+    }
+
+    /** 页面用：关闭自己所在的标签页。 */
+    fun closePage(page: WorkspacePage) {
+        tabs.firstOrNull { it.page === page }?.let { closeTab(it.data.id) }
+    }
 
     private fun createTab(
         kind: String,
@@ -809,9 +901,11 @@ class WorkspaceActivity : BaseActivity() {
         )
         head.addView(
             TextView(this).apply {
-                text = WorkspaceTabs.label(entry.data.kind)
+                text = WorkspaceTabs.labelOf(entry.data)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setTextColor(if (selected) primary else onSurface)
+                // 预览标签用斜体区分：它会被下一个打开的文件顶替，名字不是"固定"的。
+                if (entry.data.preview) typeface = Typeface.create("sans-serif", Typeface.ITALIC)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
@@ -919,7 +1013,7 @@ class WorkspaceActivity : BaseActivity() {
         id: String,
         into: CodaSheet? = null,
     ) {
-        val label = tabs.firstOrNull { it.data.id == id }?.let { WorkspaceTabs.label(it.data.kind) } ?: "标签"
+        val label = tabs.firstOrNull { it.data.id == id }?.let { WorkspaceTabs.labelOf(it.data) } ?: "标签"
         // 菜单页就地换到"标签操作"时，宿主是那张已经打开的卡；否则自己新建一张。
         val holder = arrayOfNulls<CodaSheet>(1)
 
@@ -1087,6 +1181,7 @@ class WorkspaceActivity : BaseActivity() {
     private fun describeKind(kind: String): String =
         when (kind) {
             WorkspaceTabs.FILES -> "浏览、编辑与管理文件"
+            WorkspaceTabs.EDITOR -> "查看与编辑文本文件"
             WorkspaceTabs.GIT -> "提交图与分支操作"
             WorkspaceTabs.TERMINAL -> "在当前目录下执行命令"
             else -> "任务与提交概览"
@@ -1095,6 +1190,7 @@ class WorkspaceActivity : BaseActivity() {
     private fun iconFor(kind: String): Int =
         when (kind) {
             WorkspaceTabs.FILES -> R.drawable.ic_folder
+            WorkspaceTabs.EDITOR -> R.drawable.ic_file
             WorkspaceTabs.GIT -> R.drawable.ic_branch
             WorkspaceTabs.TERMINAL -> R.drawable.ic_terminal
             else -> R.drawable.ic_chart
