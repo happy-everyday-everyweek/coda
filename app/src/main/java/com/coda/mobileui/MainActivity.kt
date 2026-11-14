@@ -457,6 +457,7 @@ class MainActivity : BaseActivity() {
         )
         // 初始态：新会话且未选工作区时胶囊是「运行位置」，否则是模型名。
         syncHeaderPill()
+        applyWideLayout()
         updateSendAvailability()
         setupSendMode()
         attachScroll = findViewById(R.id.attach_scroll)
@@ -3212,8 +3213,13 @@ class MainActivity : BaseActivity() {
                 tag = "sessions_host"
                 orientation = LinearLayout.VERTICAL
             }
-        // 搜索入口：Claude 的抽屉里就有一个 Search chats 动作，这里放在会话列表顶部。
-        list.addView(searchEntryRow())
+        // 搜索入口只在全屏抽屉里露出：半屏抽屉的列表位置留给会话本身。
+        list.addView(
+            searchEntryRow().apply {
+                tag = "drawer_search_entry"
+                visibility = if (fullDrawer?.visibility == View.VISIBLE) View.VISIBLE else View.GONE
+            },
+        )
         zc.sessions.forEachIndexed { index, s ->
             list.addView(
                 createSessionRow(inflater, list, s),
@@ -3228,6 +3234,51 @@ class MainActivity : BaseActivity() {
             list,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
         )
+    }
+
+    /**
+     * 大屏判定：平板、折叠屏展开、以及足够宽的手机横屏。
+     *
+     * Claude 在这几类形态下把侧栏当常驻栏用，正文让位而不是被盖住；手机竖屏仍是覆盖式抽屉。
+     */
+    private fun isWideLayout(): Boolean {
+        val cfg = resources.configuration
+        return cfg.smallestScreenWidthDp >= 600 ||
+            (cfg.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE && cfg.screenWidthDp >= 720)
+    }
+
+    /** 大屏下抽屉常开、去掉遮罩，并给正文让出抽屉宽度。 */
+    private fun applyWideLayout() {
+        val wide = isWideLayout()
+        drawerLayout.setScrimColor(if (wide) android.graphics.Color.TRANSPARENT else 0x99000000.toInt())
+        findViewById<View>(R.id.main_content)?.let { content ->
+            content.setPadding(
+                if (wide) dp(304) else 0,
+                content.paddingTop,
+                content.paddingRight,
+                content.paddingBottom,
+            )
+        }
+        if (wide && !drawerLayout.isDrawerOpen(Gravity.LEFT)) drawerLayout.openDrawer(Gravity.LEFT)
+    }
+
+    /** 会话点开：大屏保持侧栏常开，手机收起抽屉。 */
+    private fun runSessionOpen(block: () -> Unit) {
+        if (isWideLayout()) {
+            hideFullDrawer()
+            block()
+        } else {
+            collapseFullDrawerThen(block)
+        }
+    }
+
+    /** 搜索入口的可见性跟着全屏抽屉走：半屏不出、全屏才出。 */
+    private fun syncSearchEntryVisibility() {
+        val row =
+            findViewById<LinearLayout>(R.id.drawer_content)
+                ?.findViewWithTag<View>("drawer_search_entry")
+                ?: return
+        row.visibility = if (fullDrawer?.visibility == View.VISIBLE) View.VISIBLE else View.GONE
     }
 
     /** 抽屉里的搜索入口，样式与抽屉里的其它动作行一致。 */
@@ -3293,7 +3344,7 @@ class MainActivity : BaseActivity() {
         row.setOnClickListener {
             SettingsStore.get(this).markSessionSeen(session.id)
             pendingNewSession = false
-            collapseFullDrawerThen {
+            runSessionOpen {
                 liveText.clear()
                 messageViews.clear()
                 liveReasoning.clear()
@@ -3901,6 +3952,7 @@ class MainActivity : BaseActivity() {
         view.alpha = 1f
         animateDrawerWidth(dp(304), screenWidth, Motion.EMPHASIZED)
         setDrawerRounded(false)
+        syncSearchEntryVisibility()
 
         // 半屏顶部的两个动作行在全屏里变成右上角图标：高度塌陷 + 淡出（避免下方列表突跳）
         host.findViewWithTag<View>("drawer_actions")?.let { actions ->
@@ -4052,6 +4104,7 @@ class MainActivity : BaseActivity() {
     private fun hideFullDrawer(duration: Long = 200) {
         val host = findViewById<View>(R.id.nav_view) as? ViewGroup ?: return
         val view = host.findViewWithTag<View>("drawer_full") ?: return
+        view.postDelayed({ syncSearchEntryVisibility() }, duration + 20)
         val screenWidth = resources.displayMetrics.widthPixels
 
         // 搜索框下沉淡出
