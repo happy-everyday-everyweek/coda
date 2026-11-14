@@ -926,6 +926,27 @@ object SettingsData {
         )
         rows.add(SettingRow.Value("配对令牌", com.coda.mobileui.core.NodeBridge.token(ctx)))
         rows.add(SettingRow.Value("设备 ID", com.coda.mobileui.core.NodeBridge.deviceId(ctx)))
+        rows.add(SettingRow.Value("设备指纹", com.coda.mobileui.core.NodeBridge.deviceFingerprint(ctx)))
+        rows.add(SettingRow.Value("生成配对码", "5 分钟内有效、一次性；桌面端用它换自己的凭据", "node_pair_code"))
+        val credentials = com.coda.mobileui.core.NodeBridge.credentials(ctx)
+        rows.add(SettingRow.Header("授权设备"))
+        if (credentials.isEmpty()) {
+            rows.add(SettingRow.Value("尚无授权设备", "先生成配对码，再在桌面端输入"))
+        } else {
+            for (credential in credentials) {
+                val used =
+                    if (credential.lastUsedAt <= 0L) {
+                        "从未使用"
+                    } else {
+                        "最近使用 " + android.text.format.DateFormat.format("MM-dd HH:mm", credential.lastUsedAt)
+                    }
+                if (credential.revoked) {
+                    rows.add(SettingRow.Value("${credential.label}（已撤销）", used))
+                } else {
+                    rows.add(SettingRow.Value(credential.label, "$used · 点按撤销", "node_revoke:${credential.id}"))
+                }
+            }
+        }
         rows.add(SettingRow.Header("操作"))
         if (running) {
             rows.add(SettingRow.Value("停止节点桥", "断开桌面端，停止前台服务", "node_stop"))

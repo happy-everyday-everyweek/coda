@@ -12,6 +12,7 @@ import java.security.MessageDigest
 object NodeBridgeProtocol {
     const val VERSION = 1
     const val METHOD_HELLO = "node.hello"
+    const val METHOD_PAIR = "node.pair"
     const val METHOD_SNAPSHOT = "node.snapshot"
     const val METHOD_SESSION_NEW = "node.session.new"
     const val METHOD_SESSION_OPEN = "node.session.open"
@@ -67,5 +68,17 @@ object NodeBridgeProtocol {
     fun tokenMatches(expected: String, actual: String?): Boolean {
         if (actual == null) return false
         return MessageDigest.isEqual(expected.toByteArray(Charsets.UTF_8), actual.toByteArray(Charsets.UTF_8))
+    }
+
+    /** NDJSON 写一帧：一行一个 JSON，写完立即 flush。两端客户端共用这一份实现。 */
+    fun writeFrame(
+        writer: java.io.BufferedWriter,
+        frame: JSONObject,
+    ) {
+        synchronized(writer) {
+            writer.write(frame.toString())
+            writer.newLine()
+            writer.flush()
+        }
     }
 }

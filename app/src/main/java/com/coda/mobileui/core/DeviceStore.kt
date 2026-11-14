@@ -5,9 +5,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * 运行地点（本机 + 已配对设备）与各设备会话缓存的本地存储。
+ * 运行地点（本机 + 已授权设备）与各设备会话缓存的本地存储。
  *
- * 只存配对信息与最近一次快照，不伪造在线状态：
+ * 只存授权信息与最近一次快照，不伪造在线状态：
  * - 设备是否在线由连接层写入 lastSeen/lastError，UI 必须如实展示；
  * - 会话缓存是只读投影，桌面端不可达时仍能浏览，但不能在缓存上执行。
  */
@@ -27,14 +27,14 @@ object DeviceStore {
         val lastError: String? = null,
     ) {
         val address: String get() = if (host.isBlank()) "本机" else "$host:$port"
-        val paired: Boolean get() = id != LOCAL_ID
+        val isRemote: Boolean get() = id != LOCAL_ID
     }
 
     fun local(): Device = Device(LOCAL_ID, "这台设备", "", 0, "")
 
-    fun all(ctx: Context): List<Device> = listOf(local()) + paired(ctx)
+    fun all(ctx: Context): List<Device> = listOf(local()) + remotes(ctx)
 
-    fun paired(ctx: Context): List<Device> {
+    fun remotes(ctx: Context): List<Device> {
         val raw = prefs(ctx).getString(KEY_DEVICES, null) ?: return emptyList()
         val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
         val out = mutableListOf<Device>()
@@ -58,25 +58,25 @@ object DeviceStore {
 
     fun add(ctx: Context, device: Device): Device {
         val id = device.id.ifBlank { "dev_" + System.currentTimeMillis() }
-        val list = paired(ctx).filterNot { it.id == id }.toMutableList()
+        val list = remotes(ctx).filterNot { it.id == id }.toMutableList()
         list.add(0, device.copy(id = id))
         save(ctx, list)
         return device.copy(id = id)
     }
 
     fun remove(ctx: Context, id: String) {
-        save(ctx, paired(ctx).filterNot { it.id == id })
+        save(ctx, remotes(ctx).filterNot { it.id == id })
         prefs(ctx).edit().remove(sessionsKey(id)).remove(sessionsAtKey(id)).apply()
     }
 
     fun markError(ctx: Context, id: String, message: String?) {
-        val list = paired(ctx).map { if (it.id == id) it.copy(lastError = message, lastSeen = if (message == null) System.currentTimeMillis() else it.lastSeen) else it }
+        val list = remotes(ctx).map { if (it.id == id) it.copy(lastError = message, lastSeen = if (message == null) System.currentTimeMillis() else it.lastSeen) else it }
         save(ctx, list)
     }
 
     private fun save(ctx: Context, list: List<Device>) {
         val array = JSONArray()
-        for (d in list.filter { it.paired }) {
+        for (d in list.filter { it.isRemote }) {
             array.put(
                 JSONObject()
                     .put("id", d.id)

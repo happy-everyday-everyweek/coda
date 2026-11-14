@@ -3246,7 +3246,7 @@ class MainActivity : BaseActivity() {
         // 本机会话 + 其他设备的缓存会话，平铺成一条列表；不按设备分组。
         val entries = mutableListOf<DrawerSessionEntry>()
         for (s in zc.sessions) entries.add(DrawerSessionEntry(s, com.coda.mobileui.core.DeviceStore.LOCAL_ID, null, false))
-        for (device in com.coda.mobileui.core.DeviceStore.paired(this)) {
+        for (device in com.coda.mobileui.core.DeviceStore.remotes(this)) {
             val array = com.coda.mobileui.core.DeviceStore.cachedSessions(this, device.id)
             for (i in 0 until array.length()) {
                 val obj = array.optJSONObject(i) ?: continue
@@ -3295,7 +3295,7 @@ class MainActivity : BaseActivity() {
 
     /** 启动时刷新所有已配对设备；失败只记录，不打扰用户。 */
     private fun refreshPairedDevices() {
-        val devices = com.coda.mobileui.core.DeviceStore.paired(this)
+        val devices = com.coda.mobileui.core.DeviceStore.remotes(this)
         if (devices.isEmpty()) return
         com.coda.mobileui.core.RemoteNodeSync.refreshAll(this, devices) { ok, _ ->
             if (ok > 0) runOnUiThread {
@@ -5415,7 +5415,7 @@ class MainActivity : BaseActivity() {
                 ),
             )
             sheet.dismiss()
-            val added = com.coda.mobileui.core.DeviceStore.paired(this).firstOrNull { it.name == name }
+            val added = com.coda.mobileui.core.DeviceStore.remotes(this).firstOrNull { it.name == name }
             snack("已添加 $name，正在连接…")
             if (added != null) {
                 com.coda.mobileui.core.RemoteNodeSync.refresh(this, added) { ok, message ->

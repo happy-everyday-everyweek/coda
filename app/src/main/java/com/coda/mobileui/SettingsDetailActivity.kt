@@ -587,9 +587,27 @@ class SettingsDetailActivity :
                 renderPage()
             }
 
+            key.startsWith("node_revoke:") -> {
+                val credentialId = key.removePrefix("node_revoke:")
+                com.coda.mobileui.core.NodeBridge.revoke(this, credentialId)
+                snack("已撤销该设备的授权")
+                renderPage()
+            }
+            key == "node_pair_code" -> {
+                val code = com.coda.mobileui.core.NodeBridge.pairingCode(this)
+                snack("配对码 $code，5 分钟内有效")
+                renderPage()
+            }
             key == "node_start" -> {
+                // Android 13+ 的前台服务通知要运行时权限，否则用户看不到「节点在运行」。
+                if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                    checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41)
+                }
                 com.coda.mobileui.core.NodeBridgeService.start(this)
-                snack("节点桥启动中，首次连接请在桌面端输入设置页令牌")
+                snack("节点桥启动中；桌面端可用配对码或设置页令牌授权")
                 renderPage()
             }
 

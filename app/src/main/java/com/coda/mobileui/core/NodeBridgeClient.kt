@@ -182,11 +182,7 @@ class NodeBridgeClient private constructor(
         val future = CompletableFuture<JSONObject>()
         pending[id] = future
         val frame = JSONObject().put("jsonrpc", "2.0").put("id", id).put("method", method).put("params", params)
-        synchronized(writer) {
-            writer.write(frame.toString())
-            writer.newLine()
-            writer.flush()
-        }
+        NodeBridgeProtocol.writeFrame(writer, frame)
         return try {
             future.get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (error: ExecutionException) {

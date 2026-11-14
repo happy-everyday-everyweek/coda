@@ -11,8 +11,6 @@ import java.io.OutputStreamWriter
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.security.SecureRandom
-import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -37,8 +35,13 @@ object NodeBridge {
     private const val INTERACTION_TTL_MS = 10 * 60_000L
     private const val PREFS = "node_bridge"
     private const val KEY_TOKEN = "token"
+    private const val KEY_CREDENTIALS = "credentials"
+    private const val KEY_PAIR_CODE = "pair_code"
+    private const val KEY_PAIR_EXPIRES = "pair_code_expires"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_PORT = "port"
+    /** 配对码有效期：短到够用，长到不至于边看边过期。 */
+    private const val PAIR_CODE_TTL_MS = 5 * 60_000L
 
     private data class Interaction(val requestId: Any, val at: Long)
 
@@ -49,6 +52,7 @@ object NodeBridge {
     private val clients = CopyOnWriteArrayList<Client>()
     private val pendingInteractions = ConcurrentHashMap<String, Interaction>()
     private val receipts = CommandReceipts()
+    private val credentialsCodec = NodeCredentials()
     private val running = AtomicBoolean(false)
 
     @Volatile private var lastStatus: String = "未启动"
@@ -61,24 +65,99 @@ object NodeBridge {
     fun isRunning(): Boolean = running.get()
     fun clientCount(): Int = clients.size
 
-    fun token(ctx: Context): String {
-        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val existing = prefs.getString(KEY_TOKEN, null)
-        if (!existing.isNullOrBlank()) return existing
-        val bytes = ByteArray(24).also { SecureRandom().nextBytes(it) }
-        val fresh = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
-        prefs.edit().putString(KEY_TOKEN, fresh).apply()
-        return fresh
+    private fun prefsOf(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** 读凭据表；老版本只有单个 token，这里做一次迁移，把它当作「默认凭据」。 */
+    private fun loadCredentials(ctx: Context): List<NodeCredentials.Credential> {
+        val prefs = prefsOf(ctx)
+        val raw = prefs.getString(KEY_CREDENTIALS, null)
+        if (!raw.isNullOrBlank()) return credentialsCodec.fromJson(raw)
+        val legacy = prefs.getString(KEY_TOKEN, null)
+        if (legacy.isNullOrBlank()) return emptyList()
+        val migrated =
+            NodeCredentials.Credential(
+                id = "cred_legacy",
+                label = "默认凭据",
+                token = legacy,
+                createdAt = System.currentTimeMillis(),
+            )
+        val list = listOf(migrated)
+        prefs.edit().putString(KEY_CREDENTIALS, credentialsCodec.toJson(list)).remove(KEY_TOKEN).apply()
+        return list
     }
 
+    private fun saveCredentials(
+        ctx: Context,
+        list: List<NodeCredentials.Credential>,
+    ) {
+        prefsOf(ctx).edit().putString(KEY_CREDENTIALS, credentialsCodec.toJson(list)).apply()
+    }
+
+    /** 当前授权设备列表（含已撤销条目，界面按 revoked 区分）。 */
+    fun credentials(ctx: Context): List<NodeCredentials.Credential> = loadCredentials(ctx)
+
+    fun deviceFingerprint(ctx: Context): String = credentialsCodec.deviceFingerprint(deviceId(ctx))
+
+    /** 仍在生效的第一条凭据；没有就新发一条，保证设置页始终有东西可展示。 */
+    fun token(ctx: Context): String {
+        val list = loadCredentials(ctx)
+        list.firstOrNull { !it.revoked }?.let { return it.token }
+        val (next, credential) = credentialsCodec.issue(list, "默认凭据", System.currentTimeMillis())
+        saveCredentials(ctx, next)
+        return credential.token
+    }
+
+    /** 生成一次性配对码，桌面端用它换取自己的凭据。 */
+    fun pairingCode(ctx: Context): String {
+        val code = credentialsCodec.pairingCode()
+        prefsOf(ctx).edit()
+            .putString(KEY_PAIR_CODE, code)
+            .putLong(KEY_PAIR_EXPIRES, System.currentTimeMillis() + PAIR_CODE_TTL_MS)
+            .apply()
+        return code
+    }
+
+    /** 用配对码签发一条新凭据；码错或过期返回 null。 */
+    fun pair(
+        ctx: Context,
+        code: String,
+        label: String,
+    ): NodeCredentials.Credential? {
+        val prefs = prefsOf(ctx)
+        val expected = prefs.getString(KEY_PAIR_CODE, null) ?: return null
+        if (prefs.getLong(KEY_PAIR_EXPIRES, 0L) < System.currentTimeMillis()) return null
+        if (!NodeBridgeProtocol.tokenMatches(expected, code)) return null
+        val (next, credential) = credentialsCodec.issue(loadCredentials(ctx), label, System.currentTimeMillis())
+        saveCredentials(ctx, next)
+        prefs.edit().remove(KEY_PAIR_CODE).remove(KEY_PAIR_EXPIRES).apply()
+        return credential
+    }
+
+    /** 按凭据撤销：只断开这条凭据的连接，别的设备不受影响。 */
+    fun revoke(
+        ctx: Context,
+        credentialId: String,
+    ) {
+        saveCredentials(ctx, credentialsCodec.revoke(loadCredentials(ctx), credentialId))
+        for (client in clients) {
+            if (client.credentialId == credentialId) {
+                client.close()
+                clients.remove(client)
+            }
+        }
+        lastStatus = "已撤销一条授权，相关连接已断开"
+        broadcast("bridge.revoke", JSONObject().put("credentialId", credentialId))
+    }
+
+    /** 撤销全部凭据并新发一条，用于「重置令牌」。 */
     fun resetToken(ctx: Context): String {
-        val bytes = ByteArray(24).also { SecureRandom().nextBytes(it) }
-        val fresh = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_TOKEN, fresh).apply()
-        lastStatus = "令牌已重置，已断开现有连接"
+        val revokedAll = loadCredentials(ctx).map { it.copy(revoked = true) }
+        val (next, credential) = credentialsCodec.issue(revokedAll, "默认凭据", System.currentTimeMillis())
+        saveCredentials(ctx, next)
+        lastStatus = "已撤销全部授权，现有连接已断开"
         broadcast("bridge.reset", JSONObject())
         disconnectAll()
-        return fresh
+        return credential.token
     }
 
     fun deviceId(ctx: Context): String {
@@ -365,19 +444,42 @@ object NodeBridge {
         val id = request.opt("id")
         val method = request.optString("method", "")
         val params = request.optJSONObject("params") ?: JSONObject()
+        if (method == NodeBridgeProtocol.METHOD_PAIR) {
+            // 配对码是一次性凭证：用它换一条只属于这台桌面端的凭据。
+            val credential = pair(client.context, params.optString("code", ""), params.optString("clientName", "桌面端"))
+            if (credential == null) {
+                client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_UNAUTHORIZED, "pairing code invalid or expired"))
+            } else {
+                client.send(
+                    NodeBridgeProtocol.result(
+                        id,
+                        JSONObject()
+                            .put("ok", true)
+                            .put("credentialId", credential.id)
+                            .put("token", credential.token)
+                            .put("deviceId", deviceId(client.context))
+                            .put("fingerprint", deviceFingerprint(client.context)),
+                    ),
+                )
+            }
+            return
+        }
         if (method == NodeBridgeProtocol.METHOD_HELLO) {
             val version = params.optInt("protocolVersion", 1)
             if (version != NodeBridgeProtocol.VERSION) {
                 client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_VERSION, "unsupported protocol version $version"))
                 return
             }
-            val expected = token(client.context)
-            if (!NodeBridgeProtocol.tokenMatches(expected, params.optString("token", ""))) {
+            val list = loadCredentials(client.context)
+            val credential = credentialsCodec.findByToken(list, params.optString("token", ""))
+            if (credential == null) {
                 client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_UNAUTHORIZED, "invalid token"))
                 return
             }
             client.authenticated = true
-            client.send(NodeBridgeProtocol.result(id, hello(client.context)))
+            client.credentialId = credential.id
+            saveCredentials(client.context, credentialsCodec.markUsed(list, credential.id, System.currentTimeMillis()))
+            client.send(NodeBridgeProtocol.result(id, hello(client.context, credential.id)))
             return
         }
         if (!client.authenticated) {
@@ -494,14 +596,19 @@ object NodeBridge {
         }
     }
 
-    private fun hello(ctx: Context): JSONObject {
+    private fun hello(
+        ctx: Context,
+        credentialId: String,
+    ): JSONObject {
         val versionName = runCatching {
             ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
         }.getOrNull() ?: "unknown"
         return JSONObject()
             .put("protocolVersion", NodeBridgeProtocol.VERSION)
+            .put("credentialId", credentialId)
             .put("node", JSONObject()
                 .put("id", deviceId(ctx))
+                .put("fingerprint", deviceFingerprint(ctx))
                 .put("name", "Coda Android")
                 .put("appVersion", versionName)
                 .put("androidSdk", Build.VERSION.SDK_INT)
@@ -537,17 +644,13 @@ object NodeBridge {
         private val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
         private val seq = java.util.concurrent.atomic.AtomicLong(0)
         @Volatile var authenticated = false
+        /** 这条连接用的是哪条凭据：撤销时据此只断掉受影响的设备。 */
+        @Volatile var credentialId: String? = null
 
         /** 每条连接内单调递增：客户端据此丢弃重放与乱序事件。 */
         fun nextSeq(): Long = seq.incrementAndGet()
 
-        fun send(frame: JSONObject) {
-            synchronized(writer) {
-                writer.write(frame.toString())
-                writer.newLine()
-                writer.flush()
-            }
-        }
+        fun send(frame: JSONObject) = NodeBridgeProtocol.writeFrame(writer, frame)
 
         fun close() {
             runCatching { socket.close() }
