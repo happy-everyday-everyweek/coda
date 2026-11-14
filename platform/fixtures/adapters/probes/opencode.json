@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-07T13:44:21.037Z",
+  "agent": {
+    "id": "opencode",
+    "package": "opencode-ai",
+    "bin": "opencode",
+    "commands": [
+      {
+        "cmd": "opencode --version",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "opencode --help",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "opencode serve --help",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "opencode acp --help",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "opencode acp",
+        "timeoutMs": 20000,
+        "stdin": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1,\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false}},\"clientInfo\":{\"name\":\"coda-probe\",\"version\":\"0.0.1\"}}}\n"
+      },
+      {
+        "cmd": "opencode acp",
+        "timeoutMs": 25000,
+        "stdinLines": [
+          "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1,\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false}},\"clientInfo\":{\"name\":\"coda-probe\",\"version\":\"0.0.1\"}}}",
+          "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/new\",\"params\":{\"cwd\":\"/tmp\",\"mcpServers\":[]}}"
+        ]
+      },
+      {
+        "cmd": "opencode acp",
+        "timeoutMs": 120000,
+        "acpFlow": {
+          "prompt": "Reply with exactly one word: pong",
+          "timeoutMs": 100000
+        }
+      }
+    ]
+  },
+  "packageVersion": "1.19.5",
+  "runner": {
+    "os": "linux",
+    "arch": "x64",
+    "release": "7.0.0-1019-azure",
+    "node": "v24.22.2",
+    "host": "runnervmwuk1x"
+  },
+  "probes": [
+    {
+      "cmd": "opencode --version",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 393,
+      "stdout": "1.19.5\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "opencode --help",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 369,
+      "stdout": "",
+      "stderr": "⠀                                ▄     \n█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█\n█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀\n▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀\n\nCommands:\n  opencode completion          generate shell completion script\n  opencode acp                 start ACP (Agent Client Protocol) server\n  opencode mcp                 manage MCP (Model Context Protocol) servers\n  opencode [project]           start opencode tui                                          [default]\n  opencode attach <url>        attach to a running opencode server\n  opencode run [message..]     run opencode with a message\n  opencode debug               debugging and troubleshooting tools\n  opencode providers           manage AI providers and credentials                   [aliases: auth]\n  opencode agent               manage agents\n  opencode upgrade [target]    upgrade opencode to the latest or a specific version\n  opencode uninstall           uninstall opencode and remove all related files\n  opencode serve               starts a headless opencode server\n  opencode web                 start opencode server and open web interface\n  opencode models [provider]   list all available models\n  opencode stats               show token usage and cost statistics\n  opencode export [sessionID]  export session data as JSON\n  opencode import <file>       import session data from JSON file\n  opencode github              manage GitHub agent\n  opencode pr <number>         fetch and checkout a GitHub PR branch, then run opencode\n  opencode session             manage sessions\n  opencode plugin <module>     install plugin and update config                      [aliases: plug]\n  opencode db                  database tools\n\nPositionals:\n  project  path to start opencode in                                                        [string]\n\nOptions:\n  -h, --help          show help                                                            [boolean]\n  -v, --version       show version number                                                  [boolean]\n      --print-logs    print logs to stderr                                                 [boolean]\n      --log-level     log level                 [string] [choices: \"DEBUG\", \"INFO\", \"WARN\", \"ERROR\"]\n      --pure          run without external plugins                                         [boolean]\n      --port          port to listen on                                        [number] [default: 0]\n      --hostname      hostname to listen on                          [string] [default: \"127.0.0.1\"]\n      --mdns          enable mDNS service discovery (defaults hostname to 0.0.0.0)\n                                                                          [boolean] [default: false]\n      --mdns-domain   custom domain name for mDNS service (default: opencode.local)\n                                                                [string] [default: \"opencode.local\"]\n      --cors          additional domains to allow for CORS                     [array] [default: []]\n  -m, --model         model to use in the format of provider/model                          [string]\n  -c, --continue      continue the last session                                            [boolean]\n  -s, --session       session id to continue                                                [string]\n      --fork          fork the session when continuing (use with --continue or --session)  [boolean]\n      --prompt        prompt to use                                                         [string]\n      --agent         agent to use                                                          [string]\n      --auto          auto-approve permissions that are not explicitly denied (dangerous!)\n                                                                          [boolean] [default: false]\n      --mini          start the minimal interactive interface             [boolean] [default: false]\n      --no-replay     disable mini session history replay on resume and after resize       [boolean]\n      --replay-limit  cap visible mini replay to the newest N messages                      [number]\n"
+    },
+    {
+      "cmd": "opencode serve --help",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 362,
+      "stdout": "",
+      "stderr": "opencode serve\n\nstarts a headless opencode server\n\nOptions:\n  -h, --help         show help                                                             [boolean]\n  -v, --version      show version number                                                   [boolean]\n      --print-logs   print logs to stderr                                                  [boolean]\n      --log-level    log level                  [string] [choices: \"DEBUG\", \"INFO\", \"WARN\", \"ERROR\"]\n      --pure         run without external plugins                                          [boolean]\n      --port         port to listen on                                         [number] [default: 0]\n      --hostname     hostname to listen on                           [string] [default: \"127.0.0.1\"]\n      --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)\n                                                                          [boolean] [default: false]\n      --mdns-domain  custom domain name for mDNS service (default: opencode.local)\n                                                                [string] [default: \"opencode.local\"]\n      --cors         additional domains to allow for CORS                      [array] [default: []]"
+    },
+    {
+      "cmd": "opencode acp --help",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 363,
+      "stdout": "",
+      "stderr": "opencode acp\n\nstart ACP (Agent Client Protocol) server\n\nOptions:\n  -h, --help         show help                                                             [boolean]\n  -v, --version      show version number                                                   [boolean]\n      --print-logs   print logs to stderr                                                  [boolean]\n      --log-level    log level                  [string] [choices: \"DEBUG\", \"INFO\", \"WARN\", \"ERROR\"]\n      --pure         run without external plugins                                          [boolean]\n      --port         port to listen on                                         [number] [default: 0]\n      --hostname     hostname to listen on                           [string] [default: \"127.0.0.1\"]\n      --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)\n                                                                          [boolean] [default: false]\n      --mdns-domain  custom domain name for mDNS service (default: opencode.local)\n                                                                [string] [default: \"opencode.local\"]\n      --cors         additional domains to allow for CORS                      [array] [default: []]\n      --cwd          working directory\n                         [string] [default: \"~/work/coda-agent-probes/coda-agent-probes\"]"
+    },
+    {
+      "cmd": "opencode acp",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 795,
+      "stdout": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":true,\"mcpCapabilities\":{\"http\":true,\"sse\":true},\"promptCapabilities\":{\"embeddedContext\":true,\"image\":true},\"sessionCapabilities\":{\"close\":{},\"fork\":{},\"list\":{},\"resume\":{}}},\"authMethods\":[{\"description\":\"Run `opencode auth login` in the terminal\",\"name\":\"Login with opencode\",\"id\":\"opencode-login\"}],\"agentInfo\":{\"name\":\"OpenCode\",\"version\":\"1.19.5\"}}}\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "opencode acp",
+      "timeoutMs": 25000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1630,
+      "stdout": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":true,\"mcpCapabilities\":{\"http\":true,\"sse\":true},\"promptCapabilities\":{\"embeddedContext\":true,\"image\":true},\"sessionCapabilities\":{\"close\":{},\"fork\":{},\"list\":{},\"resume\":{}}},\"authMethods\":[{\"description\":\"Run `opencode auth login` in the terminal\",\"name\":\"Login with opencode\",\"id\":\"opencode-login\"}],\"agentInfo\":{\"name\":\"OpenCode\",\"version\":\"1.19.5\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"ses_e49c0c0fbffeWw6cQaP0XZH88d\",\"configOptions\":[{\"id\":\"model\",\"name\":\"Model\",\"category\":\"model\",\"type\":\"select\",\"currentValue\":\"opencode/big-pickle\",\"options\":[{\"value\":\"opencode/beam-free\",\"name\":\"OpenCode/Beam Free\"},{\"value\":\"opencode/big-pickle\",\"name\":\"OpenCode/Big Pickle\"},{\"value\":\"opencode/deepseek-v4.1-flash-free\",\"name\":\"OpenCode/DeepSeek V4.1 Flash Free\"},{\"value\":\"opencode/flint-40b-free\",\"name\":\"OpenCode/Flint 40B Free\"},{\"value\":\"opencode/glm-5.3-flash-free\",\"name\":\"OpenCode/GLM-5.3-Flash Free\"},{\"value\":\"opencode/mimo-v2.6-flash-free\",\"name\":\"OpenCode/MiMo-V2.6-Flash Free\"},{\"value\":\"opencode/nemotron-3-ultra-free\",\"name\":\"OpenCode/Nemotron 3 Ultra Free\"},{\"value\":\"opencode/nemotron-3.5-lightning-free\",\"name\":\"OpenCode/Nemotron 3.5 Lightning Free\"},{\"value\":\"opencode/nemotron-3.5-super-vl-free\",\"name\":\"OpenCode/Nemotron 3.5 Super VL Free\"}]},{\"id\":\"mode\",\"name\":\"Session Mode\",\"category\":\"mode\",\"type\":\"select\",\"currentValue\":\"build\",\"options\":[{\"value\":\"build\",\"name\":\"build\",\"description\":\"The default agent. Executes tools based on configured permissions.\"},{\"value\":\"plan\",\"name\":\"plan\",\"description\":\"Plan mode. Disallows all edit tools.\"}]}]}}\n{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"ses_e49c0c0fbffeWw6cQaP0XZH88d\",\"update\":{\"sessionUpdate\":\"available_commands_update\",\"availableCommands\":[{\"name\":\"customize-opencode\",\"description\":\"Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself.\"},{\"name\":\"init\",\"description\":\"guided AGENTS.md setup\"},{\"name\":\"review\",\"description\":\"review changes [commit|branch|pr], defaults to uncommitted\"}]}}}\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "opencode acp",
+      "timeoutMs": 120000,
+      "exitCode": null,
+      "signal": "SIGKILL",
+      "timedOut": true,
+      "durationMs": 100046,
+      "frames": [
+        {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "protocolVersion": 1,
+            "agentCapabilities": {
+              "loadSession": true,
+              "mcpCapabilities": {
+                "http": true,
+                "sse": true
+              },
+              "promptCapabilities": {
+                "embeddedContext": true,
+                "image": true
+              },
+              "sessionCapabilities": {
+                "close": {},
+                "fork": {},
+                "list": {},
+                "resume": {}
+              }
+            },
+            "authMethods": [
+              {
+                "description": "Run `opencode auth login` in the terminal",
+                "name": "Login with opencode",
+                "id": "opencode-login"
+              }
+            ],
+            "agentInfo": {
+              "name": "OpenCode",
+              "version": "1.19.5"
+            }
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "result": {
+            "sessionId": "ses_e49c0bab2ffeMEf4Nk2l7mDjy4",
+            "configOptions": [
+              {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "type": "select",
+                "currentValue": "opencode/big-pickle",
+                "options": [
+                  {
+                    "value": "opencode/beam-free",
+                    "name": "OpenCode/Beam Free"
+                  },
+                  {
+                    "value": "opencode/big-pickle",
+                    "name": "OpenCode/Big Pickle"
+                  },
+                  {
+                    "value": "opencode/deepseek-v4.1-flash-free",
+                    "name": "OpenCode/DeepSeek V4.1 Flash Free"
+                  },
+                  {
+                    "value": "opencode/flint-40b-free",
+                    "name": "OpenCode/Flint 40B Free"
+                  },
+                  {
+                    "value": "opencode/glm-5.3-flash-free",
+                    "name": "OpenCode/GLM-5.3-Flash Free"
+                  },
+                  {
+                    "value": "opencode/mimo-v2.6-flash-free",
+                    "name": "OpenCode/MiMo-V2.6-Flash Free"
+                  },
+                  {
+                    "value": "opencode/nemotron-3-ultra-free",
+                    "name": "OpenCode/Nemotron 3 Ultra Free"
+                  },
+                  {
+                    "value": "opencode/nemotron-3.5-lightning-free",
+                    "name": "OpenCode/Nemotron 3.5 Lightning Free"
+                  },
+                  {
+                    "value": "opencode/nemotron-3.5-super-vl-free",
+                    "name": "OpenCode/Nemotron 3.5 Super VL Free"
+                  }
+                ]
+              },
+              {
+                "id": "mode",
+                "name": "Session Mode",
+                "category": "mode",
+                "type": "select",
+                "currentValue": "build",
+                "options": [
+                  {
+                    "value": "build",
+                    "name": "build",
+                    "description": "The default agent. Executes tools based on configured permissions."
+                  },
+                  {
+                    "value": "plan",
+                    "name": "plan",
+                    "description": "Plan mode. Disallows all edit tools."
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "method": "session/update",
+          "params": {
+            "sessionId": "ses_e49c0bab2ffeMEf4Nk2l7mDjy4",
+            "update": {
+              "sessionUpdate": "available_commands_update",
+              "availableCommands": [
+                {
+                  "name": "customize-opencode",
+                  "description": "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
+                },
+                {
+                  "name": "init",
+                  "description": "guided AGENTS.md setup"
+                },
+                {
+                  "name": "review",
+                  "description": "review changes [commit|branch|pr], defaults to uncommitted"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "stdout": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":true,\"mcpCapabilities\":{\"http\":true,\"sse\":true},\"promptCapabilities\":{\"embeddedContext\":true,\"image\":true},\"sessionCapabilities\":{\"close\":{},\"fork\":{},\"list\":{},\"resume\":{}}},\"authMethods\":[{\"description\":\"Run `opencode auth login` in the terminal\",\"name\":\"Login with opencode\",\"id\":\"opencode-login\"}],\"agentInfo\":{\"name\":\"OpenCode\",\"version\":\"1.19.5\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"ses_e49c0bab2ffeMEf4Nk2l7mDjy4\",\"configOptions\":[{\"id\":\"model\",\"name\":\"Model\",\"category\":\"model\",\"type\":\"select\",\"currentValue\":\"opencode/big-pickle\",\"options\":[{\"value\":\"opencode/beam-free\",\"name\":\"OpenCode/Beam Free\"},{\"value\":\"opencode/big-pickle\",\"name\":\"OpenCode/Big Pickle\"},{\"value\":\"opencode/deepseek-v4.1-flash-free\",\"name\":\"OpenCode/DeepSeek V4.1 Flash Free\"},{\"value\":\"opencode/flint-40b-free\",\"name\":\"OpenCode/Flint 40B Free\"},{\"value\":\"opencode/glm-5.3-flash-free\",\"name\":\"OpenCode/GLM-5.3-Flash Free\"},{\"value\":\"opencode/mimo-v2.6-flash-free\",\"name\":\"OpenCode/MiMo-V2.6-Flash Free\"},{\"value\":\"opencode/nemotron-3-ultra-free\",\"name\":\"OpenCode/Nemotron 3 Ultra Free\"},{\"value\":\"opencode/nemotron-3.5-lightning-free\",\"name\":\"OpenCode/Nemotron 3.5 Lightning Free\"},{\"value\":\"opencode/nemotron-3.5-super-vl-free\",\"name\":\"OpenCode/Nemotron 3.5 Super VL Free\"}]},{\"id\":\"mode\",\"name\":\"Session Mode\",\"category\":\"mode\",\"type\":\"select\",\"currentValue\":\"build\",\"options\":[{\"value\":\"build\",\"name\":\"build\",\"description\":\"The default agent. Executes tools based on configured permissions.\"},{\"value\":\"plan\",\"name\":\"plan\",\"description\":\"Plan mode. Disallows all edit tools.\"}]}]}}\n{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"ses_e49c0bab2ffeMEf4Nk2l7mDjy4\",\"update\":{\"sessionUpdate\":\"available_commands_update\",\"availableCommands\":[{\"name\":\"customize-opencode\",\"description\":\"Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself.\"},{\"name\":\"init\",\"description\":\"guided AGENTS.md setup\"},{\"name\":\"review\",\"description\":\"review changes [commit|branch|pr], defaults to uncommitted\"}]}}}",
+      "stderr": ""
+    }
+  ]
+}

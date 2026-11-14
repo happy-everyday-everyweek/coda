@@ -42,6 +42,16 @@ jobs:
           ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
           "$SDKMANAGER" "build-tools;36.0.0" > /dev/null 2>&1 || true
 
+      - name: 风格检查（变更文件）
+        run: |
+          BASE="${{ github.event.pull_request.base.ref || 'dev' }}"
+          git fetch --no-tags --depth=1 origin "$BASE" || true
+          FILES="$(git diff --name-only --diff-filter=ACM "origin/$BASE" HEAD || true)"
+          if [ -z "$FILES" ]; then
+            echo "没有可比较的变更，跳过风格检查"
+            exit 0
+          fi
+          node tools/check-style.mjs $FILES
       - name: 编译 Kotlin 与生成 Python 包
         run: |
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
@@ -50,6 +60,9 @@ jobs:
             -x installDebugPythonRequirements \
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
+
+      - name: 安卓宿主桥单测
+        run: ./gradlew :app:testDebugUnitTest -x installDebugPythonRequirements --stacktrace
 
       - name: 安装 Personal Agent 测试依赖
         working-directory: kernel/maibot-lite
@@ -63,11 +76,38 @@ jobs:
         working-directory: kernel/maibot-lite
         run: python -m pytest tests/test_lite_coding_tool.py -q
 
+  # platform/ 参考实现的通用构建：每次 push/PR 都产出 npm 包、Web 资产和发布清单。
+  # 只作为 Actions 产物；正式/预发行附件由 release.yml 与 dev-prerelease.yml 生成。
+  platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: ./.github/actions/build-platform
+        id: platform
+      - name: 平台契约测试
+        working-directory: platform
+        run: node --test "test/**/*.test.mjs"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coda-platform-${{ steps.platform.outputs.version }}
+          if-no-files-found: error
+          path: |
+            ${{ steps.platform.outputs.tgz }}
+            ${{ steps.platform.outputs.webzip }}
+            ${{ steps.platform.outputs.manifest }}
+            platform/dist/web-version.json
+
   # 只有手动触发并勾选 build_apk 时才打包：分支构建不产可安装产物，更不会进 Release。
   apk:
     if: github.event_name == 'workflow_dispatch' && inputs.build_apk
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write
     env:
       PYO3_CROSS: "1"
       PYO3_CROSS_PYTHON_VERSION: "3.12"
@@ -106,5 +146,19 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: coda-debug-${{ github.ref_name }}-${{ github.sha }}
+          name: coda-debug-${{ github.run_id }}-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: 发布到 android-latest（便于国内镜像下载）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          if ! gh release view android-latest -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create android-latest -R "$GITHUB_REPOSITORY" \
+              --title "Android 最新构建" \
+              --notes "由 Build 工作流自动构建，含节点桥双向能力；仅作真机验证用。" \
+              --prerelease
+          fi
+          gh release upload android-latest -R "$GITHUB_REPOSITORY" \
+            app/build/outputs/apk/debug/*.apk --clobber

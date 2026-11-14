@@ -1,0 +1,1 @@
+{"ts":"2026-11-08T01:04:01.429Z","path":"/chat/completions","model":"default-model","stream":true,"lastUser":"<system-reminder data-role=\"memory\"><memory>\n# Long-term memory\n\nYour memory lives in `<CI_WORKSPACE> and carries ","reply":"CODA_GATEWAY_OK"}

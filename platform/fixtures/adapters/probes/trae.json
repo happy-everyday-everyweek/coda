@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-07T13:51:06.047Z",
+  "agent": {
+    "id": "trae",
+    "package": null,
+    "bin": "traecli",
+    "needsAuth": true,
+    "commands": [
+      {
+        "cmd": "traecli --version || echo NOT_FOUND",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "traecli --help || true",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "traecli exec --help || true",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "traecli acp --help || true",
+        "timeoutMs": 20000
+      }
+    ]
+  },
+  "packageVersion": null,
+  "runner": {
+    "os": "linux",
+    "arch": "x64",
+    "release": "7.0.0-1019-azure",
+    "node": "v24.22.2",
+    "host": "runnervmwuk1x"
+  },
+  "probes": [
+    {
+      "cmd": "traecli --version || echo NOT_FOUND",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 124,
+      "stdout": "NOT_FOUND\n",
+      "stderr": "bash: line 1: traecli: command not found\n"
+    },
+    {
+      "cmd": "traecli --help || true",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 111,
+      "stdout": "",
+      "stderr": "bash: line 1: traecli: command not found\n"
+    },
+    {
+      "cmd": "traecli exec --help || true",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 120,
+      "stdout": "",
+      "stderr": "bash: line 1: traecli: command not found\n"
+    },
+    {
+      "cmd": "traecli acp --help || true",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 113,
+      "stdout": "",
+      "stderr": "bash: line 1: traecli: command not found\n"
+    }
+  ]
+}

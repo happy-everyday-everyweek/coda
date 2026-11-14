@@ -1,0 +1,85 @@
+{
+  "agent": "claude",
+  "gateway": "http://127.0.0.1:18080",
+  "prompt": "Reply with exactly CODA_GATEWAY_OK. Do not use tools.",
+  "startedAt": "2026-11-08T01:14:05.341Z",
+  "events": [
+    {
+      "kind": "status",
+      "payload": {
+        "state": "running",
+        "phase": "turn_start"
+      }
+    },
+    {
+      "kind": "session",
+      "payload": {
+        "session": {
+          "id": "live-session",
+          "providerThreadId": "c6ce80e1-2b49-4a21-90fd-8f656bf38ad0",
+          "cwd": "/tmp/tmp.BRj62RkTvb",
+          "model": "claude-sonnet-4-5"
+        }
+      }
+    },
+    {
+      "kind": "status",
+      "payload": {
+        "state": "running",
+        "model": "claude-sonnet-4-5",
+        "permissionMode": "default"
+      }
+    },
+    {
+      "kind": "message",
+      "payload": {
+        "role": "assistant",
+        "text": "CODA_GATEWAY_OK",
+        "delta": true
+      }
+    },
+    {
+      "kind": "message",
+      "payload": {
+        "role": "assistant",
+        "text": "CODA_GATEWAY_OK",
+        "delta": false
+      }
+    },
+    {
+      "kind": "status",
+      "payload": {
+        "state": "idle",
+        "subtype": "success",
+        "durationMs": 122
+      }
+    },
+    {
+      "kind": "status",
+      "payload": {
+        "state": "idle"
+      }
+    }
+  ],
+  "probe": {
+    "installed": true,
+    "version": "2.1.319 (Claude Code)",
+    "path": "/opt/hostedtoolcache/node/24.22.2/x64/bin/claude"
+  },
+  "result": {
+    "state": "succeeded",
+    "text": "CODA_GATEWAY_OK",
+    "upstreamSessionId": "c6ce80e1-2b49-4a21-90fd-8f656bf38ad0"
+  },
+  "eventKinds": [
+    "status",
+    "session",
+    "status",
+    "message",
+    "message",
+    "status",
+    "status"
+  ],
+  "ok": true,
+  "finishedAt": "2026-11-08T01:14:05.935Z"
+}

@@ -1,0 +1,1 @@
+{"ts":"2026-11-08T00:33:57.717Z","path":"/v1/messages","model":"claude-sonnet-4-5","stream":true,"lastUser":"<system-reminder>\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: <TMP_WORKDIR>\n - Is a git repository: false\n - Platform: linux\n - Shell: bash\n ","reply":"CODA_GATEWAY_OK"}

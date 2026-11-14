@@ -1,0 +1,37 @@
+{
+  "name": "coda-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Coda 跨端 Agent 控制与协同平台：共享核心、适配器、TUI/Web 客户端、同步与 PA（参考实现）",
+  "files": [
+    "adapters",
+    "contracts",
+    "core",
+    "sync",
+    "pa",
+    "security",
+    "clients",
+    "tools",
+    "CONTRACT.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "coda": "clients/tui/main.mjs",
+    "coda-web": "clients/web/server.mjs"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "test:core": "node --test \"test/core/**/*.test.mjs\"",
+    "tui": "node clients/tui/main.mjs",
+    "web": "node clients/web/server.mjs",
+    "bench": "node test/perf/bench.mjs",
+    "test:adapters": "node --test \"test/adapters/**/*.test.mjs\"",
+    "test:clients": "node --test \"test/clients/**/*.test.mjs\"",
+    "test:sync": "node --test \"test/sync/**/*.test.mjs\" \"test/security/**/*.test.mjs\"",
+    "test:pa": "node --test \"test/pa/**/*.test.mjs\"",
+    "smoke": "node tools/smoke-clients.mjs"
+  }
+}

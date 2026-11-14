@@ -1,0 +1,385 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "kind": "handwritten",
+      "agentId": "acp-generic",
+      "taskId": "AGT-104",
+      "version": null,
+      "path": "fixtures/adapters/acp-happy-path.fixture.json",
+      "recordedAt": "2026-11-07T10:00:00.000Z",
+      "frames": 9,
+      "redactionApplied": true
+    },
+    {
+      "kind": "handwritten",
+      "agentId": "acp-generic",
+      "taskId": "AGT-104",
+      "version": null,
+      "path": "fixtures/adapters/acp-protocol-error.fixture.json",
+      "recordedAt": "2026-11-07T12:00:00.000Z",
+      "frames": 5,
+      "redactionApplied": true
+    },
+    {
+      "kind": "handwritten",
+      "agentId": "acp-generic",
+      "taskId": "AGT-104",
+      "version": null,
+      "path": "fixtures/adapters/acp-stop-denied-permission.fixture.json",
+      "recordedAt": "2026-11-07T11:00:00.000Z",
+      "frames": 8,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "auggie",
+      "taskId": null,
+      "version": "0.37.0",
+      "path": "fixtures/adapters/probes/auggie.json",
+      "generatedAt": "2026-11-07T13:29:10.329Z",
+      "probes": 3,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "claude-code",
+      "taskId": "AGT-111",
+      "version": "2.1.319",
+      "path": "fixtures/adapters/claude-stream-json-noauth.fixture.json",
+      "recordedAt": "2026-11-07T13:26:00Z",
+      "frames": 3,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "claude",
+      "taskId": "AGT-111",
+      "version": "2.1.319",
+      "path": "fixtures/adapters/live-turns/claude.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": "pass",
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "claude",
+      "taskId": "AGT-111",
+      "version": "2.1.319",
+      "path": "fixtures/adapters/probes/claude.json",
+      "generatedAt": "2026-11-07T13:29:37.615Z",
+      "probes": 5,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "codebuddy",
+      "taskId": "AGT-117",
+      "version": "2.181.0",
+      "path": "fixtures/adapters/codebuddy-acp-auth-gate.fixture.json",
+      "recordedAt": "2026-11-07T13:52:04.596Z",
+      "frames": 2,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "codebuddy",
+      "taskId": "AGT-117",
+      "version": "2.181.0",
+      "path": "fixtures/adapters/codebuddy-headless-stream-json.fixture.json",
+      "recordedAt": "2026-11-07T13:55:23.924Z",
+      "frames": 5,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "codebuddy",
+      "taskId": "AGT-117",
+      "version": "2.181.0",
+      "path": "fixtures/adapters/live-turns/codebuddy.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": null,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "codebuddy",
+      "taskId": null,
+      "version": "2.181.0",
+      "path": "fixtures/adapters/probes/codebuddy.json",
+      "generatedAt": "2026-11-07T14:07:12.832Z",
+      "probes": 7,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "codex",
+      "taskId": "AGT-112",
+      "version": "0.167.0",
+      "path": "fixtures/adapters/codex-app-server-initialize.fixture.json",
+      "recordedAt": "2026-11-07T13:26:05.564Z",
+      "frames": 2,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "codex",
+      "taskId": "AGT-112",
+      "version": "0.167.0",
+      "path": "fixtures/adapters/codex-exec-noauth.fixture.json",
+      "recordedAt": "2026-11-07T13:25:51Z",
+      "frames": 14,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "codex",
+      "taskId": "AGT-112",
+      "version": "codex-cli 0.167.0",
+      "path": "fixtures/adapters/live-turns/codex.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": "pass",
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "codex",
+      "taskId": "AGT-112",
+      "version": "0.167.0",
+      "path": "fixtures/adapters/probes/codex.json",
+      "generatedAt": "2026-11-07T13:29:29.702Z",
+      "probes": 10,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "copilot",
+      "taskId": "AGT-123",
+      "version": "1.0.107",
+      "path": "fixtures/adapters/probes/copilot.json",
+      "generatedAt": "2026-11-07T13:29:14.922Z",
+      "probes": 3,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "crush",
+      "taskId": null,
+      "version": "0.100.0",
+      "path": "fixtures/adapters/live-turns/crush.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": null,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "crush",
+      "taskId": null,
+      "version": "0.100.0",
+      "path": "fixtures/adapters/probes/crush.json",
+      "generatedAt": "2026-11-07T13:29:10.073Z",
+      "probes": 2,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "deepseek-harness",
+      "taskId": "AGT-113",
+      "version": "0.2.2-rc.1",
+      "path": "fixtures/adapters/deepseek-harness-headless-error.fixture.json",
+      "recordedAt": "2026-11-07T13:12:00Z",
+      "frames": 6,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "fx",
+      "taskId": "AGT-129",
+      "version": null,
+      "path": "fixtures/adapters/fx-acp-auth-gate.fixture.json",
+      "recordedAt": "2026-11-07T13:51:27.835Z",
+      "frames": 1,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "fx",
+      "taskId": null,
+      "version": null,
+      "path": "fixtures/adapters/probes/fx.json",
+      "generatedAt": "2026-11-07T13:51:27.835Z",
+      "probes": 4,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "gemini",
+      "taskId": "AGT-122",
+      "version": "0.67.0",
+      "path": "fixtures/adapters/gemini-acp-handshake.fixture.json",
+      "recordedAt": "2026-11-07T13:26:00Z",
+      "frames": 2,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "gemini",
+      "taskId": "AGT-122",
+      "version": "0.67.0",
+      "path": "fixtures/adapters/probes/gemini.json",
+      "generatedAt": "2026-11-07T13:29:19.355Z",
+      "probes": 4,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "kimi",
+      "taskId": "AGT-128",
+      "version": "2.5.2",
+      "path": "fixtures/adapters/kimi-acp-auth-gate.fixture.json",
+      "recordedAt": "2026-11-07T13:55:34.147Z",
+      "frames": 2,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "kimi",
+      "taskId": "AGT-128",
+      "version": "2.5.2",
+      "path": "fixtures/adapters/kimi-headless-stream-json.fixture.json",
+      "recordedAt": "2026-11-07T14:07:14.186Z",
+      "frames": 1,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "kimi",
+      "taskId": "AGT-128",
+      "version": "2.5.2",
+      "path": "fixtures/adapters/live-turns/kimi.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": "pass",
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "kimi",
+      "taskId": null,
+      "version": null,
+      "path": "fixtures/adapters/probes/kimi.json",
+      "generatedAt": "2026-11-07T14:07:14.186Z",
+      "probes": 8,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "openclaw",
+      "taskId": null,
+      "version": "2026.11.1",
+      "path": "fixtures/adapters/probes/openclaw.json",
+      "generatedAt": "2026-11-07T13:52:31.477Z",
+      "probes": 4,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "opencode",
+      "taskId": "AGT-121",
+      "version": "1.19.5",
+      "path": "fixtures/adapters/live-turns/opencode.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": null,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "opencode",
+      "taskId": "AGT-121",
+      "version": "1.19.5",
+      "path": "fixtures/adapters/opencode-acp-flow.fixture.json",
+      "recordedAt": "2026-11-07T13:44:21.037Z",
+      "frames": 3,
+      "redactionApplied": true
+    },
+    {
+      "kind": "recording",
+      "agentId": "opencode",
+      "taskId": "AGT-121",
+      "version": "1.19.5",
+      "path": "fixtures/adapters/opencode-acp-handshake.fixture.json",
+      "recordedAt": "2026-11-07T13:26:00Z",
+      "frames": 3,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "opencode",
+      "taskId": "AGT-121",
+      "version": "1.19.5",
+      "path": "fixtures/adapters/probes/opencode.json",
+      "generatedAt": "2026-11-07T13:44:21.037Z",
+      "probes": 7,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "qoder-cn",
+      "taskId": null,
+      "version": null,
+      "path": "fixtures/adapters/probes/qoder-cn.json",
+      "generatedAt": "2026-11-07T13:51:15.646Z",
+      "probes": 6,
+      "redactionApplied": true
+    },
+    {
+      "kind": "live-turn",
+      "agentId": "qwen",
+      "taskId": null,
+      "version": "0.27.0",
+      "path": "fixtures/adapters/live-turns/qwen.transcript.txt",
+      "recordedAt": "2026-11-08T01:20:00Z",
+      "frames": null,
+      "result": "pass",
+      "adapterSmoke": null,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "qwen",
+      "taskId": null,
+      "version": "0.26.9",
+      "path": "fixtures/adapters/probes/qwen.json",
+      "generatedAt": "2026-11-07T13:29:13.402Z",
+      "probes": 4,
+      "redactionApplied": true
+    },
+    {
+      "kind": "probe",
+      "agentId": "trae",
+      "taskId": null,
+      "version": null,
+      "path": "fixtures/adapters/probes/trae.json",
+      "generatedAt": "2026-11-07T13:51:06.047Z",
+      "probes": 4,
+      "redactionApplied": true
+    }
+  ],
+  "counts": {
+    "probe": 14,
+    "recording": 12,
+    "handwritten": 3,
+    "liveTurn": 7
+  }
+}

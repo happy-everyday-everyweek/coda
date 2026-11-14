@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "kind": "gateway-backed-live-turn",
+  "generatedAt": "2026-11-08T01:20:00Z",
+  "runId": 42433802182,
+  "runUrl": "https://github.com/happy-everyday-everyweek/coda/actions/runs/42433802182",
+  "workflow": ".github/workflows/agent-live.yml",
+  "gateway": {
+    "command": "node platform/tools/mock-llm-gateway.mjs --port 18080",
+    "reply": "CODA_GATEWAY_OK",
+    "protocols": [
+      "Anthropic Messages /v1/messages (SSE)",
+      "OpenAI Chat Completions /v1/chat/completions (SSE)",
+      "OpenAI Responses /v1/responses (SSE)",
+      "Kimi custom registry /api.json"
+    ]
+  },
+  "prompt": "Reply with exactly CODA_GATEWAY_OK. Do not use tools.",
+  "agents": [
+    {
+      "id": "claude",
+      "cli": "Claude Code",
+      "package": "@anthropic-ai/claude-code",
+      "version": "2.1.319",
+      "transport": "Anthropic Messages SSE + stream-json",
+      "result": "pass",
+      "adapterSmoke": "pass"
+    },
+    {
+      "id": "codex",
+      "cli": "Codex CLI",
+      "package": "@openai/codex",
+      "version": "codex-cli 0.167.0",
+      "transport": "OpenAI Responses SSE + JSONL",
+      "result": "pass",
+      "adapterSmoke": "pass"
+    },
+    {
+      "id": "opencode",
+      "cli": "OpenCode",
+      "package": "opencode-ai",
+      "version": "1.19.5",
+      "transport": "OpenAI Chat Completions SSE",
+      "result": "pass"
+    },
+    {
+      "id": "qwen",
+      "cli": "Qwen Code",
+      "package": "@qwen-code/qwen-code",
+      "version": "0.27.0",
+      "transport": "OpenAI Chat Completions SSE + stream-json",
+      "result": "pass"
+    },
+    {
+      "id": "kimi",
+      "cli": "Kimi Code CLI",
+      "package": "@moonshot-ai/kimi-code",
+      "version": "2.5.2",
+      "transport": "OpenAI Chat Completions SSE + stream-json",
+      "result": "pass",
+      "adapterSmoke": "pass"
+    },
+    {
+      "id": "codebuddy",
+      "cli": "CodeBuddy",
+      "package": "@tencent-ai/codebuddy-code",
+      "version": "2.181.0",
+      "transport": "OpenAI Chat Completions SSE (/chat/completions)",
+      "result": "pass"
+    },
+    {
+      "id": "crush",
+      "cli": "Crush",
+      "package": "@charmland/crush",
+      "version": "0.100.0",
+      "transport": "OpenAI Responses SSE",
+      "result": "pass"
+    }
+  ],
+  "caveat": "真实 Agent 二进制与真实协议栈，但模型后端是固定回复的本地网关；这验证回合协议与退出路径，不代表模型质量或已接通真实模型服务商。",
+  "adapterSmoke": {
+    "claude": {
+      "adapter": "platform/adapters/claude-stream-json.mjs",
+      "state": "succeeded",
+      "events": [
+        "status",
+        "session",
+        "message"
+      ]
+    },
+    "codex": {
+      "adapter": "platform/adapters/codex-exec.mjs",
+      "state": "succeeded",
+      "events": [
+        "status",
+        "session",
+        "tool",
+        "message"
+      ]
+    },
+    "kimi": {
+      "adapter": "platform/adapters/kimi-headless.mjs",
+      "state": "succeeded",
+      "events": [
+        "status",
+        "session",
+        "message"
+      ]
+    }
+  }
+}

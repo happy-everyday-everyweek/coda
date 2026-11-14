@@ -1,0 +1,945 @@
+{
+  "matrixVersion": 1,
+  "generatedAt": "2026-11-07T14:15:09.999Z",
+  "columns": [
+    "session",
+    "thread",
+    "turn",
+    "streaming",
+    "tools",
+    "approvals",
+    "plan",
+    "subagent",
+    "context",
+    "checkpoint",
+    "identity",
+    "attachments"
+  ],
+  "instances": [
+    {
+      "instanceId": "ai_auggie",
+      "provider": "auggie",
+      "version": "0.37.0",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/auggie.json",
+          "note": "3 probes"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "仅有安装/入口证据，无会话录制"
+    },
+    {
+      "instanceId": "ai_claude",
+      "provider": "claude",
+      "version": "2.1.319",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": {
+          "multiThread": false,
+          "modelSwitch": "experimental",
+          "permissionModeSwitch": "experimental",
+          "resume": "experimental",
+          "requestDurability": "unverified"
+        },
+        "thread": {
+          "empty": false,
+          "snapshot": false,
+          "fork": false,
+          "fromTurn": false,
+          "nativeId": "experimental"
+        },
+        "turn": {
+          "startEndEvents": "experimental",
+          "interrupt": "experimental",
+          "nativeSteer": false,
+          "stopThenAppend": "unverified",
+          "queue": false,
+          "terminalTrust": "unverified"
+        },
+        "streaming": {
+          "text": "experimental",
+          "reasoning": "experimental",
+          "toolOutput": "experimental",
+          "planText": "unverified",
+          "messageCompleted": "experimental"
+        },
+        "tools": "experimental",
+        "approvals": {
+          "command": "unverified",
+          "fileRead": "unverified",
+          "fileWrite": "unverified",
+          "patch": "unverified",
+          "subagent": "unverified",
+          "nativeRequestId": "unverified"
+        },
+        "plan": "unverified",
+        "subagent": "experimental",
+        "context": {
+          "system": "unverified",
+          "summary": "unverified",
+          "handoffFull": false,
+          "handoffIncremental": false
+        },
+        "checkpoint": {
+          "filesystem": false,
+          "sessionRollback": false,
+          "consistent": false
+        },
+        "identity": {
+          "thread": "experimental",
+          "turn": "unverified",
+          "item": "unverified",
+          "request": false
+        },
+        "attachments": {
+          "input": "unverified",
+          "output": "unverified"
+        }
+      },
+      "support": {
+        "session": "experimental",
+        "thread": "experimental",
+        "turn": "experimental",
+        "streaming": "experimental",
+        "tools": "experimental",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "experimental",
+        "context": "unverified",
+        "checkpoint": "unsupported",
+        "identity": "experimental",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/claude.json",
+          "note": "5 probes"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "仅有安装/入口证据，无会话录制"
+    },
+    {
+      "instanceId": "ai_codebuddy",
+      "provider": "codebuddy",
+      "version": "2.181.0",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/codebuddy.json",
+          "note": "7 probes"
+        },
+        {
+          "kind": "recording",
+          "ref": "fixtures/adapters/codebuddy*.fixture.json",
+          "note": "真实帧（成功回合待录）"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "有真实帧录制；成功模型回合仍需账号"
+    },
+    {
+      "instanceId": "ai_codex",
+      "provider": "codex",
+      "version": "0.167.0",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": {
+          "multiThread": "unverified",
+          "modelSwitch": "experimental",
+          "permissionModeSwitch": "unverified",
+          "resume": "experimental",
+          "requestDurability": "unverified"
+        },
+        "thread": {
+          "empty": "unverified",
+          "snapshot": "unverified",
+          "fork": "unverified",
+          "fromTurn": "unverified",
+          "nativeId": "experimental"
+        },
+        "turn": {
+          "startEndEvents": "experimental",
+          "interrupt": "experimental",
+          "nativeSteer": "experimental",
+          "stopThenAppend": "unverified",
+          "queue": "unverified",
+          "terminalTrust": "unverified"
+        },
+        "streaming": {
+          "text": "experimental",
+          "reasoning": "experimental",
+          "toolOutput": "experimental",
+          "planText": "unverified",
+          "messageCompleted": "experimental"
+        },
+        "tools": "experimental",
+        "approvals": {
+          "command": "unverified",
+          "fileRead": "unverified",
+          "fileWrite": "unverified",
+          "patch": "unverified",
+          "subagent": "unverified",
+          "nativeRequestId": "unverified"
+        },
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": {
+          "system": "unverified",
+          "summary": "unverified",
+          "handoffFull": "unverified",
+          "handoffIncremental": "unverified"
+        },
+        "checkpoint": {
+          "filesystem": "unverified",
+          "sessionRollback": "unverified",
+          "consistent": "unverified"
+        },
+        "identity": {
+          "thread": "experimental",
+          "turn": "unverified",
+          "item": "unverified",
+          "request": "unverified"
+        },
+        "attachments": {
+          "input": "unverified",
+          "output": "unverified"
+        }
+      },
+      "support": {
+        "session": "experimental",
+        "thread": "experimental",
+        "turn": "experimental",
+        "streaming": "experimental",
+        "tools": "experimental",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "experimental",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/codex.json",
+          "note": "10 probes"
+        },
+        {
+          "kind": "recording",
+          "ref": "fixtures/adapters/codex*.fixture.json",
+          "note": "真实帧（成功回合待录）"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "有真实帧录制；成功模型回合仍需账号"
+    },
+    {
+      "instanceId": "ai_copilot",
+      "provider": "copilot",
+      "version": "1.0.107",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/copilot.json",
+          "note": "3 probes"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "仅有安装/入口证据，无会话录制"
+    },
+    {
+      "instanceId": "ai_crush",
+      "provider": "crush",
+      "version": "0.100.0",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/crush.json",
+          "note": "2 probes"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "仅有安装/入口证据，无会话录制"
+    },
+    {
+      "instanceId": "ai_fx",
+      "provider": "fx",
+      "version": "unknown",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/fx.json",
+          "note": "4 probes"
+        },
+        {
+          "kind": "recording",
+          "ref": "fixtures/adapters/fx*.fixture.json",
+          "note": "真实帧（成功回合待录）"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "有真实帧录制；成功模型回合仍需账号"
+    },
+    {
+      "instanceId": "ai_gemini",
+      "provider": "gemini",
+      "version": "0.67.0",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/gemini.json",
+          "note": "4 probes"
+        },
+        {
+          "kind": "recording",
+          "ref": "fixtures/adapters/gemini*.fixture.json",
+          "note": "真实帧（成功回合待录）"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "有真实帧录制；成功模型回合仍需账号"
+    },
+    {
+      "instanceId": "ai_kimi",
+      "provider": "kimi",
+      "version": "unknown",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/kimi.json",
+          "note": "8 probes"
+        },
+        {
+          "kind": "recording",
+          "ref": "fixtures/adapters/kimi*.fixture.json",
+          "note": "真实帧（成功回合待录）"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "有真实帧录制；成功模型回合仍需账号"
+    },
+    {
+      "instanceId": "ai_openclaw",
+      "provider": "openclaw",
+      "version": "2026.11.1",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/openclaw.json",
+          "note": "4 probes"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "仅有安装/入口证据，无会话录制"
+    },
+    {
+      "instanceId": "ai_opencode",
+      "provider": "opencode",
+      "version": "1.19.5",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/opencode.json",
+          "note": "7 probes"
+        },
+        {
+          "kind": "recording",
+          "ref": "fixtures/adapters/opencode*.fixture.json",
+          "note": "真实帧（成功回合待录）"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "有真实帧录制；成功模型回合仍需账号"
+    },
+    {
+      "instanceId": "ai_qoder_cn",
+      "provider": "qoder-cn",
+      "version": "unknown",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/qoder-cn.json",
+          "note": "6 probes"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "仅有安装/入口证据，无会话录制"
+    },
+    {
+      "instanceId": "ai_qwen",
+      "provider": "qwen",
+      "version": "0.26.9",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/qwen.json",
+          "note": "4 probes"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "仅有安装/入口证据，无会话录制"
+    },
+    {
+      "instanceId": "ai_trae",
+      "provider": "trae",
+      "version": "unknown",
+      "environment": "host",
+      "release": "blocked",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "protocol-trace",
+          "ref": "fixtures/adapters/probes/trae.json",
+          "note": "4 probes"
+        }
+      ],
+      "blockedReason": "TRAE CLI 需要企业版旗舰套餐（259 元/席/月，3 席起）；无凭证不可用",
+      "notes": "仅有安装/入口证据，无会话录制"
+    },
+    {
+      "instanceId": "ai_claude_code",
+      "provider": "claude-code",
+      "version": "2.1.319",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "recording",
+          "ref": "fixtures/adapters/claude-code*.fixture.json",
+          "note": "0 frames"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "本机真实录制（成功路径仍需账号）"
+    },
+    {
+      "instanceId": "ai_deepseek_harness",
+      "provider": "deepseek-harness",
+      "version": "0.2.2-rc.1",
+      "environment": "host",
+      "release": "experimental",
+      "capabilities": {
+        "session": {
+          "multiThread": false,
+          "modelSwitch": false,
+          "permissionModeSwitch": "experimental",
+          "resume": "experimental",
+          "requestDurability": "unverified"
+        },
+        "thread": {
+          "empty": "experimental",
+          "snapshot": false,
+          "fork": false,
+          "fromTurn": false,
+          "nativeId": "experimental"
+        },
+        "turn": {
+          "startEndEvents": "experimental",
+          "interrupt": "experimental",
+          "nativeSteer": false,
+          "stopThenAppend": "unverified",
+          "queue": false,
+          "terminalTrust": "experimental"
+        },
+        "streaming": {
+          "text": "experimental",
+          "reasoning": false,
+          "toolOutput": "unverified",
+          "planText": false,
+          "messageCompleted": "experimental"
+        },
+        "tools": "unverified",
+        "approvals": {
+          "command": false,
+          "fileRead": false,
+          "fileWrite": false,
+          "patch": false,
+          "subagent": false,
+          "nativeRequestId": false
+        },
+        "plan": false,
+        "subagent": false,
+        "context": {
+          "system": "unverified",
+          "summary": false,
+          "handoffFull": false,
+          "handoffIncremental": false
+        },
+        "checkpoint": {
+          "filesystem": false,
+          "sessionRollback": false,
+          "consistent": false
+        },
+        "identity": {
+          "thread": false,
+          "turn": "unverified",
+          "item": false,
+          "request": false
+        },
+        "attachments": {
+          "input": false,
+          "output": false
+        }
+      },
+      "support": {
+        "session": "experimental",
+        "thread": "experimental",
+        "turn": "experimental",
+        "streaming": "experimental",
+        "tools": "unverified",
+        "approvals": "unsupported",
+        "plan": "unsupported",
+        "subagent": "unsupported",
+        "context": "unverified",
+        "checkpoint": "unsupported",
+        "identity": "unverified",
+        "attachments": "unsupported"
+      },
+      "evidence": [
+        {
+          "kind": "recording",
+          "ref": "fixtures/adapters/deepseek-harness*.fixture.json",
+          "note": "6 frames"
+        }
+      ],
+      "blockedReason": null,
+      "notes": "本机真实录制（成功路径仍需账号）"
+    },
+    {
+      "instanceId": "ai_workbuddy",
+      "provider": "workbuddy",
+      "version": "unknown",
+      "environment": "host",
+      "release": "blocked",
+      "capabilities": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "support": {
+        "session": "unverified",
+        "thread": "unverified",
+        "turn": "unverified",
+        "streaming": "unverified",
+        "tools": "unverified",
+        "approvals": "unverified",
+        "plan": "unverified",
+        "subagent": "unverified",
+        "context": "unverified",
+        "checkpoint": "unverified",
+        "identity": "unverified",
+        "attachments": "unverified"
+      },
+      "evidence": [
+        {
+          "kind": "manual",
+          "ref": "platform/docs/DOMESTIC-AGENTS.md",
+          "note": "官方文档树无 CLI 章节"
+        }
+      ],
+      "blockedReason": "官方无本地 CLI/ACP/app-server；只有 WMA 云接口",
+      "notes": "BLOCKED：不采用非官方网关照生产"
+    }
+  ]
+}

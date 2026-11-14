@@ -146,6 +146,10 @@ jobs:
             exit 1
           fi
 
+      - name: 构建平台参考实现产物
+        id: platform
+        uses: ./.github/actions/build-platform
+
       # 应用内更新读取的版本清单。走 releases/latest/download/update.json 静态下载，
 # 不消耗 GitHub API 限额，并带 sha256 供下载后校验。
       - name: 生成更新清单
@@ -183,5 +187,8 @@ jobs:
             coda-webui.zip \
             sha256.txt \
             update.json \
+            "${{ steps.platform.outputs.tgz }}" \
+            "${{ steps.platform.outputs.webzip }}" \
+            "${{ steps.platform.outputs.manifest }}" \
             --title "Coda $CODA_VERSION_NAME" \
             --generate-notes

@@ -24,3 +24,6 @@ captures/
 
 # 系统文件
 .DS_Store
+
+# 真实回合测试产物
+/live-turns/

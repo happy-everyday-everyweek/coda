@@ -1,0 +1,1 @@
+{"ts":"2026-11-08T00:33:57.911Z","path":"/v1/chat/completions","model":"coda-gateway","stream":true,"lastUser":"<system-reminder>\nAuto permission mode is active. Tool approvals will be handled automatically while this mode remains enabled.\n  - Continue normally without pausing for approval prompts.\n  - Do NOT c","reply":"CODA_GATEWAY_OK"}
