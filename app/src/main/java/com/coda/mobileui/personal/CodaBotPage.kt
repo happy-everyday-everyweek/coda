@@ -116,6 +116,37 @@ class CodaBotPage(
             setBackgroundColor(Color.TRANSPARENT)
         }
         loader.addView(pet, FrameLayout.LayoutParams(-1, -2))
+        // 形象可拖动：拖到消息区域也可以；松手按重力落回输入框上沿（地面）。
+        run {
+            var downX = 0f
+            var downY = 0f
+            var baseX = 0f
+            var baseY = 0f
+            pet.setOnTouchListener { v, e ->
+                when (e.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        downX = e.rawX
+                        downY = e.rawY
+                        baseX = v.translationX
+                        baseY = v.translationY
+                        v.animate().cancel()
+                        true
+                    }
+
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        val maxX = (this@CodaBotPage.width - v.width).toFloat().coerceAtLeast(0f)
+                        v.translationX = (baseX + e.rawX - downX).coerceIn(0f, maxX)
+                        v.translationY = (baseY + e.rawY - downY).coerceIn(-dp(280).toFloat(), 0f)
+                        true
+                    }
+
+                    else -> {
+                        v.animate().translationX(0f).translationY(0f).setDuration(220).start()
+                        false
+                    }
+                }
+            }
+        }
         column.addView(loader, LinearLayout.LayoutParams(-1, -2))
         replyBar = LinearLayout(host).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -146,7 +177,12 @@ class CodaBotPage(
         composer.addView(ImageButton(host).apply {
             setImageResource(R.drawable.ic_add)
             setColorFilter(attr(com.google.android.material.R.attr.colorOnSurface))
-            background = null
+            // 加号给一层圆形底：主题容器色，直径 44dp，图标内缩一圈。
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(attr(com.google.android.material.R.attr.colorSurfaceContainerHigh))
+            }
+            setPadding(dp(10), dp(10), dp(10), dp(10))
             contentDescription = "添加附件"
             setOnClickListener { pickAttachment() }
         }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { setMargins(0, 0, dp(6), dp(5)) })
