@@ -31,17 +31,24 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object NodeBridge {
     const val DEFAULT_PORT = 17654
+    /** 认证前的单帧上限：hello 只是一小段 JSON，超过就不该再读下去。 */
+    private const val MAX_PREAUTH_LINE = 16 * 1024
+    /** 审批请求的保留时长：控制器超时或会话结束不会再回调，留着只会涨内存。 */
+    private const val INTERACTION_TTL_MS = 10 * 60_000L
     private const val PREFS = "node_bridge"
     private const val KEY_TOKEN = "token"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_PORT = "port"
+
+    private data class Interaction(val requestId: Any, val at: Long)
 
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
     private var controller: ZController? = null
     private var listener: ZController.Listener? = null
     private val clients = CopyOnWriteArrayList<Client>()
-    private val pendingInteractions = ConcurrentHashMap<String, Any>()
+    private val pendingInteractions = ConcurrentHashMap<String, Interaction>()
+    private val receipts = CommandReceipts()
     private val running = AtomicBoolean(false)
 
     @Volatile private var lastStatus: String = "未启动"
@@ -131,8 +138,12 @@ object NodeBridge {
                 val socketClient =
                     try {
                         socket.accept()
-                    } catch (_: Exception) {
-                        break
+                    } catch (error: Exception) {
+                        // 停服时是预期异常；其余情况不能静默退出，否则状态还写着「运行中」但不再接受连接。
+                        if (!running.get()) break
+                        lastError = error.message ?: error.javaClass.simpleName
+                        runCatching { Thread.sleep(50) }
+                        continue
                     }
                 val client = Client(socketClient, ctx.applicationContext)
                 clients.add(client)
@@ -203,7 +214,8 @@ object NodeBridge {
                     params: JSONObject,
                 ) {
                     val token = requestId.toString()
-                    pendingInteractions[token] = requestId
+                    pruneInteractions()
+                    pendingInteractions[token] = Interaction(requestId, System.currentTimeMillis())
                     broadcast(
                         "interaction.request",
                         JSONObject()
@@ -218,7 +230,8 @@ object NodeBridge {
                     params: JSONObject,
                 ) {
                     val token = requestId.toString()
-                    pendingInteractions[token] = requestId
+                    pruneInteractions()
+                    pendingInteractions[token] = Interaction(requestId, System.currentTimeMillis())
                     broadcast(
                         "interaction.request",
                         JSONObject()
@@ -244,11 +257,10 @@ object NodeBridge {
     }
 
     private fun broadcast(type: String, fields: JSONObject) {
-        val frame = NodeBridgeProtocol.event(type, fields)
         for (client in clients) {
             if (!client.authenticated) continue
             try {
-                client.send(frame)
+                client.send(NodeBridgeProtocol.event(type, fields, client.nextSeq()))
             } catch (_: Exception) {
                 client.close()
                 clients.remove(client)
@@ -265,7 +277,14 @@ object NodeBridge {
         try {
             client.socket.soTimeout = 0
             while (!client.socket.isClosed) {
-                val line = client.reader.readLine() ?: break
+                // 认证前只允许一小段 hello：没有上限时，一个未认证连接就能用超长行撑爆内存。
+                val line = if (client.authenticated) client.reader.readLine() else readBoundedLine(client.reader)
+                if (line == null) {
+                    if (!client.authenticated) {
+                        client.send(NodeBridgeProtocol.error(null, NodeBridgeProtocol.ERR_PARSE, "hello frame too large"))
+                    }
+                    break
+                }
                 if (line.isBlank()) continue
                 handleLine(client, line)
             }
@@ -274,6 +293,64 @@ object NodeBridge {
             client.close()
             clients.remove(client)
         }
+    }
+
+    /**
+     * 读一行，最多 [MAX_PREAUTH_LINE] 个字符；超限返回 null。
+     *
+     * 只在认证前使用：hello 帧很短，没有上限时对端可以用一条不换行的长帧吃光内存。
+     */
+    private fun readBoundedLine(reader: BufferedReader): String? {
+        val sb = StringBuilder()
+        while (true) {
+            val code = reader.read()
+            if (code == -1) return if (sb.isEmpty()) null else sb.toString()
+            if (code == '\n'.code) return sb.toString()
+            if (sb.length >= MAX_PREAUTH_LINE) return null
+            if (code != '\r'.code) sb.append(code.toChar())
+        }
+    }
+
+    /**
+     * 同一 commandId 已有收据时直接回原结果，不重复执行（CONTRACT §3、SPEC 11.5）。
+     * 返回 true 表示已回复，调用方不应再执行命令。
+     */
+    private fun duplicateReceipt(
+        client: Client,
+        id: Any?,
+        commandId: String,
+    ): Boolean {
+        if (commandId.isBlank()) return false
+        val entry = receipts.get(commandId) ?: return false
+        val result = entry.result
+        if (result != null && entry.errorCode == null) {
+            client.send(NodeBridgeProtocol.result(id, JSONObject(result.toString()).put("duplicate", true)))
+        } else {
+            client.send(
+                NodeBridgeProtocol.error(id, entry.errorCode ?: NodeBridgeProtocol.ERR_INTERNAL, entry.errorMessage ?: "duplicate command"),
+            )
+        }
+        return true
+    }
+
+    private fun rememberResult(
+        commandId: String,
+        result: JSONObject,
+    ) {
+        receipts.put(commandId, CommandReceipts.Entry(result = result))
+    }
+
+    private fun rememberError(
+        commandId: String,
+        code: Int,
+        message: String,
+    ) {
+        receipts.put(commandId, CommandReceipts.Entry(errorCode = code, errorMessage = message))
+    }
+
+    private fun pruneInteractions() {
+        val cutoff = System.currentTimeMillis() - INTERACTION_TTL_MS
+        pendingInteractions.entries.removeAll { it.value.at < cutoff }
     }
 
     private fun handleLine(
@@ -312,14 +389,29 @@ object NodeBridge {
             client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_INTERNAL, "bridge not running"))
             return
         }
+        val commandId = params.optString("commandId", "")
+        val mutating =
+            method == NodeBridgeProtocol.METHOD_SESSION_NEW ||
+                method == NodeBridgeProtocol.METHOD_SESSION_OPEN ||
+                method == NodeBridgeProtocol.METHOD_TURN_SEND ||
+                method == NodeBridgeProtocol.METHOD_TURN_STOP ||
+                method == NodeBridgeProtocol.METHOD_INTERACTION_ANSWER
+        // 重投同一 commandId：回原收据，不再执行一遍。
+        if (mutating && duplicateReceipt(client, id, commandId)) return
         when (method) {
             NodeBridgeProtocol.METHOD_SNAPSHOT -> client.send(NodeBridgeProtocol.result(id, snapshot(ctl)))
             NodeBridgeProtocol.METHOD_PING -> client.send(NodeBridgeProtocol.result(id, JSONObject().put("pong", true)))
             NodeBridgeProtocol.METHOD_SESSION_NEW -> {
                 val workspace = params.optString("workspace", "").takeIf { it.isNotBlank() }
                 ctl.newSession(workspace) { ok, message ->
-                    if (ok) client.send(NodeBridgeProtocol.result(id, JSONObject().put("ok", true).put("sessionId", ctl.activeSessionId())))
-                    else client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_INTERNAL, message))
+                    if (ok) {
+                        val result = JSONObject().put("ok", true).put("sessionId", ctl.activeSessionId())
+                        rememberResult(commandId, result)
+                        client.send(NodeBridgeProtocol.result(id, result))
+                    } else {
+                        rememberError(commandId, NodeBridgeProtocol.ERR_INTERNAL, message)
+                        client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_INTERNAL, message))
+                    }
                 }
             }
             NodeBridgeProtocol.METHOD_SESSION_OPEN -> {
@@ -340,8 +432,14 @@ object NodeBridge {
                     client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_PARAMS, "sessionId and text required"))
                 } else {
                     ctl.sendTo(sessionId, text) { ok, message ->
-                        if (ok) client.send(NodeBridgeProtocol.result(id, JSONObject().put("ok", true)))
-                        else client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_INTERNAL, message))
+                        if (ok) {
+                            val result = JSONObject().put("ok", true)
+                            rememberResult(commandId, result)
+                            client.send(NodeBridgeProtocol.result(id, result))
+                        } else {
+                            rememberError(commandId, NodeBridgeProtocol.ERR_INTERNAL, message)
+                            client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_INTERNAL, message))
+                        }
                     }
                 }
             }
@@ -384,7 +482,7 @@ object NodeBridge {
             NodeBridgeProtocol.METHOD_INTERACTION_ANSWER -> {
                 val token = params.optString("requestId", "")
                 val allow = params.optBoolean("allow", false)
-                val original = pendingInteractions.remove(token)
+                val original = pendingInteractions.remove(token)?.requestId
                 if (original == null) {
                     client.send(NodeBridgeProtocol.error(id, NodeBridgeProtocol.ERR_NOT_FOUND, "unknown interaction"))
                 } else {
@@ -437,7 +535,11 @@ object NodeBridge {
     private class Client(val socket: Socket, val context: Context) {
         val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
         private val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
+        private val seq = java.util.concurrent.atomic.AtomicLong(0)
         @Volatile var authenticated = false
+
+        /** 每条连接内单调递增：客户端据此丢弃重放与乱序事件。 */
+        fun nextSeq(): Long = seq.incrementAndGet()
 
         fun send(frame: JSONObject) {
             synchronized(writer) {

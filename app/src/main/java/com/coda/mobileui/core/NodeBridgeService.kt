@@ -24,7 +24,8 @@ class NodeBridgeService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // 这时端口还没绑定，先给个中性文案，等 onStartCommand 成功后再更新成真实端口。
+        startForeground(NOTIFICATION_ID, buildNotification("正在启动…"))
     }
 
     override fun onStartCommand(
@@ -39,6 +40,9 @@ class NodeBridgeService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // 端口绑定成功后再刷新一次：否则通知会一直显示启动前的 0。
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIFICATION_ID, buildNotification())
         return START_STICKY
     }
 
@@ -58,7 +62,7 @@ class NodeBridgeService : Service() {
         )
     }
 
-    private fun buildNotification(text: String = "已监听 ${NodeBridge.port()}，等待桌面端配对"): Notification {
+    private fun buildNotification(text: String = "已监听 ${NodeBridge.port()}，等待桌面端连接"): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,

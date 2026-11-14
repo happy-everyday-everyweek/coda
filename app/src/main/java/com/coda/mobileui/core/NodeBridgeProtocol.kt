@@ -42,13 +42,26 @@ object NodeBridgeProtocol {
             .put("id", id ?: JSONObject.NULL)
             .put("error", JSONObject().put("code", code).put("message", message))
 
-    fun event(type: String, fields: JSONObject = JSONObject()): JSONObject =
+    fun event(
+        type: String,
+        fields: JSONObject = JSONObject(),
+        seq: Long? = null,
+    ): JSONObject =
         JSONObject()
             .put("jsonrpc", "2.0")
             .put("method", EVENT)
-            .put("params", JSONObject().put("type", type).put("ts", System.currentTimeMillis()).apply {
-                for (key in fields.keys()) put(key, fields.opt(key))
+            .put("params", JSONObject().put("type", type).put("ts", isoTimestamp()).apply {
+                if (seq != null) put("seq", seq)
+                for (key in fields.keys()) {
+                    // type/ts/seq 是信封自己的字段，业务负载不许覆盖。
+                    if (key == "type" || key == "ts" || key == "seq") continue
+                    put(key, fields.opt(key))
+                }
             })
+
+    /** ISO-8601 UTC，与平台契约 §2 一致；不再用毫秒整数。 */
+    fun isoTimestamp(now: Long = System.currentTimeMillis()): String =
+        java.time.Instant.ofEpochMilli(now).toString()
 
     /** 常量时间比较，避免 token 被按字节计时猜测。 */
     fun tokenMatches(expected: String, actual: String?): Boolean {

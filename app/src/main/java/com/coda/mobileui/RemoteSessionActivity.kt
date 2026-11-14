@@ -151,6 +151,8 @@ class RemoteSessionActivity : BaseActivity() {
             try {
                 val node = NodeBridgeClient.connect(device)
                 node.onEvent = { payload -> ui.post { onEvent(payload) } }
+                // 远端掉线必须落到界面：状态改离线、发送键失效，不能还显示「已连接」。
+                node.onClose = { reason -> ui.post { setOffline(reason) } }
                 node.hello(device.token)
                 client = node
                 if (sessionId.isNotBlank()) {
@@ -207,6 +209,13 @@ class RemoteSessionActivity : BaseActivity() {
     private fun setReady() {
         status.text = "已连接 · ${device.label.ifBlank { device.host }}"
         sendButton.isEnabled = true
+    }
+
+    /** 连接断了就地降级：状态改成离线、发送键失效，只保留已经收到的内容。 */
+    private fun setOffline(reason: String) {
+        if (isFinishing) return
+        status.text = "离线 · $reason"
+        sendButton.isEnabled = false
     }
 
     private fun setStatus(text: String) {

@@ -16,10 +16,20 @@ import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 /** 节点桥调用失败（网络/鉴权/超时/远端错误）。 */
-class NodeBridgeException(
+open class NodeBridgeException(
     message: String,
     val code: Int = NodeBridgeProtocol.ERR_INTERNAL,
 ) : Exception(message)
+
+/**
+ * 请求超时：远端可能已经执行了，结果未知。
+ *
+ * 按 CONTRACT §3 不能当成失败去重试，否则同一句话可能在远端执行两遍。
+ */
+class NodeBridgeTimeoutException(
+    message: String,
+    val commandId: String? = null,
+) : NodeBridgeException(message)
 
 /**
  * Android 端连接另一个 Coda 节点的客户端（与桌面端 android-node.mjs 同协议）。
@@ -35,6 +45,9 @@ class NodeBridgeClient private constructor(
     private val nextId = AtomicInteger(1)
     /** 远端事件回调（在读取线程上调用，调用方自行切主线程）。 */
     @Volatile var onEvent: ((JSONObject) -> Unit)? = null
+
+    /** 连接结束回调（读取线程上调用）：UI 必须据此显示离线，不能继续假装已连接。 */
+    @Volatile var onClose: ((String) -> Unit)? = null
     @Volatile private var closed = false
     private val readerThread =
         Thread({
@@ -62,7 +75,10 @@ class NodeBridgeClient private constructor(
                 }
             } catch (_: Exception) {
             } finally {
-                failAll(NodeBridgeException("$deviceName 连接已断开"))
+                val reason = if (closed) "已关闭连接" else "$deviceName 连接已断开"
+                failAll(NodeBridgeException(reason))
+                // 连接掉了就通知界面：不能让它继续显示「已连接」。
+                onClose?.invoke(reason)
             }
         }, "coda-node-rpc").apply { isDaemon = true }
 
@@ -81,7 +97,9 @@ class NodeBridgeClient private constructor(
                 timeoutMs,
             )
         val version = result.optInt("protocolVersion", 0)
-        if (version != NodeBridgeProtocol.VERSION) throw NodeBridgeException("节点协议版本不兼容：$version")
+        if (version != NodeBridgeProtocol.VERSION) {
+            throw NodeBridgeException("节点协议版本不兼容：$version", NodeBridgeProtocol.ERR_VERSION)
+        }
         return result
     }
 
@@ -92,36 +110,74 @@ class NodeBridgeClient private constructor(
         request(NodeBridgeProtocol.METHOD_MESSAGES, JSONObject().put("sessionId", sessionId), timeoutMs)
             .optJSONArray("messages") ?: JSONArray()
 
-    fun sessionNew(workspace: String?, timeoutMs: Long = 30000): String {
+    fun sessionNew(
+        workspace: String?,
+        timeoutMs: Long = 30000,
+        commandId: String = newCommandId(),
+    ): String {
         val params = JSONObject()
         if (!workspace.isNullOrBlank()) params.put("workspace", workspace)
-        return request(NodeBridgeProtocol.METHOD_SESSION_NEW, params, timeoutMs).optString("sessionId", "")
+        return request(NodeBridgeProtocol.METHOD_SESSION_NEW, params, timeoutMs, commandId).optString("sessionId", "")
     }
 
-    fun sessionOpen(sessionId: String, timeoutMs: Long = 15000): Boolean =
-        request(NodeBridgeProtocol.METHOD_SESSION_OPEN, JSONObject().put("sessionId", sessionId), timeoutMs)
-            .optBoolean("ok", false)
+    fun sessionOpen(
+        sessionId: String,
+        timeoutMs: Long = 15000,
+        commandId: String = newCommandId(),
+    ): Boolean =
+        request(
+            NodeBridgeProtocol.METHOD_SESSION_OPEN,
+            JSONObject().put("sessionId", sessionId),
+            timeoutMs,
+            commandId,
+        ).optBoolean("ok", false)
 
-    fun sendTurn(sessionId: String, text: String, timeoutMs: Long = 15000): Boolean =
+    fun sendTurn(
+        sessionId: String,
+        text: String,
+        timeoutMs: Long = 15000,
+        commandId: String = newCommandId(),
+    ): Boolean =
         request(
             NodeBridgeProtocol.METHOD_TURN_SEND,
             JSONObject().put("sessionId", sessionId).put("text", text),
             timeoutMs,
+            commandId,
         ).optBoolean("ok", false)
 
-    fun turnStop(sessionId: String, timeoutMs: Long = 15000): Boolean =
-        request(NodeBridgeProtocol.METHOD_TURN_STOP, JSONObject().put("sessionId", sessionId), timeoutMs)
-            .optBoolean("ok", false)
+    fun turnStop(
+        sessionId: String,
+        timeoutMs: Long = 15000,
+        commandId: String = newCommandId(),
+    ): Boolean =
+        request(
+            NodeBridgeProtocol.METHOD_TURN_STOP,
+            JSONObject().put("sessionId", sessionId),
+            timeoutMs,
+            commandId,
+        ).optBoolean("ok", false)
 
-    fun answerInteraction(requestId: String, allow: Boolean, timeoutMs: Long = 15000): Boolean =
+    fun answerInteraction(
+        requestId: String,
+        allow: Boolean,
+        timeoutMs: Long = 15000,
+        commandId: String = newCommandId(),
+    ): Boolean =
         request(
             NodeBridgeProtocol.METHOD_INTERACTION_ANSWER,
             JSONObject().put("requestId", requestId).put("allow", allow),
             timeoutMs,
+            commandId,
         ).optBoolean("ok", false)
 
-    private fun request(method: String, params: JSONObject, timeoutMs: Long): JSONObject {
+    private fun request(
+        method: String,
+        params: JSONObject,
+        timeoutMs: Long,
+        commandId: String? = null,
+    ): JSONObject {
         if (closed) throw NodeBridgeException("连接已关闭")
+        if (commandId != null) params.put("commandId", commandId)
         val id = nextId.getAndIncrement()
         val future = CompletableFuture<JSONObject>()
         pending[id] = future
@@ -140,7 +196,7 @@ class NodeBridgeClient private constructor(
             throw NodeBridgeException(cause?.message ?: "远端错误")
         } catch (error: TimeoutException) {
             pending.remove(id)
-            throw NodeBridgeException("请求超时：$method")
+            throw NodeBridgeTimeoutException("请求超时（结果未知）：$method", commandId)
         } catch (error: InterruptedException) {
             pending.remove(id)
             Thread.currentThread().interrupt()
@@ -160,6 +216,9 @@ class NodeBridgeClient private constructor(
     }
 
     companion object {
+        /** 每条命令一个 id；重投时必须复用同一个 id 才能吃到幂等。 */
+        fun newCommandId(): String = java.util.UUID.randomUUID().toString()
+
         fun connect(device: DeviceStore.Device, timeoutMs: Int = 5000): NodeBridgeClient {
             if (device.host.isBlank()) throw NodeBridgeException("设备地址为空")
             val socket = Socket()

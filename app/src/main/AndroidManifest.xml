@@ -17,6 +17,8 @@
     <!-- 桌面节点桥：App 退到后台后保持监听，通知栏始终可见 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 13+ 前台服务通知需要运行时权限，否则「通知栏可见」这条不成立 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".CodaApp"
