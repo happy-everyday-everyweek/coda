@@ -4602,8 +4602,40 @@ class MainActivity : BaseActivity() {
         }
     }
 
-    /** 图片内容的最小描述：取缩略一像素的平均色，落到一个颜色词上，供搜索按内容命中。 */
+    /** 图片描述缓存：解码放到后台，渲染路径上只查表，避免在会话渲染时同步解码导致卡顿与耗电。 */
+    private val imgColorCache = mutableMapOf<String, String>()
+    private val imgColorPending = mutableSetOf<String>()
+    private var imgColorLoaded = false
+
     private fun imageColorWord(url: String): String {
+        if (url.isBlank()) return ""
+        if (!imgColorLoaded) {
+            imgColorLoaded = true
+            runCatching {
+                java.io.File(filesDir, "search/img-colors.txt").forEachLine { line ->
+                    val idx = line.lastIndexOf(' ')
+                    if (idx > 0) imgColorCache[line.substring(0, idx)] = line.substring(idx + 1)
+                }
+            }
+        }
+        imgColorCache[url]?.let { return it }
+        if (imgColorPending.add(url)) {
+            Thread {
+                val word = computeColorWord(url)
+                if (word.isNotEmpty()) {
+                    imgColorCache[url] = word
+                    runCatching {
+                        val dir = java.io.File(filesDir, "search").apply { mkdirs() }
+                        java.io.File(dir, "img-colors.txt").appendText("$url $word\n")
+                    }
+                }
+                imgColorPending.remove(url)
+            }.start()
+        }
+        return ""
+    }
+
+    private fun computeColorWord(url: String): String {
         val bitmap =
             runCatching {
                 if (url.startsWith("content:") || url.startsWith("file:")) {
