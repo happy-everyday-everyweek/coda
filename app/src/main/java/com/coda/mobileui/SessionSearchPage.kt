@@ -31,9 +31,18 @@ import java.util.Locale
 class SessionSearchPage(
     private val host: MainActivity,
     private val sessions: () -> List<ZSessionInfo>,
+    private val extras: () -> List<Extra>,
     private val onClose: () -> Unit,
     private val onPick: (ZSessionInfo) -> Unit,
 ) {
+    /** 会话以外的可搜索对象：设置分类、Coda Bot、图片等。 */
+    data class Extra(
+        val section: String,
+        val title: String,
+        val subtitle: String,
+        val run: () -> Unit,
+    )
+
     private val dp: (Float) -> Int = { (it * host.resources.displayMetrics.density).toInt() }
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
@@ -145,6 +154,59 @@ class SessionSearchPage(
         matched.forEach { session ->
             results.addView(row(session, q))
         }
+        // 会话以外的结果：设置分类、Coda Bot、图片，按来源分组。
+        val others =
+            if (q.isEmpty()) {
+                emptyList()
+            } else {
+                extras().filter {
+                    it.title.contains(q, ignoreCase = true) || it.subtitle.contains(q, ignoreCase = true)
+                }
+            }
+        var lastSection = ""
+        others.forEach { extra ->
+            if (extra.section != lastSection) {
+                lastSection = extra.section
+                results.addView(
+                    TextView(host).apply {
+                        text = extra.section
+                        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+                        setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                        setPadding(dp(12f), dp(14f), dp(12f), dp(4f))
+                    },
+                )
+            }
+            results.addView(
+                LinearLayout(host).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                    isClickable = true
+                    setOnClickListener { extra.run() }
+                    addView(
+                        TextView(host).apply {
+                            text = highlight(extra.title, q)
+                            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
+                            setTextColor(color(com.google.android.material.R.attr.colorOnSurface))
+                            maxLines = 1
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                        },
+                    )
+                    if (extra.subtitle.isNotEmpty()) {
+                        addView(
+                            TextView(host).apply {
+                                text = extra.subtitle
+                                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+                                setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                                setPadding(0, dp(3f), 0, 0)
+                            },
+                        )
+                    }
+                },
+            )
+        }
+        if (others.isNotEmpty()) hint.visibility = View.GONE
     }
 
     private fun row(

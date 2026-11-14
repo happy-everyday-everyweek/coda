@@ -4572,6 +4572,60 @@ class MainActivity : BaseActivity() {
     }
 
     /**
+     * 搜索页里的非会话结果。
+     *
+     * 设置与 Coda Bot 属于轻量对象，随时可查；图片要扫目录，按其体量代价高，
+     * 只在充电时纳入（对齐“只在部分情况下索引”的要求），避免常态耗电。
+     */
+    private fun searchExtras(): List<SessionSearchPage.Extra> {
+        val out = mutableListOf<SessionSearchPage.Extra>()
+        SettingsData.home(this)
+            .filterIsInstance<SettingRow.Category>()
+            .forEach { c ->
+                out +=
+                    SessionSearchPage.Extra("设置", c.title, c.summary) {
+                        startActivity(
+                            Intent(this, SettingsDetailActivity::class.java)
+                                .putExtra(SettingsDetailActivity.EXTRA_PAGE, c.page),
+                        )
+                    }
+            }
+        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        out +=
+            SessionSearchPage.Extra("Coda Bot", profile.name, profile.persona.take(40)) {
+                showBotPage()
+            }
+        if (isCharging()) {
+            runCatching {
+                val root = File(zc.workspacePath())
+                root
+                    .listFiles()
+                    ?.filter { it.isFile && it.extension.lowercase() in imageExts }
+                    ?.take(40)
+                    ?.forEach { f ->
+                        out +=
+                            SessionSearchPage.Extra("图片", f.name, readableSize(f.length())) {
+                                openWorkspace()
+                            }
+                    }
+            }
+        }
+        return out
+    }
+
+    private val imageExts = setOf("jpg", "jpeg", "png", "webp", "gif", "heic")
+
+    private fun isCharging(): Boolean =
+        (getSystemService(android.content.Context.BATTERY_SERVICE) as? android.os.BatteryManager)?.isCharging ?: false
+
+    private fun readableSize(bytes: Long): String =
+        when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
+            else -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
+        }
+
+    /**
      * 进入会话搜索页：与设置页、Bot 页同级，只在内容区换页。
      *
      * 形态对齐 Claude 安卓端：搜索独立成页（内部屏名 SearchChats），入口在侧栏与首页；
@@ -4593,6 +4647,7 @@ class MainActivity : BaseActivity() {
                 ?: SessionSearchPage(
                     this,
                     sessions = { zc.sessions },
+                    extras = { searchExtras() },
                     onClose = { hideSearchPage() },
                     onPick = { openSessionFromSearch(it) },
                 ).also { searchPage = it }
