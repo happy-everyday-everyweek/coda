@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import net from "node:net";
 import { once } from "node:events";
 
-import { AndroidNodeClient, AndroidNodeError, NODE_ERRORS, NODE_METHODS } from "../../sync/android-node.mjs";
+import { AndroidNodeClient, AndroidNodeError, AndroidNodeTimeoutError, MAX_FRAME_BYTES, NODE_ERRORS, NODE_METHODS } from "../../sync/android-node.mjs";
 
-async function fakeNode({ token = "secret", reply = "pong" } = {}) {
+async function fakeNode({ token = "secret", reply = "pong", hang = false, flood = false, dupSeq = false, seen = [] } = {}) {
   const sockets = new Set();
   const server = net.createServer((socket) => {
     sockets.add(socket);
@@ -21,6 +21,7 @@ async function fakeNode({ token = "secret", reply = "pong" } = {}) {
         buffer = buffer.slice(i + 1);
         if (!line.trim()) continue;
         const req = JSON.parse(line);
+        seen.push(req);
         if (req.method === NODE_METHODS.hello) {
           if (req.params?.token !== token) {
             send({ jsonrpc: "2.0", id: req.id, error: { code: NODE_ERRORS.UNAUTHORIZED, message: "invalid token" } });
@@ -43,11 +44,23 @@ async function fakeNode({ token = "secret", reply = "pong" } = {}) {
           send({ jsonrpc: "2.0", id: req.id, error: { code: NODE_ERRORS.UNAUTHORIZED, message: "hello required" } });
           continue;
         }
-        if (req.method === NODE_METHODS.ping) send({ jsonrpc: "2.0", id: req.id, result: { pong: true } });
-        else if (req.method === NODE_METHODS.snapshot) send({ jsonrpc: "2.0", id: req.id, result: { sessions: [{ id: "s1" }] } });
+        if (req.method === NODE_METHODS.ping) {
+          if (hang) continue;
+          send({ jsonrpc: "2.0", id: req.id, result: { pong: true } });
+        } else if (req.method === NODE_METHODS.messages) {
+          send({ jsonrpc: "2.0", id: req.id, result: { messages: [{ id: "m1", role: "user", text: "hi" }] } });
+        } else if (req.method === NODE_METHODS.snapshot) send({ jsonrpc: "2.0", id: req.id, result: { sessions: [{ id: "s1" }] } });
         else if (req.method === NODE_METHODS.turnSend) {
           send({ jsonrpc: "2.0", id: req.id, result: { ok: true } });
-          send({ jsonrpc: "2.0", method: "node.event", params: { type: "message.delta", sessionId: req.params.sessionId, text: reply } });
+          if (flood) {
+            socket.write("x".repeat(MAX_FRAME_BYTES + 1024));
+            continue;
+          }
+          const seq = dupSeq ? 5 : 1;
+          send({ jsonrpc: "2.0", method: "node.event", params: { type: "message.delta", sessionId: req.params.sessionId, text: reply, seq } });
+          if (dupSeq) {
+            send({ jsonrpc: "2.0", method: "node.event", params: { type: "message.delta", sessionId: req.params.sessionId, text: "重放", seq } });
+          }
         } else send({ jsonrpc: "2.0", id: req.id, result: { ok: true } });
       }
     });
@@ -94,4 +107,52 @@ test("Android 节点：发送后收到流式事件", async (t) => {
   const [event] = await eventPromise;
   assert.equal(event.sessionId, "s1");
   assert.equal(event.text, "hello from android");
+});
+
+test("Android 节点：正文可拉取，命令携带 commandId", async (t) => {
+  const seen = [];
+  const node = await fakeNode({ seen });
+  t.after(node.close);
+  const client = await AndroidNodeClient.connect({ host: "127.0.0.1", port: node.port, token: "secret" });
+  t.after(() => client.close());
+  const messages = await client.messages("s1");
+  assert.equal(messages[0].id, "m1");
+  await client.send("s1", "hi", { commandId: "cmd-1" });
+  const sent = seen.find((req) => req.method === NODE_METHODS.turnSend);
+  assert.equal(sent.params.commandId, "cmd-1");
+});
+
+test("Android 节点：超时落在结果未知，不冒充失败", async (t) => {
+  const node = await fakeNode({ hang: true });
+  t.after(node.close);
+  const client = await AndroidNodeClient.connect({ host: "127.0.0.1", port: node.port, token: "secret" });
+  t.after(() => client.close());
+  await assert.rejects(
+    client.request(NODE_METHODS.ping, {}, { timeoutMs: 80, commandId: "cmd-timeout" }),
+    (error) =>
+      error instanceof AndroidNodeTimeoutError && error.outcomeUnknown === true && error.commandId === "cmd-timeout",
+  );
+});
+
+test("Android 节点：seq 重放的事件被丢弃", async (t) => {
+  const node = await fakeNode({ dupSeq: true });
+  t.after(node.close);
+  const client = await AndroidNodeClient.connect({ host: "127.0.0.1", port: node.port, token: "secret" });
+  t.after(() => client.close());
+  const texts = [];
+  client.on("event:message.delta", (event) => texts.push(event.text));
+  const duplicated = once(client, "duplicateEvent");
+  await client.send("s1", "hi");
+  await duplicated;
+  assert.deepEqual(texts, ["pong"]);
+});
+
+test("Android 节点：超长帧被拒绝并断开", async (t) => {
+  const node = await fakeNode({ flood: true });
+  t.after(node.close);
+  const client = await AndroidNodeClient.connect({ host: "127.0.0.1", port: node.port, token: "secret" });
+  const closed = once(client, "close");
+  await client.send("s1", "hi").catch(() => {});
+  const [reason] = await closed;
+  assert.match(reason, /frame too large/);
 });

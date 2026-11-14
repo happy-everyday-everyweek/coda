@@ -12,6 +12,8 @@
   SharedPreferences 中的令牌做常量时间比较；未认证连接只能调用 `hello`。
 - 令牌：24 字节 `SecureRandom`，Base64URL；设置页可查看/复制/重置。
 - 安全边界：令牌等同密码；不开放终端、附件、成果读取；公共 Wi-Fi 不应开启。
+- **令牌授权不是设备配对**：这一版没有长期身份密钥、指纹确认与按设备撤销，
+  规格 11.3 的配对要求仍未满足，`SYNC-109` 保持 `BLOCKED`。
 
 ## 2. 方法
 
@@ -23,14 +25,31 @@
 | `node.session.open` | `sessionId` | `{ ok }` |
 | `node.turn.send` | `sessionId`, `text` | `{ ok }`（流式内容走事件） |
 | `node.turn.stop` | `sessionId` | `{ ok }` |
+| `node.messages` | `sessionId` | `{ messages: [...] }` |
 | `node.interaction.answer` | `requestId`, `allow` | `{ ok }` |
 | `node.ping` | — | `{ pong: true }` |
+
+### 2.1 命令幂等
+
+除 `hello`/`snapshot`/`ping` 外的命令都接受可选的 `commandId`。同一个 `commandId` 重复投递时，
+节点返回**上次的结果**并追加 `"duplicate": true`，不会把同一句话再执行一遍（CONTRACT §3、SPEC 11.5）。
+
+客户端超时属于「结果未知」：桌面端抛 `AndroidNodeTimeoutError`（`outcomeUnknown = true`），
+Android 端抛 `NodeBridgeTimeoutException`。两边都必须据此提示用户，不得静默重试。
+
+收据只存在进程内存里（上限 128 条，LRU 淘汰）；进程重启后同一 `commandId` 会被当成新命令。
 
 事件（服务端主动推送）：
 
 ```json
-{"jsonrpc":"2.0","method":"node.event","params":{"type":"message.delta","sessionId":"s1","messageId":"m1","text":"...","ts":1730000000000}}
+{"jsonrpc":"2.0","method":"node.event","params":{"type":"message.delta","sessionId":"s1","messageId":"m1","text":"...","ts":"2026-11-08T10:00:00Z","seq":12}}
 ```
+
+`ts` 是 ISO-8601 UTC 字符串（与平台契约 §2 一致，不再用毫秒整数）。`seq` 在每条连接内单调递增，
+客户端必须丢弃 `seq` 不大于已见值的事件，避免重放或乱序把同一条消息回显两次。
+
+单帧上限：认证前的 hello 帧最多 16 KiB（超出即断开），桌面端对任意帧的上限是 1 MiB。
+两侧都有在途请求上限（桌面端 256），超出会直接拒绝而不是排队。
 
 事件类型：`state.changed`、`message.delta`、`reasoning.delta`、`turn.finished`、
 `session.opened`、`interaction.request`、`notice`、`bridge.reset`。
