@@ -96,7 +96,17 @@ class CodaBotPage(
         if (runtime != null && signatureOf(profile) == runtimeSignature) return
         runtime?.let { runCatching { it.close() } }
         runtimeSignature = signatureOf(profile)
-        runtime = CodaBotRuntime(host, profile) { message -> host.runOnUiThread { addBubble(message) } }
+        runtime = CodaBotRuntime(host, profile) { message ->
+            host.runOnUiThread {
+                addBubble(message)
+                // 收到回复：先给一个“完成”的表情，再回到常态；表演不全靠一个 idle。
+                pet?.petView()?.setActivity(null)
+                pet?.petView()?.setMood(com.coda.mobileui.core.PetMood.DONE)
+                pet?.postDelayed({
+                    pet?.petView()?.setMood(com.coda.mobileui.core.PetMood.IDLE)
+                }, 1400)
+            }
+        }
     }
 
     private fun buildChat() {
@@ -120,6 +130,9 @@ class CodaBotPage(
             visibility = if (profile.petAnimation) View.VISIBLE else View.GONE
             setPadding(dp(18), 0, dp(18), 0)
             setBackgroundColor(Color.TRANSPARENT)
+            // 动作帧比静止帧高一圈，别让父容器把动作裁掉。
+            clipChildren = false
+            clipToPadding = false
         }
         loader.addView(pet, FrameLayout.LayoutParams(-1, -2))
         // 形象可拖动：拖到消息区域也可以；松手按重力落回输入框上沿（地面）。
@@ -397,6 +410,8 @@ class CodaBotPage(
         if (text.isEmpty()) return
         val quoted = pendingReply
         clearReply()
+        // 发送即进入“在想”：更接近 dsh-Go 的表演状态机，而不是一直 idle。
+        pet?.petView()?.setActivity("thinking")
         input.setText("")
         val message = CodaBotMessage(
             fromUser = true,
