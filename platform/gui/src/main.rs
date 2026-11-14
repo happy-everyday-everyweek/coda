@@ -14,13 +14,23 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, FocusHandle, Window, WindowBounds, WindowOptions, div,
+    AnyElement, App, Bounds, Context, FocusHandle, KeyDownEvent, Window, WindowBounds, WindowOptions,
+    div,
     prelude::*, px, rgb, rgba, size,
 };
 use gpui_platform::application;
 use serde_json::Value;
 
 const MAX_PANES: usize = 4;
+
+#[derive(Clone, Copy)]
+enum PaneAction {
+    SplitRow,
+    SplitCol,
+    Close(usize),
+    Send,
+    Stop,
+}
 
 /// CI 冒烟用：出现过至少一帧。
 static RENDERED: AtomicBool = AtomicBool::new(false);
@@ -331,8 +341,8 @@ impl CodaGui {
     fn action_button(
         label: &'static str,
         index: usize,
+        action: PaneAction,
         cx: &mut Context<Self>,
-        action: fn(&mut Self, &mut Context<Self>),
     ) -> AnyElement {
         div()
             .id((label, index))
@@ -346,7 +356,13 @@ impl CodaGui {
             .hover(|style| style.bg(rgba(0xffffff1a)))
             .child(label)
             .on_click(cx.listener(move |this, _event, _window, cx| {
-                action(this, cx);
+                match action {
+                    PaneAction::SplitRow => this.split(true),
+                    PaneAction::SplitCol => this.split(false),
+                    PaneAction::Close(index) => this.close_pane(index),
+                    PaneAction::Send => this.send_current(cx),
+                    PaneAction::Stop => this.stop_turn(),
+                }
                 cx.notify();
             }))
             .into_any_element()
@@ -494,8 +510,8 @@ impl Render for CodaGui {
                     .p_2()
                     .border_t_1()
                     .border_color(rgba(0xffffff10))
-                    .child(Self::action_button("左右分屏", 0, cx, |this, _| this.split(true)))
-                    .child(Self::action_button("上下分屏", 1, cx, |this, _| this.split(false))),
+                    .child(Self::action_button("左右分屏", 0, PaneAction::SplitRow, cx))
+                    .child(Self::action_button("上下分屏", 1, PaneAction::SplitCol, cx)),
             );
 
         let pane_elements: Vec<AnyElement> = (0..self.panes.len())
@@ -617,7 +633,7 @@ impl CodaGui {
                 .on_click(cx.listener(|this, _event, window, cx| {
                     this.focus.focus(window, cx);
                 }))
-                .on_key_down(cx.listener(|this, event, _window, cx| {
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                     let keystroke = &event.keystroke;
                     if keystroke.key == "enter"
                         && (keystroke.modifiers.control || keystroke.modifiers.platform)
@@ -639,10 +655,8 @@ impl CodaGui {
                 })),
         );
         composer = composer
-            .child(Self::action_button("发送", index, cx, |this, cx| {
-                this.send_current(cx)
-            }))
-            .child(Self::action_button("停止", index, cx, |this, _| this.stop_turn()));
+            .child(Self::action_button("发送", index, PaneAction::Send, cx))
+            .child(Self::action_button("停止", index, PaneAction::Stop, cx));
 
         if let Some((interaction_id, prompt, options)) = interaction {
             let mut card = div()
@@ -722,12 +736,8 @@ impl CodaGui {
                             .flex_row()
                             .items_center()
                             .gap_2()
-                            .child(Self::action_button("左右", index, cx, |this, _| {
-                                this.split(true)
-                            }))
-                            .child(Self::action_button("上下", index, cx, |this, _| {
-                                this.split(false)
-                            }))
+                            .child(Self::action_button("左右", index, PaneAction::SplitRow, cx))
+                            .child(Self::action_button("上下", index, PaneAction::SplitCol, cx))
                             .child(
                                 div()
                                     .id(("popout", index))
@@ -751,9 +761,7 @@ impl CodaGui {
                                         });
                                     })),
                             )
-                            .child(Self::action_button("关闭", index, cx, |this, _| {
-                                this.close_pane(index)
-                            })),
+                            .child(Self::action_button("关闭", index, PaneAction::Close(index), cx)),
                     ),
             )
             .child(body)
@@ -814,14 +822,14 @@ fn main() {
         });
     }
 
-    application().run(|cx: &mut App| {
+    application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1180.0), px(760.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| CodaGui::new(base.clone(), token.clone(), cx)),
+            move |_window, cx| cx.new(|cx| CodaGui::new(base.clone(), token.clone(), cx)),
         )
         .expect("open_window");
         cx.activate(true);
