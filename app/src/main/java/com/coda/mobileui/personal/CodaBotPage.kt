@@ -99,11 +99,10 @@ class CodaBotPage(
         runtime = CodaBotRuntime(host, profile) { message ->
             host.runOnUiThread {
                 addBubble(message)
-                // 收到回复：先给一个“完成”的表情，再回到常态；表演不全靠一个 idle。
-                pet?.petView()?.setActivity(null)
-                pet?.petView()?.setMood(com.coda.mobileui.core.PetMood.DONE)
+                // 皮肤里没有 done 这个 clip，用 celebrate 播一次庆祝再回 idle。
+                pet?.petView()?.setActivity("celebrate")
                 pet?.postDelayed({
-                    pet?.petView()?.setMood(com.coda.mobileui.core.PetMood.IDLE)
+                    pet?.petView()?.setActivity(null)
                 }, 1400)
             }
         }
@@ -410,8 +409,8 @@ class CodaBotPage(
         if (text.isEmpty()) return
         val quoted = pendingReply
         clearReply()
-        // 发送即进入“在想”：更接近 dsh-Go 的表演状态机，而不是一直 idle。
-        pet?.petView()?.setActivity("thinking")
+        // 发送即进入 think：这些 manifest 里的 clip 名是 think，不是 thinking。
+        pet?.petView()?.setActivity("think")
         input.setText("")
         val message = CodaBotMessage(
             fromUser = true,
