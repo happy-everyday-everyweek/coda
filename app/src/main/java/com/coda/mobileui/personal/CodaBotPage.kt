@@ -100,7 +100,7 @@ class CodaBotPage(
             setPadding(0, 0, 0, 0)
         }
         addView(column, FrameLayout.LayoutParams(-1, -1))
-        column.addView(topBar(profile.name, "Coda Bot"), LinearLayout.LayoutParams(-1, dp(56) + statusBarHeight()))
+        column.addView(topBar(profile.name, ""), LinearLayout.LayoutParams(-1, dp(56) + statusBarHeight()))
         scroll = ScrollView(host).apply { isFillViewport = true }
         messages = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
@@ -277,12 +277,15 @@ class CodaBotPage(
             setTextColor(attr(com.google.android.material.R.attr.colorOnSurface))
             gravity = Gravity.CENTER
         })
-        labels.addView(TextView(host).apply {
-            text = subtitle
-            textSize = 11f
-            setTextColor(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
-            gravity = Gravity.CENTER
-        })
+        // 副标题只在有内容时占一行；默认不再重复显示「Coda Bot」，标题区保持单行。
+        if (subtitle.isNotBlank()) {
+            labels.addView(TextView(host).apply {
+                text = subtitle
+                textSize = 11f
+                setTextColor(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                gravity = Gravity.CENTER
+            })
+        }
         bar.addView(labels, LinearLayout.LayoutParams(0, -1, 1f))
         return bar
     }
