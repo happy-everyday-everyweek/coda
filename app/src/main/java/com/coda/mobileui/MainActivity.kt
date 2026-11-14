@@ -4727,9 +4727,91 @@ class MainActivity : BaseActivity() {
         hideBotPage()
     }
 
+    /**
+     * 首次进入 Coda Bot 的引导：先选形象，再写人设（按形象预填），最后才进聊天页。
+     *
+     * 不再替用户决定形象；没走完引导就不打开 Bot 页。
+     */
+    private fun ensureBotOnboarding(then: () -> Unit) {
+        if (com.coda.mobileui.personal.CodaBotStore.isOnboarded(this)) {
+            then()
+            return
+        }
+        val sheet = CodaSheet(this).title("先选一个形象").subtitle("之后可以在 设置 → Coda Bot 里改")
+        var chosen = com.coda.mobileui.personal.CodaBotStore.profile(this).avatarSkinId
+        sheet.content { column ->
+            column.removeAllViews()
+            com.coda.mobileui.core.PetSkins.all(this).forEach { skin ->
+                column.addView(
+                    TextView(this).apply {
+                        text = (if (skin.id == chosen) "✓ " else "") + skin.title
+                        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
+                        setTextColor(
+                            com.google.android.material.color.MaterialColors.getColor(
+                                window.decorView,
+                                com.google.android.material.R.attr.colorOnSurface,
+                                android.graphics.Color.DKGRAY,
+                            ),
+                        )
+                        setPadding(dp(8), dp(14), dp(8), dp(14))
+                        isClickable = true
+                        setOnClickListener {
+                            chosen = skin.id
+                            sheet.dismiss()
+                            askPersonaThenStart(chosen, then)
+                        }
+                    },
+                )
+            }
+        }
+        sheet.secondaryAction("取消") { sheet.dismiss() }
+        sheet.show()
+    }
+
+    /** 引导第二步：人设输入框按所选形象预填默认值。 */
+    private fun askPersonaThenStart(
+        skinId: String,
+        then: () -> Unit,
+    ) {
+        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        val field =
+            EditText(this).apply {
+                setText(com.coda.mobileui.personal.CodaBotStore.defaultPersona(skinId))
+                setSelection(text.length)
+                minLines = 4
+                gravity = Gravity.TOP or Gravity.START
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
+            }
+        val sheet = CodaSheet(this).title("写一下人设").subtitle("已按形象预填，可以改")
+        sheet.content { column ->
+            column.removeAllViews()
+            column.addView(field, LinearLayout.LayoutParams(-1, -2))
+        }
+        sheet.primaryAction("开始聊天") {
+            profile.avatarSkinId = skinId
+            profile.persona = field.text?.toString()?.trim().orEmpty().ifEmpty {
+                com.coda.mobileui.personal.CodaBotStore.defaultPersona(skinId)
+            }
+            com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+            com.coda.mobileui.personal.CodaBotStore.markOnboarded(this)
+            sheet.dismiss()
+            then()
+        }
+        sheet.secondaryAction("返回") {
+            sheet.dismiss()
+            ensureBotOnboarding(then)
+        }
+        sheet.show()
+    }
+
     /** 进入 Bot 页：与设置页一样在内容区换页，不新开页面。 */
     private fun showBotPage() {
         if (showingBot) return
+        // 第一次进 Bot 页先走引导：不替用户决定形象。
+        if (!com.coda.mobileui.personal.CodaBotStore.isOnboarded(this)) {
+            ensureBotOnboarding { showBotPage() }
+            return
+        }
         hideSearchPage()
         drawerLayout.closeDrawer(Gravity.LEFT)
         emptyState.visibility = View.GONE

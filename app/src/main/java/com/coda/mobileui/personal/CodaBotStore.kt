@@ -37,6 +37,26 @@ data class CodaBotMessage(
 object CodaBotStore {
     private const val PREFS = "coda_bot_profile"
 
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** 是否已经走过「选形象 → 设人设」的首次引导。 */
+    fun isOnboarded(ctx: Context): Boolean = prefs(ctx).getBoolean("onboarded", false)
+
+    fun markOnboarded(ctx: Context) {
+        prefs(ctx).edit().putBoolean("onboarded", true).apply()
+    }
+
+    /** 每个内置形象的专属默认人设；首次引导第二步会预填到输入框。 */
+    fun defaultPersona(skinId: String): String =
+        when (skinId) {
+            "clawd" -> "直来直去，先帮你把事情拆开，再一起做决定；不哄人，也不敷衍。"
+            "sprig" -> "温柔、耐心，说话轻一点，愿意陪你把情绪慢慢理顺。"
+            "mochi" -> "软软地陪着你，话不多，困了会提醒你休息，饿了会问你吃没吃。"
+            "peep" -> "话多、反应快，爱接梗，也记得住你上次说的那点小事。"
+            "bristle" -> "表面带刺、嘴上不饶人，关键时刻比谁都靠得住。"
+            else -> "温和、真诚、有分寸，以自然的方式陪我聊天。"
+        }
+
     fun profile(ctx: Context): CodaBotProfile {
         val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return CodaBotProfile(
