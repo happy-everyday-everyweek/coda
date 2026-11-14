@@ -9,6 +9,7 @@
 
 mod net;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,6 +21,9 @@ use gpui_platform::application;
 use serde_json::Value;
 
 const MAX_PANES: usize = 4;
+
+/// CI 冒烟用：出现过至少一帧。
+static RENDERED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default, Clone)]
 struct Remote {
@@ -411,6 +415,7 @@ impl CodaGui {
 
 impl Render for CodaGui {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        RENDERED.store(true, Ordering::SeqCst);
         let remote = self.snapshot();
         let sessions = sessions_of(&remote.projection);
         let active_session = self.active_session(&sessions);
@@ -795,6 +800,18 @@ fn main() {
             }
             _ => {}
         }
+    }
+
+    if std::env::var("CODA_GUI_SMOKE").as_deref() == Ok("1") {
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_secs(25));
+            if RENDERED.load(Ordering::SeqCst) {
+                eprintln!("CODA_GUI_OK: window rendered");
+                std::process::exit(0);
+            }
+            eprintln!("CODA_GUI_FAIL: no frame within 25s");
+            std::process::exit(2);
+        });
     }
 
     application().run(|cx: &mut App| {

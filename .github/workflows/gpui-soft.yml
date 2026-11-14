@@ -66,6 +66,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
           WGPU_BACKEND: vulkan
           WINIT_UNIX_BACKEND: x11
+          CODA_GUI_SMOKE: "1"
         run: |
           set -o pipefail
           xvfb-run -a --server-args="-screen 0 1280x800x24" \
@@ -113,6 +114,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
           WGPU_BACKEND: vulkan
           WINIT_UNIX_BACKEND: x11
+          CODA_GUI_SMOKE: "1"
         run: |
           set -o pipefail
           xvfb-run -a --server-args="-screen 0 1280x800x24" \
