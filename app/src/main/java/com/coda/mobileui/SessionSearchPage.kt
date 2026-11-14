@@ -147,7 +147,7 @@ class SessionSearchPage(
                 all.sortedByDescending { it.updatedAt }
             } else {
                 all
-                    .filter { it.title.contains(q, ignoreCase = true) || (it.workspacePath ?: "").contains(q, true) }
+                    .filter { SearchSemantics.matches(q, it.title) || SearchSemantics.matches(q, it.workspacePath ?: "") }
                     .sortedByDescending { it.updatedAt }
             }
         hint.visibility = if (matched.isEmpty() && q.isNotEmpty()) View.VISIBLE else View.GONE
@@ -160,7 +160,7 @@ class SessionSearchPage(
                 emptyList()
             } else {
                 extras(q).filter {
-                    it.title.contains(q, ignoreCase = true) || it.subtitle.contains(q, ignoreCase = true)
+                    SearchSemantics.matches(q, it.title) || SearchSemantics.matches(q, it.subtitle)
                 }
             }
         var lastSection = ""
