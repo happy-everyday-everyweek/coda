@@ -1,120 +1,681 @@
-//! Coda 桌面 GUI（GPUI）。
+//! Coda 桌面 GUI（GPUI）——三端之一。
 //!
-//! 布局参照 Zed：左侧半透明侧边栏放会话与新建入口，中间是浮起的会话卡片，
-//! 支持左右/上下分屏（最多 4 格）与把某个会话拆成独立窗口。
+//! 数据来源：核心的 Web API（`GET /api/state`、`POST /api/command`、`POST /api/answer`）。
+//! GUI 不重写投影逻辑，投影由 `platform/clients/shared/projection.mjs` 生成，
+//! 这样 GUI 与 Web UI 天然保持同一套能力面。
 //!
-//! 这一版先把「壳 + 布局 + 多窗格 + 多窗口」跑通并通过 CI 出帧验证，
-//! 核心连接与真实会话数据在后续提交里接上（见 docs/GUI.md 的进度表）。
+//! 布局参照 Zed：左侧半透明侧边栏（会话 + 新建 + 分屏入口），中间浮起的会话卡片；
+//! 最多 4 个窗格，支持左右/上下切分，并可把某个会话拆成独立窗口。
+
+mod net;
+
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb,
-    rgba, size,
+    AnyElement, App, Bounds, Context, FocusHandle, Window, WindowBounds, WindowOptions, div,
+    prelude::*, px, rgb, rgba, size,
 };
 use gpui_platform::application;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static RENDERED: AtomicBool = AtomicBool::new(false);
+use serde_json::Value;
 
 const MAX_PANES: usize = 4;
 
+#[derive(Default, Clone)]
+struct Remote {
+    version: u64,
+    error: Option<String>,
+    projection: Value,
+}
+
 #[derive(Clone)]
-struct SessionView {
+struct Session {
     id: String,
     title: String,
-    state: &'static str,
+    state: String,
     agent: String,
     model: String,
 }
 
-impl SessionView {
-    fn demo(index: usize) -> Self {
-        let titles = ["检查构建失败原因", "在 WSL 里跑构建", "整理发布清单", "审阅节点桥协议"];
-        Self {
-            id: format!("ses_{index}"),
-            title: titles[index % titles.len()].to_string(),
-            state: if index % 3 == 1 { "running" } else { "idle" },
-            agent: if index % 2 == 0 { "Claude Code" } else { "Codex" }.to_string(),
-            model: if index % 2 == 0 { "claude-sonnet" } else { "gpt-5-codex" }.to_string(),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct PaneView {
+struct Pane {
     id: String,
-    session: SessionView,
+    session_id: Option<String>,
 }
 
 struct CodaGui {
-    sessions: Vec<SessionView>,
-    panes: Vec<PaneView>,
+    base: String,
+    token: String,
+    shared: Arc<Mutex<Remote>>,
+    seen_version: u64,
+    focus: FocusHandle,
+    input: String,
+    panes: Vec<Pane>,
     active: usize,
     orientation_row: bool,
+    keep: Vec<Box<dyn std::any::Any>>,
+}
+
+fn sessions_of(projection: &Value) -> Vec<Session> {
+    projection
+        .get("sessions")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("id")?.as_str()?.to_string();
+                    Some(Session {
+                        title: item
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or("(未命名会话)")
+                            .to_string(),
+                        state: item
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        agent: item
+                            .get("agent")
+                            .and_then(Value::as_str)
+                            .unwrap_or("未知 Agent")
+                            .to_string(),
+                        model: item
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .unwrap_or("未选模型")
+                            .to_string(),
+                        id,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn messages_of(projection: &Value, session_id: &str) -> Vec<(String, String)> {
+    projection
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item.get("sessionId").and_then(Value::as_str) == Some(session_id))
+                .map(|item| {
+                    (
+                        item.get("role").and_then(Value::as_str).unwrap_or("assistant").to_string(),
+                        item.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn pending_interaction(projection: &Value, session_id: &str) -> Option<(String, String, Vec<(String, String)>)> {
+    let items = projection.get("interactions")?.as_array()?;
+    let item = items.iter().find(|item| {
+        item.get("sessionId").and_then(Value::as_str) == Some(session_id)
+            && item.get("status").and_then(Value::as_str) == Some("pending")
+    })?;
+    let id = item.get("id")?.as_str()?.to_string();
+    let prompt = item
+        .get("prompt")
+        .and_then(Value::as_str)
+        .unwrap_or("待处理")
+        .to_string();
+    let options = item
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|option| {
+                    Some((
+                        option.get("id")?.as_str()?.to_string(),
+                        option
+                            .get("label")
+                            .and_then(Value::as_str)
+                            .unwrap_or("选项")
+                            .to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((id, prompt, options))
+}
+
+fn state_badge(state: &str) -> &'static str {
+    match state {
+        "idle" => "空闲",
+        "running" => "运行中",
+        "queued" => "排队中",
+        "stopped" => "已停止",
+        "failed" => "失败",
+        _ => "未知",
+    }
 }
 
 impl CodaGui {
-    fn new() -> Self {
-        let sessions = (0..4).map(SessionView::demo).collect::<Vec<_>>();
-        let panes = vec![PaneView {
-            id: "p1".to_string(),
-            session: sessions[0].clone(),
-        }];
-        Self {
-            sessions,
-            panes,
+    fn new(base: String, token: String, cx: &mut Context<Self>) -> Self {
+        let shared = Arc::new(Mutex::new(Remote::default()));
+        let focus = cx.focus_handle();
+        let mut app = Self {
+            base,
+            token,
+            shared: shared.clone(),
+            seen_version: 0,
+            focus,
+            input: String::new(),
+            panes: vec![Pane {
+                id: "p1".to_string(),
+                session_id: None,
+            }],
             active: 0,
             orientation_row: true,
-        }
+            keep: Vec::new(),
+        };
+        app.start_polling(shared, cx);
+        app
     }
 
-    fn next_pane_id(&self) -> String {
-        let mut index = 1;
-        while self.panes.iter().any(|pane| pane.id == format!("p{index}")) {
-            index += 1;
+    fn start_polling(&mut self, shared: Arc<Mutex<Remote>>, cx: &mut Context<Self>) {
+        let base = self.base.clone();
+        let token = self.token.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let mut version = 0u64;
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(1200))
+                    .await;
+                match net::get_state(&base, &token) {
+                    Ok(projection) => {
+                        version += 1;
+                        if let Ok(mut guard) = shared.lock() {
+                            guard.version = version;
+                            guard.error = None;
+                            guard.projection = projection;
+                        }
+                    }
+                    Err(error) => {
+                        if let Ok(mut guard) = shared.lock() {
+                            guard.error = Some(error.to_string());
+                        }
+                    }
+                }
+                if this
+                    .update(cx, |this, cx| {
+                        let version = this.shared.lock().map(|guard| guard.version).unwrap_or(0);
+                        if version != this.seen_version {
+                            this.seen_version = version;
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        self.keep.push(Box::new(task));
+    }
+
+    fn snapshot(&self) -> Remote {
+        self.shared
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    fn active_session(&self, sessions: &[Session]) -> Option<String> {
+        let pane = self.panes.get(self.active)?;
+        pane.session_id
+            .clone()
+            .or_else(|| sessions.first().map(|session| session.id.clone()))
+    }
+
+    fn select(&mut self, session_id: String) {
+        if let Some(pane) = self.panes.get_mut(self.active) {
+            pane.session_id = Some(session_id);
         }
-        format!("p{index}")
     }
 
     fn split(&mut self, orientation_row: bool) {
         if self.panes.len() >= MAX_PANES {
             return;
         }
-        let source = self.panes[self.active].session.clone();
-        let id = self.next_pane_id();
-        self.panes.push(PaneView {
-            id,
-            session: source,
+        let source = self.panes[self.active].session_id.clone();
+        let mut index = 1;
+        while self.panes.iter().any(|pane| pane.id == format!("p{index}")) {
+            index += 1;
+        }
+        self.panes.push(Pane {
+            id: format!("p{index}"),
+            session_id: source,
         });
         self.active = self.panes.len() - 1;
         self.orientation_row = orientation_row;
     }
 
-    fn close_active(&mut self) {
-        if self.panes.len() <= 1 {
+    fn close_pane(&mut self, index: usize) {
+        if self.panes.len() <= 1 || index >= self.panes.len() {
             return;
         }
-        self.panes.remove(self.active);
+        self.panes.remove(index);
         self.active = self.active.min(self.panes.len() - 1);
     }
 
-    fn new_session(&mut self) {
-        let session = SessionView::demo(self.sessions.len());
-        self.sessions.push(session.clone());
-        self.panes[self.active].session = session;
+    fn create_session(&mut self, cx: &mut Context<Self>) {
+        self.post("session.create", serde_json::json!({}), serde_json::json!({}));
+        cx.notify();
     }
 
-    fn select(&mut self, session: SessionView) {
-        self.panes[self.active].session = session;
+    fn post(&self, kind: &str, target: Value, payload: Value) {
+        let base = self.base.clone();
+        let token = self.token.clone();
+        let kind = kind.to_string();
+        std::thread::spawn(move || {
+            if let Err(error) = net::post_command(&base, &token, &kind, target, payload) {
+                eprintln!("command {kind} failed: {error}");
+            }
+        });
     }
 
-    fn pane_card(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let pane = self.panes[index].clone();
-        let is_active = index == self.active;
-        let state_color = if pane.session.state == "running" {
-            rgb(0x8bd5a0)
-        } else {
-            rgb(0x8a93a6)
+    fn send_current(&mut self, cx: &mut Context<Self>) {
+        let text = self.input.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let remote = self.snapshot();
+        let sessions = sessions_of(&remote.projection);
+        let Some(session_id) = self.active_session(&sessions) else {
+            return;
         };
+        self.post(
+            "turn.send",
+            serde_json::json!({ "sessionId": session_id }),
+            serde_json::json!({ "text": text, "mode": "send" }),
+        );
+        self.input.clear();
+        cx.notify();
+    }
+
+    fn stop_turn(&mut self) {
+        let remote = self.snapshot();
+        let sessions = sessions_of(&remote.projection);
+        if let Some(session_id) = self.active_session(&sessions) {
+            self.post(
+                "turn.stop",
+                serde_json::json!({ "sessionId": session_id }),
+                serde_json::json!({}),
+            );
+        }
+    }
+
+    fn answer(&self, interaction_id: String, option_id: String) {
+        let base = self.base.clone();
+        let token = self.token.clone();
+        std::thread::spawn(move || {
+            if let Err(error) =
+                net::post_answer(&base, &token, &interaction_id, Some(&option_id), None)
+            {
+                eprintln!("answer failed: {error}");
+            }
+        });
+    }
+
+    fn action_button(
+        label: &'static str,
+        index: usize,
+        cx: &mut Context<Self>,
+        action: fn(&mut Self, &mut Context<Self>),
+    ) -> AnyElement {
+        div()
+            .id((label, index))
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(rgba(0xffffff0d))
+            .text_xs()
+            .text_color(rgb(0xb9c2d4))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgba(0xffffff1a)))
+            .child(label)
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                action(this, cx);
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    fn bubble(role: &str, text: &str) -> AnyElement {
+        let bg = if role == "user" {
+            rgba(0x2b3756cc)
+        } else {
+            rgba(0x1a2233cc)
+        };
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .child(
+                div()
+                    .max_w(px(560.0))
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(bg)
+                    .text_sm()
+                    .text_color(rgb(0xdbe3f2))
+                    .child(text.to_string()),
+            )
+            .into_any_element()
+    }
+
+    fn session_row(session: &Session, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+        let id = session.id.clone();
+        div()
+            .id(format!("session-{id}"))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(if selected {
+                rgba(0xffffff1a)
+            } else {
+                rgba(0x00000000)
+            })
+            .cursor_pointer()
+            .hover(|style| style.bg(rgba(0xffffff12)))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xe6ebf5))
+                    .child(session.title.clone()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(0x7f8ba3))
+                    .child(format!("{} · {}", session.agent, state_badge(&session.state))),
+            )
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.select(id.clone());
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+}
+
+impl Render for CodaGui {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let remote = self.snapshot();
+        let sessions = sessions_of(&remote.projection);
+        let active_session = self.active_session(&sessions);
+        let status = match &remote.error {
+            Some(error) => format!("未连接：{error}"),
+            None => format!("已连接 · {} 个会话", sessions.len()),
+        };
+
+        let sidebar = div()
+            .flex()
+            .flex_col()
+            .w(px(272.0))
+            .h_full()
+            .bg(rgba(0x111726aa))
+            .rounded_lg()
+            .border_1()
+            .border_color(rgba(0xffffff12))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px_4()
+                    .py_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(rgb(0x7f8ba3)).child("会话"))
+                            .child(div().text_xs().text_color(rgb(0x5f6b82)).child(status)),
+                    )
+                    .child(
+                        div()
+                            .id("new-session")
+                            .px_2()
+                            .rounded_md()
+                            .bg(rgba(0xffffff12))
+                            .text_sm()
+                            .text_color(rgb(0xdbe3f2))
+                            .cursor_pointer()
+                            .child("＋")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.create_session(cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("session-list")
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_2()
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .children(
+                        sessions
+                            .iter()
+                            .map(|session| {
+                                Self::session_row(
+                                    session,
+                                    active_session.as_deref() == Some(session.id.as_str()),
+                                    cx,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .p_2()
+                    .border_t_1()
+                    .border_color(rgba(0xffffff10))
+                    .child(Self::action_button("左右分屏", 0, cx, |this, _| this.split(true)))
+                    .child(Self::action_button("上下分屏", 1, cx, |this, _| this.split(false))),
+            );
+
+        let pane_elements: Vec<AnyElement> = (0..self.panes.len())
+            .map(|index| self.pane_card(index, &remote, &sessions, cx))
+            .collect();
+
+        let panes = div()
+            .id("panes")
+            .flex()
+            .flex_1()
+            .h_full()
+            .gap_3()
+            .p_3()
+            .when(!self.orientation_row, |el| el.flex_col())
+            .children(pane_elements);
+
+        div()
+            .flex()
+            .flex_row()
+            .size_full()
+            .gap_3()
+            .p_3()
+            .bg(rgb(0x0b0f18))
+            .text_color(rgb(0xe6ebf5))
+            .child(sidebar)
+            .child(panes)
+    }
+}
+
+impl CodaGui {
+    fn pane_card(
+        &self,
+        index: usize,
+        remote: &Remote,
+        sessions: &[Session],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let pane = &self.panes[index];
+        let session_id = pane
+            .session_id
+            .clone()
+            .or_else(|| sessions.first().map(|session| session.id.clone()));
+        let session = session_id
+            .as_deref()
+            .and_then(|id| sessions.iter().find(|session| session.id == id));
+        let title = session
+            .map(|session| session.title.clone())
+            .unwrap_or_else(|| "未选择会话".to_string());
+        let meta = session
+            .map(|session| {
+                format!(
+                    "{} · {} · {}",
+                    session.agent,
+                    session.model,
+                    state_badge(&session.state)
+                )
+            })
+            .unwrap_or_else(|| "先点左侧会话，或按＋新建".to_string());
+        let is_active = index == self.active;
+        let messages = session_id
+            .as_deref()
+            .map(|id| messages_of(&remote.projection, id))
+            .unwrap_or_default();
+        let interaction = session_id
+            .as_deref()
+            .and_then(|id| pending_interaction(&remote.projection, id));
+
+        let mut body = div()
+            .id(("pane-body", index))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .flex_1()
+            .overflow_y_scroll();
+        if messages.is_empty() {
+            body = body.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0x6f7a90))
+                    .child("这个会话还没有消息"),
+            );
+        } else {
+            for (role, text) in &messages {
+                body = body.child(Self::bubble(role, text));
+            }
+        }
+
+        let mut composer = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(rgba(0xffffff10));
+        let placeholder = self.input.is_empty();
+        composer = composer.child(
+            div()
+                .id(("composer", index))
+                .track_focus(&self.focus)
+                .flex_1()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(rgba(0x0f1522aa))
+                .text_sm()
+                .text_color(if placeholder {
+                    rgb(0x6f7a90)
+                } else {
+                    rgb(0xe6ebf5)
+                })
+                .child(if placeholder {
+                    "输入任务；Ctrl+Enter 发送".to_string()
+                } else {
+                    self.input.clone()
+                })
+                .on_click(cx.listener(|this, _event, window, cx| {
+                    this.focus.focus(window, cx);
+                }))
+                .on_key_down(cx.listener(|this, event, _window, cx| {
+                    let keystroke = &event.keystroke;
+                    if keystroke.key == "enter"
+                        && (keystroke.modifiers.control || keystroke.modifiers.platform)
+                    {
+                        this.send_current(cx);
+                        return;
+                    }
+                    if keystroke.key == "backspace" {
+                        this.input.pop();
+                        cx.notify();
+                        return;
+                    }
+                    if let Some(text) = &keystroke.key_char {
+                        if !keystroke.modifiers.control && !keystroke.modifiers.platform {
+                            this.input.push_str(text);
+                            cx.notify();
+                        }
+                    }
+                })),
+        );
+        composer = composer
+            .child(Self::action_button("发送", index, cx, |this, cx| {
+                this.send_current(cx)
+            }))
+            .child(Self::action_button("停止", index, cx, |this, _| this.stop_turn()));
+
+        if let Some((interaction_id, prompt, options)) = interaction {
+            let mut card = div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .mx_3()
+                .mt_2()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(rgba(0x6e8bff1f))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0xdbe3f2))
+                        .child(prompt),
+                );
+            for (option_id, label) in options {
+                let interaction_id = interaction_id.clone();
+                card = card.child(
+                    div()
+                        .id(format!("option-{index}-{option_id}"))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(rgba(0xffffff14))
+                        .text_xs()
+                        .text_color(rgb(0xe6ebf5))
+                        .cursor_pointer()
+                        .child(label)
+                        .on_click(cx.listener(move |this, _event, _window, _cx| {
+                            this.answer(interaction_id.clone(), option_id.clone());
+                        })),
+                );
+            }
+            body = body.child(card);
+        }
 
         div()
             .id(("pane", index))
@@ -147,21 +708,8 @@ impl CodaGui {
                             .flex_col()
                             .gap_1()
                             .flex_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(0xe6ebf5))
-                                    .child(pane.session.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x7f8ba3))
-                                    .child(format!(
-                                        "{} · {} · {}",
-                                        pane.session.agent, pane.session.model, pane.session.state
-                                    )),
-                            ),
+                            .child(div().text_sm().text_color(rgb(0xe6ebf5)).child(title))
+                            .child(div().text_xs().text_color(rgb(0x7f8ba3)).child(meta)),
                     )
                     .child(
                         div()
@@ -169,12 +717,15 @@ impl CodaGui {
                             .flex_row()
                             .items_center()
                             .gap_2()
-                            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(state_color))
-                            .child(Self::pane_button("左右", index, cx, |app| app.split(true)))
-                            .child(Self::pane_button("上下", index, cx, |app| app.split(false)))
+                            .child(Self::action_button("左右", index, cx, |this, _| {
+                                this.split(true)
+                            }))
+                            .child(Self::action_button("上下", index, cx, |this, _| {
+                                this.split(false)
+                            }))
                             .child(
                                 div()
-                                    .id(("pane-popout", index))
+                                    .id(("popout", index))
                                     .px_2()
                                     .py_1()
                                     .rounded_md()
@@ -182,268 +733,42 @@ impl CodaGui {
                                     .text_xs()
                                     .text_color(rgb(0xb9c2d4))
                                     .cursor_pointer()
-                                    .hover(|style| style.bg(rgba(0xffffff1a)))
                                     .child("新窗口")
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        let session = this.panes[index].session.clone();
-                                        cx.defer(move |app| open_session_window(app, session));
+                                        let session = this
+                                            .panes
+                                            .get(index)
+                                            .and_then(|pane| pane.session_id.clone());
+                                        let base = this.base.clone();
+                                        let token = this.token.clone();
+                                        cx.defer(move |app| {
+                                            open_session_window(app, base, token, session);
+                                        });
                                     })),
                             )
-                            .child(Self::pane_button("关闭", index, cx, |app| app.close_pane(index))),
-                    ),
-            )
-            .child(
-                div()
-                    .id(("pane-body", index))
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .gap_3()
-                    .p_4()
-                    .overflow_y_scroll()
-                    .child(Self::bubble("user", "请检查构建失败原因"))
-                    .child(Self::bubble("assistant", "我先看了一下日志：编译器在 shader 阶段失败，稍后给出补丁。"))
-                    .child(Self::bubble("assistant", "补丁已生成，点右侧「成果」可查看 diff。"))
-                    .child(Self::bubble("user", "跑一遍测试确认"))
-                    .child(Self::bubble("assistant", "测试通过 387 项，没有新增失败。")),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .border_t_1()
-                    .border_color(rgba(0xffffff10))
-                    .child(
-                        div()
-                            .flex_1()
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .bg(rgba(0x0f1522aa))
-                            .text_sm()
-                            .text_color(rgb(0x6f7a90))
-                            .child("输入任务；Ctrl+Enter 发送"),
-                    )
-                    .child(Self::small_button("发送"))
-                    .child(Self::small_button("排队"))
-                    .child(Self::small_button("插话"))
-                    .child(Self::small_button("停止")),
-            )
-            .into_any_element()
-    }
-
-    fn pane_button(
-        label: &'static str,
-        index: usize,
-        cx: &mut Context<Self>,
-        action: fn(&mut Self),
-    ) -> impl IntoElement {
-        div()
-            .id((label, index))
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(rgba(0xffffff0d))
-            .text_xs()
-            .text_color(rgb(0xb9c2d4))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgba(0xffffff1a)))
-            .child(label)
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                action(this);
-                cx.notify();
-            }))
-    }
-
-    fn close_pane(&mut self, index: usize) {
-        if self.panes.len() <= 1 {
-            return;
-        }
-        self.panes.remove(index);
-        self.active = self.active.min(self.panes.len() - 1);
-    }
-
-    fn bubble(role: &str, text: &str) -> impl IntoElement {
-        let bg = if role == "user" {
-            rgba(0x2b3756cc)
-        } else {
-            rgba(0x1a2233cc)
-        };
-        div().flex().flex_col().w_full().child(
-            div()
-                .max_w(px(560.0))
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .bg(bg)
-                .text_sm()
-                .text_color(rgb(0xdbe3f2))
-                .child(text.to_string()),
-        )
-    }
-
-    fn small_button(label: &'static str) -> impl IntoElement {
-        div()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .bg(rgba(0xffffff0d))
-            .text_xs()
-            .text_color(rgb(0xb9c2d4))
-            .cursor_pointer()
-            .child(label)
-    }
-}
-
-impl Render for CodaGui {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        RENDERED.store(true, Ordering::SeqCst);
-        let sessions = self.sessions.clone();
-        let active_session = self.panes[self.active].session.id.clone();
-
-        let sidebar = div()
-            .flex()
-            .flex_col()
-            .w(px(272.0))
-            .h_full()
-            .bg(rgba(0x111726aa))
-            .rounded_lg()
-            .border_1()
-            .border_color(rgba(0xffffff12))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .px_4()
-                    .py_3()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(0x7f8ba3))
-                            .child("会话"),
-                    )
-                    .child(
-                        div()
-                            .id("new-session")
-                            .px_2()
-                            .rounded_md()
-                            .bg(rgba(0xffffff12))
-                            .text_sm()
-                            .text_color(rgb(0xdbe3f2))
-                            .cursor_pointer()
-                            .child("＋")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.new_session();
-                                cx.notify();
+                            .child(Self::action_button("关闭", index, cx, |this, _| {
+                                this.close_pane(index)
                             })),
                     ),
             )
-            .child(
-                div()
-                    .id("session-list")
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_2()
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .children(sessions.into_iter().enumerate().map(|(index, session)| {
-                        let selected = session.id == active_session;
-                        let target = session.clone();
-                        div()
-                            .id(("session", index))
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .bg(if selected {
-                                rgba(0xffffff1a)
-                            } else {
-                                rgba(0x00000000)
-                            })
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgba(0xffffff12)))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(0xe6ebf5))
-                                    .child(session.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x7f8ba3))
-                                    .child(format!("{} · {}", session.agent, session.state)),
-                            )
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.select(target.clone());
-                                cx.notify();
-                            }))
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(rgba(0xffffff10))
-                    .child(Self::small_button("左右分屏"))
-                    .child(Self::small_button("上下分屏")),
-            );
-
-        let pane_elements: Vec<AnyElement> = (0..self.panes.len())
-            .map(|index| self.pane_card(index, cx))
-            .collect();
-
-        let panes = div()
-            .id("panes")
-            .flex()
-            .flex_1()
-            .h_full()
-            .gap_3()
-            .p_3()
-            .when(!self.orientation_row, |el| el.flex_col())
-            .children(pane_elements);
-
-        div()
-            .flex()
-            .flex_row()
-            .size_full()
-            .gap_3()
-            .p_3()
-            .bg(rgb(0x0b0f18))
-            .text_color(rgb(0xe6ebf5))
-            .child(sidebar)
-            .child(panes)
+            .child(body)
+            .child(composer)
+            .into_any_element()
     }
 }
 
-fn open_session_window(app: &mut App, session: SessionView) {
-    let bounds = Bounds::centered(None, size(px(760.0), px(560.0)), app);
+fn open_session_window(app: &mut App, base: String, token: String, session_id: Option<String>) {
+    let bounds = Bounds::centered(None, size(px(860.0), px(620.0)), app);
     let opened = app.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
         move |_window, cx| {
-            cx.new(|_| CodaGui {
-                sessions: vec![session.clone()],
-                panes: vec![PaneView {
-                    id: "p1".to_string(),
-                    session: session.clone(),
-                }],
-                active: 0,
-                orientation_row: true,
+            cx.new(|cx| {
+                let mut gui = CodaGui::new(base.clone(), token.clone(), cx);
+                gui.panes[0].session_id = session_id.clone();
+                gui
             })
         },
     );
@@ -453,16 +778,25 @@ fn open_session_window(app: &mut App, session: SessionView) {
 }
 
 fn main() {
-    // CI 出帧验证：拿到第一帧就退出 0，避免事件循环把 job 拖到超时。
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(20));
-        if RENDERED.load(Ordering::SeqCst) {
-            eprintln!("CODA_GUI_OK: window rendered");
-            std::process::exit(0);
+    let mut base = "http://127.0.0.1:8787".to_string();
+    let mut token = String::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--base" => {
+                if let Some(value) = args.next() {
+                    base = value;
+                }
+            }
+            "--token" => {
+                if let Some(value) = args.next() {
+                    token = value;
+                }
+            }
+            _ => {}
         }
-        eprintln!("CODA_GUI_FAIL: no frame within 20s");
-        std::process::exit(2);
-    });
+    }
+
     application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1180.0), px(760.0)), cx);
         cx.open_window(
@@ -470,7 +804,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|_| CodaGui::new()),
+            |_window, cx| cx.new(|cx| CodaGui::new(base.clone(), token.clone(), cx)),
         )
         .expect("open_window");
         cx.activate(true);

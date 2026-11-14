@@ -15,5 +15,7 @@ gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "b564a34413bb7ef
     "runtime_shaders",
 ] }
 
+serde_json = "1"
+
 [profile.dev]
 opt-level = 1
