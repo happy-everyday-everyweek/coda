@@ -7,7 +7,8 @@
 //! 核心连接与真实会话数据在后续提交里接上（见 docs/GUI.md 的进度表）。
 
 use gpui::{
-    App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
+    AnyElement, App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb,
+    rgba, size,
 };
 use gpui_platform::application;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,7 +107,7 @@ impl CodaGui {
         self.panes[self.active].session = session;
     }
 
-    fn pane_card(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    fn pane_card(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let pane = self.panes[index].clone();
         let is_active = index == self.active;
         let state_color = if pane.session.state == "running" {
@@ -168,11 +169,27 @@ impl CodaGui {
                             .flex_row()
                             .items_center()
                             .gap_2()
-                            .child(div().size_2().rounded_full().bg(state_color))
-                            .child(self.pane_button("左右", index, cx, |app| app.split(true)))
-                            .child(self.pane_button("上下", index, cx, |app| app.split(false)))
-                            .child(self.pane_button("新窗口", index, cx, |app| app.popout(index, cx)))
-                            .child(self.pane_button("关闭", index, cx, |app| app.close_pane(index))),
+                            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(state_color))
+                            .child(Self::pane_button("左右", index, cx, |app| app.split(true)))
+                            .child(Self::pane_button("上下", index, cx, |app| app.split(false)))
+                            .child(
+                                div()
+                                    .id(("pane-popout", index))
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgba(0xffffff0d))
+                                    .text_xs()
+                                    .text_color(rgb(0xb9c2d4))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgba(0xffffff1a)))
+                                    .child("新窗口")
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        let session = this.panes[index].session.clone();
+                                        cx.defer(move |app| open_session_window(app, session));
+                                    })),
+                            )
+                            .child(Self::pane_button("关闭", index, cx, |app| app.close_pane(index))),
                     ),
             )
             .child(
@@ -184,11 +201,11 @@ impl CodaGui {
                     .gap_3()
                     .p_4()
                     .overflow_y_scroll()
-                    .child(self.bubble("user", "请检查构建失败原因"))
-                    .child(self.bubble("assistant", "我先看了一下日志：编译器在 shader 阶段失败，稍后给出补丁。"))
-                    .child(self.bubble("assistant", "补丁已生成，点右侧「成果」可查看 diff。"))
-                    .child(self.bubble("user", "跑一遍测试确认"))
-                    .child(self.bubble("assistant", "测试通过 387 项，没有新增失败。")),
+                    .child(Self::bubble("user", "请检查构建失败原因"))
+                    .child(Self::bubble("assistant", "我先看了一下日志：编译器在 shader 阶段失败，稍后给出补丁。"))
+                    .child(Self::bubble("assistant", "补丁已生成，点右侧「成果」可查看 diff。"))
+                    .child(Self::bubble("user", "跑一遍测试确认"))
+                    .child(Self::bubble("assistant", "测试通过 387 项，没有新增失败。")),
             )
             .child(
                 div()
@@ -211,23 +228,22 @@ impl CodaGui {
                             .text_color(rgb(0x6f7a90))
                             .child("输入任务；Ctrl+Enter 发送"),
                     )
-                    .child(self.small_button("发送"))
-                    .child(self.small_button("排队"))
-                    .child(self.small_button("插话"))
-                    .child(self.small_button("停止")),
+                    .child(Self::small_button("发送"))
+                    .child(Self::small_button("排队"))
+                    .child(Self::small_button("插话"))
+                    .child(Self::small_button("停止")),
             )
+            .into_any_element()
     }
 
     fn pane_button(
-        &self,
         label: &'static str,
         index: usize,
         cx: &mut Context<Self>,
         action: fn(&mut Self),
     ) -> impl IntoElement {
-        let _ = index;
         div()
-            .id(("pane-action", label, index))
+            .id((label, index))
             .px_2()
             .py_1()
             .rounded_md()
@@ -251,29 +267,7 @@ impl CodaGui {
         self.active = self.active.min(self.panes.len() - 1);
     }
 
-    fn popout(&mut self, index: usize, cx: &mut Context<Self>) {
-        let pane = self.panes[index].clone();
-        let bounds = Bounds::centered(None, size(px(720.0), px(520.0)), cx);
-        let handle = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            move |_window, cx| {
-                cx.new(|_| CodaGui {
-                    sessions: vec![pane.session.clone()],
-                    panes: vec![pane.clone()],
-                    active: 0,
-                    orientation_row: true,
-                })
-            },
-        );
-        if handle.is_err() {
-            eprintln!("open_window for pane failed");
-        }
-    }
-
-    fn bubble(&self, role: &str, text: &str) -> impl IntoElement {
+    fn bubble(role: &str, text: &str) -> impl IntoElement {
         let bg = if role == "user" {
             rgba(0x2b3756cc)
         } else {
@@ -292,7 +286,7 @@ impl CodaGui {
         )
     }
 
-    fn small_button(&self, label: &'static str) -> impl IntoElement {
+    fn small_button(label: &'static str) -> impl IntoElement {
         div()
             .px_3()
             .py_2()
@@ -403,9 +397,13 @@ impl Render for CodaGui {
                     .p_2()
                     .border_t_1()
                     .border_color(rgba(0xffffff10))
-                    .child(self.small_button("左右分屏"))
-                    .child(self.small_button("上下分屏")),
+                    .child(Self::small_button("左右分屏"))
+                    .child(Self::small_button("上下分屏")),
             );
+
+        let pane_elements: Vec<AnyElement> = (0..self.panes.len())
+            .map(|index| self.pane_card(index, cx))
+            .collect();
 
         let panes = div()
             .id("panes")
@@ -415,7 +413,7 @@ impl Render for CodaGui {
             .gap_3()
             .p_3()
             .when(!self.orientation_row, |el| el.flex_col())
-            .children((0..self.panes.len()).map(|index| self.pane_card(index, cx)));
+            .children(pane_elements);
 
         div()
             .flex()
@@ -427,6 +425,30 @@ impl Render for CodaGui {
             .text_color(rgb(0xe6ebf5))
             .child(sidebar)
             .child(panes)
+    }
+}
+
+fn open_session_window(app: &mut App, session: SessionView) {
+    let bounds = Bounds::centered(None, size(px(760.0), px(560.0)), app);
+    let opened = app.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        move |_window, cx| {
+            cx.new(|_| CodaGui {
+                sessions: vec![session.clone()],
+                panes: vec![PaneView {
+                    id: "p1".to_string(),
+                    session: session.clone(),
+                }],
+                active: 0,
+                orientation_row: true,
+            })
+        },
+    );
+    if let Err(error) = opened {
+        eprintln!("open_window failed: {error}");
     }
 }
 
