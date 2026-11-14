@@ -14,7 +14,7 @@ import java.io.File
  */
 object PetSkins {
     /** assets 下的五个内置形象，顺序与原项目设置页一致。 */
-    private val BUILTIN = listOf("clawd", "sprig", "mochi", "peep", "bristle")
+    private val BUILTIN = listOf("clawd", "sprig", "mochi", "peep", "bristle", "ember", "ripple")
 
     /** 原项目没给 clawd 写 title，设置里就叫它 Clawd。 */
     private val TITLE_OVERRIDE = mapOf("clawd" to "Clawd")
