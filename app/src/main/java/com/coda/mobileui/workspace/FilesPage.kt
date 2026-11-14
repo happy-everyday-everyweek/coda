@@ -25,12 +25,20 @@ import java.util.Locale
 /**
  * 文件页：逐级浏览、查看与编辑文本、重命名、移动、删除与新建。
  */
-class FilesPage(
+open class FilesPage(
     host: WorkspaceActivity,
     private val saved: JSONObject,
 ) : WorkspacePage(host) {
     override val kind: String = WorkspaceTabs.FILES
     override val title: String = "文件"
+
+    /**
+     * 只装编辑区、不建目录列表。
+     *
+     * 浏览与编辑是两种页面类型：文件列表是 [FilesPage] 的常态，编辑器由 [EditorPage]
+     * 复用同一套编辑实现，但只装编辑区。
+     */
+    protected open val editorOnly: Boolean = false
 
     private lateinit var shell: FrameLayout
 
@@ -106,6 +114,13 @@ class FilesPage(
 
     override fun build(): View {
         shell = FrameLayout(host)
+        // 编辑器页：只装编辑区，目录列表根本不存在。
+        if (editorOnly) {
+            shell.addView(buildEditor(), FrameLayout.LayoutParams(MATCH, MATCH))
+            editor.visibility = View.VISIBLE
+            editor.post { loadFileFromState() }
+            return shell
+        }
         // 平板（sw >= 600dp）默认双栏；手机仍是单栏，可以用菜单切换。
         dualPane = host.resources.configuration.smallestScreenWidthDp >= 600
         split =
@@ -132,6 +147,51 @@ class FilesPage(
         renderList()
         return shell
     }
+
+    /** 编辑器页用：按状态里记录的路径载入文件；文件没了就关掉这个标签。 */
+    protected fun loadFileFromState() {
+        // 只读预览（压缩包内的文件）正文不从磁盘读，按标签 key 去宿主取。
+        if (saved.optBoolean("readonly")) {
+            val content = host.editorBuffer(saved.optString("bufferKey"))
+            if (content != null) {
+                openReadOnlyText(saved.optString("name"), content)
+            } else {
+                toast("预览内容已失效")
+                host.closePage(this)
+            }
+            return
+        }
+        val path = saved.optString("path")
+        if (path.isEmpty()) return
+        val file = File(path)
+        if (!file.isFile) {
+            toast("文件已不存在")
+            host.closePage(this)
+            return
+        }
+        readInto(
+            file,
+            onFail = { toast(it) },
+            done = { showEditor(file, it, saved.optBoolean("markdown")) },
+        )
+    }
+
+    /** 编辑器页用：显示一段只读文本（压缩包内的文件预览等）。 */
+    protected fun showReadOnlyBuffer(
+        name: String,
+        content: String,
+    ) {
+        openReadOnlyText(name, content)
+    }
+
+    /** 编辑器内容被改动。编辑器页用它把预览标签转成常驻。 */
+    protected open fun onEditorContentChanged() {}
+
+    /** 编辑器页用：顶部菜单里的保存。 */
+    protected fun saveCurrentFile() = saveEditor()
+
+    /** 编辑器页用：顶部菜单里的关闭（会先问未保存的修改）。 */
+    protected fun closeCurrentEditor() = closeEditor()
 
     /** 一栏的容器：占据半屏，点击空白处会把活动栏切过来。 */
     private fun paneSlot(
@@ -629,7 +689,8 @@ class FilesPage(
                 if (text == null) {
                     toast("无法读取，可能是二进制文件或超过上限")
                 } else {
-                    openReadOnlyText(entry.name, text)
+                    // 压缩包内预览同样走独立的编辑器页，只读、不绑定可写文件。
+                    host.openReadOnlyEditor(entry.name, text)
                 }
             },
             onError = { toast("读取失败") },
@@ -1219,6 +1280,8 @@ class FilesPage(
                             refreshDirty()
                             refreshEditorChrome()
                             host.scheduleHighlight(highlightTick)
+                            // 程序化载入（setText）不算改动，只有用户真的敲了字才转预览为常驻。
+                            if (!suppressEdits) onEditorContentChanged()
                         }
 
                         override fun afterTextChanged(s: android.text.Editable?) = Unit
@@ -1710,33 +1773,6 @@ class FilesPage(
         toast(if (wrap) "已启用自动换行" else "已关闭自动换行")
     }
 
-    /**
-     * 编辑器里有未保存修改时，切文件前先拦住。
-     *
-     * showEditor 会直接 setText 覆盖，没有这道拦，点开另一个文件就等于
-     * 把没存的内容丢了，而且没有任何提示。
-     */
-    private fun guardUnsaved(then: () -> Unit) {
-        val file = editing
-        if (file == null || !dirty) {
-            then()
-            return
-        }
-        val sheet = sheet().title("有未保存的修改").subtitle(file.name)
-        sheet.content { column ->
-            column.addView(label("打开另一个文件会丢弃当前修改。", 13f, onSurfaceVariant))
-        }
-        sheet.primaryAction("保存并继续") {
-            sheet.dismiss()
-            if (saveEditorBlocking()) then()
-        }
-        sheet.secondaryAction("放弃修改") {
-            sheet.dismiss()
-            then()
-        }
-        sheet.show()
-    }
-
     private fun openFile(
         file: File,
         forceMarkdown: Boolean = false,
@@ -1745,10 +1781,8 @@ class FilesPage(
             showInfo(file, "文件过大，未打开")
             return
         }
-        if (editing == file && editor.visibility == View.VISIBLE) return
-        guardUnsaved {
-            readInto(file, onFail = { showInfo(file, it) }, done = { showEditor(file, it, forceMarkdown) })
-        }
+        // 浏览与编辑是两种页面：这里只把文件交给编辑器标签页，不在本页内换模式。
+        host.openEditor(file.absolutePath, preview = true, markdown = forceMarkdown)
     }
 
     /**
@@ -1862,15 +1896,13 @@ class FilesPage(
         }
         val textual = isProbablyText(file)
         if (textual && file.length() <= MAX_EDIT_BYTES) {
-            guardUnsaved {
-                readInto(
-                    file,
-                    onFail = { note ->
-                        if (!openWithSystem(file) && !tryArchiveByContent(file)) showInfo(file, note)
-                    },
-                    done = { showEditor(file, it, isMarkdownFile(file)) },
-                )
-            }
+            readInto(
+                file,
+                onFail = { note ->
+                    if (!openWithSystem(file) && !tryArchiveByContent(file)) showInfo(file, note)
+                },
+                done = { host.openEditor(file.absolutePath, preview = true, markdown = isMarkdownFile(file)) },
+            )
             return
         }
         // 二进制，或大到不该塞进编辑器：先问系统
@@ -2061,22 +2093,6 @@ class FilesPage(
         )
     }
 
-    /** 同步保存，只在「保存并继续」这种需要立刻知道结果的串行流程里用。 */
-    private fun saveEditorBlocking(): Boolean {
-        val file = editing ?: return false
-        val text = editorInput.text.toString()
-        val ok = runCatching { file.writeText(text) }.isSuccess
-        if (ok) {
-            originalText = text
-            dirty = false
-            editorTitle.text = file.name
-            refreshCursorStatus()
-        } else {
-            toast("保存失败")
-        }
-        return ok
-    }
-
     private fun closeEditor() {
         val file = editing
         if (file != null && editorInput.text.toString() != originalText) {
@@ -2109,6 +2125,11 @@ class FilesPage(
         editorInput.setText("")
         suppressEdits = false
         editor.visibility = View.GONE
+        // 编辑器页：关掉这块内容就是关掉这个标签，没有"退回列表"这一层。
+        if (editorOnly) {
+            host.closePage(this)
+            return
+        }
         renderList()
     }
 
@@ -2133,7 +2154,7 @@ class FilesPage(
         }
         sheet.primaryAction("以文本打开") {
             sheet.dismiss()
-            readInto(file, onFail = { toast(it) }, done = { showEditor(file, it) })
+            host.openEditor(file.absolutePath)
         }
         sheet.secondaryAction("关闭") { sheet.dismiss() }
         sheet.show()

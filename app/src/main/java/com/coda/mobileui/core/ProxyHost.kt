@@ -25,10 +25,9 @@ import java.util.zip.GZIPInputStream
  *
  * 进程走 [LinuxEnv.builder]，与终端页同一条 proot 通路，因此不需要另造一套容器启动逻辑。
  *
- * 分发方式：宿主二进制与八家的 arm64 插件**全部随 APK 发布**（`assets/proxy-host` 与
- * `assets/proxy-plugins`），首次使用只做本地复制，运行期不依赖任何外部服务。
- * 早先这里有一条"资产缺失就联网下载"的兜底，那是设计错误：几十兆的下载在移动网络下
- * 经常失败，用户只会看到一句"网关启动失败"，而真实原因被埋在网络层。
+ * 分发方式：为了压 APK 体积，宿主二进制（约 64MB）与八家 arm64 插件（约 60MB）**不再随包发布**，
+ * 首次启用某个 OAuth 供应商时才按需下载一次，装进 rootfs 后长期复用（见 [ensureInstalled] /
+ * [ensurePlugin]）。`assets/proxy-host` 只保留面板页、glibc 运行时与 WorkBuddy 网关这几个小件。
  */
 object ProxyHost {
     /** 宿主发布版本；升级只需改这里，随包资产与目录名跟着变。 */
@@ -274,10 +273,9 @@ object ProxyHost {
     /**
      * 确保宿主二进制就位。
      *
-     * 宿主随 APK 一起发布（`assets/proxy-host/cli-proxy-api-<VERSION>`），首次使用只做一次
-     * 本地复制，**不联网**。之前这里有一条"资产缺失就从 GitHub 下载"的兜底，那是错的：
-     * 二十多兆的下载在移动网络下经常失败，用户看到的就是一句"网关启动失败"，而真正原因
-     * 被埋在网络层。构建期就该把二进制放进包里，运行时不该依赖任何外部服务。
+     * 先看包内有没有随包资产（`assets/proxy-host/cli-proxy-api-<VERSION>`），有就本地复制；
+     * 精简载荷后默认没有，于是按需从上游 Release 下载一次 linux/aarch64 包并解出二进制。
+     * 两条路都失败时把具体原因写进 [lastError]，由调用方展示，避免用户只看到"启动失败"。
      */
     fun ensureInstalled(
         ctx: Context,
@@ -293,11 +291,128 @@ object ProxyHost {
             return true
         }
 
-        // 走到这里说明打包漏了资产，属于构建错误，要让用户看到明确原因而不是干等。
-        val reason = "安装包内缺少网关程序（assets/proxy-host/cli-proxy-api-$VERSION）"
+        // 包内没带（精简载荷后就是这种情况）：按需从上游 Release 拉一次并解出二进制。
+        onProgress("下载网关程序…")
+        if (installFromNetwork(ctx, target)) {
+            AppLog.i("ProxyHost", "网关程序下载安装成功：${target.absolutePath} ${target.length()}B")
+            return true
+        }
+
+        // 走到这里说明既没打包也没下载成功，要让用户看到明确原因而不是干等。
+        val reason = lastError ?: "安装包内缺少网关程序，且下载失败（CLIProxyAPI $VERSION）"
         lastError = reason
         onProgress(reason)
         return false
+    }
+
+    /**
+     * 从上游 Release 下载 linux/aarch64 包并取出网关二进制。
+     *
+     * 精简 APK 后不再预置这台 64MB 的二进制，只在首次启用网关时下载一次；
+     * 下载成功即写入 rootfs 内的固定路径，后续启动不再联网。
+     */
+    private fun installFromNetwork(
+        ctx: Context,
+        target: File,
+    ): Boolean {
+        val archive = "CLIProxyAPI_${VERSION}_linux_aarch64.tar.gz"
+        val url = "https://github.com/router-for-me/CLIProxyAPI/releases/download/v$VERSION/$archive"
+        val zip = File(dirFor(ctx), archive)
+        if (!download(ctx, url, zip)) {
+            lastError = "网关程序下载失败：$url"
+            return false
+        }
+        val extracted =
+            runCatching {
+                GZIPInputStream(BufferedInputStream(FileInputStream(zip))).use { gz ->
+                    extractTarEntry(gz, target, "cli-proxy-api")
+                }
+            }.getOrDefault(false)
+        zip.delete()
+        if (!extracted) {
+            lastError = "网关程序解包失败：$archive"
+            runCatching { target.delete() }
+            return false
+        }
+        if (target.length() < 10_000_000L || !looksExecutable(target)) {
+            lastError = "网关程序内容不完整"
+            runCatching { target.delete() }
+            return false
+        }
+        Os.chmod(target.absolutePath, 493) // 0755
+        return installGlibc(ctx)
+    }
+
+    /** 在 tar 流里找到指定文件名并解出；其余条目跳过。 */
+    private fun extractTarEntry(
+        input: java.io.InputStream,
+        out: File,
+        wanted: String,
+    ): Boolean {
+        val header = ByteArray(512)
+        while (true) {
+            if (!readFully(input, header, 512)) return false
+            // 全 0 的块是 tar 的结束标记。
+            if (header.all { it == 0.toByte() }) return false
+            val name = String(header, 0, 100, Charsets.UTF_8).trim('\u0000', ' ')
+            val sizeText = String(header, 124, 12, Charsets.UTF_8).trim('\u0000', ' ')
+            val size = sizeText.trim().toLongOrNull(8) ?: 0L
+            val padded = (size + 511L) / 512L * 512L
+            if (name.substringAfterLast('/') == wanted) {
+                targetParent(out)
+                FileOutputStream(out).use { sink -> copyExactly(input, sink, size) }
+                skipFully(input, padded - size)
+                return true
+            }
+            if (!skipFully(input, padded)) return false
+        }
+    }
+
+    private fun targetParent(file: File) {
+        file.parentFile?.mkdirs()
+    }
+
+    private fun readFully(
+        input: java.io.InputStream,
+        buffer: ByteArray,
+        length: Int,
+    ): Boolean {
+        var read = 0
+        while (read < length) {
+            val n = input.read(buffer, read, length - read)
+            if (n <= 0) return false
+            read += n
+        }
+        return true
+    }
+
+    private fun copyExactly(
+        input: java.io.InputStream,
+        out: java.io.OutputStream,
+        length: Long,
+    ) {
+        val buf = ByteArray(256 * 1024)
+        var left = length
+        while (left > 0) {
+            val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+            if (n <= 0) break
+            out.write(buf, 0, n)
+            left -= n
+        }
+    }
+
+    private fun skipFully(
+        input: java.io.InputStream,
+        length: Long,
+    ): Boolean {
+        var left = length
+        val buf = ByteArray(8192)
+        while (left > 0) {
+            val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+            if (n <= 0) return false
+            left -= n
+        }
+        return true
     }
 
     /** 从随包资产释放宿主二进制。资产缺失或写出不完整时返回 false。 */

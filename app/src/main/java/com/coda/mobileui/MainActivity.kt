@@ -445,6 +445,10 @@ class MainActivity : BaseActivity() {
             this,
             object : androidx.activity.OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
+                    if (showingSearch) {
+                        hideSearchPage()
+                        return
+                    }
                     if (showingBot) {
                         hideBotPage()
                         return
@@ -461,6 +465,7 @@ class MainActivity : BaseActivity() {
         )
         // 初始态：新会话且未选工作区时胶囊是「运行位置」，否则是模型名。
         syncHeaderPill()
+        applyWideLayout()
         updateSendAvailability()
         setupSendMode()
         attachScroll = findViewById(R.id.attach_scroll)
@@ -494,8 +499,24 @@ class MainActivity : BaseActivity() {
         // 抽屉被直接收起（返回键、点空白、手势）时把全屏状态复位，保证下次打开仍是半屏
         drawerLayout.addDrawerListener(
             object : DrawerLayout.SimpleDrawerListener() {
+                override fun onDrawerSlide(
+                    drawerView: View,
+                    slideOffset: Float,
+                ) {
+                    // 参考 dsh-Go 的抽屉开合：位移全程跟手，主内容只做轻微让位，
+                    // 不做缩放/淡出——那会在滑动中途改变层级观感。
+                    val shift = dp(24) * slideOffset
+                    findViewById<View>(R.id.main_content)?.translationX = shift
+                }
+
                 override fun onDrawerClosed(drawerView: View) {
+                    findViewById<View>(R.id.main_content)?.translationX = 0f
                     resetDrawerToCompact()
+                }
+
+                override fun onDrawerOpened(drawerView: View) {
+                    // 落位后把位移归零交给布局自己，避免后续窗口变化把内容顶偏。
+                    findViewById<View>(R.id.main_content)?.translationX = 0f
                 }
             },
         )
@@ -812,6 +833,10 @@ class MainActivity : BaseActivity() {
     /** 是否停留在 Bot 页：它与会话、设置同级，只占用内容区。 */
     private var showingBot = false
     private var botPage: com.coda.mobileui.personal.CodaBotPage? = null
+
+    /** 是否停留在会话搜索页：与设置页、Bot 页一样只占用内容区。 */
+    private var showingSearch = false
+    private var searchPage: SessionSearchPage? = null
 
     /** 当前选中的会话 id（同样在配置变更后恢复）。 */
     private var currentConversationId: String? = null
@@ -1937,6 +1962,7 @@ class MainActivity : BaseActivity() {
         messages: List<com.coda.mobileui.core.ZMessage>,
         trackViews: Boolean = true,
     ) {
+        indexSessionContent(zc.currentSessionId, messages)
         val inflater = LayoutInflater.from(this)
         val neutral =
             com.google.android.material.color.MaterialColors.getColor(
@@ -3210,6 +3236,13 @@ class MainActivity : BaseActivity() {
                 tag = "sessions_host"
                 orientation = LinearLayout.VERTICAL
             }
+        // 搜索入口只在全屏抽屉里露出：半屏抽屉的列表位置留给会话本身。
+        list.addView(
+            searchEntryRow().apply {
+                tag = "drawer_search_entry"
+                visibility = if (fullDrawer?.visibility == View.VISIBLE) View.VISIBLE else View.GONE
+            },
+        )
         // 本机会话 + 其他设备的缓存会话，平铺成一条列表；不按设备分组。
         val entries = mutableListOf<DrawerSessionEntry>()
         for (s in zc.sessions) entries.add(DrawerSessionEntry(s, com.coda.mobileui.core.DeviceStore.LOCAL_ID, null, false))
@@ -3332,6 +3365,71 @@ class MainActivity : BaseActivity() {
         return row
     }
 
+
+    /**
+     * 大屏判定：平板、折叠屏展开、以及足够宽的手机横屏。
+     *
+     * Claude 在这几类形态下把侧栏当常驻栏用，正文让位而不是被盖住；手机竖屏仍是覆盖式抽屉。
+     */
+    private fun isWideLayout(): Boolean {
+        val cfg = resources.configuration
+        return cfg.smallestScreenWidthDp >= 600 ||
+            (cfg.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE && cfg.screenWidthDp >= 720)
+    }
+
+    /** 大屏下抽屉常开、去掉遮罩，并给正文让出抽屉宽度。 */
+    private fun applyWideLayout() {
+        val wide = isWideLayout()
+        drawerLayout.setScrimColor(if (wide) android.graphics.Color.TRANSPARENT else 0x99000000.toInt())
+        findViewById<View>(R.id.main_content)?.let { content ->
+            content.setPadding(
+                if (wide) dp(304) else 0,
+                content.paddingTop,
+                content.paddingRight,
+                content.paddingBottom,
+            )
+        }
+        if (wide && !drawerLayout.isDrawerOpen(Gravity.LEFT)) drawerLayout.openDrawer(Gravity.LEFT)
+    }
+
+    /** 会话点开：大屏保持侧栏常开，手机收起抽屉。 */
+    private fun runSessionOpen(block: () -> Unit) {
+        if (isWideLayout()) {
+            hideFullDrawer()
+            block()
+        } else {
+            collapseFullDrawerThen(block)
+        }
+    }
+
+    /** 搜索入口的可见性跟着全屏抽屉走：半屏不出、全屏才出。 */
+    private fun syncSearchEntryVisibility() {
+        val row =
+            findViewById<LinearLayout>(R.id.drawer_content)
+                ?.findViewWithTag<View>("drawer_search_entry")
+                ?: return
+        row.visibility = if (fullDrawer?.visibility == View.VISIBLE) View.VISIBLE else View.GONE
+    }
+
+    /** 抽屉里的搜索入口，样式与抽屉里的其它动作行一致。 */
+    private fun searchEntryRow(): View =
+        TextView(this).apply {
+            text = getString(R.string.drawer_search_hint)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextColor(
+                com.google.android.material.color.MaterialColors.getColor(
+                    window.decorView,
+                    com.google.android.material.R.attr.colorOnSurfaceVariant,
+                    android.graphics.Color.GRAY,
+                ),
+            )
+            setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_search, 0, 0, 0)
+            compoundDrawablePadding = dp(10)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            isClickable = true
+            setOnClickListener { showSearchPage() }
+        }
+
     /** 一条真实会话行。 */
     private fun createSessionRow(
         inflater: LayoutInflater,
@@ -3376,7 +3474,7 @@ class MainActivity : BaseActivity() {
         row.setOnClickListener {
             SettingsStore.get(this).markSessionSeen(session.id)
             pendingNewSession = false
-            collapseFullDrawerThen {
+            runSessionOpen {
                 liveText.clear()
                 messageViews.clear()
                 liveReasoning.clear()
@@ -4014,8 +4112,9 @@ class MainActivity : BaseActivity() {
         val screenWidth = resources.displayMetrics.widthPixels
         view.visibility = View.VISIBLE
         view.alpha = 1f
-        animateDrawerWidth(dp(304), screenWidth, 240)
+        animateDrawerWidth(dp(304), screenWidth, Motion.EMPHASIZED)
         setDrawerRounded(false)
+        syncSearchEntryVisibility()
 
         // 半屏顶部的两个动作行在全屏里变成右上角图标：高度塌陷 + 淡出（避免下方列表突跳）
         host.findViewWithTag<View>("drawer_actions")?.let { actions ->
@@ -4057,7 +4156,8 @@ class MainActivity : BaseActivity() {
         val host = findViewById<View>(R.id.nav_view) ?: return
         ValueAnimator.ofInt(from, to).apply {
             this.duration = duration
-            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            // 抽屉开合是「跟手后落位」：用 glide 的长尾减速收住，避免线性走完的硬停。
+            interpolator = Motion.GLIDE
             addUpdateListener { anim ->
                 val params = host.layoutParams
                 params.width = anim.animatedValue as Int
@@ -4166,6 +4266,7 @@ class MainActivity : BaseActivity() {
     private fun hideFullDrawer(duration: Long = 200) {
         val host = findViewById<View>(R.id.nav_view) as? ViewGroup ?: return
         val view = host.findViewWithTag<View>("drawer_full") ?: return
+        view.postDelayed({ syncSearchEntryVisibility() }, duration + 20)
         val screenWidth = resources.displayMetrics.widthPixels
 
         // 搜索框下沉淡出
@@ -4576,6 +4677,7 @@ class MainActivity : BaseActivity() {
     /** 打开设置：主区域换页 + 抽屉收起（与新对话同一层级，不新开页面）。 */
     private fun openSettingsPage() {
         hideBotPage()
+        hideSearchPage()
         showingSettings = true
         drawerLayout.closeDrawer(Gravity.LEFT)
         emptyState.visibility = View.GONE
@@ -4631,9 +4733,165 @@ class MainActivity : BaseActivity() {
         }
     }
 
-        /** 进入 Bot 页：与设置页一样在内容区换页，不新开页面。 */
+    /**
+     * 搜索页里的非会话结果。
+     *
+     * 设置与 Coda Bot 属于轻量对象，随时可查；图片要扫目录，按其体量代价高，
+     * 只在充电时纳入（对齐“只在部分情况下索引”的要求），避免常态耗电。
+     */
+    /** 会话正文与聊天里发过的图片落一份可检索的文本索引；只在会话渲染时增量写，不额外跑后台任务。 */
+    private fun indexSessionContent(
+        sessionId: String?,
+        messages: List<com.coda.mobileui.core.ZMessage>,
+    ) {
+        if (sessionId == null || messages.isEmpty()) return
+        runCatching {
+            val dir = java.io.File(filesDir, "search/sessions").apply { mkdirs() }
+            val sb = StringBuilder()
+            messages.takeLast(80).forEach { m ->
+                val t = m.text().trim()
+                if (t.isNotEmpty()) sb.append("TXT ").append(t.replace('\n', ' ').take(400)).append('\n')
+                m.parts.filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>().forEach { f ->
+                    if (f.mime.startsWith("image/")) {
+                        sb.append("IMG ").append(f.filename).append(' ').append(f.url)
+                            .append(' ').append(f.width).append('x').append(f.height).append('\n')
+                    }
+                }
+            }
+            java.io.File(dir, "$sessionId.txt").writeText(sb.toString().take(200_000))
+        }
+    }
+
+    private fun searchExtras(q: String): List<SessionSearchPage.Extra> {
+        val out = mutableListOf<SessionSearchPage.Extra>()
+        // 会话正文：用户消息、AI 回复都在里面；命中的那一行当作摘要。
+        runCatching {
+            java.io.File(filesDir, "search/sessions").listFiles()?.forEach { f ->
+                val id = f.nameWithoutExtension
+                val session = zc.sessions.firstOrNull { it.id == id }
+                f.readLines().forEach { line ->
+                    val hit =
+                        when {
+                            line.startsWith("TXT ") && line.contains(q, true) -> line.removePrefix("TXT ").trim()
+                            line.startsWith("IMG ") && line.contains(q, true) -> line.removePrefix("IMG ").trim()
+                            else -> null
+                        }
+                    if (hit != null && session != null) {
+                        out +=
+                            SessionSearchPage.Extra(
+                                if (line.startsWith("IMG ")) "会话图片" else "会话内容",
+                                session.title.ifEmpty { "未命名会话" },
+                                hit.take(60),
+                            ) {
+                                openSessionFromSearch(session)
+                            }
+                    }
+                }
+            }
+        }
+        // Coda Bot 的消息正文。
+        runCatching {
+            CodaBotStore.messages(this).forEach { m ->
+                if (m.text.contains(q, true)) {
+                    out +=
+                        SessionSearchPage.Extra(
+                            "Coda Bot",
+                            m.text.lineSequence().first().take(40),
+                            if (m.fromUser) "你" else com.coda.mobileui.personal.CodaBotStore.profile(this).name,
+                        ) {
+                            showBotPage()
+                        }
+                }
+            }
+        }
+        SettingsData.home(this)
+            .filterIsInstance<SettingRow.Category>()
+            .forEach { c ->
+                out +=
+                    SessionSearchPage.Extra("设置", c.title, c.summary) {
+                        startActivity(
+                            Intent(this, SettingsDetailActivity::class.java)
+                                .putExtra(SettingsDetailActivity.EXTRA_PAGE, c.page),
+                        )
+                    }
+            }
+        return out
+    }
+    /**
+     * 进入会话搜索页：与设置页、Bot 页同级，只在内容区换页。
+     *
+     * 形态对齐 Claude 安卓端：搜索独立成页（内部屏名 SearchChats），入口在侧栏与首页；
+     * 结果行是「标题命中 + 一行上下文」，对应其接口里的 title_matches 与 matched_snippet。
+     */
+    private fun showSearchPage() {
+        if (showingSearch) return
+        // 三个页共用内容区：进来之前先把另外两个收掉。
+        hideSettingsPage()
+        hideBotPage()
+        drawerLayout.closeDrawer(Gravity.LEFT)
+        emptyState.visibility = View.GONE
+        chatView.visibility = View.GONE
+        findViewById<View>(R.id.composer_container).visibility = View.GONE
+        (findViewById<View>(R.id.header_pill)?.parent as? ViewGroup)?.visibility = View.GONE
+        val area = findViewById<FrameLayout>(R.id.content_area) ?: return
+        val page =
+            searchPage
+                ?: SessionSearchPage(
+                    this,
+                    sessions = { zc.sessions },
+                    extras = { q -> searchExtras(q) },
+                    onClose = { hideSearchPage() },
+                    onPick = { openSessionFromSearch(it) },
+                ).also { searchPage = it }
+        if (page.view.parent == null) area.addView(page.view, FrameLayout.LayoutParams(-1, -1))
+        page.view.visibility = View.VISIBLE
+        page.open()
+        showingSearch = true
+        updateSwipeIntercept()
+    }
+
+    /** 退出搜索页：回到原来的会话或空态。 */
+    private fun hideSearchPage() {
+        if (!showingSearch) return
+        showingSearch = false
+        searchPage?.close()
+        searchPage?.view?.visibility = View.GONE
+        (findViewById<View>(R.id.header_pill)?.parent as? ViewGroup)?.visibility = View.VISIBLE
+        findViewById<View>(R.id.composer_container).visibility = View.VISIBLE
+        if (messageViews.isNotEmpty() || zc.currentSessionId != null) {
+            chatView.visibility = View.VISIBLE
+            emptyState.visibility = View.GONE
+        } else {
+            chatView.visibility = View.GONE
+            showEmptyState()
+        }
+        updateSwipeIntercept()
+    }
+
+    /** 搜索结果点选：收起搜索页并切到那条会话。 */
+    private fun openSessionFromSearch(session: com.coda.mobileui.core.ZSessionInfo) {
+        SettingsStore.get(this).markSessionSeen(session.id)
+        pendingNewSession = false
+        hideSearchPage()
+        liveText.clear()
+        messageViews.clear()
+        liveReasoning.clear()
+        reasoningViews.clear()
+        reasoningCollapsed.clear()
+        reasoningStart.clear()
+        reasoningDone.clear()
+        runningSince = null
+        zc.openSession(session.id, null)
+        chatView.visibility = View.VISIBLE
+        emptyState.visibility = View.GONE
+        hideSettingsPage()
+        hideBotPage()
+    }
+
+    /** 进入 Bot 页：与设置页一样在内容区换页，不新开页面。 */
     private fun showBotPage() {
         if (showingBot) return
+        hideSearchPage()
         drawerLayout.closeDrawer(Gravity.LEFT)
         emptyState.visibility = View.GONE
         chatView.visibility = View.GONE

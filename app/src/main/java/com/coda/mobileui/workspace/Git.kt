@@ -177,7 +177,7 @@ object Git {
         // 容易误以为仓库坏了。
         val trimmed = message.trim()
         if (trimmed.isEmpty()) return Result(false, "提交信息不能为空")
-        val staged = run(env, root, listOf("add", "-A"))
+        val staged = addAllWithRepair(env, root)
         if (!staged.ok) return staged
         // add -A 成功不代表真有变更：没有变更时 commit 会返回非 0 且输出
         // 一长串提示。先判一次，给出明确的「没有可提交的变更」。
@@ -312,7 +312,73 @@ object Git {
     fun addAll(
         env: LinuxEnv,
         root: File,
-    ): Result = run(env, root, listOf("add", "-A"))
+    ): Result = addAllWithRepair(env, root)
+
+    /**
+     * `git add -A`，失败时先修一次对象目录再重试。
+     *
+     * 工作区在容器里被移动或复制过之后，`.git/objects` 的分片目录可能没跟着建出来，
+     * 于是 `git add` 直接报 "unable to write file .git/objects/xx/…: No such file or directory"
+     * 并以 "fatal: adding files failed" 结束。这种状态修起来很轻：把分片目录补上就行。
+     */
+    private fun addAllWithRepair(
+        env: LinuxEnv,
+        root: File,
+    ): Result {
+        repairObjectDirs(root)
+        val first = run(env, root, listOf("add", "-A"))
+        if (first.ok) return first
+        val broken =
+            first.output.contains("unable to write file") ||
+                first.output.contains("failed to insert into database") ||
+                first.output.contains("unable to index file")
+        if (!broken) return first
+        repairObjectDirs(root)
+        return run(env, root, listOf("add", "-A"))
+    }
+
+    /**
+     * 补齐 `.git/objects` 的对象分片目录，并把 `.coda/` 排除出索引。
+     *
+     * 后者是应用自己写在每个工作区里的状态目录，不该出现在用户的提交里；
+     * 之前没排除时，`.coda/workspace.json` 会被一起 add，索引写失败就把整次提交带崩。
+     */
+    private fun repairObjectDirs(root: File) {
+        val gitDir = resolveGitDir(root) ?: return
+        val objects = File(gitDir, "objects")
+        File(objects, "info").mkdirs()
+        File(objects, "pack").mkdirs()
+        for (i in 0..255) {
+            File(objects, String.format("%02x", i)).mkdirs()
+        }
+        runCatching {
+            val exclude = File(gitDir, "info/exclude")
+            exclude.parentFile?.mkdirs()
+            val text = if (exclude.isFile) exclude.readText() else ""
+            if (text.lineSequence().none { it.trim() == ".coda/" }) {
+                val sep = if (text.isEmpty() || text.endsWith("\n")) "" else "\n"
+                exclude.writeText(text + sep + ".coda/\n")
+            }
+        }
+    }
+
+    /** 解析真实的 .git 目录：普通仓库是目录，worktree/子模块是带 gitdir 的文件。 */
+    private fun resolveGitDir(root: File): File? {
+        val dot = File(root, ".git")
+        if (dot.isDirectory) return dot
+        if (dot.isFile) {
+            val line =
+                runCatching {
+                    dot.readText().lineSequence().firstOrNull { it.startsWith("gitdir:") }
+                }.getOrNull()
+            val path = line?.removePrefix("gitdir:")?.trim()
+            if (!path.isNullOrEmpty()) {
+                val target = File(path)
+                return if (target.isAbsolute) target else File(root, path)
+            }
+        }
+        return null
+    }
 
     /** 只把一个文件标记为已解决。 */
     fun addFile(

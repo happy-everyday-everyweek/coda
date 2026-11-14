@@ -108,11 +108,12 @@ class CodaBotPage(
         }
         scroll.addView(messages, ViewGroup.LayoutParams(-1, -2))
         column.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        val loader = FrameLayout(host).apply { id = View.generateViewId() }
+        val loader = FrameLayout(host).apply { id = View.generateViewId(); setBackgroundColor(Color.TRANSPARENT) }
         pet = PetBar(host).apply {
             applySkin(host, profile.avatarSkinId)
             visibility = if (profile.petAnimation) View.VISIBLE else View.GONE
             setPadding(dp(18), 0, dp(18), 0)
+            setBackgroundColor(Color.TRANSPARENT)
         }
         loader.addView(pet, FrameLayout.LayoutParams(-1, -2))
         column.addView(loader, LinearLayout.LayoutParams(-1, -2))

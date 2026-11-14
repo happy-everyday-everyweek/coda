@@ -11,6 +11,13 @@ data class WorkspaceTab(
     val id: String,
     val kind: String,
     var state: JSONObject,
+    /**
+     * 预览标签：单点文件打开时用。
+     *
+     * 预览标签不占位：再点别的文件时在原位置换成新文件，标签栏不会被一堆
+     * 临时文件塞满；在编辑器里改动或点保存后转成常驻（[preview] 置回 false）。
+     */
+    var preview: Boolean = false,
 )
 
 /** 标签页集合的落点与读写。 */
@@ -19,6 +26,9 @@ object WorkspaceTabs {
     const val FILES = "files"
     const val GIT = "git"
     const val TERMINAL = "terminal"
+
+    /** 文件编辑器：与文件列表是两种页面，打开文件开一个新标签。 */
+    const val EDITOR = "editor"
 
     private const val VERSION = 1
 
@@ -34,7 +44,21 @@ object WorkspaceTabs {
             FILES -> "文件"
             GIT -> "Git"
             TERMINAL -> "终端"
+            EDITOR -> "编辑器"
             else -> "概览"
+        }
+
+    /** 标签上显示的名字：编辑器显示文件名，其余用页面名。 */
+    fun labelOf(tab: WorkspaceTab): String =
+        if (tab.kind == EDITOR) {
+            val name = tab.state.optString("name")
+            if (name.isNotEmpty()) {
+                name
+            } else {
+                tab.state.optString("path").substringAfterLast('/').ifEmpty { label(EDITOR) }
+            }
+        } else {
+            label(tab.kind)
         }
 
     /** 读回上次的标签页集合与当前标签；没有记录时返回空集合。 */
@@ -50,7 +74,7 @@ object WorkspaceTabs {
                 val id = item.optString("id")
                 val kind = item.optString("kind")
                 if (id.isEmpty() || kind.isEmpty()) continue
-                tabs += WorkspaceTab(id, kind, item.optJSONObject("state") ?: JSONObject())
+                tabs += WorkspaceTab(id, kind, item.optJSONObject("state") ?: JSONObject(), item.optBoolean("preview"))
             }
             val active = saved.optString("active").ifEmpty { null }
             tabs to active
@@ -74,7 +98,8 @@ object WorkspaceTabs {
                 JSONObject()
                     .put("id", tab.id)
                     .put("kind", tab.kind)
-                    .put("state", tab.state),
+                    .put("state", tab.state)
+                    .put("preview", tab.preview),
             )
         }
         val payload =

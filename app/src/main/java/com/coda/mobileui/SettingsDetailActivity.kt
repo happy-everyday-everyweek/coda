@@ -172,30 +172,21 @@ class SettingsDetailActivity :
         block: () -> Unit,
     ) {
         val container = findViewById<LinearLayout>(R.id.page_container)
-        val width =
-            (container.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels).toFloat()
-        // 参数对齐 NextPlayer 的页面过渡：总 200ms、线性缓动、行程 30% 屏宽。
-        // 写成本页自己的值，不去借工作区的 Motion，两处互不影响。
-        val shift = width * 0.3f
-        val half = 100L
-        val linear = android.view.animation.LinearInterpolator()
-        container.animate().cancel()
+        val out = if (forward) -dp(12).toFloat() else dp(12).toFloat()
+        val inFrom = if (forward) dp(16).toFloat() else -dp(16).toFloat()
         container
             .animate()
             .alpha(0f)
-            .translationX(if (forward) -shift else shift)
-            .setDuration(half)
-            .setInterpolator(linear)
+            .translationX(out)
+            .setDuration(110)
             .withEndAction {
                 block()
-                container.translationX = if (forward) shift else -shift
-                container.alpha = 0f
+                container.translationX = inFrom
                 container
                     .animate()
                     .alpha(1f)
                     .translationX(0f)
-                    .setDuration(half)
-                    .setInterpolator(linear)
+                    .setDuration(150)
                     .start()
             }.start()
     }
@@ -910,8 +901,23 @@ class SettingsDetailActivity :
         title: String,
         message: String,
         confirmText: String,
+        // 从另一张半屏卡片进来时传它：就地换页，不关卡片再开一张，
+        // 这样走的是标准换页动画，而不是「先沉下去再升起来」。
+        into: CodaSheet? = null,
         onConfirm: () -> Unit,
     ) {
+        if (into != null) {
+            into.navigate {
+                this.title(title)
+                subtitle(message)
+                secondaryAction("取消") { it.dismiss() }
+                primaryAction(confirmText) { sheet ->
+                    sheet.dismiss()
+                    onConfirm()
+                }
+            }
+            return
+        }
         CodaSheet(this)
             .compact()
             .title(title)
@@ -2833,8 +2839,8 @@ class SettingsDetailActivity :
                 ).secondaryAction("取消") { it.dismiss() }
         if (existing != null) {
             sheet.headerAction("删除") { s ->
-                s.dismiss()
-                confirmDeleteProvider(existing)
+                // 就地换页到确认页，复用标准卡片切换动画。
+                confirmDeleteProvider(existing, into = s)
             }
         }
         sheet.content { col ->
@@ -3288,8 +3294,11 @@ class SettingsDetailActivity :
         if (!debouncing) snack("已保存，正在应用新配置…")
     }
 
-    private fun confirmDeleteProvider(p: ProviderStore.Provider) {
-        sheetConfirm("删除供应商", "确定删除「${p.name}」及其全部模型配置？", "删除") {
+    private fun confirmDeleteProvider(
+        p: ProviderStore.Provider,
+        into: CodaSheet? = null,
+    ) {
+        sheetConfirm("删除供应商", "确定删除「${p.name}」及其全部模型配置？", "删除", into = into) {
             val list = ProviderStore.load(this)
             list.removeAll { it.id == p.id }
             ProviderStore.save(this, list)
@@ -3418,8 +3427,8 @@ class SettingsDetailActivity :
             toggleAutomation(id, !enabled)
         }
         sheet.headerAction("删除") { s ->
-            s.dismiss()
-            confirmDeleteAutomation(id, title)
+            // 就地换页到确认页，复用标准卡片切换动画。
+            confirmDeleteAutomation(id, title, into = s)
         }
         sheet.show()
     }
@@ -3456,8 +3465,9 @@ class SettingsDetailActivity :
     private fun confirmDeleteAutomation(
         id: String,
         title: String,
+        into: CodaSheet? = null,
     ) {
-        sheetConfirm("删除任务", "确定删除「$title」？此操作不可恢复。", "删除") {
+        sheetConfirm("删除任务", "确定删除「$title」？此操作不可恢复。", "删除", into = into) {
             Bg.run {
                 val ok = AutomationStore(applicationContext).delete(id)
                 runOnUiThread {
