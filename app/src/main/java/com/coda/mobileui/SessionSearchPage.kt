@@ -31,7 +31,7 @@ import java.util.Locale
 class SessionSearchPage(
     private val host: MainActivity,
     private val sessions: () -> List<ZSessionInfo>,
-    private val extras: () -> List<Extra>,
+    private val extras: (String) -> List<Extra>,
     private val onClose: () -> Unit,
     private val onPick: (ZSessionInfo) -> Unit,
 ) {
@@ -159,7 +159,7 @@ class SessionSearchPage(
             if (q.isEmpty()) {
                 emptyList()
             } else {
-                extras().filter {
+                extras(q).filter {
                     it.title.contains(q, ignoreCase = true) || it.subtitle.contains(q, ignoreCase = true)
                 }
             }

@@ -1940,6 +1940,7 @@ class MainActivity : BaseActivity() {
         messages: List<com.coda.mobileui.core.ZMessage>,
         trackViews: Boolean = true,
     ) {
+        indexSessionContent(zc.currentSessionId, messages)
         val inflater = LayoutInflater.from(this)
         val neutral =
             com.google.android.material.color.MaterialColors.getColor(
@@ -4577,8 +4578,71 @@ class MainActivity : BaseActivity() {
      * 设置与 Coda Bot 属于轻量对象，随时可查；图片要扫目录，按其体量代价高，
      * 只在充电时纳入（对齐“只在部分情况下索引”的要求），避免常态耗电。
      */
-    private fun searchExtras(): List<SessionSearchPage.Extra> {
+    /** 会话正文与聊天里发过的图片落一份可检索的文本索引；只在会话渲染时增量写，不额外跑后台任务。 */
+    private fun indexSessionContent(
+        sessionId: String?,
+        messages: List<com.coda.mobileui.core.ZMessage>,
+    ) {
+        if (sessionId == null || messages.isEmpty()) return
+        runCatching {
+            val dir = java.io.File(filesDir, "search/sessions").apply { mkdirs() }
+            val sb = StringBuilder()
+            messages.takeLast(80).forEach { m ->
+                val t = m.text().trim()
+                if (t.isNotEmpty()) sb.append("TXT ").append(t.replace('\n', ' ').take(400)).append('\n')
+                m.parts.filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>().forEach { f ->
+                    if (f.mime.startsWith("image/")) {
+                        sb.append("IMG ").append(f.filename).append(' ').append(f.url)
+                            .append(' ').append(f.width).append('x').append(f.height).append('\n')
+                    }
+                }
+            }
+            java.io.File(dir, "$sessionId.txt").writeText(sb.toString().take(200_000))
+        }
+    }
+
+    private fun searchExtras(q: String): List<SessionSearchPage.Extra> {
         val out = mutableListOf<SessionSearchPage.Extra>()
+        // 会话正文：用户消息、AI 回复都在里面；命中的那一行当作摘要。
+        runCatching {
+            java.io.File(filesDir, "search/sessions").listFiles()?.forEach { f ->
+                val id = f.nameWithoutExtension
+                val session = zc.sessions.firstOrNull { it.id == id }
+                f.readLines().forEach { line ->
+                    val hit =
+                        when {
+                            line.startsWith("TXT ") && line.contains(q, true) -> line.removePrefix("TXT ").trim()
+                            line.startsWith("IMG ") && line.contains(q, true) -> line.removePrefix("IMG ").trim()
+                            else -> null
+                        }
+                    if (hit != null && session != null) {
+                        out +=
+                            SessionSearchPage.Extra(
+                                if (line.startsWith("IMG ")) "会话图片" else "会话内容",
+                                session.title.ifEmpty { "未命名会话" },
+                                hit.take(60),
+                            ) {
+                                openSessionFromSearch(session)
+                            }
+                    }
+                }
+            }
+        }
+        // Coda Bot 的消息正文。
+        runCatching {
+            CodaBotStore.messages(this).forEach { m ->
+                if (m.text.contains(q, true)) {
+                    out +=
+                        SessionSearchPage.Extra(
+                            "Coda Bot",
+                            m.text.lineSequence().first().take(40),
+                            if (m.fromUser) "你" else com.coda.mobileui.personal.CodaBotStore.profile(this).name,
+                        ) {
+                            showBotPage()
+                        }
+                }
+            }
+        }
         SettingsData.home(this)
             .filterIsInstance<SettingRow.Category>()
             .forEach { c ->
@@ -4590,43 +4654,8 @@ class MainActivity : BaseActivity() {
                         )
                     }
             }
-        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
-        out +=
-            SessionSearchPage.Extra("Coda Bot", profile.name, profile.persona.take(40)) {
-                showBotPage()
-            }
-        if (isCharging()) {
-            // 图片只索引「发给过 AI 的那几张」，不再扫工作区目录；
-            // 真正的图片内容检索要等本地多模态嵌入模型接进来（EmbeddingGemma 2 这类）。
-            runCatching {
-                val dir = java.io.File(filesDir, "coda-bot/attachments")
-                dir
-                    .listFiles()
-                    ?.filter { it.isFile && it.extension.lowercase() in imageExts }
-                    ?.take(40)
-                    ?.forEach { f ->
-                        out +=
-                            SessionSearchPage.Extra("图片", f.name, readableSize(f.length())) {
-                                showBotPage()
-                            }
-                    }
-            }
-        }
         return out
     }
-
-    private val imageExts = setOf("jpg", "jpeg", "png", "webp", "gif", "heic")
-
-    private fun isCharging(): Boolean =
-        (getSystemService(android.content.Context.BATTERY_SERVICE) as? android.os.BatteryManager)?.isCharging ?: false
-
-    private fun readableSize(bytes: Long): String =
-        when {
-            bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
-            else -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
-        }
-
     /**
      * 进入会话搜索页：与设置页、Bot 页同级，只在内容区换页。
      *
@@ -4649,7 +4678,7 @@ class MainActivity : BaseActivity() {
                 ?: SessionSearchPage(
                     this,
                     sessions = { zc.sessions },
-                    extras = { searchExtras() },
+                    extras = { q -> searchExtras(q) },
                     onClose = { hideSearchPage() },
                     onPick = { openSessionFromSearch(it) },
                 ).also { searchPage = it }
