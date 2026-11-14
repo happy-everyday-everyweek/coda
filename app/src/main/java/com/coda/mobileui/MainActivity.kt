@@ -4630,7 +4630,7 @@ class MainActivity : BaseActivity() {
         }
         // Coda Bot 的消息正文。
         runCatching {
-            CodaBotStore.messages(this).forEach { m ->
+            com.coda.mobileui.personal.CodaBotStore.messages(this).forEach { m ->
                 if (m.text.contains(q, true)) {
                     out +=
                         SessionSearchPage.Extra(
