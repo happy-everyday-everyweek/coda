@@ -15,11 +15,21 @@
 - **令牌授权不是设备配对**：这一版没有长期身份密钥、指纹确认与按设备撤销，
   规格 11.3 的配对要求仍未满足，`SYNC-109` 保持 `BLOCKED`。
 
+### 1.1 凭据与配对码
+
+- 每个已授权设备一条凭据（32 字节令牌 + 标签 + 时间戳），可单独撤销；
+  撤销只断开该凭据的连接，其他设备不受影响。
+- 配对码由手机端生成，6 位数字、5 分钟有效、一次性；桌面端用它换一条自己的凭据，
+  换完即失效，不会复用同一串令牌。
+- 旧版本只有单个令牌的安装，会在首次读取时迁移成「默认凭据」，不会把用户踢下线。
+- 设备指纹是 `deviceId` 的 SHA-256 前 8 字节，用于人工核对；它不是非对称密钥。
+
 ## 2. 方法
 
 | 方法 | 参数 | 返回 |
 |---|---|---|
-| `node.hello` | `protocolVersion`, `token`, `clientName` | `protocolVersion`, `node`, `capabilities`, `sessions` |
+| `node.hello` | `protocolVersion`, `token`, `clientName` | `protocolVersion`, `credentialId`, `node`, `capabilities`, `sessions` |
+| `node.pair` | `code`, `clientName` | `{ ok, credentialId, token, deviceId, fingerprint }` |
 | `node.snapshot` | — | `{ sessions: [...] }` |
 | `node.session.new` | `workspace?` | `{ ok, sessionId }` |
 | `node.session.open` | `sessionId` | `{ ok }` |

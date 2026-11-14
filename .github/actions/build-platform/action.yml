@@ -27,6 +27,11 @@ runs:
       run: |
         node tools/capability-matrix.mjs --check
         node tools/fixture-index.mjs --check
+    # 打包前先确认三端真能起来：桌面核心可导入、CLI 能跑一轮、Web 能监听并回 200。
+    - name: 三端冒烟（核心 / CLI / Web）
+      shell: bash
+      working-directory: platform
+      run: node tools/smoke-clients.mjs
 
     - name: 打包平台产物
       id: pack
@@ -59,6 +64,11 @@ runs:
         tar -tzf "$TGZ" > /tmp/coda-platform-tar.txt
         grep -q '^package/adapters/index.mjs$' /tmp/coda-platform-tar.txt
         grep -q '^package/contracts/ids.mjs$' /tmp/coda-platform-tar.txt
+        # 三端入口必须都在包里，并且 package.json 的 bin 指向它们，否则装上也没有命令可用。
+        grep -q '^package/clients/tui/main.mjs$' /tmp/coda-platform-tar.txt
+        grep -q '^package/clients/web/server.mjs$' /tmp/coda-platform-tar.txt
+        test "$(node -p 'require("./package.json").bin.coda')" = "clients/tui/main.mjs"
+        test "$(node -p 'require("./package.json").bin["coda-web"]')" = "clients/web/server.mjs"
 
         {
           echo "### Coda Platform $VERSION"

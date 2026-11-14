@@ -18,6 +18,10 @@
   "engines": {
     "node": ">=24"
   },
+  "bin": {
+    "coda": "clients/tui/main.mjs",
+    "coda-web": "clients/web/server.mjs"
+  },
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\"",
     "test:core": "node --test \"test/core/**/*.test.mjs\"",
@@ -27,6 +31,7 @@
     "test:adapters": "node --test \"test/adapters/**/*.test.mjs\"",
     "test:clients": "node --test \"test/clients/**/*.test.mjs\"",
     "test:sync": "node --test \"test/sync/**/*.test.mjs\" \"test/security/**/*.test.mjs\"",
-    "test:pa": "node --test \"test/pa/**/*.test.mjs\""
+    "test:pa": "node --test \"test/pa/**/*.test.mjs\"",
+    "smoke": "node tools/smoke-clients.mjs"
   }
 }
