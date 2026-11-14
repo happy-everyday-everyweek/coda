@@ -8,10 +8,12 @@ on:
   push:
     paths:
       - "platform/gui-smoke/**"
+      - "platform/gui/**"
       - ".github/workflows/gpui-soft.yml"
   pull_request:
     paths:
       - "platform/gui-smoke/**"
+      - "platform/gui/**"
       - ".github/workflows/gpui-soft.yml"
   workflow_dispatch:
 
@@ -80,3 +82,48 @@ jobs:
             /tmp/gpui-build.log
             /tmp/gpui-run.log
             /tmp/vulkan.txt
+
+  gui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # 先不阻塞主流水线；GUI 稳定后在独立 PR 里改成 false。
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: platform/gui -> target
+      - name: 安装软件 GPU 与窗系统依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            mesa-vulkan-drivers vulkan-tools xvfb libgl1-mesa-dri mesa-utils \
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev libxcb1-dev libxkbcommon-x11-dev \
+            libzstd-dev pkg-config clang cmake
+      - name: 编译 GUI
+        working-directory: platform/gui
+        env:
+          CARGO_TERM_COLOR: always
+        run: cargo build 2>&1 | tee /tmp/gui-build.log
+      - name: Xvfb 下出帧
+        working-directory: platform/gui
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WGPU_BACKEND: vulkan
+          WINIT_UNIX_BACKEND: x11
+        run: |
+          set -o pipefail
+          xvfb-run -a --server-args="-screen 0 1280x800x24" \
+            timeout 180 cargo run --quiet 2>&1 | tee /tmp/gui-run.log
+          grep -q "CODA_GUI_OK" /tmp/gui-run.log
+      - name: 上传日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-logs
+          if-no-files-found: ignore
+          path: |
+            /tmp/gui-build.log
+            /tmp/gui-run.log

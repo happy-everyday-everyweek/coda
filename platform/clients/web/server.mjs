@@ -41,6 +41,7 @@ const STATIC_FILES = new Map([
   ["/index.html", "index.html"],
   ["/app.mjs", "app.mjs"],
   ["/styles.css", "styles.css"],
+  ["/layout.mjs", "layout.mjs"],
 ]);
 
 const CONTENT_TYPES = new Map([
