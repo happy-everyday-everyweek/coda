@@ -1,13 +1,13 @@
 {
   "schema": 2,
-  "name": "ember",
-  "title": "余烬 Ember",
+  "name": "whalegirl",
+  "title": "鲸娘",
   "tickMs": 60,
   "grid": [18, 10],
   "palette": {
-    "B": "#F08A5D",
-    "b": "#C96A3F",
-    "h": "#FFC2A1",
+    "B": "#5FB8D9",
+    "b": "#3F8FAE",
+    "h": "#A8DCEF",
     "G": "#6BCB5F",
     "g": "#3F9442",
     "f": "#FF8FB8",
@@ -963,7 +963,7 @@
         {
           "count": 14,
           "glyph": "dot",
-          "colors": ["#FF8FB8", "#FFD24A", "#6BCB5F", "#F08A5D", "#FFFFFF", "#FF8FB8"],
+          "colors": ["#FF8FB8", "#FFD24A", "#6BCB5F", "#5FB8D9", "#FFFFFF", "#FF8FB8"],
           "x": [4, 13],
           "y": -2,
           "vx": [-18, 18],
