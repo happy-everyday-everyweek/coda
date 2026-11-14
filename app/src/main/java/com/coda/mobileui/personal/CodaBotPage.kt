@@ -68,6 +68,12 @@ class CodaBotPage(
 
     /** 收起 Bot 页：释放运行时，界面留待下次重建。 */
     fun close() {
+        // 录音中退出页面：先把麦克风收干净，别留下一个还在录的线程。
+        if (recording) {
+            recording = false
+            runCatching { recorder?.cancel() }
+            recorder = null
+        }
         runtime?.let { runCatching { it.close() } }
         runtime = null
         runtimeSignature = ""
@@ -141,7 +147,11 @@ class CodaBotPage(
                     }
 
                     else -> {
-                        v.animate().translationX(0f).translationY(0f).setDuration(220).start()
+                        // 碰撞箱：松手时如果明显高于输入框上沿，就当它站在消息内容上，
+                        // 停在落点；否则回到地面（输入框上沿）。
+                        if (v.translationY > -dp(40).toFloat()) {
+                            v.animate().translationX(0f).translationY(0f).setDuration(220).start()
+                        }
                         false
                     }
                 }
@@ -290,7 +300,66 @@ class CodaBotPage(
         return bar
     }
 
+    private var recorder: com.coda.mobileui.core.AsrTester.Recorder? = null
+    private var recording = false
+
+    /**
+     * 语音输入：点一下开始录音，再点一下结束并把这段音频交给项目自己的 ASR 封装转写，
+     * 转写结果直接追加到输入框。识别失败才退回系统识别器。
+     */
     private fun startVoiceInput() {
+        if (!recording) {
+            val r = com.coda.mobileui.core.AsrTester.Recorder(host)
+            if (r.start()) {
+                recorder = r
+                recording = true
+                toast("正在录音，再点一下结束")
+            } else {
+                fallbackRecognizer()
+            }
+            return
+        }
+        recording = false
+        val audio = recorder?.stop()
+        recorder = null
+        if (audio == null) {
+            toast("没有录到音频")
+            return
+        }
+        toast("正在识别…")
+        Thread {
+            val provider =
+                com.coda.mobileui.core.ProviderStore.builtins()
+                    .firstOrNull { it.id == com.coda.mobileui.core.ProviderStore.BUILTIN_DOUBAO_ASR }
+            val result =
+                if (provider != null) {
+                    com.coda.mobileui.core.AsrTester.transcribe(provider, audio, "doubao-voice")
+                } else {
+                    com.coda.mobileui.core.AsrTester.Result.Fail("没有可用的语音识别供应商")
+                }
+            host.runOnUiThread {
+                when (result) {
+                    is com.coda.mobileui.core.AsrTester.Result.Ok -> {
+                        val text = result.text.trim()
+                        if (text.isNotEmpty()) {
+                            val current = input.text?.toString().orEmpty()
+                            input.setText(if (current.isBlank()) text else "$current$text")
+                            input.setSelection(input.text?.length ?: 0)
+                        } else {
+                            toast("没听清")
+                        }
+                    }
+
+                    is com.coda.mobileui.core.AsrTester.Result.Fail -> {
+                        toast(result.reason.ifBlank { "识别失败" })
+                        fallbackRecognizer()
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun fallbackRecognizer() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PROMPT, "说吧，我在听")
