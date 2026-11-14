@@ -4596,16 +4596,18 @@ class MainActivity : BaseActivity() {
                 showBotPage()
             }
         if (isCharging()) {
+            // 图片只索引「发给过 AI 的那几张」，不再扫工作区目录；
+            // 真正的图片内容检索要等本地多模态嵌入模型接进来（EmbeddingGemma 2 这类）。
             runCatching {
-                val root = File(zc.workspacePath())
-                root
+                val dir = java.io.File(filesDir, "coda-bot/attachments")
+                dir
                     .listFiles()
                     ?.filter { it.isFile && it.extension.lowercase() in imageExts }
                     ?.take(40)
                     ?.forEach { f ->
                         out +=
                             SessionSearchPage.Extra("图片", f.name, readableSize(f.length())) {
-                                openWorkspace()
+                                showBotPage()
                             }
                     }
             }
