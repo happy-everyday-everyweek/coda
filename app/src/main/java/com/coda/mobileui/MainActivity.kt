@@ -4593,11 +4593,44 @@ class MainActivity : BaseActivity() {
                 m.parts.filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>().forEach { f ->
                     if (f.mime.startsWith("image/")) {
                         sb.append("IMG ").append(f.filename).append(' ').append(f.url)
-                            .append(' ').append(f.width).append('x').append(f.height).append('\n')
+                            .append(' ').append(f.width).append('x').append(f.height)
+                            .append(' ').append(imageColorWord(f.url)).append('\n')
                     }
                 }
             }
             java.io.File(dir, "$sessionId.txt").writeText(sb.toString().take(200_000))
+        }
+    }
+
+    /** 图片内容的最小描述：取缩略一像素的平均色，落到一个颜色词上，供搜索按内容命中。 */
+    private fun imageColorWord(url: String): String {
+        val bitmap =
+            runCatching {
+                if (url.startsWith("content:") || url.startsWith("file:")) {
+                    contentResolver.openInputStream(android.net.Uri.parse(url))?.use {
+                        android.graphics.BitmapFactory.decodeStream(it)
+                    }
+                } else {
+                    android.graphics.BitmapFactory.decodeFile(url)
+                }
+            }.getOrNull() ?: return ""
+        val pixel =
+            runCatching {
+                android.graphics.Bitmap.createScaledBitmap(bitmap, 1, 1, true).getPixel(0, 0)
+            }.getOrDefault(android.graphics.Color.TRANSPARENT)
+        if (android.graphics.Color.alpha(pixel) == 0) return ""
+        val r = android.graphics.Color.red(pixel)
+        val g = android.graphics.Color.green(pixel)
+        val b = android.graphics.Color.blue(pixel)
+        val max = maxOf(r, g, b)
+        val min = minOf(r, g, b)
+        return when {
+            max < 60 -> "黑"
+            min > 210 -> "白"
+            max - min < 28 -> "灰"
+            r >= g && r >= b -> if (g > b + 40) "橙" else "红"
+            g >= r && g >= b -> "绿"
+            else -> if (r > g + 40) "紫" else "蓝"
         }
     }
 
