@@ -458,6 +458,17 @@ class MainActivity : BaseActivity() {
         // 初始态：新会话且未选工作区时胶囊是「运行位置」，否则是模型名。
         syncHeaderPill()
         applyWideLayout()
+        // 有 Shizuku 就顺手把自己这份无障碍服务打开；没有就安静跳过。
+        rikka.shizuku.Shizuku.addRequestPermissionResultListener { _, results ->
+            if (com.coda.mobileui.core.ShizukuShell.handlePermissionResult(
+                    com.coda.mobileui.core.ShizukuShell.REQUEST_CODE,
+                    results,
+                )
+            ) {
+                enableOwnAccessibilityViaShizuku()
+            }
+        }
+        ensureShizukuAccessibility()
         updateSendAvailability()
         setupSendMode()
         attachScroll = findViewById(R.id.attach_scroll)
@@ -5180,6 +5191,26 @@ class MainActivity : BaseActivity() {
      * 这个选择器不应去改变它。
      */
     private var composerWorkspace: String? = null
+
+/** 有 Shizuku 就请求一次授权；已授权则直接打开本应用的无障碍服务。 */
+    private fun ensureShizukuAccessibility() {
+        if (!com.coda.mobileui.core.ShizukuShell.available()) return
+        if (com.coda.mobileui.core.ShizukuShell.isReady()) {
+            enableOwnAccessibilityViaShizuku()
+            return
+        }
+        val prefs = getSharedPreferences("shizuku", MODE_PRIVATE)
+        if (!prefs.getBoolean("asked", false)) {
+            prefs.edit().putBoolean("asked", true).apply()
+            com.coda.mobileui.core.ShizukuShell.requestPermission()
+        }
+    }
+
+    /** 通过 Shizuku 写系统设置，把本应用的无障碍服务挂上。 */
+    private fun enableOwnAccessibilityViaShizuku() {
+        val service = "$packageName/com.coda.mobileui.core.PhoneAccessibilityService"
+        com.coda.mobileui.core.ShizukuShell.enableAccessibility(service)
+    }
 
     /**
      * 是否处于「刚点新对话、还没建会话」的待建态。
