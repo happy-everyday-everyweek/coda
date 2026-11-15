@@ -1,4 +1,18 @@
 #!/usr/bin/env node
+const PERF_START = process.hrtime.bigint();
+let perfMarked = false;
+// PERF_HOOK：首次 stdout 写入即视为首帧。
+const __origStdoutWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk, ...rest) => {
+  markPerfReady();
+  return __origStdoutWrite(chunk, ...rest);
+};
+function markPerfReady() {
+  if (perfMarked) return;
+  perfMarked = true;
+  const ms = Number(process.hrtime.bigint() - PERF_START) / 1e6;
+  process.stderr.write(`TUI_READY_MS ${ms.toFixed(1)}\n`);
+}
 /**
  * TUI-101 / TUI-102：终端客户端（纯终端环境，不依赖 GUI）。
  *
