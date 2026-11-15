@@ -40,7 +40,7 @@ jobs:
             mesa-vulkan-drivers vulkan-tools xvfb libgl1-mesa-dri mesa-utils \
             libfontconfig1-dev libfreetype6-dev libxkbcommon-dev \
             libwayland-dev libx11-dev libxcb1-dev libxkbcommon-x11-dev \
-            libzstd-dev pkg-config clang cmake
+            libzstd-dev pkg-config clang cmake imagemagick x11-apps
 
       - name: 记录 GPU 后端（软件 Vulkan）
         run: |
@@ -102,13 +102,13 @@ jobs:
             mesa-vulkan-drivers vulkan-tools xvfb libgl1-mesa-dri mesa-utils \
             libfontconfig1-dev libfreetype6-dev libxkbcommon-dev \
             libwayland-dev libx11-dev libxcb1-dev libxkbcommon-x11-dev \
-            libzstd-dev pkg-config clang cmake
+            libzstd-dev pkg-config clang cmake imagemagick x11-apps
       - name: 编译 GUI
         working-directory: platform/gui
         env:
           CARGO_TERM_COLOR: always
         run: cargo build 2>&1 | tee /tmp/gui-build.log
-      - name: Xvfb 下出帧
+      - name: Xvfb 下出帧与截图
         working-directory: platform/gui
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -117,9 +117,24 @@ jobs:
           CODA_GUI_SMOKE: "1"
         run: |
           set -o pipefail
-          xvfb-run -a --server-args="-screen 0 1280x800x24" \
-            timeout 180 cargo run --quiet 2>&1 | tee /tmp/gui-run.log
+          cargo build --quiet
+          xvfb-run -a --server-args="-screen 0 1280x800x24" bash -c '
+            ./target/debug/coda-gui > /tmp/gui-run.log 2>&1 &
+            APP=$!
+            sleep 6
+            import -window root /tmp/gui.png || xwd -root -silent | convert xwd:- /tmp/gui.png || true
+            wait $APP
+          '
           grep -q "CODA_GUI_OK" /tmp/gui-run.log
+          ls -la /tmp/gui.png || true
+
+      - name: 性能读数与门禁（首帧 / 状态可用）
+        working-directory: platform/gui
+        run: |
+          READY=$(sed -n "s/^CODA_GUI_READY_MS //p" /tmp/gui-run.log | head -1)
+          echo "GUI 首帧：${READY}ms" >> "$GITHUB_STEP_SUMMARY"
+          echo "目标：显示 50ms × 95% = 52.5ms；全部可用 100ms × 95% = 105ms" >> "$GITHUB_STEP_SUMMARY"
+          python3 -c "import sys; ready=float('${READY}' or 9999); print('READY', ready); sys.exit(0 if ready <= 52.5 else 1)"
       - name: 上传日志
         if: always()
         uses: actions/upload-artifact@v4
@@ -129,3 +144,4 @@ jobs:
           path: |
             /tmp/gui-build.log
             /tmp/gui-run.log
+            /tmp/gui.png
