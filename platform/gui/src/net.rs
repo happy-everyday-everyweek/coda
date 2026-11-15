@@ -155,3 +155,43 @@ fn unique_id() -> u128 {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0)
 }
+/// 订阅 /api/events（SSE），任何事件到达就递增 dirty，让界面尽快拉新状态。
+/// 分块编码的块长行会被忽略：只认 data: / event: 行，这是协议层面稳定的部分。
+pub fn watch_events(base: &str, token: &str, dirty: std::sync::Arc<std::sync::atomic::AtomicU64>) {
+    use std::sync::atomic::Ordering;
+    loop {
+        if let Ok((host, port)) = split_base(base) {
+            let address = format!("{host}:{port}");
+            if let Ok(mut stream) = TcpStream::connect(&address) {
+                stream.set_read_timeout(Some(Duration::from_secs(90))).ok();
+                let request = format!(
+                    "GET /api/events?token={token} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+                );
+                if stream.write_all(request.as_bytes()).is_ok() {
+                    let mut buffer = String::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        match stream.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(size) => {
+                                buffer.push_str(&String::from_utf8_lossy(&chunk[..size]));
+                                while let Some(index) = buffer.find('\n') {
+                                    let line = buffer[..index].trim_end_matches('\r').to_string();
+                                    buffer.drain(..=index);
+                                    if line.starts_with("data:") || line.starts_with("event:") {
+                                        dirty.fetch_add(1, Ordering::SeqCst);
+                                    }
+                                    if buffer.len() > 262144 {
+                                        buffer.clear();
+                                    }
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}

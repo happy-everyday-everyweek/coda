@@ -9,7 +9,7 @@
 
 mod net;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -60,6 +60,7 @@ struct CodaGui {
     base: String,
     token: String,
     shared: Arc<Mutex<Remote>>,
+    dirty: Arc<AtomicU64>,
     seen_version: u64,
     focus: FocusHandle,
     input: String,
@@ -173,11 +174,19 @@ fn state_badge(state: &str) -> &'static str {
 impl CodaGui {
     fn new(base: String, token: String, cx: &mut Context<Self>) -> Self {
         let shared = Arc::new(Mutex::new(Remote::default()));
+        let dirty = Arc::new(AtomicU64::new(0));
         let focus = cx.focus_handle();
+        {
+            let dirty = dirty.clone();
+            let base = base.clone();
+            let token = token.clone();
+            std::thread::spawn(move || net::watch_events(&base, &token, dirty));
+        }
         let mut app = Self {
             base,
             token,
             shared: shared.clone(),
+            dirty: dirty.clone(),
             seen_version: 0,
             focus,
             input: String::new(),
@@ -196,12 +205,24 @@ impl CodaGui {
     fn start_polling(&mut self, shared: Arc<Mutex<Remote>>, cx: &mut Context<Self>) {
         let base = self.base.clone();
         let token = self.token.clone();
+        let dirty = self.dirty.clone();
         let task = cx.spawn(async move |this, cx| {
             let mut version = 0u64;
+            let mut seen_dirty = dirty.load(Ordering::SeqCst);
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(1200))
-                    .await;
+                // 有事件就立刻拉；没有事件时 1.2 秒兜底刷新一次。
+                let mut waited = 0u32;
+                while waited < 1200 {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(120))
+                        .await;
+                    waited += 120;
+                    let current = dirty.load(Ordering::SeqCst);
+                    if current != seen_dirty {
+                        seen_dirty = current;
+                        break;
+                    }
+                }
                 match net::get_state(&base, &token) {
                     Ok(projection) => {
                         version += 1;
