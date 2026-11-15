@@ -88,6 +88,12 @@ jobs:
           node-version: "24"
       - uses: ./.github/actions/build-platform
         id: platform
+      - name: TUI 首帧性能（50ms 门禁）
+        working-directory: platform
+        run: |
+          OUT=$(node clients/tui/main.mjs --mock --no-color --script '[{"action":"projection"}]' 2>&1 >/dev/null | sed -n 's/^TUI_READY_MS //p' | head -1)
+          echo "TUI 首帧：${OUT}ms" >> "$GITHUB_STEP_SUMMARY"
+          python3 -c "import sys; ms=float('${OUT}' or 9999); print('TUI_READY_MS', ms); sys.exit(0 if ms <= 50 else 1)"
       - name: 平台契约测试
         working-directory: platform
         run: node --test "test/**/*.test.mjs"
