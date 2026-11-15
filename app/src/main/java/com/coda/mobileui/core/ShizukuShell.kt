@@ -37,10 +37,9 @@ object ShizukuShell {
     fun exec(command: String): Result<String> {
         if (!isReady()) return Result.failure(IllegalStateException("Shizuku 未授权"))
         return runCatching {
-            val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
-            val output =
-                process.inputStream.bufferedReader().readText() +
-                    process.errorStream.bufferedReader().readText()
+            // 合并 stderr 后再读：避免两个管道各自缓冲导致 waitFor 卡死。
+            val process = Shizuku.newProcess(arrayOf("sh", "-c", "$command 2>&1"), null, null)
+            val output = process.inputStream.bufferedReader().readText()
             process.waitFor()
             output.trim()
         }
