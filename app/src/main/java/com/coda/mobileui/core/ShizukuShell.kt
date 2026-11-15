@@ -82,4 +82,22 @@ object ShizukuShell {
             ?.let { (w, h) ->
                 w.trim().toIntOrNull()?.let { ww -> h.trim().toIntOrNull()?.let { hh -> ww to hh } }
             }
+
+    /**
+     * 起一块虚拟副屏（系统自带的「模拟副屏」开关），spec 形如 `1280x720/160`。
+     *
+     * 副屏起来后可以用 [launchOnDisplay] 把某个组件放上去，配合 tap/swipe 做 GUI 操作，
+     * 主屏保持不被占用。
+     */
+    fun enableVirtualDisplay(spec: String = "1280x720/160"): Result<String> =
+        exec("settings put global overlay_display_devices \"$spec\"")
+
+    fun disableVirtualDisplay(): Result<String> =
+        exec("settings put global overlay_display_devices null")
+
+    /** 在指定显示上启动组件，component 形如 `com.example/.MainActivity`。 */
+    fun launchOnDisplay(
+        component: String,
+        displayId: Int = 1,
+    ): Result<String> = exec("am start --display $displayId -n $component")
 }
