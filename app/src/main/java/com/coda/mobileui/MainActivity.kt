@@ -1989,6 +1989,36 @@ class MainActivity : BaseActivity() {
                         if (trackViews) messageViews[message.id] = body
                     },
                 )
+                val plainCount = tools.count { !ZWorkflowKit.isWorkflowTool(it.tool) }
+                val collapseTools = plainCount >= 2
+                // 连续工具调用合并成一组：默认收起，只露一行摘要，点开才铺卡片。
+                val toolHost =
+                    if (collapseTools) {
+                        LinearLayout(this).apply {
+                            orientation = LinearLayout.VERTICAL
+                            visibility = View.GONE
+                        }
+                    } else {
+                        host
+                    }
+                if (collapseTools) {
+                    host.addView(
+                        TextView(this).apply {
+                            text = "调用 $plainCount 个工具"
+                            textSize = 13f
+                            setTextColor(neutral)
+                            setPadding(dp(12), dp(6), dp(12), dp(6))
+                            isClickable = true
+                            setOnClickListener { v ->
+                                val open = toolHost.visibility == View.VISIBLE
+                                toolHost.visibility = if (open) View.GONE else View.VISIBLE
+                                (v as TextView).text =
+                                    if (open) "调用 $plainCount 个工具" else "收起 $plainCount 个工具"
+                            }
+                        },
+                    )
+                    host.addView(toolHost)
+                }
                 tools.forEach { tool ->
                     // 工作流：折叠态本身就是时间轴两态组件，仍走专用卡。
                     // 子代理：主界面保持 0.7.5 的通用工具卡不变，只有点击后打开的半屏不同。
@@ -2015,7 +2045,7 @@ class MainActivity : BaseActivity() {
                             showToolDetail(tool)
                         }
                     }
-                    host.addView(row)
+                    toolHost.addView(row)
                 }
             }
         }
