@@ -34,6 +34,7 @@ enum PaneAction {
 
 /// CI 冒烟用：出现过至少一帧。
 static RENDERED: AtomicBool = AtomicBool::new(false);
+static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 #[derive(Default, Clone)]
 struct Remote {
@@ -452,7 +453,10 @@ impl CodaGui {
 
 impl Render for CodaGui {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        RENDERED.store(true, Ordering::SeqCst);
+        if !RENDERED.swap(true, Ordering::SeqCst) {
+            let ms = START.get().map(|start| start.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0);
+            eprintln!("CODA_GUI_READY_MS {ms:.1}");
+        }
         let remote = self.snapshot();
         let sessions = sessions_of(&remote.projection);
         let active_session = self.active_session(&sessions);
@@ -812,6 +816,7 @@ fn open_session_window(app: &mut App, base: String, token: String, session_id: O
 }
 
 fn main() {
+    let _ = START.set(std::time::Instant::now());
     let mut base = "http://127.0.0.1:8787".to_string();
     let mut token = String::new();
     let mut args = std::env::args().skip(1);
