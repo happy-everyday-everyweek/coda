@@ -4624,8 +4624,7 @@ class MainActivity : BaseActivity() {
                 m.parts.filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>().forEach { f ->
                     if (f.mime.startsWith("image/")) {
                         sb.append("IMG ").append(f.filename).append(' ').append(f.url)
-                            .append(' ').append(f.width).append('x').append(f.height)
-                            .append(' ').append(imageColorWord(f.url)).append('\n')
+                            .append(' ').append(f.width).append('x').append(f.height).append('\n')
                     }
                 }
             }
