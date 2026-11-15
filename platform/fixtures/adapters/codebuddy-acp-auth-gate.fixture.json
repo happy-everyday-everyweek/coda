@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "kind": "recording",
+  "agentId": "codebuddy",
+  "taskId": "AGT-117",
+  "source": "recording",
+  "sourceNote": "CI 真实运行 `codebuddy --acp` 的 ACP 帧；ACP initialize 成功；session/new 返回 Authentication required（缺 CODEBUDDY_API_KEY）。",
+  "recordedAt": "2026-11-07T13:52:04.596Z",
+  "agentVersion": "2.181.0",
+  "command": [
+    "codebuddy",
+    "--acp"
+  ],
+  "redaction": {
+    "applied": true
+  },
+  "frames": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "promptCapabilities": {
+            "image": true,
+            "embeddedContext": true
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": true
+          },
+          "loadSession": true,
+          "delegateToolsSupport": true,
+          "mainAgentSupport": false,
+          "multitaskSupport": true,
+          "toolModeSupport": false,
+          "codeModeSupport": false,
+          "metaPromptSupport": true
+        },
+        "authMethods": [
+          {
+            "id": "iOA",
+            "name": "Login with iOA",
+            "description": null
+          },
+          {
+            "id": "external",
+            "name": "Login with Google/Github",
+            "description": null
+          },
+          {
+            "id": "internal",
+            "name": "Login with WeChat",
+            "description": null
+          },
+          {
+            "id": "selfhosted",
+            "name": "Login with Enterprise Domain",
+            "description": null
+          }
+        ]
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "error": {
+        "code": -32000,
+        "message": "Authentication required",
+        "data": {
+          "category": "auth"
+        }
+      }
+    }
+  ]
+}

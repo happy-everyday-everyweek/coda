@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Coda Web UI</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Coda <span>Web</span></div>
+      <div class="topbar-right">
+        <span id="connection" class="pill">未连接</span>
+        <button id="pair-toggle" type="button" class="ghost">配对</button>
+      </div>
+    </header>
+
+    <div id="pair-banner" class="banner" hidden>
+      <form id="pair-form" class="pair-form">
+        <label for="pair-token">配对令牌</label>
+        <input id="pair-token" type="password" autocomplete="off" spellcheck="false" required />
+        <button type="submit">连接</button>
+        <span id="pair-error" class="error-text" role="alert"></span>
+      </form>
+      <p class="hint">
+        令牌由本地服务器启动时打印（<code>PAIRING_TOKEN</code>）。仅访问端口不构成授权；
+        远程访问需要服务器显式开启 <code>--allow-remote</code> 且仍必须携带令牌。
+      </p>
+    </div>
+
+    <div id="error-banner" class="banner error" role="alert" hidden></div>
+
+    <main id="workspace" class="workspace" hidden>
+      <aside id="sessions" class="sessions" aria-label="会话列表"></aside>
+
+      <section class="conversation">
+        <header id="session-header" class="session-header"></header>
+        <div id="interactions" class="interactions"></div>
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="composer" class="composer">
+          <textarea id="composer-input" rows="2" placeholder="输入任务；Ctrl+Enter 发送" aria-label="消息输入"></textarea>
+          <div class="composer-actions">
+            <button type="submit" data-mode="send">发送</button>
+            <button type="button" id="send-queue" class="ghost">排队</button>
+            <button type="button" id="send-steer" class="ghost">插话</button>
+            <button type="button" id="send-stop" class="danger">停止</button>
+            <label class="model-picker">模型 <select id="model-select"></select></label>
+          </div>
+          <span id="composer-hint" class="hint"></span>
+        </form>
+
+        <div id="details" class="details"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/app.mjs"></script>
+  </body>
+</html>

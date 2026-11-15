@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-07T13:51:15.646Z",
+  "agent": {
+    "id": "qoder-cn",
+    "package": null,
+    "bin": "qodercn",
+    "needsAuth": true,
+    "commands": [
+      {
+        "cmd": "which qodercn || which qoderclicn || echo NOT_FOUND",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "(qodercn --version || qoderclicn --version || true)",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "(qodercn --help || qoderclicn --help || true)",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "(qodercn --acp --help || qoderclicn --acp --help || true)",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "qodercn --help 2>&1 | grep -iE 'acp|serve|print|output-format|session-id' | head -20",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "qodercn -p --help 2>&1 | head -40",
+        "timeoutMs": 20000
+      }
+    ]
+  },
+  "packageVersion": null,
+  "runner": {
+    "os": "linux",
+    "arch": "x64",
+    "release": "7.0.0-1019-azure",
+    "node": "v24.22.2",
+    "host": "runnervmwuk1x"
+  },
+  "probes": [
+    {
+      "cmd": "which qodercn || which qoderclicn || echo NOT_FOUND",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 127,
+      "stdout": "~/.qoder-cn/entry/qodercn\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "(qodercn --version || qoderclicn --version || true)",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 455,
+      "stdout": "1.1.85\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "(qodercn --help || qoderclicn --help || true)",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1087,
+      "stdout": "Usage: qoderclicn [options] [command] [query...]\n\nQoder CLI CN - Defaults to interactive mode. Use -p/--print for non-interactive\noutput.\n\nArguments:\n  query                                Initial prompt.\n\nOptions:\n  -d, --debug                          Run in debug mode (default: false)\n  -m, --model <model>                  Model for the current session. Default\n                                       and New Models use model name; Custom\n                                       uses modelID\n  --reasoning-effort <level>           Set reasoning effort level\n  --thinking <mode>                    Set thinking mode (auto, adaptive,\n                                       enabled, or disabled)\n  --thinking-budget <tokens>           Set a fixed thinking token budget\n                                       (implies --thinking enabled)\n  --context-window <size>              Explicit context window for supported\n                                       models\n  -i, --prompt-interactive <text>      Execute prompt and continue in\n                                       interactive mode\n  -w, --cwd <dir>                      Change working directory before startup\n  --config-dir <dir>                   Use a custom user-level config root for\n                                       this run\n  --worktree [name]                    Start in a new git worktree\n  --permission-mode <mode>             Set the permission mode (choices:\n                                       default, accept_edits,\n                                       bypass_permissions, dont_ask, auto)\n  --dangerously-skip-permissions       Bypass all permission checks\n  --allowed-mcp-server-names <name>    Allowed MCP server names\n  --tools <tools...>                   Restrict available built-in tools (\"\" to\n                                       disable all, \"default\" for all; use -p\n                                       or -- to separate from query)\n  --allowed-tools <tool>               Tools to allow\n  --disallowed-tools <tool>            Tools to deny\n  --attachment <file>                  Attach files to the initial prompt\n  --plugin-dir <dir>                   Plugin directories to load\n  -c, --continue                       Continue the most recent session\n  --fork-session                       Create a new session from a resumed\n                                       conversation\n  -r, --resume [id]                    Resume a previous session by identifier\n  -n, --name <name>                    Set a display name for this session\n  --session-id <id>                    Use a specific session ID\n  --list-sessions                      List available sessions and exit\n  --delete-session <index>             Delete a session by index number\n  --add-dir <dir>                      Additional directories to include in the\n                                       workspace\n  -o, --output-format <format>         The format of the CLI output\n  --input-format <format>              The format of the CLI input\n  --max-output-tokens <size>           Set maximum model output tokens\n  -p, --print                          Print response and exit\n                                       (non-interactive)\n  --no-session-persistence             Disable session persistence - sessions\n                                       will not be saved to disk and cannot be\n                                       resumed (only works with --print)\n  --agent <name>                       Agent for the current session\n  --agents <json>                      JSON object defining custom agents\n  --append-system-prompt <text>        Append to the default system prompt\n  --system-prompt <text>               System prompt for the session\n  --output-style <style>               Output style for this session\n  --max-model-request-retries <count>  Maximum retries for Qoder and Custom\n                                       Provider model requests\n  --mcp-config <config>                Load MCP servers from JSON file(s) or\n                                       inline JSON\n  --strict-mcp-config                  Only use MCP servers from --mcp-config\n                                       (default: false)\n  --setting-sources <source>           Setting sources to load (user, project,\n                                       local)\n  --settings <json>                    Load additional settings from a JSON\n                                       file path or inline JSON string\n  -v, --version                        output the version number\n  --list-models                        List available models for the current\n                                       user\n  --remote-session <id>                Cold-load and attach to an existing\n                                       remote session\n  --remote-control <session-id>        Run a headless Worker for an existing\n                                       remote session.\n  --remote [task]                      Create a cloud remote session and print\n                                       its access URL (preset: \"\")\n  -h, --help                           display help for command\n\nCommands:\n  hooks|hook                           Manage hooks\n  update [options]                     Update to the latest version\n  rollback [options]                   Rollback to a previous version\n  config                               View and modify CLI configuration\n  plugins|plugin                       Manage plugins\n  mcp                                  Configure and manage MCP servers\n  commit [options]                     Generate a commit message and commit\n                                       changes\n  agents|agent [options]               Manage agents\n  skills|skill                         Manage agent skills.\n  feedback [options]                   Submit feedback\n  security                             Scan source code for security issues\n  login                                Sign in to your account\n  status [options]                     Show session status\n  remote-control [options]             Start the remote-control daemon\n  sites [args...]                      Build, publish and manage Qoder Sites\n  wiki [args...]                       Generate wiki documentation for projects\n                                       (Qoder CN)\n\nConfiguration:\n  qoderclicn config set vpc_endpoint <domain>\n      Set the saved VPC endpoint, for example acme.vpc.qoder.com.cn\n  qoderclicn config get vpc_endpoint\n      Show the saved VPC endpoint\n  qoderclicn config unset vpc_endpoint\n      Remove the saved VPC endpoint configuration\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "(qodercn --acp --help || qoderclicn --acp --help || true)",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 441,
+      "stdout": "Usage: qoderclicn [options] [command] [query...]\n\nQoder CLI CN - Defaults to interactive mode. Use -p/--print for non-interactive\noutput.\n\nArguments:\n  query                                Initial prompt.\n\nOptions:\n  -d, --debug                          Run in debug mode (default: false)\n  -m, --model <model>                  Model for the current session. Default\n                                       and New Models use model name; Custom\n                                       uses modelID\n  --reasoning-effort <level>           Set reasoning effort level\n  --thinking <mode>                    Set thinking mode (auto, adaptive,\n                                       enabled, or disabled)\n  --thinking-budget <tokens>           Set a fixed thinking token budget\n                                       (implies --thinking enabled)\n  --context-window <size>              Explicit context window for supported\n                                       models\n  -i, --prompt-interactive <text>      Execute prompt and continue in\n                                       interactive mode\n  -w, --cwd <dir>                      Change working directory before startup\n  --config-dir <dir>                   Use a custom user-level config root for\n                                       this run\n  --worktree [name]                    Start in a new git worktree\n  --permission-mode <mode>             Set the permission mode (choices:\n                                       default, accept_edits,\n                                       bypass_permissions, dont_ask, auto)\n  --dangerously-skip-permissions       Bypass all permission checks\n  --allowed-mcp-server-names <name>    Allowed MCP server names\n  --tools <tools...>                   Restrict available built-in tools (\"\" to\n                                       disable all, \"default\" for all; use -p\n                                       or -- to separate from query)\n  --allowed-tools <tool>               Tools to allow\n  --disallowed-tools <tool>            Tools to deny\n  --attachment <file>                  Attach files to the initial prompt\n  --plugin-dir <dir>                   Plugin directories to load\n  -c, --continue                       Continue the most recent session\n  --fork-session                       Create a new session from a resumed\n                                       conversation\n  -r, --resume [id]                    Resume a previous session by identifier\n  -n, --name <name>                    Set a display name for this session\n  --session-id <id>                    Use a specific session ID\n  --list-sessions                      List available sessions and exit\n  --delete-session <index>             Delete a session by index number\n  --add-dir <dir>                      Additional directories to include in the\n                                       workspace\n  -o, --output-format <format>         The format of the CLI output\n  --input-format <format>              The format of the CLI input\n  --max-output-tokens <size>           Set maximum model output tokens\n  -p, --print                          Print response and exit\n                                       (non-interactive)\n  --no-session-persistence             Disable session persistence - sessions\n                                       will not be saved to disk and cannot be\n                                       resumed (only works with --print)\n  --agent <name>                       Agent for the current session\n  --agents <json>                      JSON object defining custom agents\n  --append-system-prompt <text>        Append to the default system prompt\n  --system-prompt <text>               System prompt for the session\n  --output-style <style>               Output style for this session\n  --max-model-request-retries <count>  Maximum retries for Qoder and Custom\n                                       Provider model requests\n  --mcp-config <config>                Load MCP servers from JSON file(s) or\n                                       inline JSON\n  --strict-mcp-config                  Only use MCP servers from --mcp-config\n                                       (default: false)\n  --setting-sources <source>           Setting sources to load (user, project,\n                                       local)\n  --settings <json>                    Load additional settings from a JSON\n                                       file path or inline JSON string\n  -v, --version                        output the version number\n  --list-models                        List available models for the current\n                                       user\n  --remote-session <id>                Cold-load and attach to an existing\n                                       remote session\n  --remote-control <session-id>        Run a headless Worker for an existing\n                                       remote session.\n  --remote [task]                      Create a cloud remote session and print\n                                       its access URL (preset: \"\")\n  -h, --help                           display help for command\n\nCommands:\n  hooks|hook                           Manage hooks\n  update [options]                     Update to the latest version\n  rollback [options]                   Rollback to a previous version\n  config                               View and modify CLI configuration\n  plugins|plugin                       Manage plugins\n  mcp                                  Configure and manage MCP servers\n  commit [options]                     Generate a commit message and commit\n                                       changes\n  agents|agent [options]               Manage agents\n  skills|skill                         Manage agent skills.\n  feedback [options]                   Submit feedback\n  security                             Scan source code for security issues\n  login                                Sign in to your account\n  status [options]                     Show session status\n  remote-control [options]             Start the remote-control daemon\n  sites [args...]                      Build, publish and manage Qoder Sites\n  wiki [args...]                       Generate wiki documentation for projects\n                                       (Qoder CN)\n\nConfiguration:\n  qoderclicn config set vpc_endpoint <domain>\n      Set the saved VPC endpoint, for example acme.vpc.qoder.com.cn\n  qoderclicn config get vpc_endpoint\n      Show the saved VPC endpoint\n  qoderclicn config unset vpc_endpoint\n      Remove the saved VPC endpoint configuration\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "qodercn --help 2>&1 | grep -iE 'acp|serve|print|output-format|session-id' | head -20",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 447,
+      "stdout": "Qoder CLI CN - Defaults to interactive mode. Use -p/--print for non-interactive\n  --allowed-mcp-server-names <name>    Allowed MCP server names\n  --session-id <id>                    Use a specific session ID\n  -o, --output-format <format>         The format of the CLI output\n  -p, --print                          Print response and exit\n                                       resumed (only works with --print)\n  --mcp-config <config>                Load MCP servers from JSON file(s) or\n  --strict-mcp-config                  Only use MCP servers from --mcp-config\n  --remote-control <session-id>        Run a headless Worker for an existing\n  --remote [task]                      Create a cloud remote session and print\n  mcp                                  Configure and manage MCP servers\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "qodercn -p --help 2>&1 | head -40",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 448,
+      "stdout": "Usage: qoderclicn [options] [query...]\n\nQoder CLI CN - Defaults to interactive mode. Use -p/--print for non-interactive\noutput.\n\nArguments:\n  query                                Initial prompt.\n\nOptions:\n  -d, --debug                          Run in debug mode (default: false)\n  -m, --model <model>                  Model for the current session. Default\n                                       and New Models use model name; Custom\n                                       uses modelID\n  --reasoning-effort <level>           Set reasoning effort level\n  --thinking <mode>                    Set thinking mode (auto, adaptive,\n                                       enabled, or disabled)\n  --thinking-budget <tokens>           Set a fixed thinking token budget\n                                       (implies --thinking enabled)\n  --context-window <size>              Explicit context window for supported\n                                       models\n  -i, --prompt-interactive <text>      Execute prompt and continue in\n                                       interactive mode\n  -w, --cwd <dir>                      Change working directory before startup\n  --config-dir <dir>                   Use a custom user-level config root for\n                                       this run\n  --worktree [name]                    Start in a new git worktree\n  --permission-mode <mode>             Set the permission mode (choices:\n                                       default, accept_edits,\n                                       bypass_permissions, dont_ask, auto)\n  --dangerously-skip-permissions       Bypass all permission checks\n  --allowed-mcp-server-names <name>    Allowed MCP server names\n  --tools <tools...>                   Restrict available built-in tools (\"\" to\n                                       disable all, \"default\" for all; use -p\n                                       or -- to separate from query)\n  --allowed-tools <tool>               Tools to allow\n  --disallowed-tools <tool>            Tools to deny\n  --attachment <file>                  Attach files to the initial prompt\n  --plugin-dir <dir>                   Plugin directories to load\n  -c, --continue                       Continue the most recent session\n  --fork-session                       Create a new session from a resumed\n",
+      "stderr": ""
+    }
+  ]
+}

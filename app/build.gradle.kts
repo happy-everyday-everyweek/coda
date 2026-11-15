@@ -158,4 +158,8 @@ dependencies {
     // 之前每个调用点各写一份 Thread{} 和 postDelayed，生命周期没人管，
     // 页面销毁后回调还可能打到已拆的 View 上。
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // 宿主桥协议单测：Android 单元测试默认拿不到可用的 org.json，显式引入 JVM 实现。
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "kind": "recording",
+  "agentId": "fx",
+  "taskId": "AGT-129",
+  "source": "recording",
+  "sourceNote": "CI 真实运行 `fx acp` 的 ACP 帧；ACP initialize 返回 -32600：需要 Vercel AI Gateway 登录/API key。",
+  "recordedAt": "2026-11-07T13:51:27.835Z",
+  "agentVersion": null,
+  "command": [
+    "fx",
+    "acp"
+  ],
+  "redaction": {
+    "applied": true
+  },
+  "frames": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32600,
+        "message": "fx needs access to Vercel AI Gateway. Run fx login to sign in, fx setup to use an API key, or set AI_GATEWAY_API_KEY."
+      }
+    }
+  ]
+}

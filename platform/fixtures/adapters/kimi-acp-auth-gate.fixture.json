@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "kind": "recording",
+  "agentId": "kimi",
+  "taskId": "AGT-128",
+  "source": "recording",
+  "sourceNote": "CI 真实运行 `kimi acp`（2.5.2）：initialize 成功；session/new 返回 Authentication required（需 Kimi 设备码登录）。",
+  "recordedAt": "2026-11-07T13:55:34.147Z",
+  "agentVersion": "2.5.2",
+  "command": [
+    "kimi",
+    "acp"
+  ],
+  "redaction": {
+    "applied": true
+  },
+  "frames": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "loadSession": true,
+          "promptCapabilities": {
+            "image": true,
+            "audio": false,
+            "embeddedContext": true
+          },
+          "sessionCapabilities": {
+            "list": {},
+            "resume": {},
+            "close": {},
+            "delete": {},
+            "fork": {},
+            "additionalDirectories": {}
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": true
+          },
+          "auth": {
+            "logout": {}
+          }
+        },
+        "authMethods": [
+          {
+            "id": "login",
+            "type": "terminal",
+            "name": "Login with Kimi account",
+            "description": "Open the device-code login flow in a terminal.",
+            "args": [
+              "--login"
+            ],
+            "env": {},
+            "_meta": {
+              "terminal-auth": {
+                "type": "terminal",
+                "label": "Login with Kimi account",
+                "command": "kimi",
+                "args": [
+                  "login"
+                ],
+                "env": {}
+              }
+            }
+          }
+        ],
+        "agentInfo": {
+          "name": "Kimi Code CLI",
+          "version": "2.5.2"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "error": {
+        "code": -32000,
+        "message": "Authentication required"
+      }
+    }
+  ]
+}

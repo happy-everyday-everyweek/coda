@@ -1,0 +1,15 @@
+{
+  "exitCode": 0,
+  "signal": null,
+  "summary": {
+    "tests": 342,
+    "pass": 342,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0,
+    "duration_ms": 14692.194386
+  },
+  "status": "PASS",
+  "note": "本结果只代表参考实现的契约/单元测试；G0–G5 发布门槛、真机与真实 Agent 证据见 ACCEPTANCE.md，不得据此标记发布 PASS。"
+}

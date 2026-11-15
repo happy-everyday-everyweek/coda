@@ -1,0 +1,134 @@
+{
+  "fixtureVersion": 1,
+  "id": "acp-happy-path",
+  "provider": "acp-generic",
+  "protocol": "acp/jsonrpc",
+  "source": "handwritten",
+  "sourceNote": "人工构造（非真实 Agent 录制）。对应 fake-acp-server.mjs 的 happy 场景，用于验证 ACP session/update → 统一事件的映射与回放；不作为任何真实 Agent 已支持的证据。",
+  "environment": "host",
+  "recordedAt": "2026-11-07T10:00:00.000Z",
+  "redaction": {
+    "applied": true,
+    "rules": [
+      "linux-home",
+      "root-home",
+      "email",
+      "phone-cn"
+    ]
+  },
+  "notes": "正常流式：会话创建 → 正文增量 → 工具开始/结束 → 计划 → 回合完成 → 空闲。",
+  "events": [
+    {
+      "kind": "session",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "state": "created",
+        "providerSessionId": "acp_sess_fixture_1",
+        "cwd": "/home/[REDACTED_USER]/work/demo",
+        "provider": "acp-generic"
+      },
+      "seq": 1,
+      "ts": "2026-11-07T10:00:00.000Z"
+    },
+    {
+      "kind": "status",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "state": "running",
+        "turnId": "turn_fixture_happy"
+      },
+      "seq": 2,
+      "ts": "2026-11-07T10:00:00.100Z"
+    },
+    {
+      "kind": "message",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "role": "assistant",
+        "text": "I will inspect the repository.",
+        "delta": true
+      },
+      "seq": 3,
+      "ts": "2026-11-07T10:00:00.200Z"
+    },
+    {
+      "kind": "message",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "role": "assistant",
+        "text": " Running the test suite now.",
+        "delta": true
+      },
+      "seq": 4,
+      "ts": "2026-11-07T10:00:00.300Z"
+    },
+    {
+      "kind": "tool",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "toolCallId": "tc_1",
+        "title": "Run npm test",
+        "toolKind": "execute",
+        "status": "pending",
+        "started": true,
+        "rawInput": {
+          "command": "npm test"
+        }
+      },
+      "seq": 5,
+      "ts": "2026-11-07T10:00:00.400Z"
+    },
+    {
+      "kind": "tool",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "toolCallId": "tc_1",
+        "status": "completed",
+        "started": false,
+        "output": "12 passing"
+      },
+      "seq": 6,
+      "ts": "2026-11-07T10:00:00.500Z"
+    },
+    {
+      "kind": "plan",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "entries": [
+          {
+            "content": "run tests",
+            "status": "completed",
+            "priority": "high"
+          }
+        ]
+      },
+      "seq": 7,
+      "ts": "2026-11-07T10:00:00.600Z"
+    },
+    {
+      "kind": "turn",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "turnId": "turn_fixture_happy",
+        "state": "completed",
+        "stopReason": "end_turn",
+        "endedAt": "2026-11-07T10:00:00.700Z"
+      },
+      "seq": 8,
+      "ts": "2026-11-07T10:00:00.700Z"
+    },
+    {
+      "kind": "status",
+      "sessionId": "ses_fixture_happy",
+      "payload": {
+        "state": "idle",
+        "turnId": "turn_fixture_happy",
+        "stopReason": "end_turn"
+      },
+      "seq": 9,
+      "ts": "2026-11-07T10:00:00.800Z"
+    }
+  ],
+  "agentId": "acp-generic",
+  "taskId": "AGT-104"
+}

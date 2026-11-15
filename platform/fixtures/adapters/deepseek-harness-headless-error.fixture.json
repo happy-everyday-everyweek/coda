@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "kind": "recording",
+  "agentId": "deepseek-harness",
+  "taskId": "AGT-113",
+  "source": "recording",
+  "sourceNote": "本机真实运行 `dsh --profile headless --json --approval-policy never 'Reply with exactly one word: pong'` 的完整事件流；因启动环境没有模型凭据，回合以 MISSING_CREDENTIAL 失败结束。协议生命周期（session/status/final）是真实观测。",
+  "recordedAt": "2026-11-07T13:12:00Z",
+  "agentVersion": "0.2.2-rc.1",
+  "command": [
+    "dsh",
+    "--profile",
+    "headless",
+    "--json",
+    "--approval-policy",
+    "never",
+    "Reply with exactly one word: pong"
+  ],
+  "redaction": {
+    "applied": true,
+    "note": "无凭据、无用户数据；仅保留协议帧"
+  },
+  "events": [
+    {
+      "type": "session",
+      "sessionId": "session-6bcb32dc-1fad-4405-86e9-ad60effb1999",
+      "cwd": "/tmp"
+    },
+    {
+      "type": "status",
+      "phase": "turn_start",
+      "turn": 1
+    },
+    {
+      "type": "status",
+      "phase": "step_start",
+      "turn": 1,
+      "step": 1
+    },
+    {
+      "type": "status",
+      "phase": "step_end",
+      "turn": 1,
+      "step": 1
+    },
+    {
+      "type": "status",
+      "phase": "turn_end",
+      "turn": 1,
+      "reason": {
+        "kind": "error",
+        "error": {
+          "message": "llm-deepseek: no API key for provider route \"deepseek-official\"; store DEEPSEEK_API_KEY through the credentials service (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment",
+          "code": "MISSING_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "type": "final",
+      "sessionId": "session-6bcb32dc-1fad-4405-86e9-ad60effb1999",
+      "reason": {
+        "kind": "error",
+        "error": {
+          "message": "llm-deepseek: no API key for provider route \"deepseek-official\"; store DEEPSEEK_API_KEY through the credentials service (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment",
+          "code": "MISSING_CREDENTIAL"
+        }
+      },
+      "text": ""
+    }
+  ]
+}

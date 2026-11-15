@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-07T14:07:14.186Z",
+  "agent": {
+    "id": "kimi",
+    "package": null,
+    "bin": "kimi",
+    "needsAuth": true,
+    "commands": [
+      {
+        "cmd": "ls -d ~/.kimi ~/.local/bin ~/.kimi-code 2>/dev/null; echo '---'; export PATH=\"$HOME/.kimi/bin:$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; which kimi || echo NOT_FOUND",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "export PATH=\"$HOME/.kimi/bin:$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi --version || true",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "export PATH=\"$HOME/.kimi/bin:$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi --help || true",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "export PATH=\"$HOME/.kimi/bin:$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi acp --help || true",
+        "timeoutMs": 20000
+      },
+      {
+        "cmd": "export PATH=\"$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi -p --output-format stream-json \"Reply with exactly one word: pong\"",
+        "timeoutMs": 60000
+      },
+      {
+        "cmd": "export PATH=\"$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi acp",
+        "timeoutMs": 40000,
+        "acpFlow": {
+          "prompt": "ping",
+          "timeoutMs": 35000
+        }
+      },
+      {
+        "cmd": "export PATH=\"$HOME/.kimi-code/bin:$PATH\"; kimi -p \"Reply with exactly one word: pong\" --output-format stream-json",
+        "timeoutMs": 60000
+      },
+      {
+        "cmd": "export PATH=\"$HOME/.kimi-code/bin:$PATH\"; kimi web --port 8798 2>&1",
+        "timeoutMs": 25000,
+        "serverProbe": {
+          "port": 8798,
+          "paths": [
+            "/openapi.json",
+            "/asyncapi.json",
+            "/"
+          ],
+          "waitMs": 12000
+        }
+      }
+    ]
+  },
+  "packageVersion": null,
+  "runner": {
+    "os": "linux",
+    "arch": "x64",
+    "release": "7.0.0-1019-azure",
+    "node": "v24.22.2",
+    "host": "runnervmwuk1x"
+  },
+  "probes": [
+    {
+      "cmd": "ls -d ~/.kimi ~/.local/bin ~/.kimi-code 2>/dev/null; echo '---'; export PATH=\"$HOME/.kimi/bin:$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; which kimi || echo NOT_FOUND",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 114,
+      "stdout": "~/.kimi-code\n---\n~/.kimi-code/bin/kimi\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "export PATH=\"$HOME/.kimi/bin:$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi --version || true",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 479,
+      "stdout": "2.5.2\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "export PATH=\"$HOME/.kimi/bin:$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi --help || true",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 497,
+      "stdout": "Usage: kimi [options] [command]\n\nThe Starting Point for Next-Gen Agents\n\nOptions:\n  -V, --version                 output the version number\n  -S, --session [id]            Resume a session. With ID: resume that session. Without ID:\n                                interactively pick.\n  -c, --continue                Continue the previous session for the working directory. (default:\n                                false)\n  -y, --yolo                    Start in Ask When Needed mode: routine edits and commands run\n                                automatically; risky actions, questions, and plans still ask.\n                                (default: false)\n  --auto                        Start in Never Ask mode: everything runs and is decided\n                                automatically; only plans in Plan mode wait for your review.\n                                (default: false)\n  -m, --model <model>           LLM model alias to use for this invocation. Defaults to\n                                default_model in config.toml.\n  -p, --prompt <prompt>         Run one prompt non-interactively and print the response.\n  --output-format <format>      Output format for prompt mode. Defaults to text. (choices: \"text\",\n                                \"stream-json\")\n  --skills-dir <dir>            Load skills from this directory instead of auto-discovered user and\n                                project directories. Can be repeated. (default: [])\n  --agent <name>                Agent profile to start the new session with. Custom profiles are\n                                discovered from agent directories or loaded via --agent-file. Cannot\n                                be combined with --session/--continue.\n  --agent-file <path>           Load an agent definition from a Markdown file and select it for the\n                                new session. Cannot be combined with --session/--continue. (default:\n                                [])\n  --add-dir <dir>               Add an additional workspace directory for this session. Can be\n                                repeated. (default: [])\n  --plan                        Start in plan mode. (default: false)\n  -h, --help                    Show help.\n\nCommands:\n  export [options] [sessionId]  Export a session as a ZIP archive.\n  fork [options] [sessionId]    Fork a session into a new session.\n  provider                      Manage LLM providers non-interactively.\n  session                       Manage sessions non-interactively.\n  acp [options]                 Run kimi-code as an Agent Client Protocol (ACP) server over stdio.\n  web [options]                 Run the local Kimi server and open the web UI.\n  server                        Deprecated — use `kimi web` instead.\n  rc|remote [options]           Run the local Kimi server and open the web UI through Remote\n                                Control.\n  login [options]               Authenticate with Kimi Code CLI via the device-code flow.\n  doctor                        Validate Kimi Code configuration files.\n  vis [options] [sessionId]     Launch the session visualizer in your browser.\n  install-desktop               Print the Kimi Code desktop app page and open it in your browser.\n  app [path]                    Open a new chat in the Kimi Code desktop app for this directory.\n  migrate [options]             Migrate data from a legacy kimi-cli installation into kimi-code.\n  import-sessions               Import recent Claude Code and Codex sessions into Kimi Code.\n  upgrade|update [options]      Upgrade Kimi Code to the latest version.\n\nDocumentation:        https://moonshotai.github.io/kimi-code/\n\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "export PATH=\"$HOME/.kimi/bin:$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi acp --help || true",
+      "timeoutMs": 20000,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 452,
+      "stdout": "Usage: kimi acp [options]\n\nRun kimi-code as an Agent Client Protocol (ACP) server over stdio.\n\nOptions:\n  --login            Run the device-code login flow then exit (entry point for ACP terminal-auth).\n                     (default: false)\n  --region <region>  Login region used together with --login: \"mainland-cn\" (kimi.com) or \"global\"\n                     (kimi.ai).\n  -h, --help         Show help.\n",
+      "stderr": ""
+    },
+    {
+      "cmd": "export PATH=\"$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi -p --output-format stream-json \"Reply with exactly one word: pong\"",
+      "timeoutMs": 60000,
+      "exitCode": 1,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 446,
+      "stdout": "",
+      "stderr": "unknown command 'stream-json'. See 'kimi --help'.\n"
+    },
+    {
+      "cmd": "export PATH=\"$HOME/.kimi-code/bin:$HOME/.local/bin:$PATH\"; kimi acp",
+      "timeoutMs": 40000,
+      "exitCode": null,
+      "signal": "SIGKILL",
+      "timedOut": true,
+      "durationMs": 35036,
+      "frames": [
+        {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "protocolVersion": 1,
+            "agentCapabilities": {
+              "loadSession": true,
+              "promptCapabilities": {
+                "image": true,
+                "audio": false,
+                "embeddedContext": true
+              },
+              "sessionCapabilities": {
+                "list": {},
+                "resume": {},
+                "close": {},
+                "delete": {},
+                "fork": {},
+                "additionalDirectories": {}
+              },
+              "mcpCapabilities": {
+                "http": true,
+                "sse": true
+              },
+              "auth": {
+                "logout": {}
+              }
+            },
+            "authMethods": [
+              {
+                "id": "login",
+                "type": "terminal",
+                "name": "Login with Kimi account",
+                "description": "Open the device-code login flow in a terminal.",
+                "args": [
+                  "--login"
+                ],
+                "env": {},
+                "_meta": {
+                  "terminal-auth": {
+                    "type": "terminal",
+                    "label": "Login with Kimi account",
+                    "command": "kimi",
+                    "args": [
+                      "login"
+                    ],
+                    "env": {}
+                  }
+                }
+              }
+            ],
+            "agentInfo": {
+              "name": "Kimi Code CLI",
+              "version": "2.5.2"
+            }
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "error": {
+            "code": -32000,
+            "message": "Authentication required"
+          }
+        }
+      ],
+      "stdout": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":true,\"promptCapabilities\":{\"image\":true,\"audio\":false,\"embeddedContext\":true},\"sessionCapabilities\":{\"list\":{},\"resume\":{},\"close\":{},\"delete\":{},\"fork\":{},\"additionalDirectories\":{}},\"mcpCapabilities\":{\"http\":true,\"sse\":true},\"auth\":{\"logout\":{}}},\"authMethods\":[{\"id\":\"login\",\"type\":\"terminal\",\"name\":\"Login with Kimi account\",\"description\":\"Open the device-code login flow in a terminal.\",\"args\":[\"--login\"],\"env\":{},\"_meta\":{\"terminal-auth\":{\"type\":\"terminal\",\"label\":\"Login with Kimi account\",\"command\":\"kimi\",\"args\":[\"login\"],\"env\":{}}}}],\"agentInfo\":{\"name\":\"Kimi Code CLI\",\"version\":\"2.5.2\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Authentication required\"}}",
+      "stderr": "{\"level\":\"info\",\"msg\":\"acp: auth readiness probe failed, trying the OAuth summary\",\"error\":\"no provider configured; complete onboarding via /login or the providers endpoint\"}\n"
+    },
+    {
+      "cmd": "export PATH=\"$HOME/.kimi-code/bin:$PATH\"; kimi -p \"Reply with exactly one word: pong\" --output-format stream-json",
+      "timeoutMs": 60000,
+      "exitCode": 1,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 567,
+      "stdout": "{\"role\":\"meta\",\"type\":\"system.version\",\"version\":\"2.5.2\"}\n",
+      "stderr": "error: failed to run prompt: No model configured. Run `kimi` and use /login to sign in, then retry; or set default_model in config.toml.\nSee log: ~/.kimi-code/logs/kimi-code.log\n"
+    },
+    {
+      "cmd": "export PATH=\"$HOME/.kimi-code/bin:$PATH\"; kimi web --port 8798 2>&1",
+      "timeoutMs": 25000,
+      "exitCode": null,
+      "timedOut": false,
+      "durationMs": 12060,
+      "stdout": "\n  ▐█▛█▛█▌  Kimi server ready  2.5.2\n  ▐█████▌  Local web UI is available from this machine.\n\n  Local:    http://127.0.0.1:8798/#token=[REDACTED]\n  Network:  off  use --host to enable\n\n  Token:    [REDACTED]\n\n  Logs:     off  use --log-level info to enable\n  Stop:     Ctrl+C\n",
+      "stderr": "",
+      "httpProbes": [
+        {
+          "path": "/openapi.json",
+          "status": 401,
+          "head": "{\"code\":40101,\"msg\":\"Unauthorized\",\"data\":null,\"request_id\":\"01M6V5BEQY6EVQY11DG5GM9W2F\"}"
+        },
+        {
+          "path": "/asyncapi.json",
+          "status": 401,
+          "head": "{\"code\":40101,\"msg\":\"Unauthorized\",\"data\":null,\"request_id\":\"01M6V5BER7T2Q0V1NZV1P63PJG\"}"
+        },
+        {
+          "path": "/",
+          "status": 200,
+          "head": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <link rel=\"icon\" href=\"/favicon.ico\" sizes=\"64x64\" />\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content\" />\n    <meta name=\"color-scheme\" content=\"light dark\" />\n    <meta name=\"theme-color\" content=\"#ffffff\" media=\"(prefers-color-scheme: light)\" />\n    <meta name=\"theme-color\" content=\"#121212\" media=\"(prefers-color-scheme: dark)\" />\n    <!-- Apply persisted display prefs BEFORE the bundle loads: without this,\n         users can get a color-scheme/font flash before useKimiWebClient mirrors\n         the data attributes. Mirrors applyColorSchemeToDocument. Loaded from the\n         external /boot.js (a classic script, so still render-blocking) because\n         the server's Content-Security-Policy forbids inline scripts. -->\n    <script src=\"/boot.js\"></script>\n    <title>Kimi Code Web</title>\n    <script type=\"module\" crossorigin src=\"/assets/index-CXic_agA.js\"></script>\n    <link rel=\"stylesheet\" crossorigin href=\"/assets/index-CcF1vT5e.css\">\n  </head>\n  <body>\n    <div id=\"app\"></div>\n  </body>\n</html>\n"
+        }
+      ]
+    }
+  ]
+}

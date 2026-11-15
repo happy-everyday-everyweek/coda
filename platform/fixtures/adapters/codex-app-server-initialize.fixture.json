@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "kind": "recording",
+  "agentId": "codex",
+  "taskId": "AGT-112",
+  "source": "recording",
+  "sourceNote": "CI 真实运行 `codex app-server`（newline JSON-RPC）对 initialize 的响应；无凭据。",
+  "recordedAt": "2026-11-07T13:26:05.564Z",
+  "agentVersion": "0.167.0",
+  "command": [
+    "codex",
+    "app-server"
+  ],
+  "redaction": {
+    "applied": true
+  },
+  "frames": [
+    {
+      "id": 1,
+      "result": {
+        "userAgent": "coda-probe/0.167.0 (Ubuntu 26.4.0; x86_64) dumb (coda-probe; 0.0.1)",
+        "codexHome": "~/.codex",
+        "platformFamily": "unix",
+        "platformOs": "linux"
+      }
+    },
+    {
+      "method": "remoteControl/status/changed",
+      "params": {
+        "status": "disabled",
+        "serverName": "[host]",
+        "installationId": "f47045dd-a1b7-4537-b61c-8c30f4a23788",
+        "environmentId": null
+      },
+      "emittedAtMs": 1794057951019
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "runId": "2026-11-07T13-44-14-481Z-45c951f5",
+  "startedAt": "2026-11-07T13:44:14.481Z",
+  "finishedAt": "2026-11-07T13:44:27.930Z",
+  "durationMs": 13442,
+  "node": "v24.22.1",
+  "platform": "linux",
+  "arch": "arm64",
+  "repo": {
+    "branch": "feat/desktop-agent-platform",
+    "commit": "d01b05b"
+  },
+  "cwd": "platform/",
+  "command": "node --test \"test/**/*.test.mjs\"",
+  "testDiscovery": "node --test \"test/**/*.test.mjs\"（Node 24 目录模式不可用，使用 glob）"
+}

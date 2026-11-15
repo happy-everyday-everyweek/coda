@@ -1,0 +1,84 @@
+name: Build Coda Platform
+description: 校验并打包 platform/ 参考实现（npm 包 + Web 资产 + 发布清单）
+
+# 供 build / dev-prerelease / release 复用。调用方需先准备 Node 24。
+# 产物全部落在 platform/dist/，并在 output 中给出绝对路径。
+
+outputs:
+  tgz:
+    description: coda-platform npm 包
+    value: ${{ steps.pack.outputs.tgz }}
+  webzip:
+    description: Web 客户端静态资产
+    value: ${{ steps.pack.outputs.webzip }}
+  manifest:
+    description: 带 sha256 的发布清单
+    value: ${{ steps.pack.outputs.manifest }}
+  version:
+    description: platform/package.json 的版本
+    value: ${{ steps.pack.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: 能力矩阵与证据一致性
+      shell: bash
+      working-directory: platform
+      run: |
+        node tools/capability-matrix.mjs --check
+        node tools/fixture-index.mjs --check
+    # 打包前先确认三端真能起来：桌面核心可导入、CLI 能跑一轮、Web 能监听并回 200。
+    - name: 三端冒烟（核心 / CLI / Web）
+      shell: bash
+      working-directory: platform
+      run: node tools/smoke-clients.mjs
+
+    - name: 打包平台产物
+      id: pack
+      shell: bash
+      working-directory: platform
+      run: |
+        set -euo pipefail
+        VERSION="$(node -p 'require("./package.json").version')"
+        OUT="$PWD/dist"
+        rm -rf "$OUT"
+        mkdir -p "$OUT"
+
+        # Web 客户端静态资产（带 version.json 供运行时校验）
+        node tools/install-web-assets.mjs --out dist/web
+        ( cd dist/web && zip -qr "$OUT/coda-platform-web.zip" . )
+        cp dist/web/version.json "$OUT/web-version.json"
+
+        # 发布清单在 npm pack 之前生成，打包后再次校验一致性
+        node tools/release-manifest.mjs
+        cp dist/release-manifest.json "$OUT/coda-platform-manifest.json"
+
+        npm pack --pack-destination "$OUT" >/tmp/npm-pack.log 2>&1 || { cat /tmp/npm-pack.log; exit 1; }
+        TGZ="$(ls "$OUT"/coda-platform-*.tgz | head -1)"
+        test -s "$TGZ"
+        echo "npm pack: $(basename "$TGZ") ($(stat -c%s "$TGZ") bytes)"
+
+        # 清单与磁盘一致；npm 包只允许包含平台目录内的文件
+        node tools/release-manifest.mjs --check
+        # 先落盘再检查，避免 grep -q 提前关闭管道触发 tar 的 SIGPIPE。
+        tar -tzf "$TGZ" > /tmp/coda-platform-tar.txt
+        grep -q '^package/adapters/index.mjs$' /tmp/coda-platform-tar.txt
+        grep -q '^package/contracts/ids.mjs$' /tmp/coda-platform-tar.txt
+        # 三端入口必须都在包里，并且 package.json 的 bin 指向它们，否则装上也没有命令可用。
+        grep -q '^package/clients/tui/main.mjs$' /tmp/coda-platform-tar.txt
+        grep -q '^package/clients/web/server.mjs$' /tmp/coda-platform-tar.txt
+        test "$(node -p 'require("./package.json").bin.coda')" = "clients/tui/main.mjs"
+        test "$(node -p 'require("./package.json").bin["coda-web"]')" = "clients/web/server.mjs"
+
+        {
+          echo "### Coda Platform $VERSION"
+          echo
+          echo "- 包：$(basename "$TGZ") ($(stat -c%s "$TGZ") bytes)"
+          echo "- Web 资产：$(stat -c%s "$OUT/coda-platform-web.zip") bytes"
+          echo "- 发布清单：$(node -p 'require("./dist/coda-platform-manifest.json").files.length') 个文件"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
+        echo "webzip=$OUT/coda-platform-web.zip" >> "$GITHUB_OUTPUT"
+        echo "manifest=$OUT/coda-platform-manifest.json" >> "$GITHUB_OUTPUT"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"

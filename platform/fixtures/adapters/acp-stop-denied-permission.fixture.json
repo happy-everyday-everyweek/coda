@@ -1,0 +1,187 @@
+{
+  "fixtureVersion": 1,
+  "id": "acp-stop-denied-permission",
+  "provider": "acp-generic",
+  "protocol": "acp/jsonrpc",
+  "source": "handwritten",
+  "sourceNote": "人工构造（非真实 Agent 录制）。对应 fake-acp-server.mjs 的 approval 场景被拒绝 + 回合停止的失败路径，用于验证审批拒绝、部分输出保留与停止结算；不作为任何真实 Agent 已支持的证据。",
+  "environment": "host",
+  "recordedAt": "2026-11-07T11:00:00.000Z",
+  "redaction": {
+    "applied": true,
+    "rules": [
+      "linux-home",
+      "root-home"
+    ]
+  },
+  "notes": "失败/停止场景：部分输出 → 审批请求 → 用户拒绝 → 回合停止；已产生的正文与工具事件必须保留，旧审批不得误答。",
+  "events": [
+    {
+      "kind": "status",
+      "sessionId": "ses_fixture_stop",
+      "payload": {
+        "state": "running",
+        "turnId": "turn_fixture_stop"
+      },
+      "seq": 1,
+      "ts": "2026-11-07T11:00:00.000Z"
+    },
+    {
+      "kind": "message",
+      "sessionId": "ses_fixture_stop",
+      "payload": {
+        "role": "assistant",
+        "text": "Starting the migration",
+        "delta": true
+      },
+      "seq": 2,
+      "ts": "2026-11-07T11:00:00.100Z"
+    },
+    {
+      "kind": "tool",
+      "sessionId": "ses_fixture_stop",
+      "payload": {
+        "toolCallId": "tc_write",
+        "title": "Write migration file",
+        "toolKind": "edit",
+        "status": "pending",
+        "started": true,
+        "rawInput": {
+          "path": "/home/[REDACTED_USER]/work/demo/migrations/002_add_index.sql"
+        }
+      },
+      "seq": 3,
+      "ts": "2026-11-07T11:00:00.200Z"
+    },
+    {
+      "kind": "interaction",
+      "sessionId": "ses_fixture_stop",
+      "payload": {
+        "state": "pending",
+        "interactionId": "int_fixture_stop",
+        "nativeRequestId": "1000",
+        "kind": "permission",
+        "title": "Write migration file",
+        "tool": {
+          "toolCallId": "tc_write",
+          "kind": "edit",
+          "title": "Write migration file",
+          "rawInput": {
+            "path": "/home/[REDACTED_USER]/work/demo/migrations/002_add_index.sql"
+          }
+        },
+        "options": [
+          {
+            "optionId": "allow-once",
+            "label": "Allow once",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "allow-always",
+            "label": "Always allow",
+            "kind": "allow_always"
+          },
+          {
+            "optionId": "reject-once",
+            "label": "Reject",
+            "kind": "reject_once"
+          }
+        ],
+        "freeText": false,
+        "multiple": false,
+        "source": {
+          "origin": "main",
+          "subagentId": null,
+          "parentInteractionId": null
+        },
+        "expiresAt": "2026-11-07T11:05:00.000Z",
+        "answer": null,
+        "decision": null,
+        "reason": null
+      },
+      "seq": 4,
+      "ts": "2026-11-07T11:00:00.300Z"
+    },
+    {
+      "kind": "interaction",
+      "sessionId": "ses_fixture_stop",
+      "payload": {
+        "state": "answered",
+        "interactionId": "int_fixture_stop",
+        "nativeRequestId": "1000",
+        "kind": "permission",
+        "title": "Write migration file",
+        "options": [
+          {
+            "optionId": "allow-once",
+            "label": "Allow once",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "allow-always",
+            "label": "Always allow",
+            "kind": "allow_always"
+          },
+          {
+            "optionId": "reject-once",
+            "label": "Reject",
+            "kind": "reject_once"
+          }
+        ],
+        "source": {
+          "origin": "main",
+          "subagentId": null,
+          "parentInteractionId": null
+        },
+        "answer": {
+          "optionId": "reject-once",
+          "text": null
+        },
+        "decision": {
+          "by": "user",
+          "at": "2026-11-07T11:00:01.000Z",
+          "reason": null
+        },
+        "reason": null
+      },
+      "seq": 5,
+      "ts": "2026-11-07T11:00:01.000Z"
+    },
+    {
+      "kind": "message",
+      "sessionId": "ses_fixture_stop",
+      "payload": {
+        "role": "assistant",
+        "text": " — stopped without writing.",
+        "delta": true
+      },
+      "seq": 6,
+      "ts": "2026-11-07T11:00:01.100Z"
+    },
+    {
+      "kind": "turn",
+      "sessionId": "ses_fixture_stop",
+      "payload": {
+        "turnId": "turn_fixture_stop",
+        "state": "stopped",
+        "stopReason": "cancelled",
+        "endedAt": "2026-11-07T11:00:01.200Z"
+      },
+      "seq": 7,
+      "ts": "2026-11-07T11:00:01.200Z"
+    },
+    {
+      "kind": "status",
+      "sessionId": "ses_fixture_stop",
+      "payload": {
+        "state": "stopped",
+        "turnId": "turn_fixture_stop",
+        "stopReason": "cancelled"
+      },
+      "seq": 8,
+      "ts": "2026-11-07T11:00:01.300Z"
+    }
+  ],
+  "agentId": "acp-generic",
+  "taskId": "AGT-104"
+}

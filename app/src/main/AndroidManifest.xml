@@ -14,6 +14,11 @@
          查更新与下载也要区分网络。缺这条时 ConnectivityManager
          会抛 SecurityException，打分降级成单一账号。 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 桌面节点桥：App 退到后台后保持监听，通知栏始终可见 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 13+ 前台服务通知需要运行时权限，否则「通知栏可见」这条不成立 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".CodaApp"
@@ -31,6 +36,11 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />
+        <activity
+            android:name=".RemoteSessionActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Coda.SettingsDetail" />
         <activity
             android:name=".SettingsDetailActivity"
             android:exported="false"
@@ -184,6 +194,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <!-- 桌面节点桥：受认证 TCP + NDJSON，默认关闭，用户在设置中开启 -->
+        <service
+            android:name=".core.NodeBridgeService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- 手机控制执行端：无障碍服务（默认关闭，用户在设置中开启） -->
         <service
             android:name=".core.PhoneAccessibilityService"

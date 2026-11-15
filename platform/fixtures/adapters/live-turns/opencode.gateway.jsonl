@@ -1,0 +1,2 @@
+{"ts":"2026-11-08T00:34:12.725Z","path":"/v1/chat/completions","model":"coda-gateway","stream":true,"lastUser":"\"Reply with exactly CODA_GATEWAY_OK. Do not use tools.\"","reply":"CODA_GATEWAY_OK"}
+{"ts":"2026-11-08T00:34:13.181Z","path":"/v1/chat/completions","model":"coda-gateway","stream":true,"lastUser":"\"Reply with exactly CODA_GATEWAY_OK. Do not use tools.\"","reply":"CODA_GATEWAY_OK"}

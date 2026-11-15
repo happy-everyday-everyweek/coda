@@ -1,0 +1,75 @@
+{
+  "agent": "codex",
+  "gateway": "http://127.0.0.1:18080",
+  "prompt": "Reply with exactly CODA_GATEWAY_OK. Do not use tools.",
+  "startedAt": "2026-11-08T01:14:12.801Z",
+  "events": [
+    {
+      "kind": "status",
+      "payload": {
+        "state": "running",
+        "phase": "turn_start"
+      }
+    },
+    {
+      "kind": "session",
+      "payload": {
+        "session": {
+          "id": "live-session",
+          "providerThreadId": "01a1b8b8-5e8f-7191-8ec8-b689d1afefdd"
+        }
+      }
+    },
+    {
+      "kind": "tool",
+      "payload": {
+        "tool": {
+          "id": "item_0",
+          "type": "error",
+          "message": "Model metadata for `gpt-5-codex` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+        }
+      }
+    },
+    {
+      "kind": "status",
+      "payload": {
+        "state": "running",
+        "phase": "turn_start"
+      }
+    },
+    {
+      "kind": "message",
+      "payload": {
+        "role": "assistant",
+        "text": "CODA_GATEWAY_OK",
+        "delta": false
+      }
+    },
+    {
+      "kind": "status",
+      "payload": {
+        "state": "idle"
+      }
+    }
+  ],
+  "probe": {
+    "installed": true,
+    "version": "0.167.0",
+    "path": "/opt/hostedtoolcache/node/24.22.2/x64/bin/codex"
+  },
+  "result": {
+    "state": "succeeded",
+    "text": "CODA_GATEWAY_OK",
+    "upstreamSessionId": "01a1b8b8-5e8f-7191-8ec8-b689d1afefdd"
+  },
+  "eventKinds": [
+    "status",
+    "session",
+    "tool",
+    "status",
+    "message",
+    "status"
+  ],
+  "ok": true,
+  "finishedAt": "2026-11-08T01:14:13.701Z"
+}

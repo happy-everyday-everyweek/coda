@@ -1,0 +1,58 @@
+name: Agent Live Turns
+
+# 真实 Agent CLI ↔ 本地 LLM 网关的完整回合测试。
+#
+# 背景：真实 Agent 适配此前卡在「没有模型凭据」。本工作流启动一个兼容
+# Anthropic Messages / OpenAI Chat / OpenAI Responses 的本地网关，让 Agent
+# 用真实二进制跑完整回合，验证协议、流式输出、退出码，而不是只看 --version。
+#
+# 边界：回复是网关固定文本，不代表模型质量；这是「网关支撑的真实回合」，
+# 不是「已接通真实模型服务商」。
+on:
+  push:
+    paths:
+      - "platform/tools/mock-llm-gateway.mjs"
+      - "platform/tools/live/**"
+      - ".github/workflows/agent-live.yml"
+  pull_request:
+    paths:
+      - "platform/tools/mock-llm-gateway.mjs"
+      - "platform/tools/live/**"
+      - ".github/workflows/agent-live.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [claude, codex, opencode, qwen, kimi, codebuddy, crush]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: 真实回合（${{ matrix.agent }}）
+        env:
+          LIVE_TURNS_DIR: ${{ github.workspace }}/live-turns
+          GATEWAY_PORT: "18080"
+          NPM_REGISTRY: https://registry.npmmirror.com
+        run: bash platform/tools/live/${{ matrix.agent }}.sh
+
+      - name: 上传证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-turn-${{ matrix.agent }}
+          if-no-files-found: warn
+          path: live-turns/${{ matrix.agent }}

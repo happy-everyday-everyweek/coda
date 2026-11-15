@@ -1,0 +1,21 @@
+[package]
+name = "coda-gui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Coda 桌面 GUI：三端之一（GPUI）"
+
+# 与 gui-smoke / 参考项目 Zeron 一致的 gpui 固定版本（zeronsh/zui，Zed 衍生）。
+[dependencies]
+gpui = { git = "https://github.com/zeronsh/zui", rev = "b564a34413bb7ef1da04121c4a287758f94993d9" }
+gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "b564a34413bb7ef1da04121c4a287758f94993d9", features = [
+    "wayland",
+    "x11",
+    "font-kit",
+    "runtime_shaders",
+] }
+
+serde_json = "1"
+
+[profile.dev]
+opt-level = 1
