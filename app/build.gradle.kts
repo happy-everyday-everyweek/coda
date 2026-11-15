@@ -153,6 +153,9 @@ dependencies {
     // 手写握手与帧掩码不值得，直接上 OkHttp。
     // 4.12.0 是最后一个支持 API 21+ 的稳定版，minSdk 26 完全覆盖。
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Shizuku：借已授权的 shell 身份做屏幕操作、开无障碍、起虚拟窗口。
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
     // 协程：把后台任务（转写、录音收尾、超时兜底）从散落各处的
     // Thread + Handler.postDelayed 收敛到 structured concurrency。
     // 之前每个调用点各写一份 Thread{} 和 postDelayed，生命周期没人管，
