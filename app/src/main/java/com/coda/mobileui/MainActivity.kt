@@ -2106,9 +2106,10 @@ class MainActivity : BaseActivity() {
         val title =
             TextView(this).apply {
                 this.text = if (streaming) "Thinking" else "Thought for"
-                textSize = 15f
+                textSize = 14f
                 typeface = medium
-                setTextColor(onSurface)
+                // 思考中不用纯色：亮色主题下纯黑、暗色主题下纯白都太扎眼，统一走中性灰。
+                setTextColor(neutral)
             }
         val tick =
             TextView(this).apply {
