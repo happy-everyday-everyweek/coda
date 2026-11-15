@@ -40,7 +40,7 @@ jobs:
             mesa-vulkan-drivers vulkan-tools xvfb libgl1-mesa-dri mesa-utils \
             libfontconfig1-dev libfreetype6-dev libxkbcommon-dev \
             libwayland-dev libx11-dev libxcb1-dev libxkbcommon-x11-dev \
-            libzstd-dev pkg-config clang cmake imagemagick x11-apps
+            libzstd-dev pkg-config clang cmake imagemagick x11-apps xdotool
 
       - name: 记录 GPU 后端（软件 Vulkan）
         run: |
@@ -102,7 +102,7 @@ jobs:
             mesa-vulkan-drivers vulkan-tools xvfb libgl1-mesa-dri mesa-utils \
             libfontconfig1-dev libfreetype6-dev libxkbcommon-dev \
             libwayland-dev libx11-dev libxcb1-dev libxkbcommon-x11-dev \
-            libzstd-dev pkg-config clang cmake imagemagick x11-apps
+            libzstd-dev pkg-config clang cmake imagemagick x11-apps xdotool
       - name: 编译 GUI
         working-directory: platform/gui
         env:
@@ -117,12 +117,13 @@ jobs:
           CODA_GUI_SMOKE: "1"
         run: |
           set -o pipefail
-          cargo build --quiet
+          cargo build --release --quiet
           xvfb-run -a --server-args="-screen 0 1280x800x24" bash -c '
-            ./target/debug/coda-gui > /tmp/gui-run.log 2>&1 &
+            ./target/release/coda-gui > /tmp/gui-run.log 2>&1 &
             APP=$!
-            sleep 6
-            import -window root /tmp/gui.png || xwd -root -silent | convert xwd:- /tmp/gui.png || true
+            sleep 10
+            WID=$(xdotool search --onlyvisible --name "Coda" | head -1 || true)
+            if [ -n "$WID" ]; then import -window "$WID" /tmp/gui.png; else import -window root /tmp/gui.png; fi
             wait $APP
           '
           grep -q "CODA_GUI_OK" /tmp/gui-run.log
