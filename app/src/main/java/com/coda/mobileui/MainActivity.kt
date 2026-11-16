@@ -471,7 +471,23 @@ class MainActivity : BaseActivity() {
         ensureShizukuAccessibility()
         // OAuth 供应商落库时若网关还没注册模型，清单会是空的；启动后补一次对账，
         // 顺手纠正历史上被「串网关」写进来的别家模型。
-        Thread { runCatching { com.coda.mobileui.core.OAuthLogin.refreshStoredModels(this) } }.start()
+        Thread {
+            runCatching {
+                // 先按已保存的 OAuth 供应商把网关拉起来，并回写实际端口；
+                // 再对账模型清单。端口变了就必须重启内核，否则它仍拿旧地址发请求。
+                val endpointChanged = com.coda.mobileui.core.OAuthLogin.ensureStoredGateways(this)
+                com.coda.mobileui.core.OAuthLogin.refreshStoredModels(this)
+                if (endpointChanged) {
+                    runOnUiThread {
+                        com.coda.mobileui.core.ZController
+                            .get(this)
+                            .restartCore { ok, msg ->
+                                if (!ok) com.coda.mobileui.core.AppLog.w("Coda", "OAuth 网关地址更新后重启内核失败：$msg")
+                            }
+                    }
+                }
+            }
+        }.start()
         updateSendAvailability()
         setupSendMode()
         attachScroll = findViewById(R.id.attach_scroll)

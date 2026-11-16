@@ -483,6 +483,51 @@ object OAuthLogin {
     ): JSONObject? = panelJson(ctx, path, method)?.let { runCatching { JSONObject(it) }.getOrNull() }
 
     /**
+     * 启动时把已保存的 OAuth 供应商接回可用的网关。
+     *
+     * 两个必须做的事：
+     *  1. 如果配置里有 OAuth 供应商，就把对应网关拉起来——否则重启 App 后凭据在、
+     *     网关不在，请求全部连不上。
+     *  2. 网关端口可能因为占用而从默认值漂移（8317 → 18317…），供应商里存的是
+     *     授权当时的端口。这里把 baseUrl/apiKey 改写成当前真实值，返回是否有改动，
+     *     调用方据此重启内核让新配置生效。
+     */
+    fun ensureStoredGateways(ctx: Context): Boolean {
+        val list = ProviderStore.load(ctx)
+        val oauth = list.filter { it.origin == ProviderStore.ProviderOrigin.OAUTH && OAuthProviders.byId(it.id) != null }
+        if (oauth.isEmpty()) return false
+        val needWb = oauth.any { OAuthProviders.usesWorkBuddyGateway(it.id) }
+        val needProxy = oauth.any { !OAuthProviders.usesWorkBuddyGateway(it.id) }
+
+        if (needWb && !WorkBuddyGateway.isRunning) {
+            AppLog.i(TAG, "启动时拉起 WorkBuddy 网关")
+            WorkBuddyGateway.start(ctx, { AppLog.i(TAG, "WorkBuddy：$it") })
+        }
+        if (needProxy && !ProxyHost.isRunning) {
+            AppLog.i(TAG, "启动时拉起代理网关")
+            if (ProxyHost.ensureRuntime(ctx, { AppLog.i(TAG, "代理网关：$it") })) {
+                ProxyHost.start(ctx, { AppLog.i(TAG, "代理网关：$it") })
+            }
+        }
+
+        var changed = false
+        for (p in oauth) {
+            val wb = OAuthProviders.usesWorkBuddyGateway(p.id)
+            val ready = if (wb) WorkBuddyGateway.isRunning else ProxyHost.isRunning
+            if (!ready) continue
+            val base = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1"
+            val key = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey()
+            if (p.baseUrl != base || p.apiKey != key) {
+                p.baseUrl = base
+                p.apiKey = key
+                changed = true
+            }
+        }
+        if (changed) ProviderStore.save(ctx, list)
+        return changed
+    }
+
+    /**
      * 把网关上此刻真实可用的模型回填进 ProviderStore。
      *
      * 这一步是必需的：OAuth 落库时 [save] 用的是当时的模型列表，网关还没注册模型时
