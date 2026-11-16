@@ -533,7 +533,9 @@ object OAuthLogin {
             // 后者是真实踩过的坑：两个网关同时在跑时，旧 models() 永远问 CodeBuddy，
             // 于是 Cursor/ZCode 的配置里存了一批 cb- 开头的模型，内核一条也注册不上。
             val mismatched = prefix.isNotEmpty() && p.models.any { !it.startsWith(prefix) }
-            if (p.models.isEmpty() || mismatched) {
+            // 前缀不匹配但内容与网关返回完全一致时不要每次启动都重写：
+            // 有些插件本来就不带前缀，modelsFor 会原样返回；否则每次冷启动都白写一遍配置。
+            if (p.models.isEmpty() || (mismatched && p.models.toSet() != live.toSet())) {
                 p.models = live.distinct().toMutableList()
                 changed++
                 AppLog.i("OAuthLogin", "${p.id} 模型列表${if (mismatched) "纠正" else "回填"} ${p.models.size} 个")

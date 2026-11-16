@@ -21,6 +21,10 @@ object DataBackup {
 
     private const val ENTRY_MANIFEST = "manifest.json"
     private const val ENTRY_PROVIDERS = "provider_config.json"
+    /** Coda 的分类元数据；内核不读，但丢了会把 OAuth 供应商降级成手填条目。 */
+    private const val ENTRY_PROVIDER_META = "coda-provider-meta.json"
+    /** ASR 供应商独立文件；不备份会在换设备后丢掉全部转写配置。 */
+    private const val ENTRY_ASR_PROVIDERS = "coda-asr-providers.json"
     private const val ENTRY_GLOBAL_PROMPT = "prompts/global-AGENTS.md"
     private const val ENTRY_WORKSPACE_PROMPT = "prompts/workspace-AGENTS.md"
 
@@ -56,6 +60,14 @@ object DataBackup {
 
             val providers = ProviderStore.fileFor(ctx)
             if (providers.isFile) putText(ENTRY_PROVIDERS, providers.readText())
+            // 旁路文件必须一起备份：少了 meta，OAuth 供应商会被当成手填条目；
+            // 少了 ASR 文件，换设备后所有转写供应商直接消失。
+            ProviderStore.metaFileFor(ctx).takeIf { it.isFile }?.let {
+                putText(ENTRY_PROVIDER_META, it.readText())
+            }
+            ProviderStore.asrFileFor(ctx).takeIf { it.isFile }?.let {
+                putText(ENTRY_ASR_PROVIDERS, it.readText())
+            }
 
             val global = AgentPrompt.globalFile(ctx)
             if (global.isFile) putText(ENTRY_GLOBAL_PROMPT, global.readText())
@@ -95,6 +107,16 @@ object DataBackup {
                     name == ENTRY_PROVIDERS -> {
                         val f = ProviderStore.fileFor(ctx)
                         f.writeText(String(bytes, Charsets.UTF_8))
+                        count++
+                    }
+
+                    name == ENTRY_PROVIDER_META -> {
+                        ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
+                        count++
+                    }
+
+                    name == ENTRY_ASR_PROVIDERS -> {
+                        ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
                         count++
                     }
 

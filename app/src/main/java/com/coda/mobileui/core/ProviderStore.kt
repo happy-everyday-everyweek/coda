@@ -36,6 +36,13 @@ object ProviderStore {
         var baseUrl: String,
         var apiKey: String,
         var models: MutableList<String>,
+        /**
+         * 该供应商模型的上下文窗口（token）。
+         *
+         * 内核的模型配置是必填项；统一写 200000 会让 128k 模型被塞进过量上下文，
+         * 上游直接报 context length exceeded。允许按供应商调整，默认仍是 200000。
+         */
+        var contextWindow: Int = 200000,
         /** 这条供应商属于哪类模型。老配置缺这两个字段时按 LLM + MANUAL 处理。 */
         var kind: ProviderKind = ProviderKind.LLM,
         /** 这条供应商是怎么加进来的。OAuth 的要在列表里能回到它自己的管理页。 */
@@ -72,6 +79,11 @@ object ProviderStore {
         ) {
             v = "http://$v"
         }
+        // OpenAI 官方端点的版本根是 /v1；用户常只填 https://api.openai.com。
+        // Anthropic 不能套这条规则：内核自己会给它补 /v1。
+        if (v == "https://api.openai.com" || v == "http://api.openai.com") {
+            v += "/v1"
+        }
         val suffixes =
             listOf(
                 "/chat/completions",
@@ -103,20 +115,53 @@ object ProviderStore {
             } else {
                 try {
                     val text = f.readText()
-                    // 旧版本把 Coda 扩展字段写进了内核文件，内核 strict 解析会整份拒绝。
-                    // 这里读出来后立刻重写成干净格式，用户不必手动清数据。
+                    // 先解析成功再判断旧字段：解析失败时若把 marker 置真，
+                    // 下面的「重写干净格式」会把一份坏掉但可能可救的配置直接清空。
+                    val root = JSONObject(text)
+                    val list = parse(root)
                     legacyMarker = text.contains("codaKind") || text.contains("codaOrigin")
-                    parse(JSONObject(text))
+                    list
                 } catch (_: Throwable) {
                     mutableListOf()
                 }
             }
-        applyMeta(ctx, parsed)
-        if (legacyMarker) {
-            AppLog.i("ProviderStore", "检测到带 Coda 扩展字段的旧配置，重写为内核可解析的格式")
-            save(ctx, parsed)
+        // ASR 供应商单独存：它们不该进内核的供应商文件，否则 whisper 这类
+        // 转写模型会被当成聊天模型注册进模型选择器。
+        val combined = parsed.toMutableList()
+        for (asr in readAsr(ctx)) {
+            if (combined.none { it.id == asr.id }) combined += asr
         }
-        return mergeBuiltins(parsed)
+        applyMeta(ctx, combined)
+        // 旧配置里已保存的端点/密钥也要修：用户当初可能贴了完整的
+        // `/v1/chat/completions`，或者本地地址没写 http://，或者密钥留空。
+        // 这些条目在内核里会被跳过；只修新输入的代码救不了已经存在的配置。
+        var repaired = false
+        for (p in combined) {
+            val normalized = normalizeBaseUrl(p.baseUrl)
+            if (normalized != p.baseUrl) {
+                p.baseUrl = normalized
+                repaired = true
+            }
+            if (p.kind == ProviderKind.LLM && p.apiKey.isBlank()) {
+                p.apiKey = "coda-no-key"
+                repaired = true
+            }
+            // 旧版 UI 把 Anthropic 类型写成 "anthropic"，而内核枚举只认
+            // "anthropic-messages"。这个非法值会让内核整份配置解析失败，
+            // 已保存的用户必须在这里就地修正。
+            if (p.apiType == "anthropic") {
+                p.apiType = "anthropic-messages"
+                repaired = true
+            }
+        }
+        // 旧版本把 ASR 也写在内核文件里；检测到就迁移到独立文件，
+        // 否则内核仍会把 whisper 这类模型注册进聊天模型列表。
+        val kernelHasAsr = parsed.any { it.kind == ProviderKind.ASR }
+        if (legacyMarker || kernelHasAsr || repaired) {
+            AppLog.i("ProviderStore", "迁移旧供应商配置：清理 Coda 字段、修端点并把 ASR 移出内核文件")
+            save(ctx, combined)
+        }
+        return mergeBuiltins(combined)
     }
 
     // ------------------------------------------------------------ Coda 侧元数据
@@ -132,12 +177,22 @@ object ProviderStore {
 
     private fun metaFile(ctx: Context): File = File(fileFor(ctx).parentFile, META_FILE)
 
-    private fun readMeta(ctx: Context): Map<String, Pair<ProviderKind, ProviderOrigin>> {
+    /** 备份与诊断需要拿到旁路文件的位置；内核只认 provider_config.json。 */
+    fun metaFileFor(ctx: Context): File = metaFile(ctx)
+
+    /** 旁路元数据：内核不认识的字段都放这里。 */
+    private data class Meta(
+        val kind: ProviderKind,
+        val origin: ProviderOrigin,
+        val contextWindow: Int,
+    )
+
+    private fun readMeta(ctx: Context): Map<String, Meta> {
         val f = metaFile(ctx)
         if (!f.isFile) return emptyMap()
         return runCatching {
             val root = JSONObject(f.readText()).optJSONObject("providers") ?: return emptyMap()
-            val out = mutableMapOf<String, Pair<ProviderKind, ProviderOrigin>>()
+            val out = mutableMapOf<String, Meta>()
             val keys = root.keys()
             while (keys.hasNext()) {
                 val id = keys.next()
@@ -149,7 +204,7 @@ object ProviderStore {
                         "builtin" -> ProviderOrigin.BUILTIN
                         else -> ProviderOrigin.MANUAL
                     }
-                out[id] = kind to origin
+                out[id] = Meta(kind, origin, o.optInt("contextWindow", 200000).coerceAtLeast(1))
             }
             out
         }.getOrDefault(emptyMap())
@@ -175,7 +230,7 @@ object ProviderStore {
                                 ProviderOrigin.BUILTIN -> "builtin"
                                 else -> "manual"
                             },
-                        ),
+                        ).put("contextWindow", p.contextWindow),
                 )
             }
             root.put("providers", items)
@@ -191,8 +246,95 @@ object ProviderStore {
         if (meta.isEmpty()) return
         for (p in providers) {
             val m = meta[p.id] ?: continue
-            p.kind = m.first
-            p.origin = m.second
+            p.kind = m.kind
+            p.origin = m.origin
+            p.contextWindow = m.contextWindow
+        }
+    }
+
+    // ------------------------------------------------------------ ASR 供应商
+    //
+    // 内核的供应商文件只该有语言模型。ASR 供应商（whisper 之类）走的是
+    // AsrClient 自己的转写请求，内核既不认识也不该把它们注册成聊天模型；
+    // 早先混写在一起时，转写模型会出现在模型选择器里，选中后发聊天请求必然失败。
+
+    private const val ASR_FILE = "coda-asr-providers.json"
+
+    private fun asrFile(ctx: Context): File = File(fileFor(ctx).parentFile, ASR_FILE)
+
+    /** 备份需要单独取这份文件：ASR 供应商不在内核配置里。 */
+    fun asrFileFor(ctx: Context): File = asrFile(ctx)
+
+    private fun readAsr(ctx: Context): List<Provider> {
+        val f = asrFile(ctx)
+        if (!f.isFile) return emptyList()
+        return runCatching {
+            val root = JSONObject(f.readText())
+            val arr = root.optJSONArray("providers") ?: return emptyList()
+            val out = mutableListOf<Provider>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("id")
+                if (id.isEmpty()) continue
+                val models = mutableListOf<String>()
+                o.optJSONArray("models")?.let { a ->
+                    for (j in 0 until a.length()) {
+                        val m = a.optString(j)
+                        if (m.isNotEmpty()) models += m
+                    }
+                }
+                out +=
+                    Provider(
+                        id = id,
+                        name = o.optString("name").ifEmpty { id },
+                        apiType = o.optString("apiType").ifEmpty { "openai-chat-completions" },
+                        baseUrl = o.optString("baseUrl"),
+                        apiKey = o.optString("apiKey"),
+                        models = models,
+                        kind = ProviderKind.ASR,
+                        origin = ProviderOrigin.MANUAL,
+                    )
+            }
+            out
+        }.getOrDefault(emptyList())
+    }
+
+    private fun writeAsr(
+        ctx: Context,
+        providers: List<Provider>,
+    ) {
+        val arr = JSONArray()
+        for (p in providers) {
+            val modelArray = JSONArray()
+            p.models.forEach { modelArray.put(it) }
+            arr.put(
+                JSONObject()
+                    .put("id", p.id)
+                    .put("name", p.name)
+                    .put("apiType", p.apiType)
+                    .put("baseUrl", p.baseUrl)
+                    .put("apiKey", p.apiKey)
+                    .put("models", modelArray),
+            )
+        }
+        writeTextAtomic(asrFile(ctx), JSONObject().put("providers", arr).toString(2))
+    }
+
+    /** 先写临时文件再改名：内核可能正在读同一份配置，不能让它看到半截 JSON。 */
+    private fun writeTextAtomic(
+        target: File,
+        text: String,
+    ) {
+        runCatching {
+            target.parentFile?.mkdirs()
+            val tmp = File(target.parentFile, target.name + ".tmp")
+            tmp.writeText(text)
+            if (!tmp.renameTo(target)) {
+                target.writeText(text)
+                tmp.delete()
+            }
+        }.onFailure {
+            AppLog.w("ProviderStore", "写 ${target.name} 失败：${it.message ?: it.javaClass.simpleName}")
         }
     }
 
@@ -296,7 +438,10 @@ object ProviderStore {
         val order = JSONArray()
         // 内置 provider 不落盘：它由 code 定义，写进配置会在升级后留下过期副本，
         // 也会让用户以为能改能删。这里统一过滤掉。
-        val persist = providers.filter { !isBuiltin(it) }
+        val all = providers.filter { !isBuiltin(it) }
+        // ASR 与 LLM 分家：ASR 不进内核文件，避免转写模型被注册成聊天模型。
+        val asr = all.filter { it.kind == ProviderKind.ASR }
+        val persist = all.filter { it.kind == ProviderKind.LLM }
         persist.forEach { order.put(it.id) }
         config.put("providerOrder", order)
         val prules = JSONArray()
@@ -333,7 +478,7 @@ object ProviderStore {
                 // 结果是「模型在列表里、却选不了/一发就报不可用」。
                 val props = JSONObject()
                 props.put("requiresMfjsToolSchema", false)
-                props.put("contextWindow", 200000)
+                props.put("contextWindow", p.contextWindow.coerceAtLeast(1))
                 val inputFormat = JSONObject()
                 inputFormat.put("supportsText", true)
                 inputFormat.put("supportsImage", false)
@@ -373,17 +518,8 @@ object ProviderStore {
         root.put("config", config)
         // 原子替换：内核可能正好在这次写盘期间读取配置，直接 writeText 会让它读到
         // 半截 JSON，strict 解析失败后当作「没有任何供应商」，模型列表瞬间全空。
-        runCatching {
-            val target = fileFor(ctx)
-            val tmp = File(target.parentFile, target.name + ".tmp")
-            tmp.writeText(root.toString(2))
-            if (!tmp.renameTo(target)) {
-                target.writeText(root.toString(2))
-                tmp.delete()
-            }
-        }.onFailure {
-            AppLog.w("ProviderStore", "写供应商配置失败：${it.message ?: it.javaClass.simpleName}")
-        }
-        writeMeta(ctx, providers)
+        writeTextAtomic(fileFor(ctx), root.toString(2))
+        writeAsr(ctx, asr)
+        writeMeta(ctx, all)
     }
 }

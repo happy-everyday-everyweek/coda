@@ -2487,6 +2487,7 @@ class SettingsDetailActivity :
             rows += SettingRow.Header("通用格式")
             rows += SettingRow.Value("OpenAI 兼容", "", "add_openai")
             rows += SettingRow.Value("Anthropic 兼容", "", "add_anthropic")
+            rows += SettingRow.Value("OpenAI Responses", "", "add_openai_responses")
             rows += SettingRow.Header("OAuth 授权")
             rows += SettingRow.Value("OAuth 登录", "", "add_oauth")
             SettingsViewBuilder.render(
@@ -2512,8 +2513,13 @@ class SettingsDetailActivity :
                             when (key) {
                                 // 这三条都在同一张卡片里换页（navigate），沿用项目统一的过渡动画，
                                 // 不再 dismiss 再另开——那样会出现关-开两个动画互相抢同一层。
-                                "add_openai", "add_anthropic" -> {
-                                    val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
+                                "add_openai", "add_anthropic", "add_openai_responses" -> {
+                                    val t =
+                                        when (key) {
+                                            "add_anthropic" -> "anthropic-messages"
+                                            "add_openai_responses" -> "openai-responses"
+                                            else -> "openai-chat-completions"
+                                        }
                                     showProviderEditor(sheet, null, t, providerKind)
                                 }
 
@@ -2630,6 +2636,13 @@ class SettingsDetailActivity :
                 setText(existing?.models?.joinToString(",") ?: "")
             }
 
+        val contextInput =
+            EditText(this).apply {
+                hint = "上下文窗口（tokens），如 128000；默认 200000"
+                setText((existing?.contextWindow ?: 200000).toString())
+                inputType = InputType.TYPE_CLASS_NUMBER
+            }
+
         sheet.navigate {
             title(
                 when {
@@ -2646,6 +2659,7 @@ class SettingsDetailActivity :
                 col.addView(urlInput)
                 col.addView(keyInput)
                 col.addView(modelsInput)
+                if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(contextInput)
             }
             primaryAction("保存") { s ->
                 val id = idInput.text.toString().trim()
@@ -2679,6 +2693,13 @@ class SettingsDetailActivity :
                                     .trim()
                                     .ifEmpty { "coda-no-key" },
                             models = models,
+                            contextWindow =
+                                contextInput.text
+                                    .toString()
+                                    .trim()
+                                    .toIntOrNull()
+                                    ?.coerceAtLeast(1)
+                                    ?: 200000,
                             kind = kindOfRecord,
                             origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
                         ),
@@ -2712,6 +2733,7 @@ class SettingsDetailActivity :
             rows += SettingRow.Header("通用格式")
             rows += SettingRow.Value("OpenAI 兼容", "chat/completions 格式，最常见的端点", "add_openai")
             rows += SettingRow.Value("Anthropic 兼容", "messages 格式", "add_anthropic")
+            rows += SettingRow.Value("OpenAI Responses", "responses 格式", "add_openai_responses")
             rows += SettingRow.Header("OAuth 授权")
             rows += SettingRow.Value("OAuth 登录", "扫码或跳转授权，凭据由本机网关托管", "add_oauth")
             SettingsViewBuilder.render(
@@ -2729,8 +2751,13 @@ class SettingsDetailActivity :
 
                         override fun onValueClick(key: String) {
                             when (key) {
-                                "add_openai", "add_anthropic" -> {
-                                    val t = if (key == "add_anthropic") "anthropic" else "openai-chat-completions"
+                                "add_openai", "add_anthropic", "add_openai_responses" -> {
+                                    val t =
+                                        when (key) {
+                                            "add_anthropic" -> "anthropic-messages"
+                                            "add_openai_responses" -> "openai-responses"
+                                            else -> "openai-chat-completions"
+                                        }
                                     showProviderEditor(sheet, null, t, providerKind)
                                 }
 
@@ -2795,6 +2822,12 @@ class SettingsDetailActivity :
                     }
                 setText(existing?.models?.joinToString(",") ?: "")
             }
+        val contextInput =
+            EditText(this).apply {
+                hint = "上下文窗口（tokens），如 128000；默认 200000"
+                setText((existing?.contextWindow ?: 200000).toString())
+                inputType = InputType.TYPE_CLASS_NUMBER
+            }
         // 接口类型不再让用户手填：路由已经按类型决定了，多一个输入框只会被填错。
         // 仍然留一行只读展示，方便排查。
         val apiTypeLabel =
@@ -2826,6 +2859,7 @@ class SettingsDetailActivity :
             col.addView(urlInput)
             col.addView(keyInput)
             col.addView(modelsInput)
+            if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(contextInput)
             // ASR 供应商多一个测试入口：录一段音直接打这个端点，
             // 把识别结果或失败原因就地显示。聊天框不接这条通路，
             // 所以这是唯一能验证配置是否可用的地方。
@@ -2883,6 +2917,13 @@ class SettingsDetailActivity :
                                     .trim()
                                     .ifEmpty { "coda-no-key" },
                             models = models,
+                            contextWindow =
+                                contextInput.text
+                                    .toString()
+                                    .trim()
+                                    .toIntOrNull()
+                                    ?.coerceAtLeast(1)
+                                    ?: 200000,
                             kind = kindOfRecord,
                             origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
                         )
@@ -2925,6 +2966,13 @@ class SettingsDetailActivity :
                                 .trim()
                                 .ifEmpty { "coda-no-key" },
                         models = models,
+                        contextWindow =
+                            contextInput.text
+                                .toString()
+                                .trim()
+                                .toIntOrNull()
+                                ?.coerceAtLeast(1)
+                                ?: 200000,
                         kind = kindOfRecord,
                         // 手填的一律是 MANUAL；OAuth 的那条由 OAuthLogin 落库时自己标 OAUTH，
                         // 这里覆盖掉会把它降级成普通供应商，所以保留原值。

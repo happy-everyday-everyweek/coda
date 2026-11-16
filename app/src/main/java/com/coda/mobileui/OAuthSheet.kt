@@ -710,8 +710,16 @@ class OAuthSheet(
         // 内核只在启动时读一次 provider_config.json。不重启它，新供应商与它的模型
         // 就不会进 settings.model.available —— 界面表现是「核心运行中，但模型列表里
         // 没有刚授权的那家」，而且重启应用后才突然出现，极难复现。
-        ZController.get(host).restartCore { ok, msg ->
-            if (!ok) AppLog.w("OAuthSheet", "授权后重启内核失败：$msg")
+        //
+        // 冷启动或正在解包时不能直接 restartCore：那会与首次 ensureStarted 抢时序，
+        // 重启请求可能先到、首次启动后到，结果又回到旧配置。ensureStarted 会在这里
+        // 排队，等当前启动结束后再重启。内核根本没起过则无需重启，它下次启动自然读新文件。
+        val controller = ZController.get(host)
+        if (!controller.runtime.isRunning && !controller.runtime.isStarting) return
+        controller.ensureStarted { _, _ ->
+            controller.restartCore { ok, msg ->
+                if (!ok) AppLog.w("OAuthSheet", "授权后重启内核失败：$msg")
+            }
         }
     }
 

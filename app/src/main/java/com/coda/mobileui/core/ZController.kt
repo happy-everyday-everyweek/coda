@@ -991,8 +991,7 @@ class ZController private constructor(
                     }
                     changed = true
                 } else if (modelOptions.isEmpty() && !runtime.isRunning) {
-                    // 内核这次回了空清单（常见于只配了本地网关 / OAuth，还没下发模型）：
-                    // 用本地供应商配置兜底，否则面板永远显示“暂无可用模型”。
+                    // 内核没起：本地清单只用于离线挑一个默认值，不代表真的可用。
                     val local = configModelOptions()
                     if (local.isNotEmpty()) {
                         post {
@@ -1000,6 +999,14 @@ class ZController private constructor(
                             notif { onStateChanged() }
                         }
                         changed = true
+                    }
+                } else if (runtime.isRunning && modelOptions.isNotEmpty()) {
+                    // 内核在跑但这次明确返回空：说明当前配置没有被接受。
+                    // 保留旧清单会让面板继续显示已经不可用的模型，用户选了也发不出去；
+                    // 清空并让上层提示「已配置但内核未返回模型」才是真实状态。
+                    post {
+                        modelOptions = emptyList()
+                        notif { onStateChanged() }
                     }
                 }
             }
