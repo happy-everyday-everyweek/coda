@@ -25,11 +25,11 @@ object DataBackup {
     /**
      * files 目录下不备份的顶层项。
      *
-     * core 与 linux 是内核载荷和 Alpine 根文件系统，装包或首次启动会重新释放，
-     * 备份它们只会让 zip 多出几百 MB。其余目录（会话、Bot、搜索索引、网关状态、
-     * 工作区元数据等）都属于用户状态，必须完整带走。
+     * core 是内核载荷，装包或首次启动会按清单重新释放；tmp 是临时目录。
+     * 其余目录全部带走，包括 linux 根文件系统——终端里装过的包、网关凭据与
+     * 代理配置都在里面，不带就无法恢复到原状。
      */
-    private val SKIP_FILES_TOP = setOf("core", "linux", "tmp", "cache")
+    private val SKIP_FILES_TOP = setOf("core", "tmp", "cache")
 
     private const val ENTRY_MANIFEST = "manifest.json"
     private const val ENTRY_PROVIDERS = "provider_config.json"
@@ -104,13 +104,9 @@ object DataBackup {
                 putText(ENTRY_ASR_PROVIDERS, it.readText())
             }
 
-            // 用户状态目录：除可重新释放的内核载荷与 Linux 根文件系统外全带走。
+            // 用户状态目录：除可重新释放的内核载荷外全带走，linux 根文件系统也在内。
             ctx.filesDir.listFiles()?.forEach { top ->
                 if (top.name !in SKIP_FILES_TOP) addTree("files/${top.name}", top)
-            }
-            // 网关凭据在 rootfs 的 .coda 子树里；整份 rootfs 太大，只带这一棵。
-            File(LinuxEnv(ctx).rootfs, "root/.coda").takeIf { it.exists() }?.let {
-                addTree("linux-coda", it)
             }
             // 应用数据库（若存在）不属于 filesDir，需要单独收。
             File(ctx.filesDir.parentFile, "databases").takeIf { it.exists() }?.let {
