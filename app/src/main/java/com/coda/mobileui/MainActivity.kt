@@ -469,6 +469,9 @@ class MainActivity : BaseActivity() {
             }
         }
         ensureShizukuAccessibility()
+        // OAuth 供应商落库时若网关还没注册模型，清单会是空的；启动后补一次对账，
+        // 顺手纠正历史上被「串网关」写进来的别家模型。
+        Thread { runCatching { com.coda.mobileui.core.OAuthLogin.refreshStoredModels(this) } }.start()
         updateSendAvailability()
         setupSendMode()
         attachScroll = findViewById(R.id.attach_scroll)
@@ -5287,10 +5290,11 @@ class MainActivity : BaseActivity() {
                 modelFetching = false
                 if (ok) {
                     runOnUiThread {
-                        // 只刷新模型列表，不整卡重建：
-                        // 整卡重建会重置滑杆档位（表现为点一下闪回），
-                        // 而且重建后再走进本方法会无限循环拉取+重建，
-                        // 卡片一直在重新 inflate，点击就永远落不到它上面。
+                        refreshModelItems?.invoke()
+                    }
+                } else {
+                    // 拉取失败也刷一次：可能刚被本地供应商配置兜底填上了。
+                    runOnUiThread {
                         refreshModelItems?.invoke()
                     }
                 }

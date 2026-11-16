@@ -326,6 +326,9 @@ object OAuthLogin {
         models: List<String>,
     ) {
         val wb = OAuthProviders.usesWorkBuddyGateway(provider.id)
+        // 去空、去重：网关偶尔把同一模型注册两次（多账号各注册一份），
+        // 重复项会让内核的模型下拉出现两行一样的名字。
+        val clean = models.filter { it.isNotBlank() }.distinct()
         val list = ProviderStore.load(ctx)
         list.removeAll { it.id == provider.id }
         list +=
@@ -337,7 +340,7 @@ object OAuthLogin {
                 baseUrl = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1",
                 // 网关对下游的密钥；宿主用同一个管理密钥即可，本机回环不外露。
                 apiKey = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey(),
-                models = models.toMutableList(),
+                models = clean.toMutableList(),
                 // 关键：标成 OAuth 来源。列表页据此把它认作「OAuth 添加的供应商」，
                 // 点进去直接回到对应平台的管理页，而不是甩一堆手填字段给它看。
                 // 不标记的话，落库后就是一条普通 api-key 供应商，用户会觉得「我明明是授权登录的」。
@@ -361,16 +364,48 @@ object OAuthLogin {
                 WorkBuddyGateway.isRunning -> panelJsonObject(ctx, "/v1/models", "GET")
                 else -> ProxyHost.clientJson(ctx, "/v1/models")
             } ?: return emptyList()
+        return readModelIds(body)
+    }
+
+    /** 从 `/v1/models` 的两种形状里读出模型 id 列表。 */
+    private fun readModelIds(body: JSONObject): List<String> {
         val array = body.optJSONArray("data") ?: body.optJSONArray("models") ?: return emptyList()
         val out = mutableListOf<String>()
         for (i in 0 until array.length()) {
-            val item = array.opt(i)
-            when (item) {
+            when (val item = array.opt(i)) {
                 is String -> out += item
                 is JSONObject -> item.optString("id").takeIf { it.isNotEmpty() }?.let { out += it }
             }
         }
         return out
+    }
+
+    /**
+     * 取**指定供应商**在它自己那台网关上的模型。
+     *
+     * 不能用 [models]：那个函数只看哪个网关在跑，两个网关同时活着时
+     * 永远优先 CodeBuddy。授权 Cursor 却把 CodeBuddy 的模型写进 Cursor 的
+     * provider 配置，内核按 providerId/modelId 注册时一条都对不上，
+     * 表现就是「供应商在、模型列表空」。
+     */
+    fun modelsFor(
+        ctx: Context,
+        provider: OAuthProviders.Provider,
+    ): List<String> {
+        val raw =
+            if (OAuthProviders.usesWorkBuddyGateway(provider.id)) {
+                if (!WorkBuddyGateway.isRunning) return emptyList()
+                panelJsonObject(ctx, "/v1/models", "GET")?.let { readModelIds(it) }.orEmpty()
+            } else {
+                if (!ProxyHost.isRunning) return emptyList()
+                ProxyHost.clientJson(ctx, "/v1/models")?.let { readModelIds(it) }.orEmpty()
+            }
+        // 插件按自家前缀注册模型；网关里同时挂着别家账号时不能全收。
+        val prefix = OAuthProviders.modelPrefix(provider)
+        return raw.filter { it.startsWith(prefix) }.ifEmpty {
+            // 有些插件不带前缀。只有一家网关、一轮登录时还算安全，带上全量比空好。
+            raw
+        }
     }
 
     // ---------- WorkBuddy 网关的 HTTP 调用 ----------
@@ -446,6 +481,39 @@ object OAuthLogin {
         path: String,
         method: String,
     ): JSONObject? = panelJson(ctx, path, method)?.let { runCatching { JSONObject(it) }.getOrNull() }
+
+    /**
+     * 把网关上此刻真实可用的模型回填进 ProviderStore。
+     *
+     * 这一步是必需的：OAuth 落库时 [save] 用的是当时的模型列表，网关还没注册模型时
+     * 会是空数组；之后不刷新，内核的 modelConfigRules 里就永远没有这家供应商的模型，
+     * 面板表现就是「供应商在、模型列表空」。手动兼容供应商不受影响。
+     *
+     * 只回填空模型列表，已有列表不覆盖：用户可能手动改过名字/顺序。
+     * 返回被回填的供应商数量。
+     */
+    fun refreshStoredModels(ctx: Context): Int {
+        val list = ProviderStore.load(ctx)
+        var changed = 0
+        for (p in list) {
+            if (p.kind != ProviderStore.ProviderKind.LLM) continue
+            val provider = OAuthProviders.byId(p.id) ?: continue
+            val live = modelsFor(ctx, provider)
+            if (live.isEmpty()) continue
+            val prefix = OAuthProviders.modelPrefix(provider)
+            // 两种要修：空清单；以及历史串号留下的「别家前缀」清单。
+            // 后者是真实踩过的坑：两个网关同时在跑时，旧 models() 永远问 CodeBuddy，
+            // 于是 Cursor/ZCode 的配置里存了一批 cb- 开头的模型，内核一条也注册不上。
+            val mismatched = prefix.isNotEmpty() && p.models.any { !it.startsWith(prefix) }
+            if (p.models.isEmpty() || mismatched) {
+                p.models = live.distinct().toMutableList()
+                changed++
+                AppLog.i("OAuthLogin", "${p.id} 模型列表${if (mismatched) "纠正" else "回填"} ${p.models.size} 个")
+            }
+        }
+        if (changed > 0) ProviderStore.save(ctx, list)
+        return changed
+    }
 
     /** 从 ProviderStore 里认出哪些是 OAuth 供应商（按 id 与注册表对应）。 */
     fun oauthProvidersInStore(ctx: Context): List<ProviderStore.Provider> =

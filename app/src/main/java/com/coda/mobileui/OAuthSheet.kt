@@ -582,7 +582,7 @@ class OAuthSheet(
         column.addView(status)
 
         Thread {
-            val list = OAuthLogin.models(host)
+            val list = OAuthLogin.modelsFor(host, provider)
             main.post {
                 models = list
                 status.text =
