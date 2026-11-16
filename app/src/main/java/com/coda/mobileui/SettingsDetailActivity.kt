@@ -2642,6 +2642,11 @@ class SettingsDetailActivity :
                 setText((existing?.contextWindow ?: 200000).toString())
                 inputType = InputType.TYPE_CLASS_NUMBER
             }
+        val imageBox = android.widget.CheckBox(this).apply { text = "支持图片输入"; isChecked = existing?.supportsImage ?: true }
+        val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = existing?.supportsVideo ?: false }
+        val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = existing?.supportsAudio ?: false }
+        val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = existing?.supportsPdf ?: true }
+
 
         sheet.navigate {
             title(
@@ -2660,6 +2665,10 @@ class SettingsDetailActivity :
                 col.addView(keyInput)
                 col.addView(modelsInput)
                 if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(contextInput)
+                if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(imageBox)
+                if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(videoBox)
+                if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(audioBox)
+                if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(pdfBox)
             }
             primaryAction("保存") { s ->
                 val id = idInput.text.toString().trim()
@@ -2700,6 +2709,10 @@ class SettingsDetailActivity :
                                     .toIntOrNull()
                                     ?.coerceAtLeast(1)
                                     ?: 200000,
+                            supportsImage = imageBox.isChecked,
+                            supportsVideo = videoBox.isChecked,
+                            supportsAudio = audioBox.isChecked,
+                            supportsPdf = pdfBox.isChecked,
                             kind = kindOfRecord,
                             origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
                         ),
@@ -2828,6 +2841,11 @@ class SettingsDetailActivity :
                 setText((existing?.contextWindow ?: 200000).toString())
                 inputType = InputType.TYPE_CLASS_NUMBER
             }
+        val imageBox = android.widget.CheckBox(this).apply { text = "支持图片输入"; isChecked = existing?.supportsImage ?: true }
+        val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = existing?.supportsVideo ?: false }
+        val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = existing?.supportsAudio ?: false }
+        val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = existing?.supportsPdf ?: true }
+
         // 接口类型不再让用户手填：路由已经按类型决定了，多一个输入框只会被填错。
         // 仍然留一行只读展示，方便排查。
         val apiTypeLabel =
@@ -2860,6 +2878,10 @@ class SettingsDetailActivity :
             col.addView(keyInput)
             col.addView(modelsInput)
             if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(contextInput)
+            if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(imageBox)
+            if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(videoBox)
+            if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(audioBox)
+            if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(pdfBox)
             // ASR 供应商多一个测试入口：录一段音直接打这个端点，
             // 把识别结果或失败原因就地显示。聊天框不接这条通路，
             // 所以这是唯一能验证配置是否可用的地方。
@@ -2924,6 +2946,10 @@ class SettingsDetailActivity :
                                     .toIntOrNull()
                                     ?.coerceAtLeast(1)
                                     ?: 200000,
+                            supportsImage = imageBox.isChecked,
+                            supportsVideo = videoBox.isChecked,
+                            supportsAudio = audioBox.isChecked,
+                            supportsPdf = pdfBox.isChecked,
                             kind = kindOfRecord,
                             origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
                         )
@@ -2973,6 +2999,10 @@ class SettingsDetailActivity :
                                 .toIntOrNull()
                                 ?.coerceAtLeast(1)
                                 ?: 200000,
+                        supportsImage = imageBox.isChecked,
+                        supportsVideo = videoBox.isChecked,
+                        supportsAudio = audioBox.isChecked,
+                        supportsPdf = pdfBox.isChecked,
                         kind = kindOfRecord,
                         // 手填的一律是 MANUAL；OAuth 的那条由 OAuthLogin 落库时自己标 OAUTH，
                         // 这里覆盖掉会把它降级成普通供应商，所以保留原值。
@@ -3657,6 +3687,7 @@ class SettingsDetailActivity :
                 hint = "超时毫秒，可选，默认 60000"
                 inputType = InputType.TYPE_CLASS_NUMBER
             }
+
         val sheet =
             CodaSheet(this)
                 .title("添加钩子 · $event")

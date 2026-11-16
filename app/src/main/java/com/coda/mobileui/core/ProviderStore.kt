@@ -43,6 +43,14 @@ object ProviderStore {
          * 上游直接报 context length exceeded。允许按供应商调整，默认仍是 200000。
          */
         var contextWindow: Int = 200000,
+        /** 该供应商模型是否接受图片输入。 */
+        var supportsImage: Boolean = true,
+        /** 是否接受视频输入。多数聊天端点不支持，默认关。 */
+        var supportsVideo: Boolean = false,
+        /** 是否接受音频输入。 */
+        var supportsAudio: Boolean = false,
+        /** 是否接受 PDF 输入。 */
+        var supportsPdf: Boolean = true,
         /** 这条供应商属于哪类模型。老配置缺这两个字段时按 LLM + MANUAL 处理。 */
         var kind: ProviderKind = ProviderKind.LLM,
         /** 这条供应商是怎么加进来的。OAuth 的要在列表里能回到它自己的管理页。 */
@@ -185,6 +193,10 @@ object ProviderStore {
         val kind: ProviderKind,
         val origin: ProviderOrigin,
         val contextWindow: Int,
+        val supportsImage: Boolean,
+        val supportsVideo: Boolean,
+        val supportsAudio: Boolean,
+        val supportsPdf: Boolean,
     )
 
     private fun readMeta(ctx: Context): Map<String, Meta> {
@@ -204,7 +216,16 @@ object ProviderStore {
                         "builtin" -> ProviderOrigin.BUILTIN
                         else -> ProviderOrigin.MANUAL
                     }
-                out[id] = Meta(kind, origin, o.optInt("contextWindow", 200000).coerceAtLeast(1))
+                out[id] =
+                    Meta(
+                        kind = kind,
+                        origin = origin,
+                        contextWindow = o.optInt("contextWindow", 200000).coerceAtLeast(1),
+                        supportsImage = o.optBoolean("supportsImage", true),
+                        supportsVideo = o.optBoolean("supportsVideo", false),
+                        supportsAudio = o.optBoolean("supportsAudio", false),
+                        supportsPdf = o.optBoolean("supportsPdf", true),
+                    )
             }
             out
         }.getOrDefault(emptyMap())
@@ -230,7 +251,11 @@ object ProviderStore {
                                 ProviderOrigin.BUILTIN -> "builtin"
                                 else -> "manual"
                             },
-                        ).put("contextWindow", p.contextWindow),
+                        ).put("contextWindow", p.contextWindow)
+                        .put("supportsImage", p.supportsImage)
+                        .put("supportsVideo", p.supportsVideo)
+                        .put("supportsAudio", p.supportsAudio)
+                        .put("supportsPdf", p.supportsPdf),
                 )
             }
             root.put("providers", items)
@@ -249,6 +274,10 @@ object ProviderStore {
             p.kind = m.kind
             p.origin = m.origin
             p.contextWindow = m.contextWindow
+            p.supportsImage = m.supportsImage
+            p.supportsVideo = m.supportsVideo
+            p.supportsAudio = m.supportsAudio
+            p.supportsPdf = m.supportsPdf
         }
     }
 
@@ -481,10 +510,10 @@ object ProviderStore {
                 props.put("contextWindow", p.contextWindow.coerceAtLeast(1))
                 val inputFormat = JSONObject()
                 inputFormat.put("supportsText", true)
-                inputFormat.put("supportsImage", false)
-                inputFormat.put("supportsVideo", false)
-                inputFormat.put("supportsAudio", false)
-                inputFormat.put("supportsPdf", false)
+                inputFormat.put("supportsImage", p.supportsImage)
+                inputFormat.put("supportsVideo", p.supportsVideo)
+                inputFormat.put("supportsAudio", p.supportsAudio)
+                inputFormat.put("supportsPdf", p.supportsPdf)
                 props.put("inputFormat", inputFormat)
                 props.put("outputFormat", JSONObject().put("supportsText", true))
                 props.put("supportsToolCall", true)

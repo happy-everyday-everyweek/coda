@@ -5,6 +5,9 @@ import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -17,7 +20,16 @@ import java.util.zip.ZipOutputStream
  */
 object DataBackup {
     /** 备份格式版本。 */
-    private const val SCHEMA = 1
+    private const val SCHEMA = 2
+
+    /**
+     * files 目录下不备份的顶层项。
+     *
+     * core 与 linux 是内核载荷和 Alpine 根文件系统，装包或首次启动会重新释放，
+     * 备份它们只会让 zip 多出几百 MB。其余目录（会话、Bot、搜索索引、网关状态、
+     * 工作区元数据等）都属于用户状态，必须完整带走。
+     */
+    private val SKIP_FILES_TOP = setOf("core", "linux", "tmp", "cache")
 
     private const val ENTRY_MANIFEST = "manifest.json"
     private const val ENTRY_PROVIDERS = "provider_config.json"
@@ -47,8 +59,33 @@ object DataBackup {
                 count++
             }
 
-            // 设置：逐项带类型标记保存，导入时按原类型写回，不会把数字变成字符串。
-            PREFS.forEach { name ->
+            fun putFile(
+                name: String,
+                file: File,
+            ) {
+                zip.putNextEntry(ZipEntry(name))
+                file.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+                count++
+            }
+
+            fun addTree(
+                entry: String,
+                file: File,
+            ) {
+                if (file.isFile) {
+                    putFile(entry, file)
+                    return
+                }
+                file.listFiles()?.forEach { child -> addTree("$entry/${child.name}", child) }
+            }
+
+            // 设置：收集全部 SharedPreferences，而不只是内置的两份。
+            val prefNames = LinkedHashSet(PREFS)
+            File(ctx.filesDir.parentFile, "shared_prefs")
+                .listFiles { f -> f.isFile && f.name.endsWith(".xml") }
+                ?.forEach { prefNames += it.name.removeSuffix(".xml") }
+            prefNames.forEach { name ->
                 val obj = JSONObject()
                 ctx.getSharedPreferences(name, Context.MODE_PRIVATE).all.forEach { (k, v) ->
                     obj.put(k, encode(v))
@@ -65,6 +102,19 @@ object DataBackup {
             }
             ProviderStore.asrFileFor(ctx).takeIf { it.isFile }?.let {
                 putText(ENTRY_ASR_PROVIDERS, it.readText())
+            }
+
+            // 用户状态目录：除可重新释放的内核载荷与 Linux 根文件系统外全带走。
+            ctx.filesDir.listFiles()?.forEach { top ->
+                if (top.name !in SKIP_FILES_TOP) addTree("files/${top.name}", top)
+            }
+            // 网关凭据在 rootfs 的 .coda 子树里；整份 rootfs 太大，只带这一棵。
+            File(LinuxEnv(ctx).rootfs, "root/.coda").takeIf { it.exists() }?.let {
+                addTree("linux-coda", it)
+            }
+            // 应用数据库（若存在）不属于 filesDir，需要单独收。
+            File(ctx.filesDir.parentFile, "databases").takeIf { it.exists() }?.let {
+                addTree("databases", it)
             }
 
             val global = AgentPrompt.globalFile(ctx)
@@ -95,38 +145,83 @@ object DataBackup {
             var entry: ZipEntry? = zip.nextEntry
             while (entry != null) {
                 val name = entry.name
-                val bytes = zip.readBytes()
                 when {
-                    name.startsWith("prefs/") && name.endsWith(".json") -> {
-                        applyPrefs(ctx, name.removePrefix("prefs/").removeSuffix(".json"), JSONObject(String(bytes, Charsets.UTF_8)))
+                    // 目录条目走流式恢复，避免把工作区里的大文件整个读进内存。
+                    name.startsWith("files/") -> {
+                        restoreEntry(File(ctx.filesDir, ""), name.removePrefix("files/"), zip)
                         count++
                     }
 
-                    name == ENTRY_PROVIDERS -> {
-                        val f = ProviderStore.fileFor(ctx)
-                        f.writeText(String(bytes, Charsets.UTF_8))
+                    name.startsWith("linux-coda/") -> {
+                        restoreEntry(File(LinuxEnv(ctx).rootfs, "root/.coda"), name.removePrefix("linux-coda/"), zip)
                         count++
                     }
 
-                    name == ENTRY_PROVIDER_META -> { ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)); count++ }
-
-                    name == ENTRY_ASR_PROVIDERS -> { ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)); count++ }
-
-                    name == ENTRY_GLOBAL_PROMPT -> {
-                        AgentPrompt.save(AgentPrompt.globalFile(ctx), String(bytes, Charsets.UTF_8))
+                    name.startsWith("databases/") -> {
+                        restoreEntry(File(ctx.filesDir.parentFile, "databases"), name.removePrefix("databases/"), zip)
                         count++
                     }
 
-                    name == ENTRY_WORKSPACE_PROMPT -> {
-                        AgentPrompt.save(AgentPrompt.workspaceFile(ctx), String(bytes, Charsets.UTF_8))
-                        count++
+                    else -> {
+                        val bytes = zip.readBytes()
+                        when {
+                            name.startsWith("prefs/") && name.endsWith(".json") -> {
+                                applyPrefs(
+                                    ctx,
+                                    name.removePrefix("prefs/").removeSuffix(".json"),
+                                    JSONObject(String(bytes, Charsets.UTF_8)),
+                                )
+                                count++
+                            }
+
+                            name == ENTRY_PROVIDERS -> {
+                                val f = ProviderStore.fileFor(ctx)
+                                f.writeText(String(bytes, Charsets.UTF_8))
+                                count++
+                            }
+
+                            name == ENTRY_PROVIDER_META -> { ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)); count++ }
+
+                            name == ENTRY_ASR_PROVIDERS -> { ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)); count++ }
+
+                            name == ENTRY_GLOBAL_PROMPT -> {
+                                AgentPrompt.save(AgentPrompt.globalFile(ctx), String(bytes, Charsets.UTF_8))
+                                count++
+                            }
+
+                            name == ENTRY_WORKSPACE_PROMPT -> {
+                                AgentPrompt.save(AgentPrompt.workspaceFile(ctx), String(bytes, Charsets.UTF_8))
+                                count++
+                            }
+                        }
                     }
                 }
                 zip.closeEntry()
                 entry = zip.nextEntry
             }
         }
+        // 恢复后让 ProviderStore 重新读一次：旧备份可能带 coda 字段或非法类型，
+        // 这一读会把它们就地迁移成内核可接受的新格式。
+        runCatching { ProviderStore.load(ctx) }
         return count
+    }
+
+    /**
+     * 把 zip 当前条目流式写到 [base] 下的 [rel]。
+     *
+     * 必须做路径校验：zip 里的相对路径可以带 `..`，直接拼会写到应用私有目录之外。
+     */
+    private fun restoreEntry(
+        base: File,
+        rel: String,
+        input: InputStream,
+    ) {
+        if (rel.isBlank()) return
+        val root = base.canonicalFile
+        val target = File(base, rel).canonicalFile
+        if (target != root && !target.path.startsWith(root.path + File.separator)) return
+        target.parentFile?.mkdirs()
+        FileOutputStream(target).use { out -> input.copyTo(out) }
     }
 
     /** 当前可备份内容的说明，用于设置页展示。 */
