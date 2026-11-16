@@ -463,9 +463,9 @@ class MainActivity : BaseActivity() {
             object : rikka.shizuku.Shizuku.OnRequestPermissionResultListener {
                 override fun onRequestPermissionResult(
                     requestCode: Int,
-                    grantResults: IntArray,
+                    grantResult: Int,
                 ) {
-                    if (com.coda.mobileui.core.ShizukuShell.handlePermissionResult(requestCode, grantResults)) {
+                    if (com.coda.mobileui.core.ShizukuShell.handlePermissionResult(requestCode, intArrayOf(grantResult))) {
                         enableOwnAccessibilityViaShizuku()
                     }
                 }

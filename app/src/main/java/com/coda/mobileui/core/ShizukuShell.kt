@@ -38,7 +38,22 @@ object ShizukuShell {
         if (!isReady()) return Result.failure(IllegalStateException("Shizuku 未授权"))
         return runCatching {
             // 合并 stderr 后再读：避免两个管道各自缓冲导致 waitFor 卡死。
-            val process = Shizuku.newProcess(arrayOf("sh", "-c", "$command 2>&1"), arrayOf<String>(), "/")
+            // Shizuku 13.1.5 把这个静态方法标成库内可见，Kotlin 编译期不让直接调；
+            // 它在运行时仍是公开方法，反射调用同一份实现，参数与返回类型不变。
+            val method =
+                Shizuku::class.java.getMethod(
+                    "newProcess",
+                    Array<String>::class.java,
+                    Array<String>::class.java,
+                    String::class.java,
+                )
+            val process =
+                method.invoke(
+                    null,
+                    arrayOf("sh", "-c", "$command 2>&1"),
+                    arrayOf<String>(),
+                    "/",
+                ) as Process
             val output = process.inputStream.bufferedReader().readText()
             process.waitFor()
             output.trim()
