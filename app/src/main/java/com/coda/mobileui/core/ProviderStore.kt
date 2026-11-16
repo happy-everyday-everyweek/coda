@@ -96,17 +96,104 @@ object ProviderStore {
 
     fun load(ctx: Context): MutableList<Provider> {
         val f = fileFor(ctx)
+        var legacyMarker = false
         val parsed =
             if (!f.exists()) {
                 mutableListOf()
             } else {
                 try {
-                    parse(JSONObject(f.readText()))
+                    val text = f.readText()
+                    // 旧版本把 Coda 扩展字段写进了内核文件，内核 strict 解析会整份拒绝。
+                    // 这里读出来后立刻重写成干净格式，用户不必手动清数据。
+                    legacyMarker = text.contains("codaKind") || text.contains("codaOrigin")
+                    parse(JSONObject(text))
                 } catch (_: Throwable) {
                     mutableListOf()
                 }
             }
+        applyMeta(ctx, parsed)
+        if (legacyMarker) {
+            AppLog.i("ProviderStore", "检测到带 Coda 扩展字段的旧配置，重写为内核可解析的格式")
+            save(ctx, parsed)
+        }
         return mergeBuiltins(parsed)
+    }
+
+    // ------------------------------------------------------------ Coda 侧元数据
+    //
+    // 内核用 `.strict()` schema 解析这份文件，provider 规则里只允许
+    // providerId/templateId/providerName/enabled/config。早先把 codaKind 与 codaOrigin
+    // 直接写进规则，多出的键会让整份配置解析失败——内核读到的是「没有供应商」，
+    // 表现就是核心在跑但模型列表全空。
+    //
+    // 所以 Coda 自己的分类写到旁路文件，内核文件保持纯净。内核重写主文件时这里不受影响。
+
+    private const val META_FILE = "coda-provider-meta.json"
+
+    private fun metaFile(ctx: Context): File = File(fileFor(ctx).parentFile, META_FILE)
+
+    private fun readMeta(ctx: Context): Map<String, Pair<ProviderKind, ProviderOrigin>> {
+        val f = metaFile(ctx)
+        if (!f.isFile) return emptyMap()
+        return runCatching {
+            val root = JSONObject(f.readText()).optJSONObject("providers") ?: return emptyMap()
+            val out = mutableMapOf<String, Pair<ProviderKind, ProviderOrigin>>()
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val id = keys.next()
+                val o = root.optJSONObject(id) ?: continue
+                val kind = if (o.optString("kind") == "asr") ProviderKind.ASR else ProviderKind.LLM
+                val origin =
+                    when (o.optString("origin")) {
+                        "oauth" -> ProviderOrigin.OAUTH
+                        "builtin" -> ProviderOrigin.BUILTIN
+                        else -> ProviderOrigin.MANUAL
+                    }
+                out[id] = kind to origin
+            }
+            out
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun writeMeta(
+        ctx: Context,
+        providers: List<Provider>,
+    ) {
+        runCatching {
+            val root = JSONObject()
+            val items = JSONObject()
+            for (p in providers) {
+                if (isBuiltin(p)) continue
+                items.put(
+                    p.id,
+                    JSONObject()
+                        .put("kind", if (p.kind == ProviderKind.ASR) "asr" else "llm")
+                        .put(
+                            "origin",
+                            when (p.origin) {
+                                ProviderOrigin.OAUTH -> "oauth"
+                                ProviderOrigin.BUILTIN -> "builtin"
+                                else -> "manual"
+                            },
+                        ),
+                )
+            }
+            root.put("providers", items)
+            metaFile(ctx).writeText(root.toString(2))
+        }
+    }
+
+    private fun applyMeta(
+        ctx: Context,
+        providers: MutableList<Provider>,
+    ) {
+        val meta = readMeta(ctx)
+        if (meta.isEmpty()) return
+        for (p in providers) {
+            val m = meta[p.id] ?: continue
+            p.kind = m.first
+            p.origin = m.second
+        }
     }
 
     // ------------------------------------------------------------ 内置供应商
@@ -215,17 +302,8 @@ object ProviderStore {
         val prules = JSONArray()
         for (p in persist) {
             val r = JSONObject().put("providerId", p.id).put("providerName", p.name)
-            // 这两个是 Coda 自己的扩展字段：内核不认识也不会报错，
-            // 但 App 重读时要靠它把 OAuth 供应商与手填供应商分开。
-            r.put("codaKind", if (p.kind == ProviderKind.ASR) "asr" else "llm")
-            r.put(
-                "codaOrigin",
-                when (p.origin) {
-                    ProviderOrigin.OAUTH -> "oauth"
-                    ProviderOrigin.BUILTIN -> "builtin"
-                    else -> "manual"
-                },
-            )
+            // 这里不能写任何 Coda 扩展字段：内核的规则 schema 是 strict 的，
+            // 多一个键就会让整份文件解析失败。分类信息写到旁路 meta（见 writeMeta）。
             val cfg = JSONObject()
             cfg.put("group", "standard-personal")
             cfg.put("access", JSONObject().put("type", "api-key").put("apiKey", p.apiKey))
@@ -268,5 +346,6 @@ object ProviderStore {
 
         root.put("config", config)
         fileFor(ctx).writeText(root.toString(2))
+        writeMeta(ctx, providers)
     }
 }
