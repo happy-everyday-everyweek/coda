@@ -481,12 +481,16 @@ class MainActivity : BaseActivity() {
                 val endpointChanged = com.coda.mobileui.core.OAuthLogin.ensureStoredGateways(this)
                 com.coda.mobileui.core.OAuthLogin.refreshStoredModels(this)
                 if (endpointChanged) {
-                    runOnUiThread {
-                        com.coda.mobileui.core.ZController
-                            .get(this)
-                            .restartCore { ok, msg ->
+                    // 冷启动时内核还没起来，它接下来自然会读新配置；这时再 restartCore
+                    // 会与首页的首次 ensureStarted 抢时序，可能出现「重启请求先到、
+                    // 首次启动后到」，反而让新地址没生效。
+                    val controller = com.coda.mobileui.core.ZController.get(this)
+                    if (controller.runtime.isRunning) {
+                        runOnUiThread {
+                            controller.restartCore { ok, msg ->
                                 if (!ok) com.coda.mobileui.core.AppLog.w("Coda", "OAuth 网关地址更新后重启内核失败：$msg")
                             }
+                        }
                     }
                 }
             }

@@ -689,7 +689,21 @@ class OAuthSheet(
 
     /** 收尾：把账号落成一条普通 provider（baseUrl 指向本机网关）。 */
     private fun commit() {
-        OAuthLogin.save(host, provider, models)
+        // 用户可能在「读取模型清单…」还没回来时就点了完成；这时 models 是空的，
+        // 落库会存下一条没有模型的供应商，面板要等下次启动对账才恢复。
+        // 空清单就再取一次，取不到才按空保存（启动对账还会补）。
+        if (models.isEmpty()) {
+            Thread {
+                val live = OAuthLogin.modelsFor(host, provider)
+                main.post { finishCommit(live) }
+            }.apply { isDaemon = true }.start()
+        } else {
+            finishCommit(models)
+        }
+    }
+
+    private fun finishCommit(list: List<String>) {
+        OAuthLogin.save(host, provider, list)
         Toast.makeText(host, "${provider.name} 已添加", Toast.LENGTH_SHORT).show()
         // 列表那层要重新拉一次账号，否则新号不会出现。
         onAdded?.invoke()

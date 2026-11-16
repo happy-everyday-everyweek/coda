@@ -331,37 +331,34 @@ object ProviderStore {
                 // 内核按 complete schema 校验模型配置：properties 的八项与 optionSpecs
                 // 的两项都必须齐全，缺一项就判为不可执行。之前只写 contextWindow，
                 // 结果是「模型在列表里、却选不了/一发就报不可用」。
-                cfg.put(
-                    "properties",
-                    JSONObject()
-                        .put("requiresMfjsToolSchema", false)
-                        .put("contextWindow", 200000)
-                        .put(
-                            "inputFormat",
-                            JSONObject()
-                                .put("supportsText", true)
-                                .put("supportsImage", false)
-                                .put("supportsVideo", false)
-                                .put("supportsAudio", false)
-                                .put("supportsPdf", false),
-                        )
-                        .put("outputFormat", JSONObject().put("supportsText", true))
-                        .put("supportsToolCall", true)
-                        .put("supportsJsonSchemaOutput", false)
-                        .put("supportsNativeWebSearch", false)
-                        .put("supportsMidConversationSystem", false),
-                )
+                val props = JSONObject()
+                props.put("requiresMfjsToolSchema", false)
+                props.put("contextWindow", 200000)
+                val inputFormat = JSONObject()
+                inputFormat.put("supportsText", true)
+                inputFormat.put("supportsImage", false)
+                inputFormat.put("supportsVideo", false)
+                inputFormat.put("supportsAudio", false)
+                inputFormat.put("supportsPdf", false)
+                props.put("inputFormat", inputFormat)
+                props.put("outputFormat", JSONObject().put("supportsText", true))
+                props.put("supportsToolCall", true)
+                props.put("supportsJsonSchemaOutput", false)
+                props.put("supportsNativeWebSearch", false)
+                props.put("supportsMidConversationSystem", false)
+                cfg.put("properties", props)
                 // 档位只声明中性的一档：手填模型的推理能力未知，不能像早先那样
                 // 对所有模型都写 disabled/enabled 两级。
-                cfg.put(
-                    "optionSpecs",
-                    JSONObject()
-                        .put(
-                            "reasoningLevel",
-                            JSONObject().put("values", JSONArray().put("disabled")).put("map", "{}"),
-                        )
-                        .put("maxOutputTokens", JSONObject().put("max", 32768).put("map", "{}")),
-                )
+                val specs = JSONObject()
+                val level = JSONObject()
+                level.put("values", JSONArray().put("disabled"))
+                level.put("map", "{}")
+                specs.put("reasoningLevel", level)
+                val limit = JSONObject()
+                limit.put("max", 32768)
+                limit.put("map", "{}")
+                specs.put("maxOutputTokens", limit)
+                cfg.put("optionSpecs", specs)
                 r.put("config", cfg)
                 mrules.put(r)
             }
@@ -374,7 +371,19 @@ object ProviderStore {
         )
 
         root.put("config", config)
-        fileFor(ctx).writeText(root.toString(2))
+        // 原子替换：内核可能正好在这次写盘期间读取配置，直接 writeText 会让它读到
+        // 半截 JSON，strict 解析失败后当作「没有任何供应商」，模型列表瞬间全空。
+        runCatching {
+            val target = fileFor(ctx)
+            val tmp = File(target.parentFile, target.name + ".tmp")
+            tmp.writeText(root.toString(2))
+            if (!tmp.renameTo(target)) {
+                target.writeText(root.toString(2))
+                tmp.delete()
+            }
+        }.onFailure {
+            AppLog.w("ProviderStore", "写供应商配置失败：${it.message ?: it.javaClass.simpleName}")
+        }
         writeMeta(ctx, providers)
     }
 }

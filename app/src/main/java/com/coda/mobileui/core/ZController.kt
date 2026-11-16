@@ -913,7 +913,27 @@ class ZController private constructor(
             }
             return
         }
-        readModelOptions(sid) { ok -> if (ok) cb?.invoke(true) else readModelOptionsAfterResume(sid, cb) }
+        readModelOptions(sid) { ok ->
+            if (ok) {
+                cb?.invoke(true)
+            } else {
+                readModelOptionsAfterResume(sid) { resumed ->
+                    if (resumed) {
+                        cb?.invoke(true)
+                    } else {
+                        // 兜底只给「内核没起来」的只读场景：内核在跑却返回空清单，说明配置
+                        // 没被接受，这时把本地清单伪装成可选只会让人选中一个发不出请求的模型。
+                        // 宁可让面板显示空并提示重启/检查端点，也不伪造可用性。
+                        val local = if (runtime.isRunning) emptyList() else configModelOptions()
+                        if (local.isNotEmpty()) {
+                            modelOptions = local
+                            notif { onStateChanged() }
+                        }
+                        cb?.invoke(local.isNotEmpty())
+                    }
+                }
+            }
+        }
     }
 
     /** 从本地供应商配置拼出模型清单：没有会话时也能选模型。 */
@@ -970,6 +990,17 @@ class ZController private constructor(
                         notif { onStateChanged() }
                     }
                     changed = true
+                } else if (modelOptions.isEmpty() && !runtime.isRunning) {
+                    // 内核这次回了空清单（常见于只配了本地网关 / OAuth，还没下发模型）：
+                    // 用本地供应商配置兜底，否则面板永远显示“暂无可用模型”。
+                    val local = configModelOptions()
+                    if (local.isNotEmpty()) {
+                        post {
+                            modelOptions = local
+                            notif { onStateChanged() }
+                        }
+                        changed = true
+                    }
                 }
             }
             cb?.invoke(changed)

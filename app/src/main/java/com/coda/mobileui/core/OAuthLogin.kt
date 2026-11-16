@@ -350,23 +350,6 @@ object OAuthLogin {
         ProviderStore.save(ctx, list)
     }
 
-    /**
-     * 从网关读当前可用的模型。
-     *
-     * 走宿主对下游的 `/v1/models`：登录成功的账号会以该账号实际权限注册模型，
-     * 用调用密钥就能读，不需要按插件、也不需要 auth_index。
-     */
-    fun models(ctx: Context): List<String> {
-        // 两个网关的 /v1/models 都是标准 OpenAI 形状，差别只在 baseUrl 与密钥，
-        // 所以优先问正在运行的那个；都在跑时以 WorkBuddy 为准（它是 CodeBuddy 专用）。
-        val body =
-            when {
-                WorkBuddyGateway.isRunning -> panelJsonObject(ctx, "/v1/models", "GET")
-                else -> ProxyHost.clientJson(ctx, "/v1/models")
-            } ?: return emptyList()
-        return readModelIds(body)
-    }
-
     /** 从 `/v1/models` 的两种形状里读出模型 id 列表。 */
     private fun readModelIds(body: JSONObject): List<String> {
         val array = body.optJSONArray("data") ?: body.optJSONArray("models") ?: return emptyList()
