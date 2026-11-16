@@ -328,11 +328,40 @@ object ProviderStore {
                 // 缺省不是「按启用处理」，而是直接判为不可执行：供应商在、模型规则也在，
                 // settings.model.available 却是空的，界面就表现为「拉不到模型列表」。
                 cfg.put("enabled", true)
-                cfg.put("properties", JSONObject().put("contextWindow", 200000))
-                // 不写 optionSpecs.reasoningLevel：那是「这个模型支持哪些推理档位」的声明，
-                // 用户手填的模型（以及网关转出的模型）能力未知。之前对所有模型硬写
-                // disabled/enabled，等于宣称每个模型都能开关推理，选了就把不支持的参数
-                // 发给上游，表现为「配置看着对，一发就报错」。留空让内核按无档位处理。
+                // 内核按 complete schema 校验模型配置：properties 的八项与 optionSpecs
+                // 的两项都必须齐全，缺一项就判为不可执行。之前只写 contextWindow，
+                // 结果是「模型在列表里、却选不了/一发就报不可用」。
+                cfg.put(
+                    "properties",
+                    JSONObject()
+                        .put("requiresMfjsToolSchema", false)
+                        .put("contextWindow", 200000)
+                        .put(
+                            "inputFormat",
+                            JSONObject()
+                                .put("supportsText", true)
+                                .put("supportsImage", false)
+                                .put("supportsVideo", false)
+                                .put("supportsAudio", false)
+                                .put("supportsPdf", false),
+                        )
+                        .put("outputFormat", JSONObject().put("supportsText", true))
+                        .put("supportsToolCall", true)
+                        .put("supportsJsonSchemaOutput", false)
+                        .put("supportsNativeWebSearch", false)
+                        .put("supportsMidConversationSystem", false),
+                )
+                // 档位只声明中性的一档：手填模型的推理能力未知，不能像早先那样
+                // 对所有模型都写 disabled/enabled 两级。
+                cfg.put(
+                    "optionSpecs",
+                    JSONObject()
+                        .put(
+                            "reasoningLevel",
+                            JSONObject().put("values", JSONArray().put("disabled")).put("map", "{}"),
+                        )
+                        .put("maxOutputTokens", JSONObject().put("max", 32768).put("map", "{}")),
+                )
                 r.put("config", cfg)
                 mrules.put(r)
             }
