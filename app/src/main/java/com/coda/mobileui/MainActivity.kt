@@ -5404,9 +5404,20 @@ class MainActivity : BaseActivity() {
             lastModelListSignature = signature
             items.removeAllViews()
             if (options.isEmpty()) {
+                // 区分「一条都没配」与「配了但内核没认」：后者是这次修的几个 schema 问题的
+                // 典型表现，笼统写「请先添加」会让用户反复去改已经正确的配置。
+                val configured =
+                    com.coda.mobileui.core.ProviderStore
+                        .load(this@MainActivity)
+                        .any { it.kind == com.coda.mobileui.core.ProviderStore.ProviderKind.LLM && it.models.isNotEmpty() }
                 items.addView(
                     TextView(this@MainActivity).apply {
-                        text = "暂无可用模型。请先在 设置 → 模型设置 中添加供应商与模型。"
+                        text =
+                            if (configured) {
+                                "供应商已配置，但内核没有返回可用模型。点右上角重试；仍为空就重启核心，并检查端点与密钥是否有效。"
+                            } else {
+                                "暂无可用模型。请先在 设置 → 模型设置 中添加供应商与模型。"
+                            }
                         textSize = 13f
                         setPadding(dp(4), dp(10), dp(4), dp(10))
                         setTextColor(
