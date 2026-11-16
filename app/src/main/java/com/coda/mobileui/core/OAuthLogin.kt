@@ -385,10 +385,13 @@ object OAuthLogin {
             }
         // 插件按自家前缀注册模型；网关里同时挂着别家账号时不能全收。
         val prefix = OAuthProviders.modelPrefix(provider)
-        return raw.filter { it.startsWith(prefix) }.ifEmpty {
-            // 有些插件不带前缀。只有一家网关、一轮登录时还算安全，带上全量比空好。
-            raw
-        }
+        val mine = raw.filter { it.startsWith(prefix) }
+        if (mine.isNotEmpty()) return mine
+        // 有些插件本来就不带前缀。但要先确认网关里这批名字不是别家的：
+        // 若它们命中其它供应商的前缀，宁可返回空，也不要把别家模型写进这条配置。
+        val others = OAuthProviders.all.filter { it.id != provider.id }.map { OAuthProviders.modelPrefix(it) }
+        val looksForeign = raw.any { model -> others.any { p -> p.isNotEmpty() && model.startsWith(p) } }
+        return if (looksForeign) emptyList() else raw
     }
 
     // ---------- WorkBuddy 网关的 HTTP 调用 ----------

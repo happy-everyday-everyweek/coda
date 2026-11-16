@@ -234,7 +234,7 @@ object ProviderStore {
                 )
             }
             root.put("providers", items)
-            metaFile(ctx).writeText(root.toString(2))
+            writeTextAtomic(metaFile(ctx), root.toString(2))
         }
     }
 
