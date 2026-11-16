@@ -198,20 +198,21 @@ object ProviderStore {
         config.put("providerConfigRules", JSONObject().put("providerRules", prules))
 
         val mrules = JSONArray()
-        for (p in providers) {
+        // 只为真正落盘的供应商写模型规则：内置 provider 不写 providerRules，
+        // 再给它写 modelConfigRules 就是悬空引用（schema 不拦，但内核注册不到）。
+        for (p in persist.filter { it.kind == ProviderStore.ProviderKind.LLM }) {
             for (m in p.models) {
                 val r = JSONObject().put("providerId", p.id).put("modelId", m)
                 val cfg = JSONObject()
+                // 必须显式 true。内核的模型注册逻辑是 `modelEnabled = modelConfig.enabled === true`，
+                // 缺省不是「按启用处理」，而是直接判为不可执行：供应商在、模型规则也在，
+                // settings.model.available 却是空的，界面就表现为「拉不到模型列表」。
+                cfg.put("enabled", true)
                 cfg.put("properties", JSONObject().put("contextWindow", 200000))
-                cfg.put(
-                    "optionSpecs",
-                    JSONObject().put(
-                        "reasoningLevel",
-                        JSONObject()
-                            .put("values", JSONArray().put("disabled").put("enabled"))
-                            .put("map", "{}"),
-                    ),
-                )
+                // 不写 optionSpecs.reasoningLevel：那是「这个模型支持哪些推理档位」的声明，
+                // 用户手填的模型（以及网关转出的模型）能力未知。之前对所有模型硬写
+                // disabled/enabled，等于宣称每个模型都能开关推理，选了就把不支持的参数
+                // 发给上游，表现为「配置看着对，一发就报错」。留空让内核按无档位处理。
                 r.put("config", cfg)
                 mrules.put(r)
             }
