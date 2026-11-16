@@ -144,6 +144,9 @@ object ProviderStore {
         // `/v1/chat/completions`，或者本地地址没写 http://，或者密钥留空。
         // 这些条目在内核里会被跳过；只修新输入的代码救不了已经存在的配置。
         var repaired = false
+        // 旧 meta 没有多模态字段。缺这几个键时也要重写一次，否则内核里仍是
+        // supportsImage=false 的旧模型规则，升级后视觉模型依旧收不到图片。
+        val metaHasCapabilities = runCatching { metaFile(ctx).readText() }.getOrDefault("").contains("supportsImage")
         for (p in combined) {
             val normalized = normalizeBaseUrl(p.baseUrl)
             if (normalized != p.baseUrl) {
@@ -165,7 +168,7 @@ object ProviderStore {
         // 旧版本把 ASR 也写在内核文件里；检测到就迁移到独立文件，
         // 否则内核仍会把 whisper 这类模型注册进聊天模型列表。
         val kernelHasAsr = parsed.any { it.kind == ProviderKind.ASR }
-        if (legacyMarker || kernelHasAsr || repaired) {
+        if (legacyMarker || kernelHasAsr || repaired || (combined.any { it.kind == ProviderKind.LLM } && !metaHasCapabilities)) {
             AppLog.i("ProviderStore", "迁移旧供应商配置：清理 Coda 字段、修端点并把 ASR 移出内核文件")
             save(ctx, combined)
         }
