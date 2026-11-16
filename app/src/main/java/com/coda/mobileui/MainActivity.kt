@@ -459,15 +459,18 @@ class MainActivity : BaseActivity() {
         syncHeaderPill()
         applyWideLayout()
         // 有 Shizuku 就顺手把自己这份无障碍服务打开；没有就安静跳过。
-        rikka.shizuku.Shizuku.addRequestPermissionResultListener { _, results ->
-            if (com.coda.mobileui.core.ShizukuShell.handlePermissionResult(
-                    com.coda.mobileui.core.ShizukuShell.REQUEST_CODE,
-                    results,
-                )
-            ) {
-                enableOwnAccessibilityViaShizuku()
-            }
-        }
+        rikka.shizuku.Shizuku.addRequestPermissionResultListener(
+            object : rikka.shizuku.Shizuku.OnRequestPermissionResultListener {
+                override fun onRequestPermissionResult(
+                    requestCode: Int,
+                    grantResults: IntArray,
+                ) {
+                    if (com.coda.mobileui.core.ShizukuShell.handlePermissionResult(requestCode, grantResults)) {
+                        enableOwnAccessibilityViaShizuku()
+                    }
+                }
+            },
+        )
         ensureShizukuAccessibility()
         // OAuth 供应商落库时若网关还没注册模型，清单会是空的；启动后补一次对账，
         // 顺手纠正历史上被「串网关」写进来的别家模型。
