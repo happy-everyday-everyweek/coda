@@ -63,6 +63,15 @@ object ProviderStore {
      */
     fun normalizeBaseUrl(raw: String): String {
         var v = raw.trim().trimEnd('/')
+        // 本地网关最常见的写法是 `127.0.0.1:8317/v1` 或 `localhost:7864/v1`，
+        // 缺协议。内核按 URL 校验 baseUrl，缺 http:// 会让整条供应商在注册阶段被跳过。
+        if (v.isNotEmpty() &&
+            !v.startsWith("http://") &&
+            !v.startsWith("https://") &&
+            (v.startsWith("127.") || v.startsWith("localhost") || v.startsWith("0.0.0.0") || v.startsWith("["))
+        ) {
+            v = "http://$v"
+        }
         val suffixes =
             listOf(
                 "/chat/completions",
