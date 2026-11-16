@@ -2670,8 +2670,14 @@ class SettingsDetailActivity :
                                     .trim()
                                     .ifEmpty { id },
                             apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
-                            baseUrl = urlInput.text.toString().trim(),
-                            apiKey = keyInput.text.toString().trim(),
+                            baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString()),
+                            // 内核的 access.apiKey 是非空必填：留空会让整条供应商在注册阶段被跳过，
+                            // 模型随之消失。无鉴权的本地网关也必须有字符串占位。
+                            apiKey =
+                                keyInput.text
+                                    .toString()
+                                    .trim()
+                                    .ifEmpty { "coda-no-key" },
                             models = models,
                             kind = kindOfRecord,
                             origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
@@ -2868,8 +2874,14 @@ class SettingsDetailActivity :
                                     .trim()
                                     .ifEmpty { id },
                             apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
-                            baseUrl = urlInput.text.toString().trim(),
-                            apiKey = keyInput.text.toString().trim(),
+                            baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString()),
+                            // 内核的 access.apiKey 是非空必填：留空会让整条供应商在注册阶段被跳过，
+                            // 模型随之消失。无鉴权的本地网关也必须有字符串占位。
+                            apiKey =
+                                keyInput.text
+                                    .toString()
+                                    .trim()
+                                    .ifEmpty { "coda-no-key" },
                             models = models,
                             kind = kindOfRecord,
                             origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
@@ -2904,8 +2916,14 @@ class SettingsDetailActivity :
                                 .trim()
                                 .ifEmpty { id },
                         apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
-                        baseUrl = urlInput.text.toString().trim(),
-                        apiKey = keyInput.text.toString().trim(),
+                        baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString()),
+                        // 内核的 access.apiKey 是非空必填：留空会让整条供应商在注册阶段被跳过，
+                        // 模型随之消失。无鉴权的本地网关也必须有字符串占位。
+                        apiKey =
+                            keyInput.text
+                                .toString()
+                                .trim()
+                                .ifEmpty { "coda-no-key" },
                         models = models,
                         kind = kindOfRecord,
                         // 手填的一律是 MANUAL；OAuth 的那条由 OAuthLogin 落库时自己标 OAUTH，

@@ -52,6 +52,39 @@ object ProviderStore {
         return File(base, "provider_config.json")
     }
 
+    /**
+     * 把用户填的端点规范化成「版本根」。
+     *
+     * 内核会在 baseUrl 后面自己拼 `/chat/completions`、`/models` 等路径。
+     * 用户按文档习惯把整条接口地址贴进来是很常见的，不处理就会拼成
+     * `.../v1/chat/completions/chat/completions`，请求 404，而界面上端点看起来完全正确。
+     *
+     * 只做保守裁剪：去掉尾部斜杠，以及已知的接口后缀；不动路径中间的部分。
+     */
+    fun normalizeBaseUrl(raw: String): String {
+        var v = raw.trim().trimEnd('/')
+        val suffixes =
+            listOf(
+                "/chat/completions",
+                "/completions",
+                "/responses",
+                "/messages",
+                "/models",
+                "/audio/transcriptions",
+            )
+        var changed = true
+        while (changed) {
+            changed = false
+            for (s in suffixes) {
+                if (v.endsWith(s)) {
+                    v = v.removeSuffix(s).trimEnd('/')
+                    changed = true
+                }
+            }
+        }
+        return v
+    }
+
     fun load(ctx: Context): MutableList<Provider> {
         val f = fileFor(ctx)
         val parsed =
