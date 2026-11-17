@@ -374,6 +374,8 @@ class CoreRuntime(
                         if (isCurrent) {
                             process = null
                             writer = null
+                            // 退出时把在途请求全部失败，否则调用方永久停在加载中。
+                            failAllPending("核心进程已退出")
                         }
                         log(
                             "[core] 进程退出，" + describeExit(code) +
@@ -426,6 +428,23 @@ class CoreRuntime(
         try {
             p?.errorStream?.close()
         } catch (_: Throwable) {
+        }
+        // 进程已停，所有在途请求都不会再有响应；不失败它们，调用方的
+        // refreshing/loading 标志会永久停在 true。
+        failAllPending("核心已停止")
+    }
+
+    /** 把全部在途请求以失败回调结束并清空，避免 UI 永久等待。 */
+    private fun failAllPending(reason: String) {
+        val ids = pending.keys.toList()
+        for (id in ids) {
+            val cb = pending.remove(id) ?: continue
+            val error =
+                JSONObject().put(
+                    "message",
+                    reason,
+                )
+            mainHandler.post { cb(false, JSONObject().put("error", error)) }
         }
     }
     // ---------------------------------------------------------------- 自检
@@ -612,12 +631,22 @@ class CoreRuntime(
         cb: ((Boolean, JSONObject) -> Unit)? = null,
     ) {
         val id = nextId.getAndIncrement()
+        if (writer == null) {
+            // 内核没起或刚退出：请求写不出去，必须立即失败回调，
+            // 否则调用方的 refreshing/loading 标志会永久卡住。
+            cb?.invoke(false, JSONObject().put("error", JSONObject().put("message", "核心未运行")))
+            return
+        }
         if (cb != null) pending[id] = cb
         writeFrame(JSONObject().put("id", id).put("method", method).put("params", params))
     }
 
     private fun writeFrame(obj: JSONObject) {
-        val w = writer ?: return
+        val w = writer
+        if (w == null) {
+            failAllPending("核心未运行，请求未发送")
+            return
+        }
         try {
             synchronized(w) {
                 w.write(obj.toString())
@@ -626,6 +655,7 @@ class CoreRuntime(
             }
         } catch (t: Throwable) {
             log("!! 发送失败: $t")
+            failAllPending("写请求失败：${t.message ?: t.javaClass.simpleName}")
         }
     }
 

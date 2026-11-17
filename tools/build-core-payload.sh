@@ -207,7 +207,7 @@ else
       --node-binary "$SEA_TARGET=$NODE_BASE" 2>&1 | tee "$SEA_LOG"; then
       break
     fi
-    missing="$(grep -oE 'Missing @zcode/[a-z0-9-]+ dist files' "$SEA_LOG" | tail -1 | sed -E 's/^Missing //; s/ dist files$//')"
+    missing="$(grep -oE 'Missing @zcode/[a-z0-9-]+ dist files' "$SEA_LOG" | tail -1 | sed -E 's/^Missing //; s/ dist files$//' || true)"
     if [ -z "$missing" ] || [ "$attempt" -ge 4 ]; then
       echo "!! SEA 生成失败" >&2
       tail -20 "$SEA_LOG" >&2

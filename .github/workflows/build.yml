@@ -97,6 +97,23 @@ jobs:
       - name: 构建 Android 轮子
         run: tools/build-android-wheels.sh
 
+      # 手动 APK 也必须带 payload.txt。否则解包校验退化，升级后会继续用旧内核。
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: pnpm
+          cache-dependency-path: kernel/zcode/pnpm-lock.yaml
+
+      - name: 重建内核二进制载荷
+        run: tools/build-core-payload.sh
+
+      - name: 核对内核载荷结构
+        run: python3 tools/verify-sea-payload.py app/src/main/assets/core/zcode
+
       - name: 构建 APK
         run: |
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"

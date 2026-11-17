@@ -367,6 +367,9 @@ class OAuthSheet(
         val view =
             WebView(host).apply {
                 settings.javaScriptEnabled = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 settings.domStorageEnabled = true
                 CookieManager.getInstance().setAcceptCookie(true)
                 // 授权页一律用桌面端 UA。
@@ -402,6 +405,9 @@ class OAuthSheet(
                             val popup =
                                 WebView(main.context).apply {
                                     settings.javaScriptEnabled = true
+                                    settings.allowFileAccess = false
+                                    settings.allowContentAccess = false
+                                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                                     settings.domStorageEnabled = true
                                     // 与主 WebView 保持同一套 UA，否则同一流程里两段页面
                                     // 会被识别成不同设备，跳转行为可能对不上。

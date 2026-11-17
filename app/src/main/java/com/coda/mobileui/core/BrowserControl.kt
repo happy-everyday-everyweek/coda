@@ -504,12 +504,15 @@ object BrowserControl {
             val view = WebView(ctx)
             view.settings.apply {
                 javaScriptEnabled = true
+                // agent 可以导航任意页面；关闭文件/内容访问，避免恶意页面读取私有目录。
+                allowFileAccess = false
+                allowContentAccess = false
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 domStorageEnabled = true
                 databaseEnabled = true
                 loadWithOverviewMode = true
                 useWideViewPort = true
                 cacheMode = WebSettings.LOAD_DEFAULT
-                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             }
             view.isClickable = false
             view.isFocusable = false

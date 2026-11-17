@@ -260,6 +260,13 @@ class ZController private constructor(
             override fun onExit(code: Int) {
                 started = false
                 running = false
+                // 进程退出后这些在途标志不会再有回调来复位；不重置会让刷新
+                // 与子会话加载永久卡在“加载中”。
+                refreshing = false
+                refreshAgain = false
+                snapshotRefreshing = false
+                refreshScheduled = false
+                childLoading.clear()
                 val now = System.currentTimeMillis()
                 val ranFor = if (lastStartAt > 0L) now - lastStartAt else -1L
                 if (ranFor > 120_000L) exitCount = 0
