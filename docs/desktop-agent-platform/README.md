@@ -10,6 +10,10 @@
 | [ACCEPTANCE.md](./ACCEPTANCE.md) | 可执行验收标准、测试矩阵、发布门槛 | 是 |
 | [TODO.md](./TODO.md) | 可认领任务、依赖、产出物、验收映射 | 实现进度以本文为准 |
 | [SUPPORT-MATRIX.md](./SUPPORT-MATRIX.md) | 各 Agent 的支持版本、能力、证据和发布状态 | 是；没有证据不得标为 Supported |
+| [PR13-REVIEW.md](./PR13-REVIEW.md) | 第一阶段开放 PR 的阶段性代码与证据审查 | 第二阶段修复入口 |
+| [SPEC-S2.md](./SPEC-S2.md) | 第二阶段：Rust 核心、目标、记忆、人工接管、环境与维护扩展 | 是；第二阶段产品规则以此为准 |
+| [ACCEPTANCE-S2.md](./ACCEPTANCE-S2.md) | 第二阶段真实环境、全量 Agent 和 S2-G0~G10 验收 | 是 |
+| [TODO-S2.md](./TODO-S2.md) | 第二阶段可认领任务、依赖和验收映射 | 是 |
 
 ## 阅读顺序
 
@@ -38,7 +42,15 @@
 
 特性分支：`feat/desktop-agent-platform`
 
-首个提交仅包含本组规划文档。后续实现按 `TODO.md` 的 Epic 分 PR 提交，每个 PR 必须关联对应验收编号。
+第一阶段文档的初始提交只包含规划文档。后续实现按 Epic 分提交，每个提交/PR 描述必须关联对应验收编号。
+
+### 第二阶段工作流（用户已确认）
+
+1. 第一阶段和第二阶段都继续在 **PR #13 / `feat/desktop-agent-platform`** 上推进。
+2. **PR #13 不合并**，直到用户另行明确指示；创建提交、推送文档和 CI 成功均不表示可以合并。
+3. 第一阶段产品化缺口由第二阶段接管；新范围包括 Rust 核心、目标、记忆、人工接管、WSL、SSH、容器、可选统一配置、Agent 维护和全部首版 Agent 的真实服务验收。
+4. 第二阶段产品行为以 SPEC-S2 为准；其新规则明确替代首版“无人工接管/无目标/无记忆”和 Node 参考核心的长期定位，其他不变约束继续有效。
+5. 实施任务与真实验收以 TODO-S2 / ACCEPTANCE-S2 为准，第一阶段 DONE 不能替代 S2 Gate。
 
 ## 当前基线
 
