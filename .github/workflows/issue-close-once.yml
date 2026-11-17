@@ -1,0 +1,50 @@
+name: issue-close-once
+
+on:
+  push:
+    paths:
+      - .github/workflows/issue-close-once.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  close:
+    if: contains(github.event.head_commit.message, 'close resolved issues once')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close resolved issues with a note
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > /tmp/notes.json <<'JSON'
+          {
+            "3": "已修复：PhoneControl.screenshot 改为写入 ctx.getExternalFilesDir(null)/screenshots，不再硬编码 /sdcard。",
+            "7": "已修复：CoreRuntime.readLoop/errLoop 使用 use{} 关闭流，stopCore 显式关闭管道，并在退出时失败所有在途 RPC。",
+            "8": "已修复：LinuxEnv.extractRootfs 改为先备份旧 rootfs、新目录就位失败时回滚，不再先删旧目录。",
+            "17": "已修复：CoreRuntime 在进程退出、stopCore、写失败与 writer 为空时统一失败所有 pending 回调；ZController.onExit 重置 refreshing、refreshAgain、snapshotRefreshing、refreshScheduled 与 childLoading。",
+            "20": "已修复：tools/build-core-payload.sh 的 missing 赋值管道加 || true，grep 无匹配不再触发 pipefail+errexit 提前退出。",
+            "21": "已修复：dev-prerelease.yml 从 versionName 的默认字面量提取版本，不再匹配旧版写法导致版本名恒为 dev。",
+            "22": "已修复：build.yml 手动 APK job 增加 pnpm/node、重建内核载荷与 verify-sea-payload 核对，产物会包含 payload.txt。"
+          }
+          JSON
+          python3 - <<'PY'
+          import json, os, urllib.request
+          token = os.environ["GH_TOKEN"]
+          repo = "happy-everyday-everyweek/coda"
+          notes = json.load(open("/tmp/notes.json"))
+          def req(method, url, body):
+              r = urllib.request.Request(url, data=json.dumps(body).encode(), method=method, headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "User-Agent": "coda-issue-close",
+                  "Content-Type": "application/json",
+              })
+              return urllib.request.urlopen(r, timeout=30).read()
+          for number, note in notes.items():
+              base = f"https://api.github.com/repos/{repo}/issues/{number}"
+              req("POST", base + "/comments", {"body": note})
+              req("PATCH", base, {"state": "closed", "state_reason": "completed"})
+              print("closed", number)
+          PY
