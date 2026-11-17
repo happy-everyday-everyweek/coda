@@ -634,7 +634,8 @@ class CoreRuntime(
         if (writer == null) {
             // 内核没起或刚退出：请求写不出去，必须立即失败回调，
             // 否则调用方的 refreshing/loading 标志会永久卡住。
-            cb?.invoke(false, JSONObject().put("error", JSONObject().put("message", "核心未运行")))
+            val error = JSONObject().put("error", JSONObject().put("message", "核心未运行"))
+            if (cb != null) mainHandler.post { cb(false, error) }
             return
         }
         if (cb != null) pending[id] = cb

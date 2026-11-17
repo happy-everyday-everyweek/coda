@@ -43,8 +43,14 @@ object AppLog {
 
     private val lock = Any()
     private val tail = ArrayDeque<String>(TAIL_CAPACITY)
-    private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
-    private val fileFormat = SimpleDateFormat("yyyyMMdd", Locale.US)
+    private val timeFormat =
+        object : ThreadLocal<SimpleDateFormat>() {
+            override fun initialValue() = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+        }
+    private val fileFormat =
+        object : ThreadLocal<SimpleDateFormat>() {
+            override fun initialValue() = SimpleDateFormat("yyyyMMdd", Locale.US)
+        }
 
     @Volatile
     private var appContext: Context? = null
@@ -129,7 +135,7 @@ object AppLog {
         val now = Date()
         val line =
             buildString {
-                append(timeFormat.format(now))
+                append(timeFormat.get().format(now))
                 append(' ').append(level.tag).append('/').append(tag)
                 append(": ").append(message)
                 if (error != null) {
@@ -163,7 +169,7 @@ object AppLog {
     /** 当前日志文件；没有则返回 null。 */
     fun currentFile(): File? {
         val dir = logDir ?: return null
-        return File(dir, "coda-${fileFormat.format(Date())}.log")
+        return File(dir, "coda-${fileFormat.get().format(Date())}.log")
     }
 
     /**
@@ -210,7 +216,7 @@ object AppLog {
         line: String,
     ) {
         runCatching {
-            val file = File(dir, "coda-${fileFormat.format(now)}.log")
+            val file = File(dir, "coda-${fileFormat.get().format(now)}.log")
             if (file.isFile && file.length() > MAX_FILE_BYTES) rotate(dir, file)
             file.appendText(line + "\n")
         }

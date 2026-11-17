@@ -473,7 +473,12 @@ object ProxyHost {
         val dir = glibcDirFor(ctx)
         for (name in GLIBC_LIBS) {
             val target = File(dir, name)
-            val expected = runCatching { assetSize(ctx, "proxy-host/glibc/$name") }.getOrNull() ?: continue
+            val expected =
+                runCatching { assetSize(ctx, "proxy-host/glibc/$name") }.getOrNull()
+                    ?: run {
+                        AppLog.e("ProxyHost", "缺少 glibc 库资产：$name")
+                        return false
+                    }
             if (target.isFile && target.length() == expected) {
                 // 已就位也要补执行位：loader 是被 env 直接 execve 的，没执行位就是
                 // Permission denied。老版本释放时漏了 chmod，靠这里把存量文件修好。

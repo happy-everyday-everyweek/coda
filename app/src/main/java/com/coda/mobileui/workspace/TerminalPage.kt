@@ -554,6 +554,9 @@ class TerminalPage(
             } catch (_: Throwable) {
             }
             main.post {
+                // restart() 会先建立新会话；旧 reader 的 EOF 回调如果无条件清空
+                // process/writer，会把刚启动的新会话引用抹掉。只处理自己那一个。
+                if (process !== session) return@post
                 appendNote("会话已结束。")
                 status.text = "会话已结束"
                 status.visibility = View.VISIBLE

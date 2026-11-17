@@ -314,6 +314,12 @@ class ZController private constructor(
                         } else if (listeners.isNotEmpty()) {
                             synchronized(pendingPermissionParams) {
                                 pendingPermissionParams[requestId.toString()] = params
+                                // 只保留最近 10 条：权限请求只用于用户作答时回填参数，
+                                // 长期不裁剪会随会话无限增长。
+                                while (pendingPermissionParams.size > 10) {
+                                    val oldest = pendingPermissionParams.keys.firstOrNull() ?: break
+                                    pendingPermissionParams.remove(oldest)
+                                }
                             }
                             val sessionId = params.optString("sessionId")
                             notif { onSessionPermissionRequest(sessionId, requestId, params) }
