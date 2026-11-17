@@ -1283,6 +1283,12 @@ class SettingsDetailActivity :
 
     private fun doExportBackup(uri: Uri) {
         snack("导出")
+        // 导出同样要先停写入方：网关会往 rootfs 写配置与凭据，内核会写会话数据库。
+        // 边写边打包会得到一份「看起来完整、实际半截」的备份。
+        runCatching { com.coda.mobileui.core.WorkBuddyGateway.stop() }
+        runCatching { com.coda.mobileui.core.ProxyHost.stop() }
+        val controller = ZController.get(this)
+        runCatching { controller.runtime.stopCore() }
         Thread {
             val result = runCatching { DataBackup.export(this, uri) }
             runOnUiThread {
@@ -1291,6 +1297,10 @@ class SettingsDetailActivity :
                     snack("已导出")
                 } else {
                     snack("导出失败：${result.exceptionOrNull()?.message ?: "空文件"}")
+                }
+                // 备份结束恢复运行环境；用户不需要为此手动重启。
+                controller.restartCore { ok, msg ->
+                    if (!ok) snack("核心重启失败：$msg")
                 }
                 renderPage()
             }

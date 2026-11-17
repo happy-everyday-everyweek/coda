@@ -2,6 +2,8 @@ package com.coda.mobileui.core
 
 import android.content.Context
 import android.net.Uri
+import android.system.Os
+import android.system.OsConstants
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -59,6 +61,8 @@ object DataBackup {
                 count++
             }
 
+            val execEntries = mutableListOf<String>()
+
             fun putFile(
                 name: String,
                 file: File,
@@ -66,13 +70,25 @@ object DataBackup {
                 zip.putNextEntry(ZipEntry(name))
                 file.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
+                if (file.canExecute()) execEntries += name
                 count++
             }
+
+            val symlinks = mutableListOf<Pair<String, String>>()
 
             fun addTree(
                 entry: String,
                 file: File,
             ) {
+                // zip 不保留符号链接：把链接当普通文件读会把目标内容复制一份。
+                // Linux 根文件系统里大量工具是链接，复制会让备份膨胀且丢语义，
+                // 所以单独记下链接目标，恢复时重建。
+                if (isSymlink(file)) {
+                    runCatching { Os.readlink(file.absolutePath) }.getOrNull()?.let {
+                        symlinks += entry to it
+                    }
+                    return
+                }
                 if (file.isFile) {
                     putFile(entry, file)
                     return
@@ -115,6 +131,12 @@ object DataBackup {
             // no_backup 也是应用私有持久区，部分凭据与缓存放在这里。
             ctx.noBackupFilesDir.takeIf { it.exists() }?.let {
                 addTree("no-backup", it)
+            }
+
+            // 两份清单必须在所有文件条目之后写入：恢复时先落文件，再按清单补执行位与链接。
+            if (execEntries.isNotEmpty()) putText("file-modes.txt", execEntries.joinToString("\n"))
+            if (symlinks.isNotEmpty()) {
+                putText("symlinks.txt", symlinks.joinToString("\n") { "${it.first}\t${it.second}" })
             }
 
             val global = AgentPrompt.globalFile(ctx)
@@ -185,7 +207,20 @@ object DataBackup {
                                 count++
                             }
 
-                            name == ENTRY_PROVIDER_META -> { ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)); count++ }
+                            name == ENTRY_PROVIDER_META -> {
+                                ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
+                                count++
+                            }
+
+                            name == "file-modes.txt" -> {
+                                applyModes(ctx, String(bytes, Charsets.UTF_8))
+                                count++
+                            }
+
+                            name == "symlinks.txt" -> {
+                                restoreSymlinks(ctx, String(bytes, Charsets.UTF_8))
+                                count++
+                            }
 
                             name == ENTRY_ASR_PROVIDERS -> { ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)); count++ }
 
@@ -208,7 +243,61 @@ object DataBackup {
         // 恢复后让 ProviderStore 重新读一次：旧备份可能带 coda 字段或非法类型，
         // 这一读会把它们就地迁移成内核可接受的新格式。
         runCatching { ProviderStore.load(ctx) }
+        // DNS 属于当前网络，不该跟着备份跨设备复制；删掉后 LinuxEnv 会按当前网络重写。
+        runCatching { File(LinuxEnv(ctx).rootfs, "etc/resolv.conf").delete() }
         return count
+    }
+
+    /** 判断路径本身是不是符号链接；File.isFile 会跟随链接，不能用来判断。 */
+    private fun isSymlink(file: File): Boolean =
+        runCatching {
+            OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
+        }.getOrDefault(false)
+
+    /** 恢复可执行位：zip 不保存 Unix mode，Linux 环境里的 proot 与工具全靠这一步。 */
+    private fun applyModes(
+        ctx: Context,
+        text: String,
+    ) {
+        val base = ctx.filesDir.canonicalFile
+        text.lineSequence().filter { it.startsWith("files/") }.forEach { entry ->
+            val target = File(ctx.filesDir, entry.removePrefix("files/")).canonicalFile
+            if (target.path.startsWith(base.path + File.separator)) {
+                runCatching { Os.chmod(target.absolutePath, 493) } // 0755
+            }
+        }
+    }
+
+    /** 重建符号链接。清单里的路径以 files/、databases/ 或 no-backup/ 开头。 */
+    private fun restoreSymlinks(
+        ctx: Context,
+        text: String,
+    ) {
+        text.lineSequence().filter { it.contains('\t') }.forEach { line ->
+            val parts = line.split('\t', limit = 2)
+            if (parts.size != 2) return@forEach
+            val entry = parts[0]
+            val link = parts[1]
+            val resolved =
+                when {
+                    entry.startsWith("files/") -> ctx.filesDir to entry.removePrefix("files/")
+                    entry.startsWith("databases/") -> File(ctx.filesDir.parentFile, "databases") to entry.removePrefix("databases/")
+                    entry.startsWith("no-backup/") -> ctx.noBackupFilesDir to entry.removePrefix("no-backup/")
+                    else -> return@forEach
+                }
+            val base = resolved.first
+            val rel = resolved.second
+            if (rel.isBlank()) return@forEach
+            val baseCanonical = base.canonicalFile
+            val parent = File(base, rel).parentFile?.canonicalFile ?: return@forEach
+            if (!parent.path.startsWith(baseCanonical.path + File.separator)) return@forEach
+            val target = File(parent, File(rel).name)
+            target.parentFile?.mkdirs()
+            runCatching {
+                if (target.exists() || isSymlink(target)) target.delete()
+                Os.symlink(link, target.absolutePath)
+            }
+        }
     }
 
     /**
@@ -226,6 +315,8 @@ object DataBackup {
         val target = File(base, rel).canonicalFile
         if (target != root && !target.path.startsWith(root.path + File.separator)) return
         target.parentFile?.mkdirs()
+        // 目标若是旧链接，直接 FileOutputStream 会顺着链接写到别处；先删链接。
+        if (isSymlink(target)) target.delete()
         FileOutputStream(target).use { out -> input.copyTo(out) }
     }
 
