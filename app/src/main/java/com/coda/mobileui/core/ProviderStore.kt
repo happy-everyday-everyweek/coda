@@ -51,6 +51,8 @@ object ProviderStore {
         var supportsAudio: Boolean = false,
         /** 是否接受 PDF 输入。 */
         var supportsPdf: Boolean = true,
+        /** 模型是否支持工具调用；不支持时内核不应注入工具定义。 */
+        var supportsToolCall: Boolean = true,
         /** 这条供应商属于哪类模型。老配置缺这两个字段时按 LLM + MANUAL 处理。 */
         var kind: ProviderKind = ProviderKind.LLM,
         /** 这条供应商是怎么加进来的。OAuth 的要在列表里能回到它自己的管理页。 */
@@ -200,6 +202,7 @@ object ProviderStore {
         val supportsVideo: Boolean,
         val supportsAudio: Boolean,
         val supportsPdf: Boolean,
+        val supportsToolCall: Boolean,
     )
 
     private fun readMeta(ctx: Context): Map<String, Meta> {
@@ -228,6 +231,7 @@ object ProviderStore {
                         supportsVideo = o.optBoolean("supportsVideo", false),
                         supportsAudio = o.optBoolean("supportsAudio", false),
                         supportsPdf = o.optBoolean("supportsPdf", true),
+                        supportsToolCall = o.optBoolean("supportsToolCall", true),
                     )
             }
             out
@@ -258,7 +262,8 @@ object ProviderStore {
                         .put("supportsImage", p.supportsImage)
                         .put("supportsVideo", p.supportsVideo)
                         .put("supportsAudio", p.supportsAudio)
-                        .put("supportsPdf", p.supportsPdf),
+                        .put("supportsPdf", p.supportsPdf)
+                        .put("supportsToolCall", p.supportsToolCall),
                 )
             }
             root.put("providers", items)
@@ -281,6 +286,7 @@ object ProviderStore {
             p.supportsVideo = m.supportsVideo
             p.supportsAudio = m.supportsAudio
             p.supportsPdf = m.supportsPdf
+            p.supportsToolCall = m.supportsToolCall
         }
     }
 
@@ -519,7 +525,7 @@ object ProviderStore {
                 inputFormat.put("supportsPdf", p.supportsPdf)
                 props.put("inputFormat", inputFormat)
                 props.put("outputFormat", JSONObject().put("supportsText", true))
-                props.put("supportsToolCall", true)
+                props.put("supportsToolCall", p.supportsToolCall)
                 props.put("supportsJsonSchemaOutput", false)
                 props.put("supportsNativeWebSearch", false)
                 props.put("supportsMidConversationSystem", false)

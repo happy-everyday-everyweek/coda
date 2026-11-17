@@ -2621,7 +2621,7 @@ class SettingsDetailActivity :
         kind: ProviderStore.ProviderKind,
     ) {
         val kindOfRecord = existing?.kind ?: kind
-        val typeOfRecord = existing?.apiType ?: apiType
+        var typeOfRecord = existing?.apiType ?: apiType
 
         val idInput =
             EditText(this).apply {
@@ -2671,7 +2671,10 @@ class SettingsDetailActivity :
         val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = existing?.supportsVideo ?: false }
         val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = existing?.supportsAudio ?: false }
         val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = existing?.supportsPdf ?: true }
+        val toolBox = android.widget.CheckBox(this).apply { text = "支持工具调用"; isChecked = existing?.supportsToolCall ?: true }
 
+
+        val typeSelector = apiTypeSelector(typeOfRecord) { typeOfRecord = it }
 
         sheet.navigate {
             title(
@@ -2684,6 +2687,7 @@ class SettingsDetailActivity :
             subtitle("接口类型：$typeOfRecord")
             secondaryAction("取消") { it.dismiss() }
             content { col ->
+                col.addView(typeSelector)
                 col.addView(idInput)
                 col.addView(nameInput)
                 col.addView(urlInput)
@@ -2694,6 +2698,7 @@ class SettingsDetailActivity :
                 if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(videoBox)
                 if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(audioBox)
                 if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(pdfBox)
+            if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(toolBox)
             }
             primaryAction("保存") { s ->
                 val id = idInput.text.toString().trim()
@@ -2738,6 +2743,7 @@ class SettingsDetailActivity :
                             supportsVideo = videoBox.isChecked,
                             supportsAudio = audioBox.isChecked,
                             supportsPdf = pdfBox.isChecked,
+                            supportsToolCall = toolBox.isChecked,
                             kind = kindOfRecord,
                             origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
                         ),
@@ -2813,6 +2819,48 @@ class SettingsDetailActivity :
     }
 
     /**
+     * 接口类型选择器。允许创建后再切换，避免选错一次就只能删掉重建。
+     */
+    private fun apiTypeSelector(
+        initial: String,
+        onChanged: (String) -> Unit,
+    ): TextView {
+        var current = initial
+        return TextView(this).apply {
+            text = "接口类型：$current（点击切换）"
+            textSize = 13f
+            setPadding(0, dp(6), 0, dp(2))
+            setOnClickListener {
+                val options =
+                    listOf(
+                        "openai-chat-completions" to "OpenAI 兼容（chat/completions）",
+                        "anthropic-messages" to "Anthropic 兼容（messages）",
+                        "openai-responses" to "OpenAI Responses（responses）",
+                    )
+                val sheet = CodaSheet(this@SettingsDetailActivity).title("接口类型")
+                sheet.content { col ->
+                    options.forEach { (value, label) ->
+                        col.addView(
+                            TextView(this@SettingsDetailActivity).apply {
+                                text = if (value == current) "$label · 当前" else label
+                                textSize = 15f
+                                setPadding(0, dp(12), 0, dp(12))
+                                setOnClickListener {
+                                    current = value
+                                    onChanged(value)
+                                    this@apply.text = "接口类型：$value（点击切换）"
+                                    sheet.dismiss()
+                                }
+                            },
+                        )
+                    }
+                }
+                sheet.show()
+            }
+        }
+    }
+
+    /**
      * 编辑输入能力。OAuth 供应商没有手填表单，但图片/视频/音频/PDF 的声明
      * 仍要能改：不同模型对这些输入的支持并不一致，缺了这个入口就只能用默认值。
      */
@@ -2823,6 +2871,7 @@ class SettingsDetailActivity :
         val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = provider.supportsVideo }
         val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = provider.supportsAudio }
         val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = provider.supportsPdf }
+        val toolBox = android.widget.CheckBox(this).apply { text = "支持工具调用"; isChecked = provider.supportsToolCall }
         CodaSheet(this)
             .title("${provider.name} 的输入能力")
             .subtitle("按模型实际支持的类型勾选")
@@ -2831,11 +2880,13 @@ class SettingsDetailActivity :
                 col.addView(videoBox)
                 col.addView(audioBox)
                 col.addView(pdfBox)
+                col.addView(toolBox)
             }.primaryAction("保存") { sheet ->
                 provider.supportsImage = imageBox.isChecked
                 provider.supportsVideo = videoBox.isChecked
                 provider.supportsAudio = audioBox.isChecked
                 provider.supportsPdf = pdfBox.isChecked
+                provider.supportsToolCall = toolBox.isChecked
                 ProviderStore.save(this, list)
                 sheet.dismiss()
                 applyProviderChange()
@@ -2851,7 +2902,7 @@ class SettingsDetailActivity :
     ) {
         // 编辑已有供应商时，沿用它的类型；新增时用调用方指定的类型。
         val kindOfRecord = existing?.kind ?: kind
-        val typeOfRecord = existing?.apiType ?: apiType
+        var typeOfRecord = existing?.apiType ?: apiType
 
         val idInput =
             EditText(this).apply {
@@ -2901,15 +2952,11 @@ class SettingsDetailActivity :
         val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = existing?.supportsVideo ?: false }
         val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = existing?.supportsAudio ?: false }
         val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = existing?.supportsPdf ?: true }
+        val toolBox = android.widget.CheckBox(this).apply { text = "支持工具调用"; isChecked = existing?.supportsToolCall ?: true }
 
         // 接口类型不再让用户手填：路由已经按类型决定了，多一个输入框只会被填错。
         // 仍然留一行只读展示，方便排查。
-        val apiTypeLabel =
-            TextView(this).apply {
-                text = "接口类型：$typeOfRecord"
-                textSize = 13f
-                setPadding(0, dp(6), 0, dp(2))
-            }
+        val apiTypeLabel = apiTypeSelector(typeOfRecord) { typeOfRecord = it }
 
         val sheet =
             CodaSheet(this)
@@ -2938,6 +2985,7 @@ class SettingsDetailActivity :
             if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(videoBox)
             if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(audioBox)
             if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(pdfBox)
+            if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(toolBox)
             // ASR 供应商多一个测试入口：录一段音直接打这个端点，
             // 把识别结果或失败原因就地显示。聊天框不接这条通路，
             // 所以这是唯一能验证配置是否可用的地方。
@@ -3006,6 +3054,7 @@ class SettingsDetailActivity :
                             supportsVideo = videoBox.isChecked,
                             supportsAudio = audioBox.isChecked,
                             supportsPdf = pdfBox.isChecked,
+                            supportsToolCall = toolBox.isChecked,
                             kind = kindOfRecord,
                             origin = existing?.origin ?: ProviderStore.ProviderOrigin.MANUAL,
                         )
@@ -3059,6 +3108,7 @@ class SettingsDetailActivity :
                         supportsVideo = videoBox.isChecked,
                         supportsAudio = audioBox.isChecked,
                         supportsPdf = pdfBox.isChecked,
+                            supportsToolCall = toolBox.isChecked,
                         kind = kindOfRecord,
                         // 手填的一律是 MANUAL；OAuth 的那条由 OAuthLogin 落库时自己标 OAUTH，
                         // 这里覆盖掉会把它降级成普通供应商，所以保留原值。
