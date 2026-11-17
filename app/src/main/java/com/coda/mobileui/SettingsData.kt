@@ -308,6 +308,14 @@ object SettingsData {
                             else -> "providers_edit:${p.id}"
                         },
                     )
+                if (p.isOAuthManaged) {
+                    rows +=
+                        SettingRow.Value(
+                            "输入能力",
+                            inputCapabilitySummary(p),
+                            "providers_caps:${p.id}",
+                        )
+                }
             }
         }
         // OAuth 的入口不在这里：它属于「添加供应商」那一步（半屏第一屏选类型），
@@ -317,6 +325,16 @@ object SettingsData {
 
     /** OAuth 供应商显示的平台归属（腾讯 / GitHub 等）。 */
     private fun ProviderStore.Provider.vendorOrChannel(): String = OAuthProviders.all.firstOrNull { it.id == id }?.vendor ?: "OAuth"
+
+    /** 输入能力的一句话摘要，放在 OAuth 供应商的二级行里。 */
+    private fun inputCapabilitySummary(p: ProviderStore.Provider): String {
+        val parts = mutableListOf<String>()
+        if (p.supportsImage) parts += "图片"
+        if (p.supportsVideo) parts += "视频"
+        if (p.supportsAudio) parts += "音频"
+        if (p.supportsPdf) parts += "PDF"
+        return if (parts.isEmpty()) "仅文本" else parts.joinToString("、")
+    }
 
     /** 子智能体页：用户级 agents 目录的真实文件。 */
     fun subagents(ctx: Context): SettingsPage = agentAssetsPage(ctx, AgentAssets.Kind.SUBAGENT, "子智能体")

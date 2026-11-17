@@ -480,6 +480,21 @@ class MainActivity : BaseActivity() {
                 // 再对账模型清单。端口变了就必须重启内核，否则它仍拿旧地址发请求。
                 val endpointChanged = com.coda.mobileui.core.OAuthLogin.ensureStoredGateways(this)
                 com.coda.mobileui.core.OAuthLogin.refreshStoredModels(this)
+                // 网关没起来时不能只在日志里说：用户看到 OAuth 供应商还在，但所有请求都会失败。
+                val gatewayDown =
+                    runCatching {
+                        val oauth =
+                            com.coda.mobileui.core.ProviderStore
+                                .load(this)
+                                .filter { it.origin == com.coda.mobileui.core.ProviderStore.ProviderOrigin.OAUTH }
+                        val needWb = oauth.any { com.coda.mobileui.core.OAuthProviders.usesWorkBuddyGateway(it.id) }
+                        val needProxy = oauth.any { !com.coda.mobileui.core.OAuthProviders.usesWorkBuddyGateway(it.id) }
+                        (needWb && !com.coda.mobileui.core.WorkBuddyGateway.isRunning) ||
+                            (needProxy && !com.coda.mobileui.core.ProxyHost.isRunning)
+                    }.getOrDefault(false)
+                if (gatewayDown) {
+                    runOnUiThread { snack("OAuth 网关未能启动，请检查运行日志，或重新进入一次授权页") }
+                }
                 if (endpointChanged) {
                     // 冷启动时内核还没起来，它接下来自然会读新配置；这时再 restartCore
                     // 会与首页的首次 ensureStarted 抢时序，可能出现「重启请求先到、

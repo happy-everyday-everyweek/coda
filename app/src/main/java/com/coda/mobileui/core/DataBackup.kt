@@ -112,6 +112,10 @@ object DataBackup {
             File(ctx.filesDir.parentFile, "databases").takeIf { it.exists() }?.let {
                 addTree("databases", it)
             }
+            // no_backup 也是应用私有持久区，部分凭据与缓存放在这里。
+            ctx.noBackupFilesDir.takeIf { it.exists() }?.let {
+                addTree("no-backup", it)
+            }
 
             val global = AgentPrompt.globalFile(ctx)
             if (global.isFile) putText(ENTRY_GLOBAL_PROMPT, global.readText())
@@ -155,6 +159,11 @@ object DataBackup {
 
                     name.startsWith("databases/") -> {
                         restoreEntry(File(ctx.filesDir.parentFile, "databases"), name.removePrefix("databases/"), zip)
+                        count++
+                    }
+
+                    name.startsWith("no-backup/") -> {
+                        restoreEntry(ctx.noBackupFilesDir, name.removePrefix("no-backup/"), zip)
                         count++
                     }
 

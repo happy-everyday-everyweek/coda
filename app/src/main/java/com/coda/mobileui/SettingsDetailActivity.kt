@@ -659,6 +659,10 @@ class SettingsDetailActivity :
                 OAuthAccountsSheet(this).show()
             }
 
+            key.startsWith("providers_caps:") -> {
+                editProviderCapabilities(key.removePrefix("providers_caps:"))
+            }
+
             key.startsWith("providers_oauth_open:") -> {
                 // 点已添加的供应商 = 进它的管理页，而不是再走一遍授权向导。
                 // 之前的写法直接开 OAuthSheet（授权流程），用户点自己已有的供应商
@@ -1295,7 +1299,6 @@ class SettingsDetailActivity :
 
     private fun doImportBackup(uri: Uri) {
         snack("导入")
-        val controller = ZController.get(this)
         Thread {
             val result = runCatching { DataBackup.import(this, uri) }
             val count = result.getOrNull()
@@ -1305,17 +1308,23 @@ class SettingsDetailActivity :
                     snack("导入失败：${err ?: "文件里没有可恢复的数据"}")
                     return@runOnUiThread
                 }
-                controller.restartCore { ok, msg ->
-                    runOnUiThread {
-                        val tip =
-                            if (ok) "已导入" else "导入完成，重启失败：$msg"
-                        android.widget.Toast.makeText(this, tip, android.widget.Toast.LENGTH_LONG).show()
-                        // 主题、字号等设置可能变了，重建页面让它们立即生效。
-                        recreate()
-                    }
-                }
+                // 恢复覆盖的是设置、数据库、Linux 环境与内核数据，只重启内核不够：
+                // SharedPreferences、主题与已打开的数据库都还留在当前进程里。
+                // 这里直接重启应用，保证用户看到的是备份时的完整状态。
+                android.widget.Toast.makeText(this, "已导入，应用将重启以完全生效", android.widget.Toast.LENGTH_LONG).show()
+                window.decorView.postDelayed({ relaunchApp() }, 900)
             }
         }.start()
+    }
+
+    /** 重启应用进程：清掉任务栈后重新拉起自己，再结束当前进程。 */
+    private fun relaunchApp() {
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            startActivity(intent)
+        }
+        Runtime.getRuntime().exit(0)
     }
 
     /** 按行首级别标记过滤；续行（堆栈）跟随上一条显示。 */
@@ -2785,6 +2794,37 @@ class SettingsDetailActivity :
                 horizontalInsetPx = 0,
             )
         }
+    }
+
+    /**
+     * 编辑输入能力。OAuth 供应商没有手填表单，但图片/视频/音频/PDF 的声明
+     * 仍要能改：不同模型对这些输入的支持并不一致，缺了这个入口就只能用默认值。
+     */
+    private fun editProviderCapabilities(id: String) {
+        val list = ProviderStore.load(this)
+        val provider = list.firstOrNull { it.id == id } ?: return
+        val imageBox = android.widget.CheckBox(this).apply { text = "支持图片输入"; isChecked = provider.supportsImage }
+        val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = provider.supportsVideo }
+        val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = provider.supportsAudio }
+        val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = provider.supportsPdf }
+        CodaSheet(this)
+            .title("${provider.name} 的输入能力")
+            .subtitle("按模型实际支持的类型勾选")
+            .content { col ->
+                col.addView(imageBox)
+                col.addView(videoBox)
+                col.addView(audioBox)
+                col.addView(pdfBox)
+            }.primaryAction("保存") { sheet ->
+                provider.supportsImage = imageBox.isChecked
+                provider.supportsVideo = videoBox.isChecked
+                provider.supportsAudio = audioBox.isChecked
+                provider.supportsPdf = pdfBox.isChecked
+                ProviderStore.save(this, list)
+                sheet.dismiss()
+                applyProviderChange()
+            }.secondaryAction("取消") { it.dismiss() }
+            .show()
     }
 
     /** 供应商编辑（添加 / 修改）：保存后重启核心使配置生效。 */
