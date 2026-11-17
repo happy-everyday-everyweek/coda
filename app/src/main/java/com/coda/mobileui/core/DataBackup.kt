@@ -222,7 +222,10 @@ object DataBackup {
                                 count++
                             }
 
-                            name == ENTRY_ASR_PROVIDERS -> { ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)); count++ }
+                            name == ENTRY_ASR_PROVIDERS -> {
+                                ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
+                                count++
+                            }
 
                             name == ENTRY_GLOBAL_PROMPT -> {
                                 AgentPrompt.save(AgentPrompt.globalFile(ctx), String(bytes, Charsets.UTF_8))
