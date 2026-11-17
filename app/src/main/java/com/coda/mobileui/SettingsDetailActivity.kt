@@ -1299,6 +1299,12 @@ class SettingsDetailActivity :
 
     private fun doImportBackup(uri: Uri) {
         snack("导入")
+        // 导入会覆盖 linux 根文件系统与内核数据。进程还在跑时写这些文件，
+        // 既可能写坏正在使用的配置，也可能让旧网关继续占着端口与凭据。
+        // 先收干净，再由重启后的新进程重新加载。
+        runCatching { com.coda.mobileui.core.WorkBuddyGateway.stop() }
+        runCatching { com.coda.mobileui.core.ProxyHost.stop() }
+        runCatching { ZController.get(this).runtime.stopCore() }
         Thread {
             val result = runCatching { DataBackup.import(this, uri) }
             val count = result.getOrNull()
