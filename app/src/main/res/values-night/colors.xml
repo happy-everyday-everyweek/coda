@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- MD3 静态回退色板（深色，黑白中性） -->
-    <color name="max_accent">#C4B0FF</color>
     <color name="md3_primary">#E6E6E6</color>
     <color name="md3_on_primary">#1B1B1B</color>
     <color name="md3_primary_container">#333333</color>

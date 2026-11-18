@@ -3,7 +3,6 @@
     <!-- MD3 静态回退色板（浅色，黑白中性）：主题色为近黑，去掉暖调。 -->
     <color name="tool_state_done">#2E7B4F</color>
     <color name="tool_state_failed">#C0392B</color>
-    <color name="max_accent">#7C4DFF</color>
     <color name="md3_primary">#1B1B1B</color>
     <color name="md3_on_primary">#FFFFFF</color>
     <color name="md3_primary_container">#E4E4E4</color>

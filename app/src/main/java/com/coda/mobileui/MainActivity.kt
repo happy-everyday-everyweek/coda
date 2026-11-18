@@ -4550,9 +4550,6 @@ class MainActivity : BaseActivity() {
      */
     private var swipeConsumed = false
 
-    /** 左滑进入工作区的当前拖出比例（0…1），松手时用来决定是否提交。 */
-    private var workspaceDragFraction = 0f
-
     /** 拖出超过这个比例，松手就进工作区；不到就弹回。 */
     private val workspaceDragCommit = 0.28f
 
@@ -4740,7 +4737,6 @@ class MainActivity : BaseActivity() {
             host.addView(preview)
         }
         val width = distance.coerceIn(0, screen)
-        workspaceDragFraction = width.toFloat() / screen
         preview.layoutParams = preview.layoutParams.apply { this.width = width }
         preview.requestLayout()
     }
@@ -4754,7 +4750,6 @@ class MainActivity : BaseActivity() {
         val preview = host?.findViewWithTag<android.view.View>("workspace_drag_preview")
         val screen = resources.displayMetrics.widthPixels.coerceAtLeast(1)
         val fraction = if (cancelled) 0f else (distance.toFloat() / screen).coerceIn(0f, 1f)
-        workspaceDragFraction = 0f
         val token = ++workspacePreviewToken
         if (preview != null) {
             preview.animate().cancel()
