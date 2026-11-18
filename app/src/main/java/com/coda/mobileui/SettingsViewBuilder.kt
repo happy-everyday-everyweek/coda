@@ -306,7 +306,6 @@ object SettingsViewBuilder {
                 }
             }
         }
-    }
 
     /** 组首只给上圆角、组末只给下圆角，组内其余行是直角。 */
     private fun applyGroupShape(
