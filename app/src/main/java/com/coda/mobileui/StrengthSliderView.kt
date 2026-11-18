@@ -46,7 +46,16 @@ class StrengthSliderView
         private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val knobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        private val knobPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                // 不再写死白色：浅色模式的轨道是浅灰，白滑块对比度接近 1:1，看不见当前档位。
+                color =
+                    MaterialColors.getColor(
+                        this@StrengthSliderView,
+                        androidx.appcompat.R.attr.colorPrimary,
+                        Color.WHITE,
+                    )
+            }
         private val knobShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x1A000000 }
         private val particlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val starPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -130,18 +139,35 @@ class StrengthSliderView
                         0.5f + random.nextFloat() * 1.1f,
                     )
             }
-            if (starAnimator?.isRunning != true) {
-                starAnimator =
-                    ValueAnimator.ofFloat(0f, 1f).apply {
-                        duration = 2200
-                        repeatCount = ValueAnimator.INFINITE
-                        addUpdateListener {
-                            clock += 0.055f
-                            invalidate()
-                        }
-                        start()
+            ensureStarAnimator()
+        }
+
+        /** 只在附着窗口时跑星点动画：脱离后必须停，否则每开一次面板就多一个常驻动画。 */
+        private fun ensureStarAnimator() {
+            if (starAnimator?.isRunning == true) return
+            starAnimator =
+                ValueAnimator.ofFloat(0f, 1f).apply {
+                    duration = 2200
+                    repeatCount = ValueAnimator.INFINITE
+                    addUpdateListener {
+                        clock += 0.055f
+                        invalidate()
                     }
-            }
+                    start()
+                }
+        }
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            if (stars.isNotEmpty()) ensureStarAnimator()
+        }
+
+        override fun onDetachedFromWindow() {
+            starAnimator?.cancel()
+            starAnimator = null
+            waveAnimator?.cancel()
+            waveAnimator = null
+            super.onDetachedFromWindow()
         }
 
         init {

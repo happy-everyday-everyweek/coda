@@ -70,6 +70,9 @@ class CodaSheet(
     private var fullScreenH = 0
     private var statusBarH = 0
     private var navBarH = 0
+
+    /** 当前输入法高度；键盘弹起时整张卡片要抬到它上面。 */
+    private var imeInset = 0
     private var cornerPx = 0f
 
     // 以下三个只在卡片显示期间有效：navigate() 重建内容与底栏时要用到。
@@ -492,6 +495,16 @@ class CodaSheet(
 
         decor.addView(rootView, matchParams())
         root = rootView
+        // 应用是 edge-to-edge，Android 11 起 adjustResize 不再缩小窗口：
+        // 不自己处理 ime inset，键盘会直接盖住输入框与底部按钮。
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, insets ->
+            val ime = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+            if (ime != imeInset) {
+                imeInset = ime
+                view.setPadding(0, 0, 0, ime)
+            }
+            insets
+        }
         scrim = scrimView
         panel = panelView
         isShowing = true

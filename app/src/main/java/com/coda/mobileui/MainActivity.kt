@@ -990,47 +990,80 @@ class MainActivity : BaseActivity() {
         // 使叉与模式条（点）处于同一视觉层级。
         val content = findViewById<View>(R.id.content_area) ?: return
         if (!enabled) {
-            blurOverlay?.visibility = View.GONE
+            blurRequested = false
+            clearBlurOverlay()
             return
         }
         val w = content.width
         val h = content.height
         if (w <= 0 || h <= 0) return
+        blurRequested = true
         val full =
             runCatching {
                 android.graphics.Bitmap
                     .createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
                     .also { content.draw(android.graphics.Canvas(it)) }
             }.getOrNull() ?: return
-        // 降采样到 1/4 再模糊：速度快，模糊半径按比例取，视觉等价
-        val small =
-            android.graphics.Bitmap.createScaledBitmap(
-                full,
-                (w / 4).coerceAtLeast(1),
-                (h / 4).coerceAtLeast(1),
-                true,
-            )
-        val overlay =
-            blurOverlay ?: ImageView(this).apply {
-                scaleType = ImageView.ScaleType.FIT_XY
-                isClickable = false
-                isFocusable = false
-                visibility = View.GONE
-                // 挂在内容区内部最上层：精确覆盖内容区，且位于其他内容之上
-                (content as? ViewGroup)?.addView(
-                    this,
-                    FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                    ),
-                )
-                blurOverlay = this
+        // 降采样与逐像素模糊放后台：百万级整数运算放在长按回调里会直接掉帧。
+        Bg.run {
+            val small =
+                runCatching {
+                    android.graphics.Bitmap.createScaledBitmap(
+                        full,
+                        (w / 8).coerceAtLeast(1),
+                        (h / 8).coerceAtLeast(1),
+                        true,
+                    )
+                }.getOrNull()
+            full.recycle()
+            if (small == null) return@run
+            val blurred = runCatching { blurBitmap(small, 3) }.getOrNull()
+            small.recycle()
+            if (blurred == null) return@run
+            runOnUiThread {
+                if (!blurRequested) {
+                    blurred.recycle()
+                    return@runOnUiThread
+                }
+                val overlay = ensureBlurOverlay(content)
+                clearBlurBitmap(overlay)
+                overlay.setImageBitmap(blurred)
+                overlay.visibility = View.VISIBLE
             }
-        overlay.setImageBitmap(blurBitmap(small, 6))
-        overlay.visibility = View.VISIBLE
+        }
     }
 
     private var blurOverlay: ImageView? = null
+    private var blurRequested = false
+
+    private fun ensureBlurOverlay(content: View): ImageView =
+        blurOverlay ?: ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            isClickable = false
+            isFocusable = false
+            visibility = View.GONE
+            // 挂在内容区内部最上层：精确覆盖内容区，且位于其他内容之上
+            (content as? ViewGroup)?.addView(
+                this,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            blurOverlay = this
+        }
+
+    private fun clearBlurBitmap(overlay: ImageView) {
+        val old = (overlay.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+        overlay.setImageDrawable(null)
+        if (old != null && !old.isRecycled) old.recycle()
+    }
+
+    private fun clearBlurOverlay() {
+        val overlay = blurOverlay ?: return
+        clearBlurBitmap(overlay)
+        overlay.visibility = View.GONE
+    }
 
     /** 三次盒式模糊近似高斯，不依赖任何图形库。 */
     private fun blurBitmap(
@@ -1589,6 +1622,9 @@ class MainActivity : BaseActivity() {
     }
 
     override fun onDestroy() {
+        // 模糊覆盖层持有的位图要显式释放，否则 Activity 销毁后仍占着整屏像素。
+        blurRequested = false
+        clearBlurOverlay()
         botPage?.close()
         botPage = null
         BrowserControl.detachActivity()

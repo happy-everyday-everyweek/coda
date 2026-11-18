@@ -969,6 +969,10 @@ open class FilesPage(
     }
 
     private fun rename(file: File) {
+        protectedReason(file)?.let {
+            toast(it)
+            return
+        }
         inputSheet("重命名", file.name) { name ->
             val target = File(file.parentFile, name)
             if (target.exists()) {
@@ -1049,15 +1053,37 @@ open class FilesPage(
     private fun protectedReason(file: File): String? {
         val path = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
         val rootPath = runCatching { host.root.canonicalPath }.getOrDefault(host.root.absolutePath)
+        // 共享存储上的 /sdcard 是链接，canonical 之后是 /storage/emulated/0；
+        // 只按字面量比较会漏掉它，所以两套写法都要在名单里。
+        val blockedRoots =
+            setOf(
+                "/",
+                "/sdcard",
+                "/mnt",
+                "/mnt/sdcard",
+                "/storage",
+                "/storage/emulated",
+                "/storage/emulated/0",
+                "/data",
+                "/system",
+                "/vendor",
+                "/product",
+                "/apex",
+                "/proc",
+                "/sys",
+                "/dev",
+            )
         return when {
             path == rootPath -> {
                 "工作区根目录不能删除或移动"
             }
-
-            path == "/" || path == "/sdcard" || path == "/storage" || path == "/storage/emulated" -> {
+            // 工作区的祖先目录同样不能动：删掉 /sdcard/Coda 会连带删掉工作区与 .coda 配置。
+            rootPath.startsWith(path.trimEnd('/') + "/") -> {
+                "工作区所在的上级目录不能删除或移动"
+            }
+            path in blockedRoots -> {
                 "系统目录不能删除或移动"
             }
-
             path.startsWith("/system") || path.startsWith("/data") || path.startsWith("/vendor") -> {
                 "系统目录不能删除或移动"
             }
@@ -1068,8 +1094,12 @@ open class FilesPage(
         }
     }
 
+    /** 符号链接本身不能当目录展开，否则删除会顺着链接清掉目标内容。 */
+    private fun isSymlink(file: File): Boolean =
+        runCatching { java.nio.file.Files.isSymbolicLink(file.toPath()) }.getOrDefault(false)
+
     private fun deleteRecursive(file: File): Boolean {
-        if (file.isDirectory) {
+        if (file.isDirectory && !isSymlink(file)) {
             file.listFiles()?.forEach { deleteRecursive(it) }
         }
         return file.delete()
@@ -1258,6 +1288,9 @@ open class FilesPage(
                     InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                 setPadding(dp(6f), dp(6f), dp(14f), dp(14f))
                 isVerticalScrollBarEnabled = true
+                // 与 wrapEnabled 的初始值（自动换行关）保持一致：默认长行横向滚动，
+                // 否则界面说「已关闭换行」但实际仍是折行。
+                setHorizontallyScrolling(!wrapEnabled)
                 layoutParams = android.widget.FrameLayout.LayoutParams(MATCH, MATCH)
                 onCaretLine = { refreshEditorChrome() }
                 setOnKeyListener { view, code, event -> handleEditorKey(view, code, event) }
@@ -1766,7 +1799,9 @@ open class FilesPage(
                 flags and InputType.TYPE_TEXT_FLAG_MULTI_LINE.inv()
             }
         editorInput.setHorizontallyScrolling(!wrap)
+        // setSingleLine(false) 内部会把横向滚动重置为 false，必须放在它之后再设一次。
         editorInput.setSingleLine(false)
+        editorInput.setHorizontallyScrolling(!wrap)
         editorInput.requestLayout()
         // 折行会改变显示行数，行号与当前行底都要跟着重算。
         editorInput.post { refreshEditorChrome() }
@@ -2073,7 +2108,7 @@ open class FilesPage(
      * 写盘放后台：编辑器上限是 MAX_EDIT_BYTES，主线程同步 writeText 在这个量级上
      * 会直接卡住界面，慢存储上更明显。
      */
-    private fun saveEditor() {
+    private fun saveEditor(onDone: ((Boolean) -> Unit)? = null) {
         val file = editing ?: return
         val text = editorInput.text.toString()
         host.background(
@@ -2081,15 +2116,20 @@ open class FilesPage(
             then = { ok ->
                 if (ok) {
                     originalText = text
-                    dirty = false
+                    // 写盘期间用户可能又改了内容：只有当前文本与已写盘的一致才清脏标记。
+                    dirty = editorInput.text.toString() != text
                     editorTitle.text = file.name
                     refreshCursorStatus()
-                    toast("已保存")
+                    toast(if (dirty) "已保存先前内容，当前修改未保存" else "已保存")
                 } else {
                     toast("保存失败")
                 }
+                onDone?.invoke(ok)
             },
-            onError = { toast("保存失败") },
+            onError = {
+                toast("保存失败")
+                onDone?.invoke(false)
+            },
         )
     }
 
@@ -2102,8 +2142,8 @@ open class FilesPage(
             }
             sheet.primaryAction("保存并关闭") {
                 sheet.dismiss()
-                saveEditor()
-                leaveEditor()
+                // 写盘成功才关标签：失败时保留编辑状态与光标，用户还能重试。
+                saveEditor { ok -> if (ok) leaveEditor() }
             }
             sheet.secondaryAction("放弃修改") {
                 sheet.dismiss()
