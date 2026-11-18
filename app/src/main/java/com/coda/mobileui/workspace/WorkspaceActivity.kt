@@ -505,6 +505,7 @@ class WorkspaceActivity : BaseActivity() {
             val old = tabs.removeAt(slot)
             pageHost.removeView(old.page.view)
             old.page.onClosed()
+            releaseEditorBuffer(old.data.state)
             history.remove(old.data.id)
             ahead.remove(old.data.id)
             // 被顶替的就是当前页：先把 activeId 清掉，免得历史里留一个不存在的 id。

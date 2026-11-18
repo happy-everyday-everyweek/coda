@@ -4714,9 +4714,14 @@ class MainActivity : BaseActivity() {
      * 所以这里在窗口上叠一层与工作区同底色的卡片，宽度跟着手指走；
      * 松手时把比例交给 WorkspaceActivity，让它从该宽度继续展开，观感是连续的。
      */
+    /** 当前拖拽预览的代号：延迟移除只对同一轮的预览生效。 */
+    private var workspacePreviewToken = 0
+
     private fun showWorkspaceDragPreview(distance: Int) {
         val screen = resources.displayMetrics.widthPixels
         if (screen <= 0) return
+        // 新一轮手势开始：让上一轮残留的延迟移除失效，否则它会在拖动中途删掉这块预览。
+        workspacePreviewToken++
         val host = findViewById<android.view.ViewGroup>(android.R.id.content) ?: return
         var preview = host.findViewWithTag<android.view.View>("workspace_drag_preview")
         if (preview == null) {
@@ -4750,10 +4755,18 @@ class MainActivity : BaseActivity() {
         val screen = resources.displayMetrics.widthPixels.coerceAtLeast(1)
         val fraction = if (cancelled) 0f else (distance.toFloat() / screen).coerceIn(0f, 1f)
         workspaceDragFraction = 0f
+        val token = ++workspacePreviewToken
         if (preview != null) {
             preview.animate().cancel()
-            // 提交时留一小段让工作区先画出来，避免中间闪一帧空白。
-            preview.postDelayed({ (preview.parent as? android.view.ViewGroup)?.removeView(preview) }, 120)
+            // 提交时留一小段让工作区先画出来；用代号避免把下一轮手势的预览删掉。
+            preview.postDelayed(
+                {
+                    if (token == workspacePreviewToken) {
+                        (preview.parent as? android.view.ViewGroup)?.removeView(preview)
+                    }
+                },
+                120,
+            )
         }
         if (!cancelled && fraction >= workspaceDragCommit) {
             WorkspaceActivity.startWidthFraction = fraction
