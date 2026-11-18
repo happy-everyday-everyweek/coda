@@ -82,7 +82,7 @@
                     android:layout_gravity="center"
                     android:text="@string/strength_hint"
                     android:textAppearance="?attr/textAppearanceTitleMedium"
-                    android:textColor="@color/max_accent"
+                    android:textColor="?attr/colorPrimary"
                     android:visibility="gone" />
             </FrameLayout>
 

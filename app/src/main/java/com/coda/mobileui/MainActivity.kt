@@ -122,6 +122,8 @@ class MainActivity : BaseActivity() {
         var pendingOpenDrawer = false
 
         private const val KEY_SHOWING_SETTINGS = "showing_settings"
+        private const val KEY_SHOWING_BOT = "showing_bot"
+        private const val KEY_SHOWING_SEARCH = "showing_search"
         private const val KEY_CONVERSATION_ID = "conversation_id"
 
         /** 全屏抽屉点会话或新对话时：先快速收回半屏（这一段时长），再收起抽屉。 */
@@ -153,6 +155,9 @@ class MainActivity : BaseActivity() {
 
     /** 思考块折叠状态：messageId → 是否收起（缺省收起）。 */
     private val reasoningCollapsed = HashMap<String, Boolean>()
+
+    /** 哪些消息的工具组被手动展开：整棵聊天树重建时要恢复，不能自己收回去。 */
+    private val expandedToolGroups = HashSet<String>()
 
     /** 思考开始时间：messageId → 首个思考增量到达的毫秒时间戳。 */
     private val reasoningStart = HashMap<String, Long>()
@@ -887,18 +892,36 @@ class MainActivity : BaseActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_SHOWING_SETTINGS, showingSettings)
+        outState.putBoolean(KEY_SHOWING_BOT, showingBot)
+        outState.putBoolean(KEY_SHOWING_SEARCH, showingSearch)
         outState.putString(KEY_CONVERSATION_ID, currentConversationId)
     }
 
     /** 小窗/全屏切换会重建界面，这里把停留在哪一页恢复回去。 */
     override fun onRestoreInstanceState(savedInstanceState: Bundle) {
         super.onRestoreInstanceState(savedInstanceState)
+        // 三个内容页与设置页一样会被重建：只恢复会话会让 Bot/搜索页直接消失。
+        if (savedInstanceState.getBoolean(KEY_SHOWING_BOT, false)) {
+            showBotPage()
+            return
+        }
+        if (savedInstanceState.getBoolean(KEY_SHOWING_SEARCH, false)) {
+            showSearchPage()
+            return
+        }
         if (savedInstanceState.getBoolean(KEY_SHOWING_SETTINGS, false)) {
             openSettingsPage()
             return
         }
         savedInstanceState.getString(KEY_CONVERSATION_ID)?.let { id ->
-            conversations.firstOrNull { it.id == id }?.let { showConversation(it) }
+            val known = conversations.firstOrNull { it.id == id }
+            if (known != null) {
+                showConversation(known)
+            } else {
+                // 抽屉里的会话列表来自内核快照，重建时可能还没到：直接让内核打开该会话，
+                // 不要拿演示数据去顶替。
+                runCatching { zc.openSession(id, null) }
+            }
         }
     }
 
@@ -2097,12 +2120,13 @@ class MainActivity : BaseActivity() {
                 )
                 val plainCount = tools.count { !ZWorkflowKit.isWorkflowTool(it.tool) }
                 val collapseTools = plainCount >= 2
-                // 连续工具调用合并成一组：默认收起，只露一行摘要，点开才铺卡片。
+                val expanded = message.id in expandedToolGroups
+                // 连续工具调用合并成一组：默认收起；展开状态按消息 id 记住，流式重建不会自己收回。
                 val toolHost =
                     if (collapseTools) {
                         LinearLayout(this).apply {
                             orientation = LinearLayout.VERTICAL
-                            visibility = View.GONE
+                            visibility = if (expanded) View.VISIBLE else View.GONE
                         }
                     } else {
                         host
@@ -2110,7 +2134,7 @@ class MainActivity : BaseActivity() {
                 if (collapseTools) {
                     host.addView(
                         TextView(this).apply {
-                            text = "调用 $plainCount 个工具"
+                            text = if (expanded) "收起 $plainCount 个工具" else "调用 $plainCount 个工具"
                             textSize = 13f
                             setTextColor(neutral)
                             setPadding(dp(12), dp(6), dp(12), dp(6))
@@ -2118,6 +2142,11 @@ class MainActivity : BaseActivity() {
                             setOnClickListener { v ->
                                 val open = toolHost.visibility == View.VISIBLE
                                 toolHost.visibility = if (open) View.GONE else View.VISIBLE
+                                if (open) {
+                                    expandedToolGroups.remove(message.id)
+                                } else {
+                                    expandedToolGroups.add(message.id)
+                                }
                                 (v as TextView).text =
                                     if (open) "调用 $plainCount 个工具" else "收起 $plainCount 个工具"
                             }
@@ -3660,6 +3689,56 @@ class MainActivity : BaseActivity() {
     }
 
     /** 权限请求对话框：选项直接来自协议（options[].response 用于应答）。 */
+    private data class DeferredRequest(
+        val id: Any,
+        val params: org.json.JSONObject,
+        val question: Boolean,
+    )
+
+    /** 用户选择「稍后处理」的请求：不自动拒绝，等用户点提示再回来。 */
+    private var deferredRequest: DeferredRequest? = null
+
+    /** 「稍后处理」行：不自动拒绝，改由提示条提供继续入口。 */
+    private fun addDeferRow(
+        col: LinearLayout,
+        request: DeferredRequest,
+        sheet: CodaSheet,
+        markResponded: () -> Unit,
+    ) {
+        val color =
+            com.google.android.material.color.MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                Color.GRAY,
+            )
+        col.addView(
+            TextView(this).apply {
+                text = "稍后处理"
+                textSize = 14f
+                setTextColor(color)
+                setPadding(dp(2), dp(14), dp(2), dp(14))
+                setOnClickListener {
+                    markResponded()
+                    deferredRequest = request
+                    clearPendingPermission()
+                    sheet.dismiss()
+                    val root = findViewById<View>(android.R.id.content) ?: return@setOnClickListener
+                    Snackbar.make(root, "已暂缓处理，可在提示里继续", Snackbar.LENGTH_INDEFINITE)
+                        .setAction("继续处理") {
+                            val pending = deferredRequest ?: return@setAction
+                            deferredRequest = null
+                            if (pending.question) {
+                                showUserInputDialog(pending.id, pending.params)
+                            } else {
+                                showPermissionDialog(pending.id, pending.params)
+                            }
+                        }
+                        .show()
+                }
+            },
+        )
+    }
+
     private fun showPermissionDialog(
         requestId: Any,
         params: org.json.JSONObject,
@@ -3713,6 +3792,7 @@ class MainActivity : BaseActivity() {
                     },
                 )
             }
+            addDeferRow(col, DeferredRequest(requestId, params, question = false), sheet) { responded = true }
         }
         sheet.show()
     }
@@ -3775,11 +3855,13 @@ class MainActivity : BaseActivity() {
                         },
                     )
                 }
+                addDeferRow(col, DeferredRequest(requestId, params, question = true), sheet) { responded = true }
             }
             sheet.show()
         } else {
             val input = EditText(this)
             sheet.content { col ->
+                addDeferRow(col, DeferredRequest(requestId, params, question = true), sheet) { responded = true }
                 col.addView(
                     input,
                     LinearLayout
@@ -4495,6 +4577,8 @@ class MainActivity : BaseActivity() {
             MotionEvent.ACTION_DOWN -> {
                 edgeSwipeStartX = ev.x
                 edgeSwipeStartY = ev.y
+                // 上一轮可能异常结束（被父容器拦截等），先清掉残留的跟手预览。
+                finishWorkspaceDrag(0, cancelled = true)
                 // 一次手势只允许被消费一次。抽屉在 ACTION_MOVE 里就被关掉之后，
                 // 如果 ACTION_UP 再判一遍，此时抽屉已是关闭态，同一个左滑会落进
                 // "左滑进工作台"分支——这就是左滑关抽屉偶发打开工作区的原因。
@@ -4542,20 +4626,29 @@ class MainActivity : BaseActivity() {
                 }
             }
 
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            MotionEvent.ACTION_CANCEL -> {
+                // 系统取消（来电、通知栏下拉、父容器拦截）：只收起预览，绝不提交。
+                swipeConsumed = false
+                finishWorkspaceDrag(0, cancelled = true)
+            }
+
+            MotionEvent.ACTION_UP -> {
                 if (blocked) return super.dispatchTouchEvent(ev)
                 // 本手势已在 MOVE 阶段处理过（开/关抽屉、进/出全屏、进工作台），抬手不再重复判定
                 if (swipeConsumed) {
                     swipeConsumed = false
+                    finishWorkspaceDrag(0, cancelled = true)
                     return super.dispatchTouchEvent(ev)
                 }
                 val dx = ev.x - edgeSwipeStartX
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
+                var committed = false
                 // 设置页：抬手也不进入工作台，只允许右滑打开抽屉
                 if (showingSettings || showingBot) {
                     if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                         drawerLayout.openDrawer(Gravity.LEFT)
                     }
+                    finishWorkspaceDrag(0, cancelled = true)
                     return super.dispatchTouchEvent(ev)
                 }
                 if (fullDrawer?.visibility == View.VISIBLE) {
@@ -4571,12 +4664,14 @@ class MainActivity : BaseActivity() {
                 } else if (dx < -dp(48) && -dx > dy) {
                     if (drawerLayout.isDrawerOpen(Gravity.LEFT)) {
                         drawerLayout.closeDrawer(Gravity.LEFT)
-                    } else if (!showingSettings && !showingBot && -dx > dp(60)) {
-                        // 主界面左滑进入工作台：拖动过程中已经画了跟手预览，
-                        // 这里提交或弹回，比例交给 WorkspaceActivity 接着展开。
-                        finishWorkspaceDrag()
+                    } else if (!showingSettings && !showingBot) {
+                        // 用抬手这一刻的位移换算比例：之前用的是 MOVE 阶段缓存的旧值，
+                        // 快速一划时采样不够就会「明明滑够了却不动」。
+                        finishWorkspaceDrag((-dx).toInt(), cancelled = false)
+                        committed = true
                     }
                 }
+                if (!committed) finishWorkspaceDrag(0, cancelled = true)
             }
         }
         return super.dispatchTouchEvent(ev)
@@ -4629,33 +4724,38 @@ class MainActivity : BaseActivity() {
                 android.view.View(this).apply {
                     tag = "workspace_drag_preview"
                     setBackgroundColor(attrColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
+                    // 工作区从右侧展开：预览锚在右边缘，宽度增长时与页面入场位置重合。
                     layoutParams =
                         android.widget.FrameLayout.LayoutParams(
                             0,
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            Gravity.END,
                         )
                 }
             host.addView(preview)
         }
-        workspaceDragFraction = (distance.toFloat() / screen).coerceIn(0f, 1f)
-        preview.layoutParams = preview.layoutParams.apply { width = distance.coerceAtMost(screen) }
+        val width = distance.coerceIn(0, screen)
+        workspaceDragFraction = width.toFloat() / screen
+        preview.layoutParams = preview.layoutParams.apply { this.width = width }
         preview.requestLayout()
     }
 
-    /** 松手：进度够就带着比例进工作区，不够就退回。 */
-    private fun finishWorkspaceDrag() {
+    /** 收尾：取消或提交都从这里走，保证预览一定被移除，不会永久盖住界面。 */
+    private fun finishWorkspaceDrag(
+        distance: Int,
+        cancelled: Boolean,
+    ) {
         val host = findViewById<android.view.ViewGroup>(android.R.id.content)
         val preview = host?.findViewWithTag<android.view.View>("workspace_drag_preview")
-        val fraction = workspaceDragFraction
-        preview
-            ?.animate()
-            ?.alpha(0f)
-            ?.setDuration(120)
-            ?.withEndAction { host?.removeView(preview) }
-            ?.start()
+        val screen = resources.displayMetrics.widthPixels.coerceAtLeast(1)
+        val fraction = if (cancelled) 0f else (distance.toFloat() / screen).coerceIn(0f, 1f)
         workspaceDragFraction = 0f
-        if (fraction >= workspaceDragCommit) {
-            // 把已经拖出的比例交给工作区，让它从这个宽度接着展开
+        if (preview != null) {
+            preview.animate().cancel()
+            // 提交时留一小段让工作区先画出来，避免中间闪一帧空白。
+            preview.postDelayed({ (preview.parent as? android.view.ViewGroup)?.removeView(preview) }, 120)
+        }
+        if (!cancelled && fraction >= workspaceDragCommit) {
             WorkspaceActivity.startWidthFraction = fraction
             openWorkspace()
         }
@@ -5030,6 +5130,8 @@ class MainActivity : BaseActivity() {
     /** 进入 Bot 页：与设置页一样在内容区换页，不新开页面。 */
     private fun showBotPage() {
         if (showingBot) return
+        // 三个页共用内容区：进来之前先把设置页收掉，避免叠两层、返回时多退一级。
+        if (showingSettings) hideSettingsPage()
         // 第一次进 Bot 页先走引导：不替用户决定形象。
         if (!com.coda.mobileui.personal.CodaBotStore.isOnboarded(this)) {
             ensureBotOnboarding { showBotPage() }
@@ -5706,7 +5808,11 @@ class MainActivity : BaseActivity() {
         hideSettingsPage()
 
         val host = chatHost()
+        // 流式刷新会整棵树重建：先记住滚动位置，重建完成后回到原处，
+        // 否则每来一段增量界面就跳回顶部。
+        val keepScroll = (chatView as? android.widget.ScrollView)?.scrollY ?: 0
         host.removeAllViews()
+        host.post { if (keepScroll > 0) (chatView as? android.widget.ScrollView)?.scrollTo(0, keepScroll) }
 
         val inflater = LayoutInflater.from(this)
         val neutral =

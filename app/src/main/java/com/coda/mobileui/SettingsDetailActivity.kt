@@ -140,7 +140,7 @@ class SettingsDetailActivity :
         setContentView(R.layout.activity_settings_detail)
 
         store = SettingsStore.get(this)
-        pageKey = intent.getStringExtra(EXTRA_PAGE) ?: PAGE_SYSTEM
+        pageKey = savedInstanceState?.getString(KEY_PAGE) ?: intent.getStringExtra(EXTRA_PAGE) ?: PAGE_SYSTEM
 
         findViewById<View>(R.id.detail_root).applySystemBarsInset()
         findViewById<View>(R.id.btn_back).setOnClickListener { goBack() }
@@ -154,6 +154,12 @@ class SettingsDetailActivity :
         renderPage()
         // 进入插件页时自动写入内置市场源并刷新市场索引。
         syncMarketplacesOnEnter()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        // 记住当前所在的二级页：旋转、分屏尺寸变化后重新创建时回到同一层。
+        outState.putString(KEY_PAGE, pageKey)
+        super.onSaveInstanceState(outState)
     }
 
     /**
@@ -4132,6 +4138,9 @@ class SettingsDetailActivity :
 
     companion object {
         const val EXTRA_PAGE = "extra_page"
+
+        /** 旋转或小窗切换后要回到同一层，不能退回入口页。 */
+        const val KEY_PAGE = "settings_page_key"
 
         /** ASR 测试申请录音权限的请求码。 */
         const val REQ_ASR_AUDIO = 1002

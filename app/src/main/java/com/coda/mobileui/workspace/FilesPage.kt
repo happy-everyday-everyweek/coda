@@ -54,6 +54,11 @@ open class FilesPage(
     /** 当前在活动的那一栏。文件操作作用在这一栏，另一栏作为移动/复制的目标。 */
     private var activeSide = Side.LEFT
 
+    /** 两栏容器与分隔线：单栏时要连容器一起隐藏，只藏分隔线会留下半屏空白。 */
+    private var leftSlot: View? = null
+    private var rightSlot: View? = null
+    private var dividerView: View? = null
+
     /** 是否启用双栏。手机上默认单栏；平板或设置项开启后用双栏。 */
     private var dualPane = false
 
@@ -130,16 +135,16 @@ open class FilesPage(
             }
         listScroll = scrolling()
         listColumn = scrollColumn(listScroll)
-        split.addView(paneSlot(listScroll, true))
-        split.addView(
+        split.addView(paneSlot(listScroll, true).also { leftSlot = it })
+        dividerView =
             View(host).apply {
                 setBackgroundColor(outline)
                 layoutParams = LinearLayout.LayoutParams(dp(0.7f), MATCH)
-            },
-        )
+            }
+        split.addView(dividerView)
         rightScroll = scrolling()
         rightColumn = scrollColumn(rightScroll)
-        split.addView(paneSlot(rightScroll, false))
+        split.addView(paneSlot(rightScroll, false).also { rightSlot = it })
         shell.addView(split, FrameLayout.LayoutParams(MATCH, MATCH))
         shell.addView(buildEditor(), FrameLayout.LayoutParams(MATCH, MATCH))
         current = resolveInitial()
@@ -205,15 +210,38 @@ open class FilesPage(
         }
 
     private fun switchSide(side: Side) {
+        // 单栏时右栏不可见，不能把操作目标切到一个看不见的栏上。
+        if (!dualPane) return
         if (side == activeSide) return
         activeSide = side
+        applyPaneIndicator()
+    }
+
+    /** 活动栏用浅底色标出来：新建、复制、移动的落点由它决定，不能是隐藏状态。 */
+    private fun applyPaneIndicator() {
+        val activeColor =
+            com.google.android.material.color.MaterialColors.getColor(
+                host,
+                com.google.android.material.R.attr.colorSurfaceContainerLow,
+                android.graphics.Color.TRANSPARENT,
+            )
+        leftSlot?.setBackgroundColor(
+            if (dualPane && activeSide == Side.LEFT) activeColor else android.graphics.Color.TRANSPARENT,
+        )
+        rightSlot?.setBackgroundColor(
+            if (dualPane && activeSide == Side.RIGHT) activeColor else android.graphics.Color.TRANSPARENT,
+        )
     }
 
     private fun applyDualPane() {
         if (!::split.isInitialized) return
-        // 单栏时隐藏右栏；双栏时左右等宽。
-        rightScroll.visibility = if (dualPane) View.VISIBLE else View.GONE
-        (split.getChildAt(1) as? View)?.visibility = if (dualPane) View.VISIBLE else View.GONE
+        // 单栏时把右栏容器与分隔线一起隐藏；只藏分隔线会让右栏继续占半屏。
+        val visible = if (dualPane) View.VISIBLE else View.GONE
+        rightSlot?.visibility = visible
+        dividerView?.visibility = visible
+        rightScroll.visibility = visible
+        if (!dualPane) activeSide = Side.LEFT
+        applyPaneIndicator()
     }
 
     private fun operationDir(): File = if (dualPane && activeSide == Side.RIGHT) rightDir ?: current else current
@@ -332,7 +360,7 @@ open class FilesPage(
                         switchSide(Side.RIGHT)
                         newFile()
                     },
-                    cardRow(R.drawable.ic_file, "复制到当前目录") { copyCurrentToRight() },
+                    cardRow(R.drawable.ic_file, "复制到右栏") { copyCurrentToRight() },
                 ),
             ),
         )
@@ -387,7 +415,9 @@ open class FilesPage(
 
     private fun pickFile(file: File) {
         selectedFile = file
-        toast("已选中 ${file.name}，可用右栏的「复制到此」")
+        toast("已选中 ${file.name}，可用右栏的「复制到右栏」")
+        // 选中态要在列表里看得见，不能只有一条 toast。
+        renderList()
         renderRightPane()
     }
 
@@ -822,7 +852,13 @@ open class FilesPage(
                 ArchiveKit.isArchive(file) -> R.drawable.ic_archive
                 else -> fileIcon(file.name)
             }
-        val trailing = if (isDir) null else readableSize(file.length())
+        val selected = dualPane && selectedFile == file
+        val trailing =
+            when {
+                selected -> "✓ 已选"
+                isDir -> null
+                else -> readableSize(file.length())
+            }
         val detail =
             if (isDir) {
                 val count = runCatching { file.list()?.size ?: 0 }.getOrDefault(0)

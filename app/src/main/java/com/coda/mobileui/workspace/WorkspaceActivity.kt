@@ -243,6 +243,7 @@ class WorkspaceActivity : BaseActivity() {
         for (entry in tabs) {
             pageHost.removeView(entry.page.view)
             entry.page.onClosed()
+            releaseEditorBuffer(entry.data.state)
         }
         tabs.clear()
         activeId = null
@@ -531,16 +532,52 @@ class WorkspaceActivity : BaseActivity() {
         content: String,
     ) {
         val key = "ro:$name:${content.length}"
+        // 同一个文件重复点：复用已有标签，不要每次点都新建一个同名预览。
+        val existing =
+            tabs.firstOrNull {
+                it.data.kind == WorkspaceTabs.EDITOR &&
+                    it.data.state.optBoolean("readonly") &&
+                    it.data.state.optString("bufferKey") == key
+            }
+        if (existing != null) {
+            selectTab(existing.data.id)
+            hideOverview()
+            return
+        }
         editorBuffers[key] = content
         val state =
             JSONObject()
                 .put("readonly", true)
                 .put("name", name)
                 .put("bufferKey", key)
+        // 只读预览也遵守「预览标签只有一个」：在原位置替换并释放旧正文。
+        val slot = tabs.indexOfFirst { it.data.preview }
+        if (slot >= 0) {
+            val old = tabs.removeAt(slot)
+            pageHost.removeView(old.page.view)
+            old.page.onClosed()
+            releaseEditorBuffer(old.data.state)
+            history.remove(old.data.id)
+            ahead.remove(old.data.id)
+            if (activeId == old.data.id) activeId = null
+            val entry = attach(WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.EDITOR, state, preview = true))
+            tabs.add(slot, entry)
+            selectTab(entry.data.id)
+            updateBar()
+            persist()
+            hideOverview()
+            return
+        }
         val entry = attach(WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.EDITOR, state, preview = true))
         tabs += entry
         selectTab(entry.data.id)
         hideOverview()
+    }
+
+    /** 只读预览的正文只活在这个标签里：标签关掉或顶替时把内存副本释放。 */
+    private fun releaseEditorBuffer(state: JSONObject) {
+        if (!state.optBoolean("readonly")) return
+        editorBuffers.remove(state.optString("bufferKey"))
     }
 
     /** 编辑器页取只读正文。 */
@@ -640,6 +677,7 @@ class WorkspaceActivity : BaseActivity() {
             .cancel()
         pageHost.removeView(entry.page.view)
         entry.page.onClosed()
+        releaseEditorBuffer(entry.data.state)
         history.remove(id)
         ahead.remove(id)
         if (activeId == id) {
