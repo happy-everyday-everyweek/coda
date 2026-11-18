@@ -157,6 +157,11 @@ def create_bridge(
     reply = json.loads(reply_json)
     root = Path(instance_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
+    # Python 进程的 cwd 是宿主启动目录（Android 上通常是只读的 /）。
+    # src.common.logger 等模块用相对路径 Path("logs") 落盘，不切到可写实例目录
+    # 会直接抛 OSError: [Errno 30] Read-only file system: 'logs'。
+    os.chdir(root)
+    Path("logs").mkdir(parents=True, exist_ok=True)
     os.environ["MAIBOT_INSTANCE_DIR"] = str(root)
     _write_model_config(root, planner, reply)
 
