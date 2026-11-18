@@ -1238,10 +1238,13 @@ class MainActivity : BaseActivity() {
             maybeAutoScrollToBottom(true)
             zc.send(text, atts) { ok, msg ->
                 if (ok) {
-                    // 发出去才清输入：新建会话失败或发送失败时，用户写的内容要留着。
-                    inputMessage.text?.clear()
-                    pendingAttachments.clear()
-                    renderAttachChips()
+                    // 只清掉刚发出去的那段文本：发送期间用户新输入的内容要留着。
+                    if (inputMessage.text?.toString()?.trim() == text) inputMessage.text?.clear()
+                    // 附件同理，避免把发送过程中新加的文件一起清掉。
+                    if (buildAttachmentsJson() == atts) {
+                        pendingAttachments.clear()
+                        renderAttachChips()
+                    }
                     updateSendAvailability()
                 } else {
                     snack("发送失败: $msg")

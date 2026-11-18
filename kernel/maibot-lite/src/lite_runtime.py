@@ -126,7 +126,12 @@ class LiteRuntime:
         # 不重载就会出现「设置里换了模型、实际仍走旧模型」。
         from src.config.config import config_manager
 
-        await config_manager.reload_config(changed_scopes=["model"])
+        try:
+            await config_manager.reload_config(changed_scopes=["model"])
+        except Exception as exc:  # noqa: BLE001 - 配置坏了也不能拦住启动，先用上次读到的值
+            from src.common.logger import get_logger
+
+            get_logger("lite").warning(f"模型配置重载失败，继续使用上次的配置：{exc}")
         await asyncio.to_thread(self._prompt_manager.load_prompts)
         # 原项目按 disabled 直接 return，未注册 Hook；Lite 仍需这些无插件 Hook 通过。
         self._plugin_manager.ensure_builtin_hook_specs_registered()
@@ -231,6 +236,9 @@ class LiteRuntime:
             except Exception as exc:  # noqa: BLE001 - 清理阶段要把异常汇总而不是中断后续清理
                 failures.append(f"{label}: {exc}")
         self._driver = None
+        # 关停结束就要把入口重新打开：管理器是单例，退出 Bot 页只是停一次运行时，
+        # 下一次进入必须还能创建会话。这里放在最后，避免和 reset() 抢时序。
+        self._stopping = False
         if failures:
             raise RuntimeError("停止 MaiBot Lite 时出错：" + "；".join(failures))
 

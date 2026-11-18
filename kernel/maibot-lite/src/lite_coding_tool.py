@@ -20,7 +20,6 @@ _controller: Any = None
 # 这里把声明落到实现：只放行只读命令，拒绝重定向、命令串联与子命令替换。
 _READONLY_COMMANDS = frozenset(
     {
-        "git",
         "grep",
         "rg",
         "ls",
@@ -35,8 +34,6 @@ _READONLY_COMMANDS = frozenset(
         "diff",
         "du",
         "tree",
-        "sed",
-        "awk",
         "sort",
         "uniq",
         "cut",
@@ -48,7 +45,48 @@ _READONLY_COMMANDS = frozenset(
         "realpath",
     }
 )
-_SHELL_WRITE_TOKENS = (">", "<", "`", "$(", "${", "&&", "||", ";")
+
+# git 只能跑这些只读子命令；clean / reset / checkout / apply 等会改工作区，一律拒绝。
+_GIT_READONLY_SUBCOMMANDS = frozenset(
+    {
+        "status",
+        "diff",
+        "log",
+        "show",
+        "branch",
+        "rev-parse",
+        "ls-files",
+        "grep",
+        "blame",
+        "remote",
+        "describe",
+        "shortlog",
+        "cat-file",
+        "count-objects",
+        "diff-tree",
+        "ls-tree",
+        "merge-base",
+        "name-rev",
+        "rev-list",
+        "show-ref",
+        "tag",
+    }
+)
+
+# 这些写法能借只读命令写盘或执行命令，按出现即拒绝处理。
+_BANNED_FLAGS = (
+    "-delete",
+    "-exec",
+    "-execdir",
+    "-ok",
+    "-okdir",
+    "-fprint",
+    "-fls",
+    "--output",
+    "--in-place",
+)
+
+_SHELL_WRITE_TOKENS = (">", "<", "`", "$(", "${", "&&", "||", ";", "\n", "\r")
 
 
 def _readonly_violation(command: str) -> Optional[str]:
@@ -59,10 +97,24 @@ def _readonly_violation(command: str) -> Optional[str]:
         return "命令为空"
     for token in _SHELL_WRITE_TOKENS:
         if token in text:
-            return f"只读检查不允许出现 {token}（重定向、命令串联或子命令替换）"
-    first = text.split()[0].split("/")[-1]
+            return f"只读检查不允许出现 {repr(token)}（重定向、命令串联、子命令替换或换行）"
+    lowered = text.lower()
+    for flag in _BANNED_FLAGS:
+        if flag in lowered:
+            return f"只读检查不允许使用 {flag}"
+    parts = text.split()
+    first = parts[0].split("/")[-1]
+    # sort/tree/uniq/du 的 -o 会把结果写进文件，属于写操作。
+    if first in {"sort", "tree", "uniq", "du"} and "-o" in parts[1:]:
+        return f"{first} -o 会写文件，只读检查不允许"
+    if first == "git":
+        if len(parts) < 2 or parts[1].startswith("-"):
+            return "git 需要明确的只读子命令，例如 git status / git diff / git log"
+        if parts[1] not in _GIT_READONLY_SUBCOMMANDS:
+            return f"git {parts[1]} 会修改仓库，只读检查不允许"
+        return None
     if first not in _READONLY_COMMANDS:
-        return f"只读检查不允许执行 {first}；可用命令：git、grep、ls、cat、head、tail、wc、find 等"
+        return f"只读检查不允许执行 {first}；可用命令：grep、ls、cat、head、tail、wc、find、git（只读子命令）等"
     return None
 
 
@@ -101,7 +153,8 @@ def get_terminal_spec() -> ToolSpec:
         name="context_run_terminal",
         description=(
             "只在当前工作区运行只读检查命令，用于核验 Coding Agent 的成果或补充上下文。"
-            "不得用它直接替用户完成开发任务，不得执行破坏性命令、后台常驻服务或交互式程序。"
+            "实现层有白名单：可用 grep、rg、ls、cat、head、tail、wc、find（不带 -delete/-exec）、"
+            "git 的只读子命令（status/diff/log/show/branch 等）；出现重定向、命令串联、换行或其它命令会被直接拒绝。"
         ),
         parameters_schema={
             "type": "object",
