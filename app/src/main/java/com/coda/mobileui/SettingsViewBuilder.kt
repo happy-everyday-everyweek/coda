@@ -289,13 +289,7 @@ object SettingsViewBuilder {
                         heat.bind(row.data)
                     }
                 } else {
-                    null
-                }
-            }
-
-            // 宠物站台：只在声明了这一行的页面出现，蹲在第一张卡片上方
-            is SettingRow.Custom -> {
-                if (row.kind == SettingRow.Custom.KIND_PET_STAGE) {
+                } else if (row.kind == SettingRow.Custom.KIND_PET_STAGE) {
                     PetStageView(container.context).apply {
                         layoutParams =
                             LinearLayout.LayoutParams(
@@ -307,6 +301,8 @@ object SettingsViewBuilder {
                         bind(container.context, row.key.ifEmpty { "pet" })
                     }
                 } else {
+                    // 未知 kind 不静默吞掉：返回 null 时这一行会直接消失，事后很难查。
+                    android.util.Log.w("SettingsView", "unknown custom row kind: ${row.kind}")
                     null
                 }
             }

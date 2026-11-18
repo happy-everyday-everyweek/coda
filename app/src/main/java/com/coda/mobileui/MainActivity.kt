@@ -932,8 +932,11 @@ class MainActivity : BaseActivity() {
         }
         sendModeView = mode
         mode.onSelectionChanged = { sendModeIndex = it }
-
         val send = findViewById<View>(R.id.btn_send)
+        // 回到起点时把发送按钮换成取消态，用户能看出松手不会发。
+        mode.onCancelStateChanged = { cancelling ->
+            send.setBackgroundResource(if (cancelling) R.drawable.bg_send_cancel_active else R.drawable.btn_send_bg)
+        }
         send.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -959,12 +962,16 @@ class MainActivity : BaseActivity() {
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     pendingLongPress?.let { view.removeCallbacks(it) }
                     pendingLongPress = null
+                    val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
                     if (mode.visibility == View.VISIBLE) {
+                        // 手指回到起点，或系统取消了这次手势（来电、通知栏下拉、父容器拦截）：
+                        // 只收起模式条，不发送。
+                        val abort = cancelled || mode.isCancelling
                         mode.hide()
                         restoreSendIcon()
                         setBackdropBlur(false)
-                        sendMessage(SendModeView.MODES[sendModeIndex])
-                    } else {
+                        if (!abort) sendMessage(SendModeView.MODES[sendModeIndex])
+                    } else if (!cancelled) {
                         sendMessage(SendModeView.MODES[defaultSendModeIndex()])
                     }
                     true
@@ -1188,7 +1195,6 @@ class MainActivity : BaseActivity() {
         }
         val protocolMode = SendModes.toProtocol(mode)
         zc.setDefaultMode(protocolMode)
-        inputMessage.text?.clear()
         hideSettingsPage()
         val atts = buildAttachmentsJson()
 
@@ -1199,8 +1205,11 @@ class MainActivity : BaseActivity() {
             maybeAutoScrollToBottom(true)
             zc.send(text, atts) { ok, msg ->
                 if (ok) {
+                    // 发出去才清输入：新建会话失败或发送失败时，用户写的内容要留着。
+                    inputMessage.text?.clear()
                     pendingAttachments.clear()
                     renderAttachChips()
+                    updateSendAvailability()
                 } else {
                     snack("发送失败: $msg")
                 }
@@ -4303,7 +4312,18 @@ class MainActivity : BaseActivity() {
                 setColorFilter(onSurface)
                 setOnClickListener {
                     collapseFullDrawerThen {
+                        // 新对话会清空输入：先留一份草稿，给一次撤销机会。
+                        val draft = inputMessage.text?.toString().orEmpty()
                         inputMessage.text?.clear()
+                        if (draft.isNotBlank()) {
+                            Snackbar.make(findViewById(android.R.id.content), "已清空输入", Snackbar.LENGTH_LONG)
+                                .setAction("撤销") {
+                                    inputMessage.setText(draft)
+                                    inputMessage.setSelection(draft.length)
+                                    updateSendAvailability()
+                                }
+                                .show()
+                        }
                         hideSettingsPage()
                         pendingNewSession = true
                         composerWorkspace = null

@@ -113,55 +113,99 @@ object CodaBotStore {
         saveProfile(ctx, p)
     }
 
-    private fun messageFile(ctx: Context): File {
-        val dir = File(ctx.filesDir, "coda-bot")
-        dir.mkdirs()
-        return File(dir, "messages.json")
-    }
+    private fun messageDir(ctx: Context): File = File(ctx.filesDir, "coda-bot").apply { mkdirs() }
 
-    fun messages(ctx: Context): MutableList<CodaBotMessage> {
-        val result = mutableListOf<CodaBotMessage>()
-        val file = messageFile(ctx)
-        if (!file.isFile) return result
-        val items = JSONArray(file.readText())
-        for (i in 0 until items.length()) {
-            val item = items.getJSONObject(i)
-            result += CodaBotMessage(
-                id = item.optString("id"),
-                fromUser = item.getBoolean("fromUser"),
-                text = item.getString("text"),
+    /** 每条消息一行 JSON：追加只写一行，不再每次把整份历史重写一遍。 */
+    private fun messageFile(ctx: Context): File = File(messageDir(ctx), "messages.jsonl")
+
+    /** 旧版的整份 JSON 数组，读取时自动迁移。 */
+    private fun legacyFile(ctx: Context): File = File(messageDir(ctx), "messages.json")
+
+    private fun encode(message: CodaBotMessage): JSONObject =
+        JSONObject()
+            .put("id", message.id)
+            .put("fromUser", message.fromUser)
+            .put("text", message.text)
+            .put("timestamp", message.timestamp)
+            .put("replyToId", message.replyToId)
+            .put("replyToText", message.replyToText)
+            .put("replyToFromUser", message.replyToFromUser)
+
+    /** 单条解析失败只跳过这一条，不让一条坏数据把整个页面打崩。 */
+    private fun decode(item: JSONObject?): CodaBotMessage? {
+        if (item == null) return null
+        return runCatching {
+            CodaBotMessage(
+                id = item.optString("id").ifEmpty { UUID.randomUUID().toString() },
+                fromUser = item.optBoolean("fromUser"),
+                text = item.optString("text"),
                 timestamp = item.optLong("timestamp"),
                 replyToId = item.optString("replyToId"),
                 replyToText = item.optString("replyToText"),
                 replyToFromUser = item.optBoolean("replyToFromUser"),
             )
+        }.getOrNull()
+    }
+
+    @Synchronized
+    fun messages(ctx: Context): MutableList<CodaBotMessage> {
+        val result = mutableListOf<CodaBotMessage>()
+        val file = messageFile(ctx)
+        if (file.isFile) {
+            runCatching {
+                file.forEachLine { line ->
+                    if (line.isBlank()) return@forEachLine
+                    decode(runCatching { JSONObject(line) }.getOrNull())?.let { result += it }
+                }
+            }
+            return result
+        }
+        // 旧格式迁移：整份数组读一次，转成逐行格式后删掉旧文件。
+        val legacy = legacyFile(ctx)
+        if (!legacy.isFile) return result
+        val items = runCatching { JSONArray(legacy.readText()) }.getOrNull() ?: return result
+        for (i in 0 until items.length()) {
+            decode(items.optJSONObject(i))?.let { result += it }
+        }
+        runCatching {
+            saveMessages(ctx, result)
+            legacy.delete()
         }
         return result
     }
 
+    @Synchronized
     fun appendMessage(ctx: Context, message: CodaBotMessage) {
-        val all = messages(ctx)
-        all += message
-        saveMessages(ctx, all)
-    }
-
-    fun saveMessages(ctx: Context, messages: List<CodaBotMessage>) {
-        val items = JSONArray()
-        messages.forEach { message ->
-            items.put(JSONObject()
-                .put("id", message.id)
-                .put("fromUser", message.fromUser)
-                .put("text", message.text)
-                .put("timestamp", message.timestamp)
-                .put("replyToId", message.replyToId)
-                .put("replyToText", message.replyToText)
-                .put("replyToFromUser", message.replyToFromUser))
+        runCatching {
+            java.io.FileOutputStream(messageFile(ctx), true).use { out ->
+                out.write((encode(message).toString() + "\n").toByteArray())
+            }
         }
-        messageFile(ctx).writeText(items.toString(2))
     }
 
+    @Synchronized
+    fun saveMessages(ctx: Context, messages: List<CodaBotMessage>) {
+        val file = messageFile(ctx)
+        val text = buildString { messages.forEach { append(encode(it).toString()).append('\n') } }
+        // 先写临时文件再改名：写到一半被杀掉时，原文件仍然完整。
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        runCatching {
+            tmp.writeText(text)
+            if (!tmp.renameTo(file)) {
+                file.writeText(text)
+                tmp.delete()
+            }
+        }.onFailure {
+            // 改名在部分文件系统上不可用，退回直接写，至少保证消息不丢。
+            file.writeText(text)
+            tmp.delete()
+        }
+    }
+
+    @Synchronized
     fun clearMessages(ctx: Context) {
         messageFile(ctx).delete()
+        legacyFile(ctx).delete()
     }
 
     fun exportMessages(ctx: Context): String {

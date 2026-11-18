@@ -39,6 +39,10 @@ class SendModeView
         /** 手指回到起点（不选任何模式）时回调 true，用来把按钮圆底变红。 */
         var onCancelStateChanged: ((Boolean) -> Unit)? = null
 
+        /** 当前是否处于「松手即取消」的位置。 */
+        var isCancelling = false
+            private set
+
         private val density = resources.displayMetrics.density
 
         private fun dp(v: Float) = v * density
@@ -178,6 +182,13 @@ class SendModeView
             x: Float,
             y: Float,
         ) {
+            // 回到按下点附近＝取消态：此时不切档，松手也不发送。
+            val cancel = kotlin.math.abs(y - dragOriginY) < rowHeight / 2f
+            if (cancel != isCancelling) {
+                isCancelling = cancel
+                onCancelStateChanged?.invoke(cancel)
+            }
+            if (cancel) return
             val steps = ((y - dragOriginY) / rowHeight).roundToInt()
             val index = (dragBaseIndex + steps).coerceIn(0, MODES.lastIndex)
             if (index != selectedIndex) {
@@ -192,6 +203,11 @@ class SendModeView
 
         fun show() {
             visibility = VISIBLE
+            // 每次浮出都从「未取消」开始，避免上一轮的红色底残留。
+            if (isCancelling) {
+                isCancelling = false
+                onCancelStateChanged?.invoke(false)
+            }
             animatedIndex = selectedIndex.coerceAtLeast(0).toFloat()
             appearAnimator?.cancel()
             appearAnimator =

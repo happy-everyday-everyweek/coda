@@ -37,8 +37,16 @@ class CodaBotRuntime(
     private val sendLock = Any()
     private val codingAgent by lazy { ZController.get(context) }
 
+    /** 待应答的审批请求：标识 + 到达时间。 */
+    private data class PendingPermission(
+        val id: Any,
+        val at: Long,
+    )
+
     /** 待应答的审批请求队列，按到达顺序处理。 */
-    private val pendingPermissions = java.util.LinkedHashMap<String, Any>()
+    private val pendingPermissions = java.util.LinkedHashMap<String, PendingPermission>()
+    private val pendingPermissionLimit = 20
+    private val pendingPermissionTtlMs = 10 * 60 * 1000L
 
     /** 宿主事件节流：同一会话在该窗口内的连续事件合并成一条。 */
     private val eventWindowMs = 8_000L
@@ -62,7 +70,11 @@ class CodaBotRuntime(
 
             override fun onSessionPermissionRequest(sessionId: String, requestId: Any, params: JSONObject) {
                 val requestKey = requestId.toString()
-                synchronized(pendingPermissions) { pendingPermissions[requestKey] = requestId }
+                // 表只增不减会一直涨，也会让 Coding Agent 永远等在审批上：过期与超量的都按拒绝处理。
+                prunePendingPermissions()
+                synchronized(pendingPermissions) {
+                    pendingPermissions[requestKey] = PendingPermission(requestId, System.currentTimeMillis())
+                }
                 val tool = params.optString("toolName").ifBlank { params.optString("tool") }
                 notifyHost(
                     "Coding Agent 请求审批：request_key=$requestKey，session_id=$sessionId，工具「$tool」。" +
@@ -278,11 +290,43 @@ class CodaBotRuntime(
         return result(ok, detail.ifBlank { if (ok) "已切换" else "切换失败" })
     }
 
+    /** 清掉过期与超量的待审批请求：这些请求不会再有应答，按拒绝放回 Coding Agent。 */
+    private fun prunePendingPermissions() {
+        val now = System.currentTimeMillis()
+        val dropped = mutableListOf<PendingPermission>()
+        synchronized(pendingPermissions) {
+            val iterator = pendingPermissions.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (now - entry.value.at > pendingPermissionTtlMs) {
+                    dropped += entry.value
+                    iterator.remove()
+                }
+            }
+            while (pendingPermissions.size >= pendingPermissionLimit) {
+                val first = pendingPermissions.entries.firstOrNull() ?: break
+                pendingPermissions.remove(first.key)
+                dropped += first.value
+            }
+        }
+        dropped.forEach { pending -> runCatching { codingAgent.respondPermission(pending.id, false) } }
+    }
+
+    /** 退出页面时把没人应答的审批全按拒绝放掉，别让 Coding Agent 一直卡在等审批。 */
+    private fun denyPendingPermissions() {
+        val dropped = synchronized(pendingPermissions) {
+            val all = pendingPermissions.values.toList()
+            pendingPermissions.clear()
+            all
+        }
+        dropped.forEach { pending -> runCatching { codingAgent.respondPermission(pending.id, false) } }
+    }
+
     private fun resolvePermission(requestKey: String, decision: String): String {
-        val requestId = synchronized(pendingPermissions) { pendingPermissions.remove(requestKey) }
+        val pending = synchronized(pendingPermissions) { pendingPermissions.remove(requestKey) }
             ?: return result(false, "没有该请求标识对应的待审批请求")
         val allow = decision.trim().lowercase() in setOf("allow", "approve", "yes", "true")
-        codingAgent.respondPermission(requestId, allow)
+        codingAgent.respondPermission(pending.id, allow)
         return result(true, if (allow) "已放行" else "已拒绝")
     }
 
@@ -381,6 +425,7 @@ class CodaBotRuntime(
 
     fun close() {
         codingAgent.removeListener(hostListener)
+        denyPendingPermissions()
         Bg.run {
             runCatching {
                 synchronized(this@CodaBotRuntime) {
