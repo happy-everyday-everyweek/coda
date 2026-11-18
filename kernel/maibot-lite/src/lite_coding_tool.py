@@ -153,6 +153,7 @@ def get_terminal_spec() -> ToolSpec:
         name="context_run_terminal",
         description=(
             "只在当前工作区运行只读检查命令，用于核验 Coding Agent 的成果或补充上下文。"
+            "不得用它直接替用户完成开发任务，不得执行破坏性命令、后台常驻服务或交互式程序。"
             "实现层有白名单：可用 grep、rg、ls、cat、head、tail、wc、find（不带 -delete/-exec）、"
             "git 的只读子命令（status/diff/log/show/branch 等）；出现重定向、命令串联、换行或其它命令会被直接拒绝。"
         ),

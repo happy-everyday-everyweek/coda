@@ -67,3 +67,26 @@ async def test_context_tools_are_limited_to_context_and_verification() -> None:
     assert read_result.content == "file:/tmp/a.py"
     assert command_result.content == "run:git diff:10"
     configure_host_controller(None)
+
+
+@pytest.mark.asyncio
+async def test_context_run_terminal_rejects_writes() -> None:
+    """只读白名单必须真正拦住写操作与命令串联，而不只是提示词约束。"""
+
+    host = _Host()
+    configure_host_controller(host)
+    provider = get_provider()
+    for command in (
+        "git clean -fdx",
+        "sed -i s/a/b/ f",
+        "find . -delete",
+        "sort -o out in",
+        "ls\nrm -rf /",
+        "rm -rf build",
+    ):
+        result = await provider.invoke(
+            SimpleNamespace(tool_name="context_run_terminal", arguments={"command": command})
+        )
+        assert not result.success, command
+        assert "只读检查" in (result.error_message or ""), command
+    configure_host_controller(None)
