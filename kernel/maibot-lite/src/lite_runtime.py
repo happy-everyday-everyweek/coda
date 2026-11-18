@@ -117,6 +117,16 @@ class LiteRuntime:
         if self._started:
             return
         self._prepare_configuration()
+        # 重新进入 Bot 页会重建运行时，但心流管理器是模块级单例：
+        # 上次关闭把它置为关停后不会自己恢复，这里显式复位，否则消息会被静默丢弃。
+        from src.chat.heart_flow.heartflow_manager import heartflow_manager
+
+        await heartflow_manager.reset()
+        # create_bridge 只把模型配置写到磁盘，这里的 ConfigManager 是 import 时读进内存的，
+        # 不重载就会出现「设置里换了模型、实际仍走旧模型」。
+        from src.config.config import config_manager
+
+        await config_manager.reload_config(changed_scopes=["model"])
         await asyncio.to_thread(self._prompt_manager.load_prompts)
         # 原项目按 disabled 直接 return，未注册 Hook；Lite 仍需这些无插件 Hook 通过。
         self._plugin_manager.ensure_builtin_hook_specs_registered()

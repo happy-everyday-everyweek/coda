@@ -16,6 +16,55 @@ from src.core.tooling import (
 
 _controller: Any = None
 
+# context_run_terminal 对模型宣称是「只读检查」，此前只有提示词约束，实际能执行任意命令。
+# 这里把声明落到实现：只放行只读命令，拒绝重定向、命令串联与子命令替换。
+_READONLY_COMMANDS = frozenset(
+    {
+        "git",
+        "grep",
+        "rg",
+        "ls",
+        "cat",
+        "head",
+        "tail",
+        "wc",
+        "find",
+        "pwd",
+        "file",
+        "stat",
+        "diff",
+        "du",
+        "tree",
+        "sed",
+        "awk",
+        "sort",
+        "uniq",
+        "cut",
+        "tr",
+        "echo",
+        "which",
+        "basename",
+        "dirname",
+        "realpath",
+    }
+)
+_SHELL_WRITE_TOKENS = (">", "<", "`", "$(", "${", "&&", "||", ";")
+
+
+def _readonly_violation(command: str) -> Optional[str]:
+    """返回拒绝原因；None 表示这条命令可以执行。"""
+
+    text = command.strip()
+    if not text:
+        return "命令为空"
+    for token in _SHELL_WRITE_TOKENS:
+        if token in text:
+            return f"只读检查不允许出现 {token}（重定向、命令串联或子命令替换）"
+    first = text.split()[0].split("/")[-1]
+    if first not in _READONLY_COMMANDS:
+        return f"只读检查不允许执行 {first}；可用命令：git、grep、ls、cat、head、tail、wc、find 等"
+    return None
+
 
 def configure_host_controller(controller: Any) -> None:
     """由 Android 桥注入宿主控制器；None 表示不提供该工具。"""
@@ -344,12 +393,18 @@ class CodingAgentToolProvider(ToolProvider):
                 error_message=None if payload.get("ok") else str(payload.get("message") or "读取失败"),
             )
         if invocation.tool_name == "context_run_terminal":
+            command = str(invocation.arguments.get("command") or "")
+            violation = _readonly_violation(command)
+            if violation:
+                return ToolExecutionResult(
+                    tool_name=invocation.tool_name, success=False, error_message=violation
+                )
             try:
                 payload = json.loads(
                     str(
                         await asyncio.to_thread(
                             _controller.runTerminal,
-                            str(invocation.arguments.get("command") or ""),
+                            command,
                             int(invocation.arguments.get("timeout_seconds") or 20),
                         )
                     )

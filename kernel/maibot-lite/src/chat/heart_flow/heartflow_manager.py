@@ -71,6 +71,19 @@ class HeartflowManager:
         if self._stopping:
             raise RuntimeError("心流管理器正在关停，不能创建聊天运行实例")
 
+    async def reset(self) -> None:
+        """重新开启创建入口。
+
+        `shutdown()` 会把 `_stopping` 置 True 且没有复位路径，而管理器是模块级单例。
+        Bot 页每次退出都会关一次运行时，若不在这里复位，重新进入页面后所有消息
+        都会被 `_ensure_running()` 拒掉并静默丢弃。
+        """
+
+        self._stopping = False
+        self.heartflow_chat_list.clear()
+        self._chat_last_active_at.clear()
+        self._chat_create_locks.clear()
+
     async def shutdown(self) -> None:
         """关闭创建入口，等待在途创建完成，再并发停止所有会话及其工具。"""
         self._stopping = True
