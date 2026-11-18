@@ -573,7 +573,7 @@ class CodaBotPage(
         textSize = 12f
         gravity = Gravity.CENTER
         setPadding(dp(8), dp(12), dp(8), dp(12))
-        setTextColor(attr(com.google.android.material.R.attr.colorPrimary))
+        setTextColor(attr(androidx.appcompat.R.attr.colorPrimary))
         isClickable = true
         setOnClickListener { loadEarlier(this) }
     }
