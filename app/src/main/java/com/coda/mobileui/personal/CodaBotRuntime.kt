@@ -40,6 +40,12 @@ class CodaBotRuntime(
     /** 待应答的审批请求队列，按到达顺序处理。 */
     private val pendingPermissions = java.util.LinkedHashMap<String, Any>()
 
+    /** 宿主事件节流：同一会话在该窗口内的连续事件合并成一条。 */
+    private val eventWindowMs = 8_000L
+    private val eventLock = Any()
+    private val lastEventAt = HashMap<String, Long>()
+    private val mergedEvents = HashMap<String, Int>()
+
     /**
      * 监听 Coding Agent 的宿主事件。
      *
@@ -51,7 +57,7 @@ class CodaBotRuntime(
             override fun onSessionTurnFinished(sessionId: String, status: String) {
                 val title = codingAgent.sessionSnapshot().firstOrNull { it.id == sessionId }?.title ?: sessionId
                 val state = if (status == "turn.failed") "回合失败" else "已完成"
-                notifyHost("Coding Agent 会话「$title」$state，请复核成果后决定是否告知用户。")
+                notifyHost("Coding Agent 会话「$title」$state，请复核成果后决定是否告知用户。", sessionId)
             }
 
             override fun onSessionPermissionRequest(sessionId: String, requestId: Any, params: JSONObject) {
@@ -281,9 +287,28 @@ class CodaBotRuntime(
     }
 
     /** 把宿主事件作为一条消息送进 MaiBot，触发规划轮次。 */
-    private fun notifyHost(text: String) {
+    private fun notifyHost(text: String, sessionId: String = "") {
+        // 设置里可以整体关掉：用户只想安静看 Coding Agent干活时不打扰。
+        if (!CodaBotStore.forwardsCodingEvents(context)) return
+        val body =
+            if (sessionId.isBlank()) {
+                text
+            } else {
+                synchronized(eventLock) {
+                    val now = System.currentTimeMillis()
+                    val last = lastEventAt[sessionId] ?: 0L
+                    // 同一会话在窗口内的连续事件合并成一条，避免一次连发多轮规划。
+                    if (now - last < eventWindowMs) {
+                        mergedEvents[sessionId] = (mergedEvents[sessionId] ?: 1) + 1
+                        return
+                    }
+                    lastEventAt[sessionId] = now
+                    val merged = mergedEvents.remove(sessionId) ?: 1
+                    if (merged > 1) "$text（同一会话另有 ${merged - 1} 次同类事件已合并）" else text
+                }
+            }
         Bg.run {
-            runCatching { bridge?.callAttr("notify_event", text) }
+            runCatching { bridge?.callAttr("notify_event", body) }
                 .onFailure { error ->
                     com.coda.mobileui.core.AppLog.w(
                         "CodaBot",

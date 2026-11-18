@@ -475,6 +475,11 @@ class SettingsDetailActivity :
             renderPage()
             return
         }
+        if (key == "coda_bot_forward_events") {
+            com.coda.mobileui.personal.CodaBotStore.setForwardsCodingEvents(this, checked)
+            renderPage()
+            return
+        }
         if (key.startsWith("pet")) {
             when (key) {
                 "pet_enabled" -> store.petEnabled = checked
@@ -4085,10 +4090,36 @@ class SettingsDetailActivity :
 
     private fun exportCodaBotMessages() {
         val text = com.coda.mobileui.personal.CodaBotStore.exportMessages(this)
+        // Binder 事务上限约 1MB：历史很长时直接塞 EXTRA_TEXT 会抛
+        // TransactionTooLargeException，而且崩在 startActivity 上很难归因。
+        if (text.length <= 64 * 1024) {
+            val intent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, text)
+                }
+            startActivity(Intent.createChooser(intent, "导出 Coda Bot 聊天记录"))
+            return
+        }
+        val file = java.io.File(filesDir, "coda-bot-chat.txt")
+        val written = runCatching { file.writeText(text) }.isSuccess
+        if (!written) {
+            snack("导出失败：无法写入临时文件")
+            return
+        }
+        val uri =
+            runCatching {
+                androidx.core.content.FileProvider.getUriForFile(this, "$packageName.workspacefiles", file)
+            }.getOrNull()
+        if (uri == null) {
+            snack("导出失败：无法共享文件")
+            return
+        }
         val intent =
             Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, text)
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         startActivity(Intent.createChooser(intent, "导出 Coda Bot 聊天记录"))
     }

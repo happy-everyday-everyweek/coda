@@ -46,6 +46,13 @@ object CodaBotStore {
         prefs(ctx).edit().putBoolean("onboarded", true).apply()
     }
 
+    /** Coding Agent 的回合结束/审批事件是否转给 Personal Agent；关掉后它不再主动开口。 */
+    fun forwardsCodingEvents(ctx: Context): Boolean = prefs(ctx).getBoolean("forward_coding_events", true)
+
+    fun setForwardsCodingEvents(ctx: Context, value: Boolean) {
+        prefs(ctx).edit().putBoolean("forward_coding_events", value).apply()
+    }
+
     /** 每个内置形象的专属默认人设；首次引导第二步会预填到输入框。 */
     fun defaultPersona(skinId: String): String =
         when (skinId) {
@@ -159,9 +166,13 @@ object CodaBotStore {
 
     fun exportMessages(ctx: Context): String {
         val profile = profile(ctx)
+        // 带上时间，导出后还能还原对话顺序；之前只有「名字：内容」。
+        val format = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
         return buildString {
             append(profile.name).append(" 的聊天记录\n\n")
             messages(ctx).forEach {
+                append(format.format(java.util.Date(it.timestamp)))
+                append(" ")
                 append(if (it.fromUser) profile.userName else profile.name)
                 append("：").append(it.text).append("\n\n")
             }

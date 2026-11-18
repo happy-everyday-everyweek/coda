@@ -58,6 +58,16 @@ class CodaBotPage(
     /** 当前运行时对应的配置指纹；人设、提示词、模型一变就需要重建。 */
     private var runtimeSignature = ""
 
+    /** 首屏只渲染最近这么多条，更早的点按钮再加，避免长会话一次建上千个 View。 */
+    private var olderRemaining: List<CodaBotMessage> = emptyList()
+    private lateinit var olderHost: LinearLayout
+
+    /** 与 Coding Agent 聊天页共用同一套 Markdown 渲染，避免一边渲染一边显示星号。 */
+    private val markwon by lazy { io.noties.markwon.Markwon.create(host) }
+
+    /** 录音上限；到点自动结束并转写，不在后台无限占麦克风。 */
+    private val recordingTimeout = Runnable { finishRecording(auto = true) }
+
     /** 打开 Bot 页：每次进入都按最新配置重建界面与运行时。 */
     fun open() {
         removeAllViews()
@@ -71,6 +81,7 @@ class CodaBotPage(
         // 录音中退出页面：先把麦克风收干净，别留下一个还在录的线程。
         if (recording) {
             recording = false
+            removeCallbacks(recordingTimeout)
             runCatching { recorder?.cancel() }
             recorder = null
         }
@@ -152,7 +163,10 @@ class CodaBotPage(
                     }
 
                     android.view.MotionEvent.ACTION_MOVE -> {
-                        val maxX = (this@CodaBotPage.width - v.width).toFloat().coerceAtLeast(0f)
+                        // 形象条本身是 match_parent，用 v.width 算可移范围恒为 0，
+                        // 横向就完全拖不动。按内容宽度（46dp 形象 + 两侧 18dp 内边距）算。
+                        val contentWidth = dp(46) + dp(18) * 2
+                        val maxX = (this@CodaBotPage.width - contentWidth).toFloat().coerceAtLeast(0f)
                         v.translationX = (baseX + e.rawX - downX).coerceIn(0f, maxX)
                         v.translationY = (baseY + e.rawY - downY).coerceIn(-dp(280).toFloat(), 0f)
                         true
@@ -263,10 +277,10 @@ class CodaBotPage(
         composer.addView(box, LinearLayout.LayoutParams(0, -2, 1f))
         column.addView(composer, LinearLayout.LayoutParams(-1, -2))
         composer.applyBottomInsetWithIme()
-        val history = CodaBotStore.messages(host)
-        if (history.isEmpty()) addSystemHint("这里只有你和${profile.name}，消息保存在本机。")
-        else history.forEach { addBubble(it, persist = false) }
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        // 更早的历史放在顶部容器里，点「加载更早」时按批插入，首屏不会被长会话拖垮。
+        olderHost = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
+        messages.addView(olderHost, LinearLayout.LayoutParams(-1, -2))
+        renderHistory(CodaBotStore.messages(host))
     }
 
     /** 聊天页顶栏：只有返回，逐层关系与工作台一致（抽屉 → 本页 → 抽屉）。 */
@@ -320,20 +334,30 @@ class CodaBotPage(
      * 转写结果直接追加到输入框。识别失败才退回系统识别器。
      */
     private fun startVoiceInput() {
-        if (!recording) {
-            val r = com.coda.mobileui.core.AsrTester.Recorder(host)
-            if (r.start()) {
-                recorder = r
-                recording = true
-                toast("正在录音，再点一下结束")
-            } else {
-                fallbackRecognizer()
-            }
+        if (recording) {
+            finishRecording(auto = false)
             return
         }
+        val r = com.coda.mobileui.core.AsrTester.Recorder(host)
+        if (!r.start()) {
+            fallbackRecognizer()
+            return
+        }
+        recorder = r
+        recording = true
+        toast("正在录音，再点一下结束")
+        removeCallbacks(recordingTimeout)
+        postDelayed(recordingTimeout, RECORDING_LIMIT_MS)
+    }
+
+    /** 结束录音并交给 ASR；auto 表示到了时长上限自动收尾。 */
+    private fun finishRecording(auto: Boolean) {
+        if (!recording) return
         recording = false
+        removeCallbacks(recordingTimeout)
         val audio = recorder?.stop()
         recorder = null
+        if (auto) toast("已到录音上限，开始识别")
         if (audio == null) {
             toast("没有录到音频")
             return
@@ -369,6 +393,25 @@ class CodaBotPage(
                 }
             }
         }.start()
+    }
+
+    /**
+     * 宿主切到后台时收掉录音。
+     *
+     * 以前只有 close() 会清录音，按 Home 键或切到别的 App 后麦克风一直被占用。
+     */
+    fun onHostPause() {
+        if (!recording) return
+        recording = false
+        removeCallbacks(recordingTimeout)
+        runCatching { recorder?.cancel() }
+        recorder = null
+        toast("已停止录音")
+    }
+
+    override fun onDetachedFromWindow() {
+        onHostPause()
+        super.onDetachedFromWindow()
     }
 
     private fun fallbackRecognizer() {
@@ -443,7 +486,12 @@ class CodaBotPage(
         if (::replyBar.isInitialized) replyBar.visibility = View.GONE
     }
 
-    private fun addBubble(message: CodaBotMessage, persist: Boolean = true) {
+    private fun addBubble(
+        message: CodaBotMessage,
+        persist: Boolean = true,
+        scrollToBottom: Boolean = true,
+        container: ViewGroup? = null,
+    ) {
         if (!::messages.isInitialized) return
         val row = LinearLayout(host).apply {
             gravity = if (message.fromUser) Gravity.END else Gravity.START
@@ -458,7 +506,8 @@ class CodaBotPage(
             )
         }
         val text = TextView(host).apply {
-            this.text = message.text
+            // Bot 的回复同样按 Markdown 渲染；用户自己输入的内容保持原样。
+            if (message.fromUser) this.text = message.text else markwon.setMarkdown(this, message.text)
             textSize = 15.5f
             setPadding(0, 0, 0, 0)
             setTextColor(
@@ -490,12 +539,57 @@ class CodaBotPage(
             width = (resources.displayMetrics.widthPixels * 0.78f).toInt()
             width = minOf(width, (text.paint.measureText(message.text) + dp(30)).toInt())
         })
-        messages.addView(row, LinearLayout.LayoutParams(-1, -2))
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        val parent = container ?: messages
+        parent.addView(row, LinearLayout.LayoutParams(-1, -2))
+        // 渲染历史时不要每条都排队滚到底：上百条就是上百次 fullScroll。
+        if (scrollToBottom) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
         val incoming = !message.fromUser
         if (incoming && persist) {
             pet.showDone(profile.name + "：我在这儿")
             CodaBotStore.appendMessage(host, message)
+        }
+    }
+
+    /**
+     * 渲染历史：首屏只画最近 HISTORY_FIRST_SCREEN 条，更早的按批追加。
+     *
+     * 之前是 history.forEach { addBubble(...) }，每条还要排一次 fullScroll，
+     * 几百条以上进页面就明显卡。
+     */
+    private fun renderHistory(history: List<CodaBotMessage>) {
+        if (history.isEmpty()) {
+            addSystemHint("这里只有你和${profile.name}，消息保存在本机。")
+            return
+        }
+        val recent = history.takeLast(HISTORY_FIRST_SCREEN)
+        olderRemaining = history.dropLast(recent.size)
+        if (olderRemaining.isNotEmpty()) olderHost.addView(loadEarlierButton())
+        recent.forEach { addBubble(it, persist = false, scrollToBottom = false) }
+        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun loadEarlierButton(): View = TextView(host).apply {
+        text = "加载更早的 ${olderRemaining.size} 条"
+        textSize = 12f
+        gravity = Gravity.CENTER
+        setPadding(dp(8), dp(12), dp(8), dp(12))
+        setTextColor(attr(com.google.android.material.R.attr.colorPrimary))
+        isClickable = true
+        setOnClickListener { loadEarlier(this) }
+    }
+
+    /** 往顶部再补一批：插在按钮之前，顺序仍是先老后新。 */
+    private fun loadEarlier(anchor: View) {
+        val batch = olderRemaining.takeLast(HISTORY_BATCH)
+        if (batch.isEmpty()) return
+        olderRemaining = olderRemaining.dropLast(batch.size)
+        val chunk = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
+        olderHost.addView(chunk, olderHost.indexOfChild(anchor))
+        batch.forEach { addBubble(it, persist = false, scrollToBottom = false, container = chunk) }
+        if (olderRemaining.isEmpty()) {
+            olderHost.removeView(anchor)
+        } else {
+            (anchor as? TextView)?.text = "加载更早的 ${olderRemaining.size} 条"
         }
     }
 
@@ -533,5 +627,14 @@ class CodaBotPage(
     companion object {
         private const val REQ_VOICE = 7102
         private const val REQ_ATTACHMENT = 7103
+
+        /** 首屏渲染的历史条数。 */
+        private const val HISTORY_FIRST_SCREEN = 60
+
+        /** 点「加载更早」时每次补的条数。 */
+        private const val HISTORY_BATCH = 100
+
+        /** 单次录音上限，到点自动结束并转写。 */
+        private const val RECORDING_LIMIT_MS = 60_000L
     }
 }

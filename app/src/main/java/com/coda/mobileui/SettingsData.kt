@@ -1209,12 +1209,20 @@ object SettingsData {
     /** Coda Bot → 聊天与数据。 */
     fun codaBotChat(ctx: Context): SettingsPage {
         val profile = codaBotProfile(ctx)
+        val forwardsEvents = com.coda.mobileui.personal.CodaBotStore.forwardsCodingEvents(ctx)
         return SettingsPage(
             "聊天与数据",
             listOf(
                 SettingRow.Header("聊天气泡"),
                 SettingRow.Radio("标准", profile.bubbleStyle == 0, "coda_bot_bubble=0"),
                 SettingRow.Radio("紧凑", profile.bubbleStyle == 1, "coda_bot_bubble=1"),
+                SettingRow.Header("事件"),
+                SettingRow.Toggle(
+                    "转发 Coding Agent 事件",
+                    "会话完成或请求审批时告诉 Bot；关掉后不主动开口",
+                    forwardsEvents,
+                    "coda_bot_forward_events",
+                ),
                 SettingRow.Header("数据"),
                 SettingRow.Value("导出聊天记录", "分享给其它应用", "coda_bot_export"),
                 SettingRow.Value("清除聊天记录", "不影响 Coding Agent", "coda_bot_clear"),

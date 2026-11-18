@@ -1573,6 +1573,12 @@ class MainActivity : BaseActivity() {
         botPage?.handleActivityResult(requestCode, resultCode, data)
     }
 
+    override fun onStop() {
+        // Bot 页在内容区里，按 Home 或切后台不会走 close()：这里把录音收回。
+        botPage?.onHostPause()
+        super.onStop()
+    }
+
     override fun onDestroy() {
         botPage?.close()
         botPage = null
@@ -4878,11 +4884,86 @@ class MainActivity : BaseActivity() {
             com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
             com.coda.mobileui.personal.CodaBotStore.markOnboarded(this)
             sheet.dismiss()
-            then()
+            // 第三步：模型。聊天入口要求两个模型都已配置，引导里不给选就必然首条报错。
+            ensureBotModelsThenStart(then)
         }
         sheet.secondaryAction("返回") {
             sheet.dismiss()
             ensureBotOnboarding(then)
+        }
+        sheet.show()
+    }
+
+    /**
+     * 引导第三步：至少选一个模型。
+     *
+     * 聊天入口强制要求规划模型与回复模型都已配置，而引导此前只收形象和人设，
+     * 新用户的第一条消息必然收到「请先选择模型」。
+     */
+    private fun ensureBotModelsThenStart(then: () -> Unit) {
+        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        if (profile.plannerModel.isNotBlank() && profile.replyModel.isNotBlank()) {
+            then()
+            return
+        }
+        val options =
+            com.coda.mobileui.core.ProviderStore.load(this)
+                .filter { it.kind == com.coda.mobileui.core.ProviderStore.ProviderKind.LLM }
+                .flatMap { p -> p.models.map { m -> Triple(p.id, p.name, m) } }
+        if (options.isEmpty()) {
+            val sheet = CodaSheet(this).title("还没有可用模型").subtitle("先去 设置 → 模型设置 添加供应商与模型")
+            sheet.content { column ->
+                column.removeAllViews()
+                column.addView(
+                    TextView(this).apply {
+                        text = "添加好之后再回到 Bot 页就能开始聊天。"
+                        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
+                        setPadding(dp(8), dp(12), dp(8), dp(12))
+                    },
+                )
+            }
+            sheet.primaryAction("知道了") {
+                sheet.dismiss()
+                then()
+            }
+            sheet.show()
+            return
+        }
+        val sheet =
+            CodaSheet(this).title("选一个模型").subtitle("规划与回复都用它，之后可在 设置 → Coda Bot 里分开设置")
+        sheet.content { column ->
+            column.removeAllViews()
+            options.forEach { option ->
+                column.addView(
+                    TextView(this).apply {
+                        text = "${option.second} · ${option.third}"
+                        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
+                        setTextColor(
+                            com.google.android.material.color.MaterialColors.getColor(
+                                window.decorView,
+                                com.google.android.material.R.attr.colorOnSurface,
+                                Color.DKGRAY,
+                            ),
+                        )
+                        setPadding(dp(8), dp(14), dp(8), dp(14))
+                        isClickable = true
+                        setOnClickListener {
+                            val fresh = com.coda.mobileui.personal.CodaBotStore.profile(this@MainActivity)
+                            fresh.plannerProviderId = option.first
+                            fresh.plannerModel = option.third
+                            fresh.replyProviderId = option.first
+                            fresh.replyModel = option.third
+                            com.coda.mobileui.personal.CodaBotStore.saveProfile(this@MainActivity, fresh)
+                            sheet.dismiss()
+                            then()
+                        }
+                    },
+                )
+            }
+        }
+        sheet.secondaryAction("稍后再说") {
+            sheet.dismiss()
+            then()
         }
         sheet.show()
     }
