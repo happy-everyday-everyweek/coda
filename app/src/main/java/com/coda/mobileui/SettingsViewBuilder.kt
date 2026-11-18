@@ -288,7 +288,6 @@ object SettingsViewBuilder {
                         inner.addView(detail)
                         heat.bind(row.data)
                     }
-                } else {
                 } else if (row.kind == SettingRow.Custom.KIND_PET_STAGE) {
                     PetStageView(container.context).apply {
                         layoutParams =
@@ -307,6 +306,7 @@ object SettingsViewBuilder {
                 }
             }
         }
+    }
 
     /** 组首只给上圆角、组末只给下圆角，组内其余行是直角。 */
     private fun applyGroupShape(
