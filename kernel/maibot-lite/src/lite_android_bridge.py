@@ -112,7 +112,8 @@ class _AndroidBotBridge:
         user_about: str,
     ) -> None:
         from src.lite_runtime import LiteRuntimeBridge
-
+        # 记下注入方身份：close 时只有自己仍是当前注入方才能清空全局控制器。
+        self._host = host
         def on_message(payload: Dict[str, str]) -> None:
             host.onMessage(str(payload.get("id", "")), str(payload.get("text", "")))
 
@@ -135,10 +136,17 @@ class _AndroidBotBridge:
         return self._bridge.notify_event(text)
 
     def close(self) -> None:
-        from src.lite_coding_tool import configure_host_controller
+        from src.lite_coding_tool import configure_host_controller, get_host_controller
 
-        configure_host_controller(None)
-        self._bridge.close()
+        try:
+            self._bridge.close()
+        finally:
+            # 先关运行时再清控制器；且只清自己注入的那份。
+            # 旧运行时的 close 可能晚于新运行时的创建（Kotlin 侧异步关闭），
+            # 无条件置 None 会让新运行时的 Coding Agent 工具全部消失。
+            if get_host_controller() is self._host:
+                configure_host_controller(None)
+
 
 
 def create_bridge(

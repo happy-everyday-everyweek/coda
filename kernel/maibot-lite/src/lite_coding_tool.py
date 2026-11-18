@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
+import asyncio
 import json
 
 from src.core.tooling import (
@@ -21,6 +22,12 @@ def configure_host_controller(controller: Any) -> None:
 
     global _controller
     _controller = controller
+
+
+def get_host_controller() -> Any:
+    """读当前注入的控制器，供桥判断自己是否还是最新的注入方。"""
+
+    return _controller
 
 
 def get_read_file_spec() -> ToolSpec:
@@ -242,7 +249,7 @@ class CodingAgentToolProvider(ToolProvider):
             )
         if invocation.tool_name == "session_list":
             try:
-                payload = json.loads(str(_controller.listSessions()))
+                payload = json.loads(str(await asyncio.to_thread(_controller.listSessions)))
             except Exception as exc:
                 return ToolExecutionResult(
                     tool_name=invocation.tool_name, success=False, error_message=str(exc)
@@ -261,7 +268,7 @@ class CodingAgentToolProvider(ToolProvider):
         if invocation.tool_name == "model_list":
             session_id = str(invocation.arguments.get("session_id") or "").strip()
             try:
-                payload = json.loads(str(_controller.listModels(session_id)))
+                payload = json.loads(str(await asyncio.to_thread(_controller.listModels, session_id)))
             except Exception as exc:
                 return ToolExecutionResult(
                     tool_name=invocation.tool_name, success=False, error_message=str(exc)
@@ -281,7 +288,8 @@ class CodingAgentToolProvider(ToolProvider):
             try:
                 payload = json.loads(
                     str(
-                        _controller.selectModel(
+                        await asyncio.to_thread(
+                            _controller.selectModel,
                             str(invocation.arguments.get("session_id") or ""),
                             str(invocation.arguments.get("provider_id") or ""),
                             str(invocation.arguments.get("model") or ""),
@@ -303,7 +311,8 @@ class CodingAgentToolProvider(ToolProvider):
             try:
                 payload = json.loads(
                     str(
-                        _controller.approveTool(
+                        await asyncio.to_thread(
+                            _controller.approveTool,
                             str(invocation.arguments.get("request_key") or "").strip(),
                             str(invocation.arguments.get("decision") or ""),
                         )
@@ -321,7 +330,9 @@ class CodingAgentToolProvider(ToolProvider):
             )
         if invocation.tool_name == "context_read_file":
             try:
-                payload = json.loads(str(_controller.readFile(str(invocation.arguments.get("path") or ""))))
+                payload = json.loads(
+                    str(await asyncio.to_thread(_controller.readFile, str(invocation.arguments.get("path") or "")))
+                )
             except Exception as exc:
                 return ToolExecutionResult(
                     tool_name=invocation.tool_name, success=False, error_message=str(exc)
@@ -336,7 +347,8 @@ class CodingAgentToolProvider(ToolProvider):
             try:
                 payload = json.loads(
                     str(
-                        _controller.runTerminal(
+                        await asyncio.to_thread(
+                            _controller.runTerminal,
                             str(invocation.arguments.get("command") or ""),
                             int(invocation.arguments.get("timeout_seconds") or 20),
                         )
@@ -369,7 +381,7 @@ class CodingAgentToolProvider(ToolProvider):
             )
         try:
             response: Dict[str, Any] = json.loads(
-                str(_controller.controlSession(action, text, session_id))
+                str(await asyncio.to_thread(_controller.controlSession, action, text, session_id))
             )
         except Exception as exc:
             return ToolExecutionResult(

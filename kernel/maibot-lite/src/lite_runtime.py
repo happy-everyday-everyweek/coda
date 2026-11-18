@@ -1,7 +1,7 @@
 """单用户 Android 嵌入入口，不创建网络服务或插件子进程。"""
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 import asyncio
@@ -196,18 +196,34 @@ class LiteRuntime:
         )
 
     async def stop(self) -> None:
-        """停止主链后台任务并释放本地驱动。"""
+        """停止主链后台任务并释放本地驱动。
+
+        每一步各自兜住异常：任一步失败也要把后面的清理跑完，
+        否则 driver 留在 platform io 里，下次 start 会重复注册同一 id。
+        """
+
         if not self._started:
             return
         self._started = False
         from src.chat.heart_flow.heartflow_manager import heartflow_manager
         from src.platform_io import get_platform_io_manager
 
-        await heartflow_manager.shutdown()
-        await get_platform_io_manager().remove_driver("android.local")
-        await get_platform_io_manager().stop()
-        await self._plugin_manager._hook_dispatcher.stop()
+        steps = (
+            ("heartflow shutdown", heartflow_manager.shutdown),
+            ("remove android driver", lambda: get_platform_io_manager().remove_driver("android.local")),
+            ("stop platform io", get_platform_io_manager().stop),
+            ("stop hook dispatcher", self._plugin_manager._hook_dispatcher.stop),
+        )
+        failures: List[str] = []
+        for label, step in steps:
+            try:
+                await step()
+            except Exception as exc:  # noqa: BLE001 - 清理阶段要把异常汇总而不是中断后续清理
+                failures.append(f"{label}: {exc}")
         self._driver = None
+        if failures:
+            raise RuntimeError("停止 MaiBot Lite 时出错：" + "；".join(failures))
+
 
 
 class LiteRuntimeBridge:
