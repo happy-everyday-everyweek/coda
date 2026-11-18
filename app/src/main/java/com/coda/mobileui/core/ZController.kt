@@ -78,10 +78,14 @@ class ZController private constructor(
 
     val runtime = CoreRuntime(app)
 
+    /** 会话与消息列表整体替换，引用跨线程可见靠 @Volatile。 */
+    @Volatile
     var sessions: MutableList<ZSessionInfo> = mutableListOf()
         private set
     var currentSessionId: String? = null
         private set
+
+    @Volatile
     var messages: MutableList<ZMessage> = mutableListOf()
 
     /**
@@ -93,6 +97,7 @@ class ZController private constructor(
     @Volatile
     var cacheOnly: Boolean = false
         private set
+    @Volatile
     var running: Boolean = false
         private set
     var mode: String = "build"
@@ -164,19 +169,32 @@ class ZController private constructor(
     private val main = Handler(Looper.getMainLooper())
     private val prefs = app.getSharedPreferences("zcode_bridge", Context.MODE_PRIVATE)
 
+    /** 状态标记的跨线程可见性靠 @Volatile，check-then-set 的原子性靠这把锁。 */
+    private val stateLock = Any()
+
+    @Volatile
     private var started = false
-    private var startWaiters = mutableListOf<(Boolean, String) -> Unit>()
+    private val startWaiters = mutableListOf<(Boolean, String) -> Unit>()
 
     /** 连续意外退出计数（稳定运行超 2 分钟后重置）。 */
+    @Volatile
     private var exitCount = 0
 
     /** 最近一次启动成功的时刻。 */
+    @Volatile
     private var lastStartAt = 0L
 
     /** 是否已安排自动重启（防重复安排）。 */
+    @Volatile
     private var autoRestartScheduled = false
+
+    @Volatile
     private var refreshScheduled = false
+
+    @Volatile
     private var refreshing = false
+
+    @Volatile
     private var refreshAgain = false
 
     fun addListener(l: Listener) {
@@ -202,14 +220,17 @@ class ZController private constructor(
             cb(true, "ok")
             return
         }
-        startWaiters += cb
+        synchronized(stateLock) { startWaiters += cb }
         runtime.events = runtimeEvents()
         runtime.start { ok, msg ->
             started = ok
             if (ok) lastStartAt = System.currentTimeMillis()
             post {
-                val ws = startWaiters.toList()
-                startWaiters.clear()
+                val ws = synchronized(stateLock) {
+                    val snapshot = startWaiters.toList()
+                    startWaiters.clear()
+                    snapshot
+                }
                 ws.forEach { it(ok, msg) }
             }
             if (ok) {
@@ -269,14 +290,18 @@ class ZController private constructor(
                 childLoading.clear()
                 val now = System.currentTimeMillis()
                 val ranFor = if (lastStartAt > 0L) now - lastStartAt else -1L
-                if (ranFor > 120_000L) exitCount = 0
-                exitCount += 1
+                // 自增与重置放在同一把锁里：两个退出回调同时进来时不能各加一次。
+                val attempt = synchronized(stateLock) {
+                    if (ranFor > 120_000L) exitCount = 0
+                    exitCount += 1
+                    exitCount
+                }
                 val reason = CoreRuntime.describeExit(code)
-                runtime.log("[core] 退出：$reason，本次运行 ${ranFor}ms，连续第 $exitCount 次")
+                runtime.log("[core] 退出：$reason，本次运行 ${ranFor}ms，连续第 $attempt 次")
                 // 刚拉起就被信号带走的进程，重启只会把同样的退出再演一遍，几秒里刷出十几次相同记录，
                 // 真正的原因反被淹没。第二次起不再自动重启，把原因留在提示与日志里。
-                val hopeless = ranFor >= 0L && ranFor <= 10_000L && code > 128 && exitCount >= 2
-                if (exitCount <= 5 && !autoRestartScheduled && !hopeless) {
+                val hopeless = ranFor >= 0L && ranFor <= 10_000L && code > 128 && attempt >= 2
+                if (attempt <= 5 && !autoRestartScheduled && !hopeless) {
                     autoRestartScheduled = true
                     notif { onNotice("核心进程意外退出：$reason，正在自动重启…") }
                     main.postDelayed({
@@ -589,12 +614,16 @@ class ZController private constructor(
     }
 
     /** 回合结束后的静默快照刷新（同步待办等快照级状态），不切换会话、不触发打开回调。 */
+    @Volatile
     private var snapshotRefreshing = false
 
     private fun refreshSnapshotQuiet() {
         val sid = currentSessionId ?: return
-        if (snapshotRefreshing) return
-        snapshotRefreshing = true
+        // check-then-set 必须原子，否则并发的两次回调会各发一次订阅。
+        synchronized(stateLock) {
+            if (snapshotRefreshing) return
+            snapshotRefreshing = true
+        }
         val params =
             JSONObject()
                 .put("sessionId", sid)
@@ -613,8 +642,10 @@ class ZController private constructor(
     // ---------------------------------------------------------------- 刷新
 
     private fun scheduleRefreshSoon() {
-        if (refreshScheduled) return
-        refreshScheduled = true
+        synchronized(stateLock) {
+            if (refreshScheduled) return
+            refreshScheduled = true
+        }
         main.postDelayed({
             refreshScheduled = false
             doRefreshMessages()
@@ -623,11 +654,13 @@ class ZController private constructor(
 
     private fun doRefreshMessages() {
         val sid = currentSessionId ?: return
-        if (refreshing) {
-            refreshAgain = true
-            return
+        synchronized(stateLock) {
+            if (refreshing) {
+                refreshAgain = true
+                return
+            }
+            refreshing = true
         }
-        refreshing = true
         runtime.call("session/messages", JSONObject().put("sessionId", sid)) { ok, body ->
             refreshing = false
             if (ok) {
