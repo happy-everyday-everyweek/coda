@@ -246,6 +246,7 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun switchRootNow(file: File) {
+        val target = file.absolutePath
         persist()
         Workspaces.select(this, target)
         Workspaces.ensureState(file)
