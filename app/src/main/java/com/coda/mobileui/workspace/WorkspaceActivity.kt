@@ -508,6 +508,8 @@ class WorkspaceActivity : BaseActivity() {
         path: String,
         preview: Boolean = true,
         markdown: Boolean = false,
+        prefetchedText: String? = null,
+        prefetchedCharset: java.nio.charset.Charset = Charsets.UTF_8,
     ) {
         // 入口统一把关：文件页的「以文本打开」也会走到这里，不能只在列表层限制。
         blockedEditorReason(File(path))?.let {
@@ -519,10 +521,22 @@ class WorkspaceActivity : BaseActivity() {
                 it.data.kind == WorkspaceTabs.EDITOR && it.data.state.optString("path") == path
             }
         if (existing != null) {
+            // 同文件已经在标签里：按这次请求的打开方式切换 Markdown，
+            // 否则用户从「打开方式」选 Markdown 会毫无反应。
+            if (existing.data.state.optBoolean("markdown") != markdown) {
+                existing.data.state.put("markdown", markdown)
+                (existing.page as? FilesPage)?.setMarkdownMode(markdown)
+                persist()
+            }
             if (!preview) promoteTab(existing.data.id)
             selectTab(existing.data.id)
             hideOverview()
             return
+        }
+        // 文件页读过的正文先留给编辑器页：同一文件不再读第二遍。
+        if (prefetchedText != null) {
+            prefetchedPath = path
+            prefetchedBody = prefetchedText to prefetchedCharset
         }
         val state = JSONObject().put("path", path).put("markdown", markdown)
         // 预览标签在原位置替换，标签顺序不跳。
@@ -553,12 +567,31 @@ class WorkspaceActivity : BaseActivity() {
     /** 只读预览的正文不进 JSON 状态，按标签 key 暂存在内存里。 */
     private val editorBuffers = mutableMapOf<String, String>()
 
+    /**
+     * 文件页刚读出来的正文，等编辑器页来取。
+     *
+     * 只留一份：同一时间只会有一次「点开文件」在途，留一份足够，也不会把多个 2 MB 正文攒在内存里。
+     */
+    private var prefetchedPath: String? = null
+    private var prefetchedBody: Pair<String, java.nio.charset.Charset>? = null
+
+    /** 取走预读正文：读一次就删，避免下次打开同名旧内容。 */
+    fun takePrefetched(path: String): Pair<String, java.nio.charset.Charset>? {
+        if (prefetchedPath != path) return null
+        val body = prefetchedBody
+        prefetchedPath = null
+        prefetchedBody = null
+        return body
+    }
+
     /** 打开一段只读文本（压缩包内预览等），同样占一个编辑器标签。 */
     fun openReadOnlyEditor(
         name: String,
         content: String,
     ) {
-        val key = "ro:$name:${content.length}"
+        // 键里带上内容指纹：只按「文件名 + 长度」会让不同目录的同名同长文件
+        // 命中同一个标签，第二次打开看到的是上一个文件的内容。
+        val key = "ro:$name:${content.length}:${content.hashCode()}"
         // 同一个文件重复点：复用已有标签，不要每次点都新建一个同名预览。
         val existing =
             tabs.firstOrNull {

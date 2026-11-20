@@ -96,6 +96,20 @@ open class FilesPage(
     private var originalText: String = ""
 
     /**
+     * 这份正文读进来时识别出的编码。
+     *
+     * 编辑器按 UTF-8 硬读写会把 GBK 文本的汉字替换成 U+FFFD 再写回去，原内容不可逆丢失。
+     * 读入时记录编码，保存时按同一编码写回，界面只在非 UTF-8 时额外标出来。
+     */
+    private var editorCharset: java.nio.charset.Charset = Charsets.UTF_8
+
+    /** 行号槽与缩进参考线的合并刷新：按键后不必立刻整篇重建。 */
+    private val chromeTick = Runnable { refreshChromeHeavy() }
+
+    /** 长度没变时的脏比较：合并到一次，避免每个字符都整篇比较。 */
+    private val dirtyTick = Runnable { compareDirty() }
+
+    /**
      * 正在浏览的压缩包（null 表示在普通目录里）。
      *
      * 打开压缩包后沿用同一套列表界面：`current` 仍指向压缩包所在的真实目录，
@@ -174,10 +188,16 @@ open class FilesPage(
             host.closePage(this)
             return
         }
+        // 文件页刚读过一遍正文：直接用它，别为了同一个文件再读一次。
+        val prefetched = host.takePrefetched(path)
+        if (prefetched != null) {
+            showEditor(file, prefetched.first, saved.optBoolean("markdown"), prefetched.second)
+            return
+        }
         readInto(
             file,
             onFail = { toast(it) },
-            done = { showEditor(file, it, saved.optBoolean("markdown")) },
+            done = { text, charset -> showEditor(file, text, saved.optBoolean("markdown"), charset) },
         )
     }
 
@@ -194,6 +214,22 @@ open class FilesPage(
 
     /** 编辑器页用：顶部菜单里的保存。 */
     protected fun saveCurrentFile() = saveEditor()
+
+    /**
+     * 已打开的标签切换 Markdown 模式。
+     *
+     * 「打开方式 → Markdown 编辑器」命中的是已有标签时，只改这个状态，不重建页面：
+     * 否则界面毫无变化，看起来像功能失效。
+     */
+    fun setMarkdownMode(on: Boolean) {
+        if (markdownMode == on) return
+        markdownMode = on
+        if (!on && ::markdownPreview.isInitialized && markdownPreview.visibility == View.VISIBLE) {
+            markdownPreview.visibility = View.GONE
+            editorBody.visibility = View.VISIBLE
+        }
+        refreshEditorTitle()
+    }
 
     /** 编辑器页用：顶部菜单里的关闭（会先问未保存的修改）。 */
     protected fun closeCurrentEditor() = closeEditor()
@@ -290,8 +326,9 @@ open class FilesPage(
         readInto(
             file,
             onFail = { toast(it) },
-            done = { text ->
+            done = { text, charset ->
                 originalText = text
+                editorCharset = charset
                 loadedMtime = mtime
                 suppressEdits = true
                 editorInput.setText(text)
@@ -825,6 +862,7 @@ override fun menuItems(): List<String> =
         editing = null
         readOnlyPreview = true
         markdownMode = false
+        editorCharset = Charsets.UTF_8
         originalText = content
         dirty = false
         editorRules = CodeHighlighter.detect(name)
@@ -1442,7 +1480,12 @@ override fun menuItems(): List<String> =
                         override fun afterTextChanged(s: android.text.Editable?) = Unit
                     },
                 )
-                setOnScrollChangeListener { _, _, _, _, _ -> editorGutter.scrollTo(0, 0) }
+                setOnScrollChangeListener { _, _, _, _, _ ->
+                    editorGutter.scrollTo(0, 0)
+                    // 行号槽是独立 View，不跟正文一起滚：按 scrollY 整体上移，
+                    // 否则长文件滚到中段后行号仍停在第一行。
+                    editorGutterText.translationY = -editorInput.scrollY.toFloat()
+                }
             }
         editorCanvas.addView(editorInput)
         editorCanvas.addView(
@@ -1525,6 +1568,9 @@ override fun menuItems(): List<String> =
 
         /** 画几级竖线；0 表示内容无缩进，一条也不画。 */
         var levels: Int = 0
+
+        /** 正文左内边距：竖线要和正文同一个起点，否则整体偏左。 */
+        var offsetPx: Float = 0f
         var guideColor: Int = android.graphics.Color.GRAY
 
         override fun onDraw(canvas: android.graphics.Canvas) {
@@ -1536,7 +1582,7 @@ override fun menuItems(): List<String> =
                     strokeWidth = 1f
                 }
             var level = 0
-            var x = stepPx
+            var x = offsetPx + stepPx
             while (level < levels && x < width) {
                 canvas.drawLine(x, 0f, x, height.toFloat(), paint)
                 level++
@@ -1575,26 +1621,51 @@ override fun menuItems(): List<String> =
 
     /** 行号槽的一行：当前行用主题色加粗，其余用弱化色。 */
     private fun gutterMarkup(): android.text.SpannableString {
-        val lines = editorInput.lineCount.coerceAtLeast(1)
+        val text = editorInput.text ?: android.text.SpannableString("")
+        val layout = editorInput.layout
+        val visualCount = editorInput.lineCount.coerceAtLeast(1)
         val current = caretLine()
-        val builder = StringBuilder()
-        for (i in 1..lines) {
-            builder.append(i)
-            if (i < lines) builder.append('\n')
+        // 自动换行后一条逻辑行会拆成多条视觉行：续行留空号，
+        // 否则同一逻辑行会出现好几个编号，与「转到行」和状态栏的口径对不上。
+        val numbers = IntArray(visualCount)
+        var logical = 0
+        var scanned = 0
+        for (i in 0 until visualCount) {
+            val start =
+                if (layout != null) {
+                    runCatching { layout.getLineStart(i) }.getOrDefault(scanned)
+                } else {
+                    scanned
+                }
+            var startsLogical = i == 0
+            while (scanned < start && scanned < text.length) {
+                if (text[scanned] == '\n') startsLogical = true
+                scanned++
+            }
+            if (startsLogical) logical++
+            numbers[i] = if (startsLogical) logical else -1
         }
-        val text = android.text.SpannableString(builder.toString())
+        val builder = StringBuilder()
+        for (i in 0 until visualCount) {
+            val n = numbers[i]
+            if (n > 0) builder.append(n) else builder.append(' ')
+            if (i < visualCount - 1) builder.append('\n')
+        }
+        val markup = android.text.SpannableString(builder.toString())
         var offset = 0
-        for (i in 1..lines) {
-            val end = offset + i.toString().length
-            val active = i == current
-            text.setSpan(
+        for (i in 0 until visualCount) {
+            val raw = numbers[i]
+            val label = if (raw > 0) raw.toString() else " "
+            val end = offset + label.length
+            val active = raw == current
+            markup.setSpan(
                 android.text.style.ForegroundColorSpan(if (active) primary else onSurfaceVariant),
                 offset,
                 end,
                 android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
             if (active) {
-                text.setSpan(
+                markup.setSpan(
                     android.text.style.StyleSpan(Typeface.BOLD),
                     offset,
                     end,
@@ -1603,16 +1674,27 @@ override fun menuItems(): List<String> =
             }
             offset = end + 1
         }
-        return text
+        return markup
     }
 
-    /** 插入点所在行（1 起），把换行显示也算进去，与行号槽一致。 */
+    /** 插入点所在的逻辑行（1 起），按 `\n` 数，与「转到行」一致。 */
     private fun caretLine(): Int {
-        val layout = editorInput.layout ?: return 1
-        val length = editorInput.text?.length ?: 0
-        val offset = editorInput.selectionStart.coerceIn(0, length)
-        val raw = runCatching { layout.getLineForOffset(offset) }.getOrDefault(0)
-        return raw + 1
+        val text = editorInput.text ?: return 1
+        val offset = editorInput.selectionStart.coerceIn(0, text.length)
+        var line = 1
+        var i = 0
+        while (i < offset) {
+            if (text[i] == '\n') line++
+            i++
+        }
+        return line
+    }
+
+    /** 文本的逻辑行数（按 `\n` 数），与自动换行无关。 */
+    private fun logicalLineCount(text: CharSequence): Int {
+        var lines = 1
+        for (ch in text) if (ch == '\n') lines++
+        return lines
     }
 
     /** 当前行底色：铺满插入点所在那一整个显示行。 */
@@ -1656,13 +1738,24 @@ override fun menuItems(): List<String> =
         return (color and 0x00FFFFFF) or (a shl 24)
     }
 
-    /** 光标随时可能动：行号、当前行底、缩进参考线、底部状态一起刷新。 */
+    /** 光标随时可能动：当前行底与底部状态立刻更新，行号槽合并到一次刷新。 */
     private fun refreshEditorChrome() {
         if (!::editorGutterText.isInitialized) return
         if (editor.visibility != View.VISIBLE) return
-        editorGutterText.text = gutterMarkup()
         refreshCurrentLine()
         refreshCursorStatus()
+        // 行号槽要按视觉行重建整串 span，缩进参考线要遍历全文：按键时先不重建，
+        // 合并到一次延迟刷新，避免每个字符都做一遍全量扫描。
+        editorInput.removeCallbacks(chromeTick)
+        editorInput.postDelayed(chromeTick, 60L)
+    }
+
+    /** 行号与缩进参考线的重建：延迟合并后执行。 */
+    private fun refreshChromeHeavy() {
+        if (!::editorGutterText.isInitialized) return
+        if (editor.visibility != View.VISIBLE) return
+        editorGutterText.text = gutterMarkup()
+        editorGutterText.translationY = -editorInput.scrollY.toFloat()
         refreshIndentGuides()
     }
 
@@ -1676,6 +1769,8 @@ override fun menuItems(): List<String> =
         editorGuide.visibility = View.VISIBLE
         val paint = editorInput.paint
         editorGuide.stepPx = paint.measureText(indentUnit)
+        // 竖线从正文的左内边距起算，否则每条线都比对应缩进偏左一个 padding。
+        editorGuide.offsetPx = editorInput.paddingLeft.toFloat()
         // 级别 = 文本里最深一层缩进占几个缩进单位，按真实内容来画，
         // 空文件、顶格写的内容都是 0 条线。
         editorGuide.levels = maxIndentLevels(editorInput.text?.toString() ?: "", indentUnit)
@@ -1715,7 +1810,26 @@ override fun menuItems(): List<String> =
             dirty = false
             return
         }
-        val file = editing ?: return
+        if (editing == null) return
+        val text = editorInput.text ?: return
+        // 长度一变就能断定有改动：不必每个字符都把整篇复制出来比较。
+        if (text.length != originalText.length) {
+            if (!dirty) {
+                dirty = true
+                refreshEditorTitle()
+            }
+            return
+        }
+        // 长度相同（替换字符、撤销回原文）才需要逐字比较，合并到一次延迟检查。
+        editorInput.removeCallbacks(dirtyTick)
+        editorInput.postDelayed(dirtyTick, 200L)
+    }
+
+    /** 长度没变时的完整比较：替换单个字符、撤销回原文都靠它判定。 */
+    private fun compareDirty() {
+        if (suppressEdits) return
+        if (readOnlyPreview) return
+        if (editing == null) return
         val changed = editorInput.text.toString() != originalText
         if (changed == dirty) return
         dirty = changed
@@ -1728,6 +1842,8 @@ override fun menuItems(): List<String> =
         val parts = mutableListOf(name)
         if (markdownMode) parts += "Markdown"
         if (readOnlyPreview) parts += "只读"
+        // 非 UTF-8 显式标出来：保存会按这个编码写回，用户需要能看见。
+        if (editorCharset != Charsets.UTF_8) parts += editorCharset.name()
         val base = parts.joinToString(" · ")
         editorTitle.text = if (dirty) "$base •" else base
     }
@@ -1878,7 +1994,12 @@ override fun menuItems(): List<String> =
     private fun runHighlight() {
         val rules = editorRules ?: return
         val text = editorInput.text ?: return
-        if (text.length > CodeHighlighter.MAX_HIGHLIGHT_CHARS) return
+        if (text.length > CodeHighlighter.MAX_HIGHLIGHT_CHARS) {
+            // 跨过上限后必须把上一次的 span 撤掉：否则旧着色留在原区间，
+            // 后续编辑还会带着它伸缩，看起来像"部分代码颜色错乱"。
+            CodeHighlighter.clear(text)
+            return
+        }
         val start = editorInput.selectionStart.coerceAtLeast(0)
         CodeHighlighter.apply(text, rules, palette())
         // 清 span 不会动文本，但部分输入法会重置选区，这里兜一下光标位置。
@@ -1892,11 +2013,17 @@ override fun menuItems(): List<String> =
         val caret = editorInput.selectionStart.coerceAtLeast(0)
         var line = 1
         var lineStart = 0
+        // 一次遍历同时得到逻辑行总数与插入点所在行：状态栏与「转到行」按 `\n` 数，
+        // 不能用 lineCount（自动换行后那是视觉行数）。
+        var total = 1
         var i = 0
-        while (i < caret && i < text.length) {
+        while (i < text.length) {
             if (text[i] == '\n') {
-                line++
-                lineStart = i + 1
+                total++
+                if (i < caret) {
+                    line++
+                    lineStart = i + 1
+                }
             }
             i++
         }
@@ -1908,12 +2035,16 @@ override fun menuItems(): List<String> =
                 append(" · ")
                 append(readableSize(file.length()))
                 append(" · ")
-                append(editorInput.lineCount)
+                append(total)
                 append(" 行")
                 append(" · Ln ")
                 append(line)
                 append(", Col ")
                 append(column)
+                if (editorCharset != Charsets.UTF_8) {
+                    append(" · ")
+                    append(editorCharset.name())
+                }
                 if (language != null) {
                     append(" · ")
                     append(language)
@@ -1928,7 +2059,7 @@ override fun menuItems(): List<String> =
         inputSheet("转到行", "", onDone = { raw ->
             val target = raw.trim().toIntOrNull() ?: return@inputSheet
             val text = editorInput.text ?: return@inputSheet
-            val clamped = target.coerceIn(1, editorInput.lineCount)
+            val clamped = target.coerceIn(1, logicalLineCount(text))
             var line = 1
             var index = 0
             while (index < text.length && line < clamped) {
@@ -2090,7 +2221,16 @@ override fun menuItems(): List<String> =
                 onFail = { note ->
                     if (!openWithSystem(file) && !tryArchiveByContent(file)) showInfo(file, note)
                 },
-                done = { host.openEditor(file.absolutePath, preview = true, markdown = isMarkdownFile(file)) },
+                // 正文已经读出来了，交给编辑器标签直接用，避免同一文件读两遍。
+                done = { text, charset ->
+                    host.openEditor(
+                        file.absolutePath,
+                        preview = true,
+                        markdown = isMarkdownFile(file),
+                        prefetchedText = text,
+                        prefetchedCharset = charset,
+                    )
+                },
             )
             return
         }
@@ -2212,32 +2352,76 @@ override fun menuItems(): List<String> =
         return fromMap ?: "application/octet-stream"
     }
 
-    /** 读回文本内容；失败时走 onFail，不会静默。 */
+    /**
+     * 读回文本内容；失败时走 onFail，不会静默。
+     *
+     * 同时识别编码：先按 UTF-8 严格解码，失败再试 GBK。识别结果随正文一起返回，
+     * 保存时按同一编码写回——否则 GBK 文件里的汉字会被 U+FFFD 覆盖成不可逆的乱码。
+     */
     private fun readInto(
         file: File,
         onFail: (String) -> Unit,
-        done: (String) -> Unit,
+        done: (String, java.nio.charset.Charset) -> Unit,
     ) {
         host.background(
             work = {
-                runCatching { file.readText() }
-                    .fold({ Read(it, "") }, { Read(null, "无法读取，可能是二进制文件") })
+                runCatching { file.readBytes() }
+                    .fold(
+                        { bytes ->
+                            val (text, charset) = decodeText(bytes)
+                            Read(text, "", charset)
+                        },
+                        { Read(null, "无法读取，可能是二进制文件", Charsets.UTF_8) },
+                    )
             },
             then = { result ->
                 val content = result.text
-                if (content == null) onFail(result.note) else done(content)
+                if (content == null) onFail(result.note) else done(content, result.charset)
             },
         )
     }
+
+    /** 按 BOM、UTF-8、GBK 的顺序识别编码；都不成立时按 UTF-8 带替换解码。 */
+    private fun decodeText(bytes: ByteArray): Pair<String, java.nio.charset.Charset> {
+        if (bytes.size >= 3 &&
+            bytes[0] == 0xEF.toByte() &&
+            bytes[1] == 0xBB.toByte() &&
+            bytes[2] == 0xBF.toByte()
+        ) {
+            return String(bytes, 3, bytes.size - 3, Charsets.UTF_8) to Charsets.UTF_8
+        }
+        strictlyDecode(bytes, Charsets.UTF_8)?.let { return it to Charsets.UTF_8 }
+        val gbk = runCatching { java.nio.charset.Charset.forName("GBK") }.getOrNull()
+        if (gbk != null) {
+            strictlyDecode(bytes, gbk)?.let { return it to gbk }
+        }
+        return String(bytes, Charsets.UTF_8) to Charsets.UTF_8
+    }
+
+    /** 严格解码：遇到非法字节返回 null，而不是悄悄替换成 U+FFFD。 */
+    private fun strictlyDecode(
+        bytes: ByteArray,
+        charset: java.nio.charset.Charset,
+    ): String? =
+        runCatching {
+            charset
+                .newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes))
+                .toString()
+        }.getOrNull()
 
     private fun showEditor(
         file: File,
         content: String,
         markdown: Boolean = false,
+        charset: java.nio.charset.Charset = Charsets.UTF_8,
     ) {
         editing = file
         markdownMode = markdown
         readOnlyPreview = false
+        editorCharset = charset
         originalText = content
         loadedMtime = runCatching { file.lastModified() }.getOrDefault(0L)
         dirty = false
@@ -2274,8 +2458,10 @@ override fun menuItems(): List<String> =
         }
         val file = editing ?: return
         val text = editorInput.text.toString()
+        val charset = editorCharset
         host.background(
-            work = { runCatching { file.writeText(text) }.isSuccess },
+            // 按读入时识别到的编码写回：GBK 文件保存后仍是 GBK，不会把汉字换成 U+FFFD。
+            work = { runCatching { file.writeBytes(text.toByteArray(charset)) }.isSuccess },
             then = { ok ->
                 if (ok) {
                     originalText = text
@@ -2423,6 +2609,7 @@ override fun menuItems(): List<String> =
     private data class Read(
         val text: String?,
         val note: String,
+        val charset: java.nio.charset.Charset = Charsets.UTF_8,
     )
 
     private companion object {
