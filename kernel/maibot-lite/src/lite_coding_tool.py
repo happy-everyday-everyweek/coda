@@ -84,6 +84,9 @@ _BANNED_FLAGS = (
     "-fls",
     "--output",
     "--in-place",
+    # 这些能让只读命令起进程或调用分页器执行任意命令。
+    "--open-files-in-pager",
+    "--pre",
 )
 
 _SHELL_WRITE_TOKENS = (">", "<", "`", "$(", "${", "&&", "||", ";", "\n", "\r")
@@ -112,6 +115,22 @@ def _readonly_violation(command: str) -> Optional[str]:
             return "git 需要明确的只读子命令，例如 git status / git diff / git log"
         if parts[1] not in _GIT_READONLY_SUBCOMMANDS:
             return f"git {parts[1]} 会修改仓库，只读检查不允许"
+        args = parts[2:]
+        # branch/tag 既可能只读列出，也可能 -d/-m 写仓库：按参数再挡一层。
+        if parts[1] == "branch" and any(
+            arg in {"-d", "-D", "-m", "-M", "-c", "-C", "-u", "--edit-description"}
+            or arg.startswith("--set-upstream-to")
+            or arg.startswith("--unset-upstream")
+            for arg in args
+        ):
+            return "git branch 的写操作（删除/改名/设置上游）不允许"
+        if parts[1] == "tag" and any(
+            arg in {"-d", "-a", "-s", "-f", "-m", "-F"} or arg.startswith("-a") or arg.startswith("--delete")
+            for arg in args
+        ):
+            return "git tag 只能列出现有标签，不能创建或删除"
+        if "-O" in args:
+            return "只读检查不允许 -O（会启动分页器执行命令）"
         return None
     if first not in _READONLY_COMMANDS:
         return f"只读检查不允许执行 {first}；可用命令：grep、ls、cat、head、tail、wc、find、git（只读子命令）等"

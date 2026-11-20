@@ -205,7 +205,7 @@ object Git {
         root: File,
         remoteBranch: String,
     ): Result {
-        val local = remoteBranch.substringAfterLast('/')
+        val local = remoteBranch.substringAfter('/')
         if (local.isEmpty()) return Result(false, "分支名不合法：$remoteBranch")
         return run(env, root, listOf("checkout", "-b", local, "--track", remoteBranch))
     }

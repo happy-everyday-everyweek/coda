@@ -83,6 +83,9 @@ async def test_context_run_terminal_rejects_writes() -> None:
         "sort -o out in",
         "ls\nrm -rf /",
         "rm -rf build",
+        "git branch -D feature",
+        "git tag -d v1",
+        "rg --pre sh pattern",
     ):
         result = await provider.invoke(
             SimpleNamespace(tool_name="context_run_terminal", arguments={"command": command})
