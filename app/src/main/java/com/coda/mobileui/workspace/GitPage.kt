@@ -35,7 +35,7 @@ class GitPage(
     host: WorkspaceActivity,
     // 由 WorkspaceActivity 传入用于恢复页面状态；本页只用它恢复选中项，
     // 但构造签名要与其余工作区页面保持一致，不能删。
-    saved: JSONObject,
+    private val saved: JSONObject,
 ) : WorkspacePage(host) {
     override val kind: String = WorkspaceTabs.GIT
     override val title: String = "Git"
