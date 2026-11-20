@@ -4751,14 +4751,14 @@ class MainActivity : BaseActivity() {
                             setColor(attrColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
                             cornerRadii =
                                 floatArrayOf(
-                                    dp(16f).toFloat(),
-                                    dp(16f).toFloat(),
+                                    dp(16).toFloat(),
+                                    dp(16).toFloat(),
                                     0f,
                                     0f,
                                     0f,
                                     0f,
-                                    dp(16f).toFloat(),
-                                    dp(16f).toFloat(),
+                                    dp(16).toFloat(),
+                                    dp(16).toFloat(),
                                 )
                         }
                     layoutParams =
