@@ -374,7 +374,7 @@ internal class GitCanvasView(
             return
         }
         val first = (-offsetY / scale / rowHeight).toInt().coerceIn(0, commits.size - 1)
-        val last = ((height - offsetY) / scale / rowHeight).toInt().coerceIn(0, commits.size - 1)
+        val last = ((visibleBottom() - offsetY) / scale / rowHeight).toInt().coerceIn(0, commits.size - 1)
         val from = (first - 2).coerceAtLeast(0)
         val to = (last + 2).coerceAtMost(commits.size - 1)
         if (to < from) return
@@ -507,6 +507,12 @@ internal class GitCanvasView(
 
     // ---------------------------------------------------------------- 小地图
 
+    // 小地图每帧都要画：画笔常驻，避免拖动时每帧新建四个对象。
+    private val miniFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val miniBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val miniDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val miniViewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
     private fun drawMinimap(canvas: Canvas) {
         if (miniAlpha <= 0.01f || commits.isEmpty()) return
         val miniWidth = dp(56f)
@@ -515,27 +521,18 @@ internal class GitCanvasView(
         val top = dp(14f)
         miniRect.set(left, top, left + miniWidth, top + miniHeight)
 
-        val fill =
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL
-                color = withAlpha(miniBgColor, 0.94f * miniAlpha)
-            }
+        val fill = miniFillPaint
+        fill.color = withAlpha(miniBgColor, 0.94f * miniAlpha)
         canvas.drawRoundRect(miniRect, dp(10f), dp(10f), fill)
-        val border =
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                strokeWidth = dp(0.8f)
-                color = withAlpha(outlineColor, miniAlpha)
-            }
+        val border = miniBorderPaint
+        border.strokeWidth = dp(0.8f)
+        border.color = withAlpha(outlineColor, miniAlpha)
         canvas.drawRoundRect(miniRect, dp(10f), dp(10f), border)
 
         val sx = miniWidth / worldWidth
         val sy = miniHeight / worldHeight
-        val dot =
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL
-                color = withAlpha(variantColor, 0.8f * miniAlpha)
-            }
+        val dot = miniDotPaint
+        dot.color = withAlpha(variantColor, 0.8f * miniAlpha)
         val dotRadius = min(dp(1.1f), 1.6f)
         for (row in commits.indices) {
             val lane = laneOf.getOrElse(row) { 0 }
@@ -571,12 +568,9 @@ internal class GitCanvasView(
             (top + viewBottom * sy).coerceIn(top, top + miniHeight),
         )
         if (rowRect.width() > 1f && rowRect.height() > 1f) {
-            val view =
-                Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    style = Paint.Style.STROKE
-                    strokeWidth = dp(1.4f)
-                    color = withAlpha(primaryColor, miniAlpha)
-                }
+            val view = miniViewPaint
+            view.strokeWidth = dp(1.4f)
+            view.color = withAlpha(primaryColor, miniAlpha)
             canvas.drawRoundRect(rowRect, dp(3f), dp(3f), view)
         }
     }

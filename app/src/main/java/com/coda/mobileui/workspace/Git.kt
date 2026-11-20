@@ -77,6 +77,14 @@ object Git {
         return Result(result.ok, result.output.trimEnd())
     }
 
+    /**
+     * 失败时不要拿输出当数据。
+     *
+     * exec 把 stderr 并进了 stdout，`status`、`branch`、`diff` 失败时输出里是
+     * `fatal: ...` 之类的错误文本；直接按行解析会把它当分支名或变更文件渲染出来。
+     */
+    private fun Result.data(): String = if (ok) output else ""
+
     /** 目录是否是 Git 仓库。 */
     fun isRepo(
         env: LinuxEnv,
@@ -110,16 +118,27 @@ object Git {
         env: LinuxEnv,
         root: File,
     ): String {
-        val head = run(env, root, listOf("symbolic-ref", "--short", "-q", "HEAD")).output.trim()
+        val head = run(env, root, listOf("symbolic-ref", "--short", "-q", "HEAD")).data().trim()
         if (head.isNotEmpty()) return head
-        return run(env, root, listOf("rev-parse", "--short", "HEAD")).output.trim()
+        return run(env, root, listOf("rev-parse", "--short", "HEAD")).data().trim()
     }
+
+    /**
+     * 工作区所在仓库的根目录。
+     *
+     * 工作区可能只是某个仓库的子目录：此时 `add -A` 的默认范围是整棵树，
+     * 界面必须知道这件事，写操作也要按工作区目录收窄。
+     */
+    fun repoRoot(
+        env: LinuxEnv,
+        root: File,
+    ): String = run(env, root, listOf("rev-parse", "--show-toplevel")).data().trim()
 
     /** 工作区变更的行数摘要。 */
     fun changes(
         env: LinuxEnv,
         root: File,
-    ): List<String> = run(env, root, listOf("status", "--porcelain")).lines()
+    ): List<String> = run(env, root, listOf("status", "--porcelain")).data().lines().filter { it.isNotBlank() }
 
     /** 提交图：跨全部分支按拓扑序取最近若干条。 */
     fun graph(
@@ -152,13 +171,13 @@ object Git {
     fun localBranches(
         env: LinuxEnv,
         root: File,
-    ): List<String> = run(env, root, listOf("branch", "--format=%(refname:short)")).lines()
+    ): List<String> = run(env, root, listOf("branch", "--format=%(refname:short)")).data().lines().filter { it.isNotBlank() }
 
     /** 远端分支名列表。 */
     fun remoteBranches(
         env: LinuxEnv,
         root: File,
-    ): List<String> = run(env, root, listOf("branch", "-r", "--format=%(refname:short)")).lines()
+    ): List<String> = run(env, root, listOf("branch", "-r", "--format=%(refname:short)")).data().lines().filter { it.isNotBlank() }
 
     /** 单个提交的完整信息。 */
     fun show(
@@ -255,10 +274,33 @@ object Git {
         root: File,
     ): Result = run(env, root, listOf("pull", "--ff-only"), timeoutMs = NETWORK_TIMEOUT_MS)
 
+    /**
+     * 推送。
+     *
+     * 新仓库（init + remote add）第一次推送没有上游，裸 `push` 必然失败。
+     * 命中这种错误时补一次 `--set-upstream`，用当前分支名与唯一的远端。
+     */
     fun push(
         env: LinuxEnv,
         root: File,
-    ): Result = run(env, root, listOf("push"), timeoutMs = NETWORK_TIMEOUT_MS)
+    ): Result {
+        val first = run(env, root, listOf("push"), timeoutMs = NETWORK_TIMEOUT_MS)
+        if (first.ok || !first.output.contains("no upstream branch")) return first
+        val current = branch(env, root)
+        if (current.isEmpty()) return first
+        val remote =
+            run(env, root, listOf("remote"))
+                .data()
+                .lines()
+                .firstOrNull { it.isNotBlank() }
+                ?: "origin"
+        return run(
+            env,
+            root,
+            listOf("push", "--set-upstream", remote, current),
+            timeoutMs = NETWORK_TIMEOUT_MS,
+        )
+    }
 
     /** 克隆远程仓库到指定目录。网络操作，超时放宽到 10 分钟。 */
     fun clone(
@@ -331,7 +373,7 @@ object Git {
     fun conflicts(
         env: LinuxEnv,
         root: File,
-    ): List<String> = run(env, root, listOf("diff", "--name-only", "--diff-filter=U")).lines()
+    ): List<String> = run(env, root, listOf("diff", "--name-only", "--diff-filter=U")).data().lines().filter { it.isNotBlank() }
 
     /** 全部标记为已解决（不改变内容，只进暂存区）。 */
     fun addAll(
@@ -351,7 +393,9 @@ object Git {
         root: File,
     ): Result {
         repairObjectDirs(root)
-        val first = run(env, root, listOf("add", "-A"))
+        // 显式限定为当前工作区目录：工作区只是父仓库的子目录时，裸 `add -A`
+        // 会把整棵树（含工作区之外）的改动一起暂存，界面显示的变更数却只有子目录。
+        val first = run(env, root, listOf("add", "-A", "--", "."))
         if (first.ok) return first
         val broken =
             first.output.contains("unable to write file") ||
@@ -359,7 +403,7 @@ object Git {
                 first.output.contains("unable to index file")
         if (!broken) return first
         repairObjectDirs(root)
-        return run(env, root, listOf("add", "-A"))
+        return run(env, root, listOf("add", "-A", "--", "."))
     }
 
     /**

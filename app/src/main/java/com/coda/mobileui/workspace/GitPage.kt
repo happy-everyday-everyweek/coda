@@ -43,6 +43,8 @@ class GitPage(
     private data class Snapshot(
         val repo: Boolean,
         val branch: String,
+        /** 仓库根目录；工作区是仓库子目录时与 host.root 不同。 */
+        val repoRoot: String,
         val changes: List<String>,
         val commits: List<Git.Commit>,
         val locals: List<String>,
@@ -259,11 +261,12 @@ class GitPage(
                     val env = host.env
                     val root = host.root
                     if (!Git.isRepo(env, root)) {
-                        Snapshot(false, "", emptyList(), emptyList(), emptyList(), emptyList(), true)
+                        Snapshot(false, "", "", emptyList(), emptyList(), emptyList(), emptyList(), true)
                     } else {
                         Snapshot(
                             repo = true,
                             branch = Git.branch(env, root),
+                            repoRoot = Git.repoRoot(env, root),
                             changes = Git.changes(env, root),
                             commits = Git.graph(env, root, 400),
                             locals = Git.localBranches(env, root),
@@ -424,6 +427,13 @@ class GitPage(
                     buildString {
                         append("本地 ${current.locals.size} 个分支 · 远端 ${current.remotes.size} 个分支")
                         append(if (changes == 0) " · 工作区干净" else " · $changes 个未提交变更")
+                        // 工作区只是父仓库的子目录时明确说出来：提交范围按本目录收窄，
+                        // 但分支与远端仍是整个仓库的，用户需要知道这一点。
+                        val repoRoot = current.repoRoot.trimEnd('/')
+                        val workspacePath = host.root.absolutePath.trimEnd('/')
+                        if (repoRoot.isNotEmpty() && repoRoot != workspacePath) {
+                            append(" · 父仓库的子目录，提交只包含本目录")
+                        }
                     }
                 Control(
                     title = current.branch.ifEmpty { "游离的 HEAD" },

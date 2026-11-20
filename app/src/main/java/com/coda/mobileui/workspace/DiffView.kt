@@ -64,9 +64,13 @@ internal class DiffView(
         var files = 0
         var added = 0
         var removed = 0
+        // 拼接两段 diff 时同一文件会出现两条 `diff --git`：按文件名去重，别报成两个文件。
+        val seen = HashSet<String>()
         for (line in lines) {
             when {
-                line.startsWith("diff --git ") -> files++
+                line.startsWith("diff --git ") -> {
+                    if (seen.add(parseDiffName(line.removePrefix("diff --git ").trim()))) files++
+                }
                 line.startsWith("+") && !line.startsWith("+++") -> added++
                 line.startsWith("-") && !line.startsWith("---") -> removed++
             }
@@ -97,18 +101,24 @@ internal class DiffView(
                 if (current.isNotEmpty()) groups.add(Group(name, current.toList()))
                 current = mutableListOf()
                 // "diff --git a/lib/x.kt b/lib/x.kt" 取后半段，路径更好读。
-                val tail = line.removePrefix("diff --git ").trim()
-                name =
-                    tail
-                        .split(' ')
-                        .lastOrNull()
-                        ?.removePrefix("b/")
-                        .orEmpty()
+                name = parseDiffName(line.removePrefix("diff --git ").trim())
             }
             current.add(line)
         }
         if (current.isNotEmpty()) groups.add(Group(name, current.toList()))
         return groups
+    }
+
+    /**
+     * 从 `diff --git` 的尾部取目标路径。
+     *
+     * 路径含空格时 git 会给两端加引号，按空格切分会得到 `file.txt"` 这样的残片；
+     * 这里先按带引号的完整形式匹配，再退回无引号形式。
+     */
+    private fun parseDiffName(tail: String): String {
+        Regex("^\"a/(.*)\" \"b/(.*)\"$").find(tail)?.let { return it.groupValues[2] }
+        Regex("^a/(.*) b/(.*)$").find(tail)?.let { return it.groupValues[2] }
+        return tail.split(' ').lastOrNull()?.removePrefix("b/").orEmpty()
     }
 
     private fun fileCard(
