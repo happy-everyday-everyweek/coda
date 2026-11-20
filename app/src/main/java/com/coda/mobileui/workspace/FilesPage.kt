@@ -263,7 +263,37 @@ open class FilesPage(
         if (editor.visibility != View.VISIBLE) {
             renderList()
             renderRightPane()
+        } else {
+            // 切回编辑标签时，磁盘上的文件可能已经被 Agent 改过：内容干净就重新载入。
+            refreshEditorIfChangedOnDisk()
         }
+    }
+
+    /** 磁盘上的文件比载入时新：干净就静默重载，脏则保留当前内容并提示。 */
+    private fun refreshEditorIfChangedOnDisk() {
+        val file = editing ?: return
+        if (file.length() > MAX_EDIT_BYTES) return
+        val mtime = runCatching { file.lastModified() }.getOrDefault(0L)
+        if (mtime <= loadedMtime) return
+        if (dirty) {
+            loadedMtime = mtime
+            toast("磁盘上的文件已被修改，当前未保存内容保留")
+            return
+        }
+        readInto(
+            file,
+            onFail = { toast(it) },
+            done = { text ->
+                originalText = text
+                loadedMtime = mtime
+                suppressEdits = true
+                editorInput.setText(text)
+                suppressEdits = false
+                runHighlight()
+                editorInput.post { refreshEditorChrome() }
+                toast("已重新载入磁盘内容")
+            },
+        )
     }
 
     override fun onBack(): Boolean {
@@ -409,6 +439,8 @@ open class FilesPage(
             },
             longClick = { showActions(file, Side.RIGHT) },
         )
+
+    private var loadedMtime = 0L
 
     /** 当前选中的文件（用于复制/移动到另一栏）。 */
     private var selectedFile: File? = null
@@ -2122,6 +2154,7 @@ open class FilesPage(
         editing = file
         markdownMode = markdown
         originalText = content
+        loadedMtime = runCatching { file.lastModified() }.getOrDefault(0L)
         dirty = false
         editorRules = rulesFor(file)
         indentUnit = if (editorRules == null) "    " else detectIndentUnit(content)
@@ -2154,7 +2187,8 @@ open class FilesPage(
             then = { ok ->
                 if (ok) {
                     originalText = text
-                    // 写盘期间用户可能又改了内容：只有当前文本与已写盘的一致才清脏标记。
+                    // 写盘之后刷新基线，避免切回来时把自己刚写的内容当成"磁盘被改过"。
+                    loadedMtime = runCatching { file.lastModified() }.getOrDefault(loadedMtime)
                     dirty = editorInput.text.toString() != text
                     editorTitle.text = file.name
                     refreshCursorStatus()

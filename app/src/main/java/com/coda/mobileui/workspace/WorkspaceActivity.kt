@@ -196,8 +196,9 @@ class WorkspaceActivity : BaseActivity() {
             }
 
             -1 -> {
-                then(false)
-                return
+                // 上次准备失败：允许再试一次。之前这里直接返回 false，
+                // 一次失败会让整个工作区永久停在「环境未就绪」。
+                envState = 0
             }
 
             1 -> {

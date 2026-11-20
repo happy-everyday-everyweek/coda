@@ -55,6 +55,11 @@ class TerminalPage(
     private val main = Handler(Looper.getMainLooper())
     private val lines = StringBuilder()
     private val pending = StringBuilder()
+
+    /** reader 线程先攒到这里，主线程一次取走：避免每个读块都 post 一个任务。 */
+    private val incoming = StringBuilder()
+    private val incomingLock = Any()
+    private val pumpScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
     private val echo = StringBuilder()
     private val modifierKeys = mutableListOf<Pair<TextView, String>>()
 
@@ -549,7 +554,20 @@ class TerminalPage(
                     val read = reader.read(buffer)
                     if (read <= 0) break
                     val chunk = String(buffer, 0, read)
-                    main.post { appendChunk(chunk) }
+                    // 背压：只标记一次「待取」，主线程取走之前不再重复排队；
+                    // 否则 cat 大文件或 yes 时会把主线程消息队列堆满。
+                    synchronized(incomingLock) { incoming.append(chunk) }
+                    if (pumpScheduled.compareAndSet(false, true)) {
+                        main.post {
+                            pumpScheduled.set(false)
+                            val text = synchronized(incomingLock) {
+                                val buffered = incoming.toString()
+                                incoming.setLength(0)
+                                buffered
+                            }
+                            if (text.isNotEmpty()) appendChunk(text)
+                        }
+                    }
                 }
             } catch (_: Throwable) {
             }
@@ -616,6 +634,11 @@ class TerminalPage(
 
     private fun appendChunk(chunk: String) {
         pending.append(chunk)
+        // 一直不出现换行（例如二进制输出）时 pending 会无限长，先截断再继续。
+        if (pending.length > MAX_PENDING) {
+            pending.delete(0, pending.length - MAX_PENDING)
+            lines.append("…（输出过多，已丢弃较早内容）\n")
+        }
         var index = pending.indexOf("\n")
         while (index >= 0) {
             val lineText = pending.substring(0, index)
@@ -695,6 +718,9 @@ class TerminalPage(
         const val CURSOR = "\u2588"
         const val BLINK_MS = 530L
         const val MAX_CHARS = 120_000
+
+        /** 未换行的待显示内容上限：超出就丢弃较早部分，避免无穷增长。 */
+        const val MAX_PENDING = 32_768
 
         /** 退格：终端里就是发送删除字符。 */
         const val BACKSPACE = "\u007f"

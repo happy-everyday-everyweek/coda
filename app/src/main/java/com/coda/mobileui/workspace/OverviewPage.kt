@@ -174,9 +174,15 @@ class OverviewPage(
                         "failed", "error" -> R.drawable.ic_state_error
                         else -> R.drawable.ic_state_pending
                     }
-                cardRow(icon, todo.content, null, null, 56) {
-                    host.openPage(WorkspaceTabs.TERMINAL)
-                }
+                val statusText =
+                    when (todo.status) {
+                        "completed", "done" -> "已完成"
+                        "in_progress", "running" -> "进行中"
+                        "failed", "error" -> "失败"
+                        else -> "待开始"
+                    }
+                // 任务行只展示状态，不再把「点哪都开终端」当成唯一动作。
+                cardRow(icon, todo.content, statusText, null, 56)
             }
         body.addViews(cardGroup(rows))
     }
