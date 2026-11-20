@@ -44,7 +44,7 @@
         style 里显式声明，不留给推断。
     -->
     <style name="Theme.Coda.SettingsDetail" parent="Theme.Coda">
-        <item name="android:windowBackground">@color/md3_surface</item>
+        <item name="android:windowBackground">?attr/colorSurface</item>
         <item name="android:windowIsTranslucent">false</item>
     </style>
 </resources>

@@ -889,6 +889,9 @@ class MainActivity : BaseActivity() {
     /** 当前选中的会话 id（同样在配置变更后恢复）。 */
     private var currentConversationId: String? = null
 
+    /** 重建时会话列表可能还没到：记住待恢复的 id，等下一次状态刷新再补上。 */
+    private var pendingRestoreConversationId: String? = null
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_SHOWING_SETTINGS, showingSettings)
@@ -918,8 +921,9 @@ class MainActivity : BaseActivity() {
             if (known != null) {
                 showConversation(known)
             } else {
-                // 抽屉里的会话列表来自内核快照，重建时可能还没到：直接让内核打开该会话，
-                // 不要拿演示数据去顶替。
+                // 抽屉里的会话列表来自内核快照，重建时可能还没到：记下来等状态刷新再补，
+                // 不要拿演示数据去顶替，也不要静默什么都不做。
+                pendingRestoreConversationId = id
                 runCatching { zc.openSession(id, null) }
             }
         }
@@ -1684,6 +1688,16 @@ class MainActivity : BaseActivity() {
         val listener =
             object : ZController.Listener {
                 override fun onStateChanged() {
+                    // 重建时没找到的会话：会话列表一到就补选中，否则页面一直空着。
+                    val pending = pendingRestoreConversationId
+                    if (pending != null) {
+                        val target = conversations.firstOrNull { it.id == pending }
+                        if (target != null) {
+                            pendingRestoreConversationId = null
+                            showConversation(target)
+                            return
+                        }
+                    }
                     renderFromController()
                     refreshSlashPanelIfTyping()
                 }
@@ -2270,7 +2284,7 @@ class MainActivity : BaseActivity() {
             }
         val title =
             TextView(this).apply {
-                this.text = if (streaming) "Thinking" else "Thought for"
+                this.text = if (streaming) "思考中" else "已思考"
                 textSize = 14f
                 typeface = medium
                 // 思考中不用纯色：亮色主题下纯黑、暗色主题下纯白都太扎眼，统一走中性灰。
@@ -3695,8 +3709,25 @@ class MainActivity : BaseActivity() {
         val question: Boolean,
     )
 
-    /** 用户选择「稍后处理」的请求：不自动拒绝，等用户点提示再回来。 */
-    private var deferredRequest: DeferredRequest? = null
+    /** 用户选择「稍后处理」的请求：按顺序排队，不自动拒绝。 */
+    private val deferredRequests = ArrayDeque<DeferredRequest>()
+
+    /** 暂缓提示：一次只显示队首，处理完自动弹出下一个。 */
+    private fun showDeferredSnackbar() {
+        if (deferredRequests.isEmpty()) return
+        val root = findViewById<View>(android.R.id.content) ?: return
+        Snackbar.make(root, "有 ${deferredRequests.size} 个请求已暂缓", Snackbar.LENGTH_INDEFINITE)
+            .setAction("继续处理") {
+                val pending = deferredRequests.removeFirstOrNull() ?: return@setAction
+                if (pending.question) {
+                    showUserInputDialog(pending.id, pending.params)
+                } else {
+                    showPermissionDialog(pending.id, pending.params)
+                }
+                showDeferredSnackbar()
+            }
+            .show()
+    }
 
     /** 「稍后处理」行：不自动拒绝，改由提示条提供继续入口。 */
     private fun addDeferRow(
@@ -3719,21 +3750,10 @@ class MainActivity : BaseActivity() {
                 setPadding(dp(2), dp(14), dp(2), dp(14))
                 setOnClickListener {
                     markResponded()
-                    deferredRequest = request
+                    deferredRequests.addLast(request)
                     clearPendingPermission()
                     sheet.dismiss()
-                    val root = findViewById<View>(android.R.id.content) ?: return@setOnClickListener
-                    Snackbar.make(root, "已暂缓处理，可在提示里继续", Snackbar.LENGTH_INDEFINITE)
-                        .setAction("继续处理") {
-                            val pending = deferredRequest ?: return@setAction
-                            deferredRequest = null
-                            if (pending.question) {
-                                showUserInputDialog(pending.id, pending.params)
-                            } else {
-                                showPermissionDialog(pending.id, pending.params)
-                            }
-                        }
-                        .show()
+                    showDeferredSnackbar()
                 }
             },
         )
@@ -4725,8 +4745,22 @@ class MainActivity : BaseActivity() {
             preview =
                 android.view.View(this).apply {
                     tag = "workspace_drag_preview"
-                    setBackgroundColor(attrColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
-                    // 工作区从右侧展开：预览锚在右边缘，宽度增长时与页面入场位置重合。
+                    // 与页面同一身份：右侧锚定、左侧留圆角，松手时不再是「一块方色板」。
+                    background =
+                        android.graphics.drawable.GradientDrawable().apply {
+                            setColor(attrColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
+                            cornerRadii =
+                                floatArrayOf(
+                                    dp(16f).toFloat(),
+                                    dp(16f).toFloat(),
+                                    0f,
+                                    0f,
+                                    0f,
+                                    0f,
+                                    dp(16f).toFloat(),
+                                    dp(16f).toFloat(),
+                                )
+                        }
                     layoutParams =
                         android.widget.FrameLayout.LayoutParams(
                             0,

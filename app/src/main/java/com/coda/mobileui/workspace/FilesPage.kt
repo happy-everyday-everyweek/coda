@@ -526,6 +526,8 @@ open class FilesPage(
             renderArchiveList(pack)
             return
         }
+        // 双栏时给左栏一个标题，与右栏的「右栏」对称；单栏不需要。
+        if (dualPane) listColumn.addView(groupHeader("左栏"))
         listColumn.addView(pathCard())
         listColumn.addView(groupSpacing())
         listColumn.addViews(
