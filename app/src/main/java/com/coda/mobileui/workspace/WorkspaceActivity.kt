@@ -577,6 +577,53 @@ class WorkspaceActivity : BaseActivity() {
         hideOverview()
     }
 
+    /**
+     * 文件页把文件或目录改名/移动之后，同步已打开的编辑器标签。
+     *
+     * 不同步的话编辑器仍拿着旧 [java.io.File]，保存时会把旧路径的文件重新创建出来，
+     * 而改名后的文件收不到任何修改。
+     */
+    fun onFilesMoved(
+        oldPath: String,
+        newPath: String,
+    ) {
+        val oldPrefix = oldPath.trimEnd('/') + "/"
+        var touched = false
+        for (entry in tabs.toList()) {
+            if (entry.data.kind != WorkspaceTabs.EDITOR) continue
+            val path = entry.data.state.optString("path")
+            if (path.isEmpty()) continue
+            val affected = path == oldPath || path.startsWith(oldPrefix)
+            if (!affected) continue
+            val next = newPath + path.removePrefix(oldPath)
+            entry.data.state.put("path", next)
+            (entry.page as? FilesPage)?.rebindEditorPath(path, File(next))
+            touched = true
+        }
+        if (touched) persist()
+    }
+
+    /**
+     * 文件页删除了文件或目录：解除受影响编辑器的保存目标。
+     *
+     * 直接关标签会丢未保存内容，所以保留正文，只把目标置空；保存时明确提示而不是重建文件。
+     */
+    fun onFilesDeleted(path: String) {
+        val prefix = path.trimEnd('/') + "/"
+        var touched = false
+        for (entry in tabs.toList()) {
+            if (entry.data.kind != WorkspaceTabs.EDITOR) continue
+            val current = entry.data.state.optString("path")
+            if (current.isEmpty()) continue
+            if (current != path && !current.startsWith(prefix)) continue
+            (entry.page as? FilesPage)?.detachDeletedFile(current)
+            entry.data.state.remove("path")
+            entry.data.state.put("detached", true)
+            touched = true
+        }
+        if (touched) persist()
+    }
+
     /** 只读预览的正文不进 JSON 状态，按标签 key 暂存在内存里。 */
     private val editorBuffers = mutableMapOf<String, String>()
 
@@ -1372,14 +1419,18 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun slideOut() {
-        container
-            .animate()
-            .translationX(container.width.toFloat())
-            .setDuration(180)
-            .withEndAction {
-                container.translationX = 0f
-                finish()
-            }.start()
+        // 边缘右滑是容器侧的退出路径：先归位再询问，避免取消后界面停在半滑出状态。
+        container.translationX = 0f
+        guardDirtyEditor {
+            container
+                .animate()
+                .translationX(container.width.toFloat())
+                .setDuration(180)
+                .withEndAction {
+                    container.translationX = 0f
+                    finish()
+                }.start()
+        }
     }
 
     // ---------------------------------------------------------------- 工具

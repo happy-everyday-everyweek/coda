@@ -101,7 +101,21 @@ class CodaBotPage(
             p.plannerModel,
             p.replyProviderId,
             p.replyModel,
+            // 供应商端点与密钥也要进签名：只改 key 或 base URL 时上面几项不变，
+            // 不重建运行时的话内核会一直用创建桥时的旧凭据。
+            providerSignature(p.plannerProviderId),
+            providerSignature(p.replyProviderId),
         ).joinToString("\u0001")
+
+    /** 供应商当前凭据的指纹；只用内存里的签名，不落盘。 */
+    private fun providerSignature(providerId: String): String {
+        if (providerId.isEmpty()) return ""
+        val provider =
+            runCatching {
+                ProviderStore.load(context).firstOrNull { it.id == providerId }
+            }.getOrNull() ?: return ""
+        return "${provider.baseUrl}\u0002${provider.apiKey.hashCode()}\u0002${provider.apiType}"
+    }
 
     private fun ensureRuntime() {
         if (runtime != null && signatureOf(profile) == runtimeSignature) return

@@ -181,7 +181,14 @@ open class FilesPage(
             return
         }
         val path = saved.optString("path")
-        if (path.isEmpty()) return
+        if (path.isEmpty()) {
+            // 文件被删除后解除绑定的标签：正文没有持久化，直接说明并关掉。
+            if (saved.optBoolean("detached")) {
+                toast("文件已被删除")
+                host.closePage(this)
+            }
+            return
+        }
         val file = File(path)
         if (!file.isFile) {
             toast("文件已不存在")
@@ -229,6 +236,34 @@ open class FilesPage(
             editorBody.visibility = View.VISIBLE
         }
         refreshEditorTitle()
+    }
+
+    /**
+     * 编辑器持有的文件被改名或移动：把保存目标改到新路径。
+     *
+     * 不改的话保存会把旧路径的文件重新创建出来，改名后的文件永远收不到修改。
+     */
+    fun rebindEditorPath(
+        oldPath: String,
+        newFile: File,
+    ) {
+        val current = editing ?: return
+        if (current.absolutePath != oldPath) return
+        editing = newFile
+        loadedMtime = runCatching { newFile.lastModified() }.getOrDefault(loadedMtime)
+        refreshEditorTitle()
+        refreshCursorStatus()
+        toast("文件已移动到 ${newFile.name}")
+    }
+
+    /** 文件已被删除：保留正文，但解除保存目标，避免保存时把文件重新创建出来。 */
+    fun detachDeletedFile(path: String) {
+        val current = editing ?: return
+        if (current.absolutePath != path) return
+        editing = null
+        readOnlyPreview = true
+        refreshEditorTitle()
+        toast("文件已被删除，当前内容不再写回磁盘")
     }
 
     /** 编辑器页用：顶部菜单里的关闭（会先问未保存的修改）。 */
@@ -581,6 +616,7 @@ override fun menuItems(): List<String> =
                 }.getOrDefault(false)
             },
             then = { ok ->
+                if (ok) host.onFilesMoved(file.absolutePath, target.absolutePath)
                 toast(if (ok) "已移动到 ${dir.name}" else "移动失败")
                 renderList()
                 renderRightPane()
@@ -1143,6 +1179,7 @@ override fun menuItems(): List<String> =
             }
             val ok = runCatching { file.renameTo(target) }.getOrDefault(false)
             if (ok) {
+                host.onFilesMoved(file.absolutePath, target.absolutePath)
                 renderList()
             } else {
                 toast("重命名失败")
@@ -1173,6 +1210,7 @@ override fun menuItems(): List<String> =
             }
             val ok = runCatching { file.renameTo(target) }.getOrDefault(false)
             if (ok) {
+                host.onFilesMoved(file.absolutePath, target.absolutePath)
                 renderList()
             } else {
                 toast("移动失败")
@@ -1199,7 +1237,12 @@ override fun menuItems(): List<String> =
         sheet.primaryAction("删除") {
             val ok = runCatching { deleteRecursive(file) }.getOrDefault(false)
             sheet.dismiss()
-            if (ok) renderList() else toast("删除失败")
+            if (ok) {
+                host.onFilesDeleted(file.absolutePath)
+                renderList()
+            } else {
+                toast("删除失败")
+            }
         }
         sheet.secondaryAction("取消") { sheet.dismiss() }
         sheet.show()
@@ -2563,7 +2606,13 @@ override fun menuItems(): List<String> =
             onDone?.invoke(false)
             return
         }
-        val file = editing ?: return
+        val file = editing
+        if (file == null) {
+            // 目标文件已被删除（或从未绑定）：明确说明，不静默什么都不做。
+            toast("文件已被删除，无法保存")
+            onDone?.invoke(false)
+            return
+        }
         val text = editorInput.text.toString()
         val charset = editorCharset
         host.background(

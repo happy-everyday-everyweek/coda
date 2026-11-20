@@ -22,4 +22,4 @@ for num in sys.argv[1:]:
         print("=====", num, "ERR", exc)
         continue
     print("=====", num, d["title"])
-    print((d.get("body") or "")[:700])
+    print((d.get("body") or "")[:650])
