@@ -4721,7 +4721,14 @@ class MainActivity : BaseActivity() {
 
     /** 进入工作台。 */
     private fun openWorkspace() {
-        startActivity(WorkspaceActivity.intent(this))
+        // 有当前会话时按会话绑定的目录打开：会话工作区与全局默认根是两套值，
+        // 从会话进来必须落在同一个目录上。
+        val sessionRoot =
+            zc.sessions
+                .firstOrNull { it.id == zc.currentSessionId }
+                ?.workspacePath
+                ?.takeIf { it.isNotBlank() }
+        startActivity(WorkspaceActivity.intent(this, sessionRoot))
     }
 
     /**
@@ -5340,6 +5347,18 @@ class MainActivity : BaseActivity() {
         list.addView(
             pickerRow(getString(R.string.workspace_create), accent = true, onClick = { showCreateWorkspaceEditor() }),
         )
+        // 与「会话改绑」保持同一能力：新会话也能浏览任意已有目录，而不只是最近的几个。
+        list.addView(pickerRow("选择其他目录…", onClick = { showWorkspaceBrowseSheet() }))
+    }
+
+    /** 新会话的目录浏览：复用会话改绑用的同一个目录选择器。 */
+    private fun showWorkspaceBrowseSheet() {
+        if (isFinishing || isDestroyed) return
+        val sheet = CodaSheet(this).compact().title("选择工作区").subtitle("绑定到已有的目录")
+        DirectoryPicker.attachTo(sheet, this, "选择工作区目录", File(Workspaces.root(this))) { picked ->
+            selectWorkspace(picked.absolutePath)
+        }
+        sheet.show()
     }
 
     private fun pickerHint(text: String): View =
@@ -5388,6 +5407,11 @@ class MainActivity : BaseActivity() {
 
     /** 选定新会话要用的工作区；传 null 表示清掉选择、回到未选状态。 */
     private fun selectWorkspace(path: String?) {
+        // 路径校验放在唯一入口：最近的列表过滤过，但浏览与新建都可能传进一个文件路径。
+        if (path != null && !java.io.File(path).isDirectory) {
+            snack("这个路径不是目录，不能作为工作区")
+            return
+        }
         composerWorkspace = path
         renderWorkspacePicker()
         syncHeaderPill()
@@ -5464,6 +5488,11 @@ class MainActivity : BaseActivity() {
         }
         val target = java.io.File(Workspaces.root(this), name)
         if (target.exists()) {
+            // 同名的是文件而不是目录：不能当成工作区选中，否则内核初始化会在发送时才报错。
+            if (!target.isDirectory) {
+                snack("同名文件已存在，请换一个名称")
+                return
+            }
             // 目录已在：直接选中，不报错。多数情况是之前建过、又被删了会话。
             selectWorkspace(target.absolutePath)
             return

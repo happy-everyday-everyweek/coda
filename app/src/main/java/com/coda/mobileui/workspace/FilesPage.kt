@@ -298,6 +298,8 @@ open class FilesPage(
         // 编辑器页没有 listColumn：先判编辑器，否则这个短路会让切回编辑标签永远
         // 不检查磁盘变化。
         if (::editor.isInitialized && editor.visibility == View.VISIBLE) {
+            // 从设置页返回时同步代码字号、行号、换行与代码主题。
+            applyCodeDisplaySettings()
             refreshEditorIfChangedOnDisk()
             return
         }
@@ -1353,6 +1355,13 @@ override fun menuItems(): List<String> =
     // -------------------------------------------------------------- 文本编辑
 
     private fun buildEditor(): View {
+        // 外观页的代码显示设置之前只写不读：字号、行号、换行在这里真正生效。
+        val codeStore = com.coda.mobileui.SettingsStore.get(host)
+        wrapEnabled = codeStore.wrapLongLines
+        val codeSizeSp =
+            com.coda.mobileui.SettingsStore.CODE_FONT_SIZES[
+                codeStore.codeFontSizeIndex.coerceIn(com.coda.mobileui.SettingsStore.CODE_FONT_SIZES.indices),
+            ]
         editor =
             LinearLayout(host).apply {
                 orientation = LinearLayout.VERTICAL
@@ -1412,12 +1421,14 @@ override fun menuItems(): List<String> =
             android.widget.HorizontalScrollView(host).apply {
                 isHorizontalScrollBarEnabled = false
                 setBackgroundColor(surface)
+                // 行号显示由外观页控制：关掉时整条槽一起隐藏，不留下空白边。
+                visibility = if (codeStore.showLineNumbers) View.VISIBLE else View.GONE
                 layoutParams = LinearLayout.LayoutParams(WRAP, MATCH)
             }
         editorGutterText =
             TextView(host).apply {
                 typeface = Typeface.MONOSPACE
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, codeSizeSp)
                 setTextColor(onSurfaceVariant)
                 setPadding(dp(12f), dp(6f), dp(10f), dp(14f))
             }
@@ -1439,7 +1450,7 @@ override fun menuItems(): List<String> =
         editorInput =
             EditorInput(host).apply {
                 typeface = Typeface.MONOSPACE
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, codeSizeSp)
                 setTextColor(onSurface)
                 setBackgroundColor(0x00000000)
                 gravity = Gravity.TOP or Gravity.START
@@ -1979,8 +1990,77 @@ override fun menuItems(): List<String> =
     /** 按当前文件的扩展名取词法规则。 */
     private fun rulesFor(file: File): LanguageRules? = CodeHighlighter.detect(file.name)
 
-    /** 从主题属性取高亮配色，深浅模式各自成立，不写死颜色。 */
-    private fun palette(): CodePalette =
+    /**
+     * 代码配色：外观页选的代码主题在这里生效。
+     *
+     * 0 默认用主题属性（跟随深浅与主色），其余四套是固定色板，按当前深浅模式各取一套。
+     */
+    private fun palette(): CodePalette {
+        val store = com.coda.mobileui.SettingsStore.get(host)
+        val dark =
+            (
+                host.resources.configuration.uiMode and
+                    android.content.res.Configuration.UI_MODE_NIGHT_MASK
+            ) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val index = if (dark) store.codeThemeDarkIndex else store.codeThemeLightIndex
+        return when (index) {
+            // GitHub
+            1 ->
+                if (dark) {
+                    CodePalette(
+                        0xFF8B949E.toInt(),
+                        0xFFFF7B72.toInt(),
+                        0xFFFFA657.toInt(),
+                        0xFFA5D6FF.toInt(),
+                        0xFF79C0FF.toInt(),
+                        0xFFD2A8FF.toInt(),
+                    )
+                } else {
+                    CodePalette(
+                        0xFF6A737D.toInt(),
+                        0xFFD73A49.toInt(),
+                        0xFF6F42C1.toInt(),
+                        0xFF032F62.toInt(),
+                        0xFF005CC5.toInt(),
+                        0xFF6F42C1.toInt(),
+                    )
+                }
+            // Monokai
+            2 ->
+                CodePalette(
+                    0xFF75715E.toInt(),
+                    0xFFF92672.toInt(),
+                    0xFF66D9EF.toInt(),
+                    0xFFE6DB74.toInt(),
+                    0xFFAE81FF.toInt(),
+                    0xFFA6E22E.toInt(),
+                )
+            // Solarized
+            3 ->
+                CodePalette(
+                    if (dark) 0xFF586E75.toInt() else 0xFF93A1A1.toInt(),
+                    0xFF859900.toInt(),
+                    0xFFB58900.toInt(),
+                    0xFF2AA198.toInt(),
+                    0xFFD33682.toInt(),
+                    0xFF268BD2.toInt(),
+                )
+            // One Dark
+            4 ->
+                CodePalette(
+                    0xFF5C6370.toInt(),
+                    0xFFC678DD.toInt(),
+                    0xFFE5C07B.toInt(),
+                    0xFF98C379.toInt(),
+                    0xFFD19A66.toInt(),
+                    0xFF61AFEF.toInt(),
+                )
+            else -> themePalette()
+        }
+    }
+
+    /** 默认配色：全部取自主题属性，深浅与主色变化自动跟随。 */
+    private fun themePalette(): CodePalette =
         CodePalette(
             comment = color(com.google.android.material.R.attr.colorOnSurfaceVariant),
             keyword = color(androidx.appcompat.R.attr.colorPrimary),
@@ -2074,8 +2154,16 @@ override fun menuItems(): List<String> =
 
     /** 切换自动换行。默认关（长行横向滚动），开启后按宽度折行。 */
     private fun toggleWrap() {
-        wrapEnabled = !wrapEnabled
-        val wrap = wrapEnabled
+        setWrap(!wrapEnabled, notify = true)
+    }
+
+    /** 应用换行状态；[notify] 为 false 时用于从设置同步，不弹提示。 */
+    private fun setWrap(
+        wrap: Boolean,
+        notify: Boolean,
+    ) {
+        if (wrapEnabled == wrap) return
+        wrapEnabled = wrap
         val flags = editorInput.inputType
         editorInput.inputType =
             if (wrap) {
@@ -2090,7 +2178,26 @@ override fun menuItems(): List<String> =
         editorInput.requestLayout()
         // 折行会改变显示行数，行号与当前行底都要跟着重算。
         editorInput.post { refreshEditorChrome() }
-        toast(if (wrap) "已启用自动换行" else "已关闭自动换行")
+        if (notify) toast(if (wrap) "已启用自动换行" else "已关闭自动换行")
+    }
+
+    /** 把外观页的代码显示设置应用到当前编辑器；从设置页返回时也会走这里。 */
+    private fun applyCodeDisplaySettings() {
+        if (!::editorInput.isInitialized) return
+        val store = com.coda.mobileui.SettingsStore.get(host)
+        val sp =
+            com.coda.mobileui.SettingsStore.CODE_FONT_SIZES[
+                store.codeFontSizeIndex.coerceIn(com.coda.mobileui.SettingsStore.CODE_FONT_SIZES.indices),
+            ]
+        editorInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        if (::editorGutterText.isInitialized) editorGutterText.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        if (::editorGutter.isInitialized) {
+            editorGutter.visibility = if (store.showLineNumbers) View.VISIBLE else View.GONE
+        }
+        setWrap(store.wrapLongLines, notify = false)
+        // 代码主题与字号变化后要重新上色，否则 span 还是旧颜色。
+        runHighlight()
+        editorInput.post { refreshEditorChrome() }
     }
 
     private fun openFile(

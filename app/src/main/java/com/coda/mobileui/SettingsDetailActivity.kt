@@ -112,6 +112,33 @@ class SettingsDetailActivity :
     private val extrasCache = HashMap<String, org.json.JSONObject>()
     private val extrasLoading = HashSet<String>()
 
+    /** 拉取失败的原因：有值就渲染错误页并给出重试入口，不把「正在读取…」永久留在界面上。 */
+    private val extrasError = HashMap<String, String>()
+
+    /** 当前页面属于哪一个异步数据源。 */
+    private fun extrasKind(): String? =
+        when (pageKey) {
+            PAGE_USAGE -> "usage"
+            PAGE_PLUGINS -> "plugins"
+            PAGE_MCP -> "mcp"
+            else -> null
+        }
+
+    /** 失败且没有缓存时给出错误页；返回 null 表示正常渲染。 */
+    private fun extrasFailurePage(): SettingsPage? {
+        val kind = extrasKind() ?: return null
+        if (extrasCache.containsKey(kind)) return null
+        val message = extrasError[kind] ?: return null
+        return SettingsPage(
+            "加载失败",
+            listOf(
+                SettingRow.Value("没能读取数据", message),
+                SettingRow.Value("重试", "重新从运行时拉取", "extras_refresh:$kind"),
+                SettingRow.Value("说明", "内核未启动或正在重启时会失败，稍后重试即可"),
+            ),
+        )
+    }
+
     private fun usageRange(): String =
         getSharedPreferences("zcode_bridge", MODE_PRIVATE)
             .getString("usage_range", "7d") ?: "7d"
@@ -120,13 +147,18 @@ class SettingsDetailActivity :
     private fun ensureExtrasLoaded(kind: String) {
         if (extrasCache.containsKey(kind) || extrasLoading.contains(kind)) return
         extrasLoading.add(kind)
+        extrasError.remove(kind)
         val zc = ZController.get(this)
         val done: (Boolean, org.json.JSONObject?) -> Unit = { ok, data ->
             extrasLoading.remove(kind)
             if (ok && data != null) {
                 extrasCache[kind] = data
-                runOnUiThread { renderPage() }
+                extrasError.remove(kind)
+            } else {
+                // 失败要落到界面上：否则页面永远停在「正在读取…」，也没有重试入口。
+                extrasError[kind] = "运行时没有返回数据，可能是内核尚未就绪或正在重启"
             }
+            runOnUiThread { renderPage() }
         }
         when (kind) {
             "usage" -> zc.fetchUsageStats(usageRange(), done)
@@ -141,6 +173,10 @@ class SettingsDetailActivity :
 
         store = SettingsStore.get(this)
         pageKey = savedInstanceState?.getString(KEY_PAGE) ?: intent.getStringExtra(EXTRA_PAGE) ?: PAGE_SYSTEM
+        // 恢复供应商二级页的类别；解析失败时保持默认 LLM。
+        savedInstanceState?.getString(KEY_PROVIDER_KIND)?.let { name ->
+            runCatching { ProviderStore.ProviderKind.valueOf(name) }.getOrNull()?.let { providerKind = it }
+        }
 
         findViewById<View>(R.id.detail_root).applySystemBarsInset()
         findViewById<View>(R.id.btn_back).setOnClickListener { goBack() }
@@ -159,6 +195,8 @@ class SettingsDetailActivity :
     override fun onSaveInstanceState(outState: Bundle) {
         // 记住当前所在的二级页：旋转、分屏尺寸变化后重新创建时回到同一层。
         outState.putString(KEY_PAGE, pageKey)
+        // 供应商二级页的类别也要存：否则 ASR 列表旋转后会退回 LLM。
+        outState.putString(KEY_PROVIDER_KIND, providerKind.name)
         super.onSaveInstanceState(outState)
     }
 
@@ -243,8 +281,10 @@ class SettingsDetailActivity :
         super.onDestroy()
     }
 
-    private fun currentPage(): SettingsPage =
-        when (pageKey) {
+    private fun currentPage(): SettingsPage {
+        // 异步页拉取失败时先给错误页与重试入口，不再停在「正在读取…」。
+        extrasFailurePage()?.let { return it }
+        return when (pageKey) {
             PAGE_APPEARANCE -> {
                 SettingsData.appearance(store)
             }
@@ -379,9 +419,11 @@ class SettingsDetailActivity :
             }
 
             else -> {
-                SettingsData.pages[pageKey] ?: SettingsData.system(this)
+                // 日志页每次打开都重新统计，不读启动时的缓存快照。
+                if (pageKey == "logs") SettingsData.logsPage() else SettingsData.pages[pageKey] ?: SettingsData.system(this)
             }
         }
+    }
 
     private fun renderPage() {
         val page = currentPage()
@@ -827,8 +869,12 @@ class SettingsDetailActivity :
             }
 
             key.startsWith("extras_refresh:") -> {
-                extrasCache.remove(key.removePrefix("extras_refresh:"))
+                val kind = key.removePrefix("extras_refresh:")
+                extrasCache.remove(kind)
+                extrasError.remove(kind)
                 renderPage()
+                // 重试要真的重新拉一次，只重绘会立刻又回到失败页。
+                ensureExtrasLoaded(kind)
             }
 
             else -> {
@@ -4151,6 +4197,8 @@ class SettingsDetailActivity :
 
         /** 旋转或小窗切换后要回到同一层，不能退回入口页。 */
         const val KEY_PAGE = "settings_page_key"
+        /** 供应商二级页当前类别（LLM/ASR），配置变更后据此恢复。 */
+        const val KEY_PROVIDER_KIND = "settings_provider_kind"
 
         /** ASR 测试申请录音权限的请求码。 */
         const val REQ_ASR_AUDIO = 1002

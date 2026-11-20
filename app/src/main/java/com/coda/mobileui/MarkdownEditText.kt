@@ -16,6 +16,9 @@ import android.util.AttributeSet
 import android.view.inputmethod.BaseInputConnection
 import androidx.appcompat.widget.AppCompatEditText
 
+/** 即时渲染的文本上限：超过后只显示纯文本，避免每次按键都整篇重扫。 */
+private const val MAX_RENDER_CHARS = 8_000
+
 /**
  * 即时渲染的 Markdown 输入框。
  *
@@ -72,15 +75,37 @@ class MarkdownEditText
                     count: Int,
                 ) = Unit
 
-                override fun afterTextChanged(s: Editable?) = rerender()
+                override fun afterTextChanged(s: Editable?) = scheduleRerender()
             }
+
+        /**
+         * 合并连续按键：每敲一个字符都整篇重扫，长文本下输入会越来越慢。
+         *
+         * 延迟一帧多一点（32ms），连续输入只算一次；内容本身不受影响，只是样式晚一点。
+         */
+        private val rerenderTick = Runnable { rerenderNow() }
 
         init {
             addTextChangedListener(watcher)
         }
 
+        private fun scheduleRerender() {
+            removeCallbacks(rerenderTick)
+            postDelayed(rerenderTick, 32L)
+        }
+
+        override fun onDetachedFromWindow() {
+            removeCallbacks(rerenderTick)
+            super.onDetachedFromWindow()
+        }
+
         /** 重算整段样式。文本内容不变，只换 span。 */
         fun rerender() {
+            removeCallbacks(rerenderTick)
+            rerenderNow()
+        }
+
+        private fun rerenderNow() {
             val text = text ?: return
             clearSpans(text)
             if (!renderEnabled) return
@@ -88,6 +113,9 @@ class MarkdownEditText
                 skippedWhileComposing = true
                 return
             }
+            // 超过上限只保留纯文本：正则全文扫描与 span 数量都随长度线性增长，
+            // 粘贴几 KB 的 prompt 后每次按键都会卡一下。
+            if (text.length > MAX_RENDER_CHARS) return
             MarkdownSpans.apply(text, markScale, markAlpha)
         }
 

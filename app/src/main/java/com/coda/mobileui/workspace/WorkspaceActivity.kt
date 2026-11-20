@@ -66,7 +66,16 @@ class WorkspaceActivity : BaseActivity() {
         /** 编辑器高亮的合并窗口：输入停顿这么久之后才重扫一遍。 */
         private const val HIGHLIGHT_DEBOUNCE_MS = 120L
 
-        fun intent(context: Context): Intent = Intent(context, WorkspaceActivity::class.java)
+        /** 打开工作区时可以指定根目录：从会话进入时带会话自己的 workspacePath。 */
+        fun intent(
+            context: Context,
+            rootPath: String?,
+        ): Intent =
+            Intent(context, WorkspaceActivity::class.java)
+                .putExtra(EXTRA_ROOT, rootPath)
+
+        /** 入口传入的根目录；空或不是目录时回落到全局默认。 */
+        const val EXTRA_ROOT = "workspace_root"
     }
 
     private data class OpenTab(
@@ -131,7 +140,11 @@ class WorkspaceActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         setupEdgeToEdge()
         env = LinuxEnv(this)
-        root = Workspaces.root(this)
+        // 入口带了会话工作区就用它：否则从会话点工作区会打开全局默认目录，
+        // 用户在错的目录里提交、删除、跑命令。
+        val requestedRoot =
+            intent.getStringExtra(EXTRA_ROOT)?.takeIf { it.isNotBlank() }?.let { File(it) }?.takeIf { it.isDirectory }
+        root = requestedRoot ?: Workspaces.root(this)
         setContentView(buildContainer())
         restoreTabs()
         enterFromDrawerShape()

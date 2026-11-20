@@ -24,12 +24,17 @@ open class BaseActivity : androidx.appcompat.app.AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val store = SettingsStore.get(this)
         AppCompatDelegate.setDefaultNightMode(store.nightMode)
-        if (!store.autoColor) {
+        // 自动取色只在系统真的支持动态取色时生效；Android 8–11 与没有 Material You
+        // 取色的设备保持静态色板，此时必须回落到用户已选的主色，否则选了也不生效。
+        val dynamicColor =
+            store.autoColor &&
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+                DynamicColors.isDynamicColorAvailable()
+        if (!dynamicColor) {
             setTheme(SettingsStore.ACCENT_THEMES[store.accentIndex.coerceIn(SettingsStore.ACCENT_THEMES.indices)])
         }
         super.onCreate(savedInstanceState)
-        if (store.autoColor) {
-            // 系统支持动态取色时跟随壁纸；不支持的设备会静默回退到静态色板。
+        if (dynamicColor) {
             DynamicColors.applyToActivityIfAvailable(this)
         }
         // 图标颜色跟随主色，每次进入页面同步一次，保证与设置一致。

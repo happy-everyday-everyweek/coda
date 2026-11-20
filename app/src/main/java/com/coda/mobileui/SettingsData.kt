@@ -1072,10 +1072,8 @@ object SettingsData {
             ),
         )
 
-    val pages: Map<String, SettingsPage> =
-        mapOf(
-            "logs" to logsPage(),
-        )
+    /** 静态页面表；日志页每次打开都要重新统计，不缓存在这里，直接调 [logsPage]。 */
+    val pages: Map<String, SettingsPage> = emptyMap()
 
     /**
      * 系统提示词页。
@@ -1252,7 +1250,7 @@ object SettingsData {
      * 只读展示当前日志的统计与最近内容；真正的查看/复制/导出入口是页面里的操作行，
      * 由 SettingsDetailActivity 处理（它拿着 Activity 上下文才能做剪贴板与文件写入）。
      */
-    private fun logsPage(): SettingsPage {
+    fun logsPage(): SettingsPage {
         val dir =
             com.coda.mobileui.core.AppLog
                 .dir()
@@ -1260,9 +1258,10 @@ object SettingsData {
             com.coda.mobileui.core.AppLog
                 .currentFile()
         val size = file?.let { if (it.isFile) it.length() else 0L } ?: 0L
+        // 只数行数，不把整份日志读成 List：4MB 的日志会有上万行对象。
         val lines =
             file?.takeIf { it.isFile }?.let {
-                runCatching { it.readLines().size }.getOrDefault(0)
+                runCatching { it.useLines { seq -> seq.count() } }.getOrDefault(0)
             } ?: 0
         return SettingsPage(
             "日志",
