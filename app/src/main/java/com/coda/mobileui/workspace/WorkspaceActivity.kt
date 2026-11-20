@@ -1148,7 +1148,9 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun showMenu() {
-        val items =
+        val page = activePage()
+        val pageItems = page?.menuItems().orEmpty()
+        val baseItems =
             listOf(
                 "新建标签页",
                 "标签总览",
@@ -1158,6 +1160,9 @@ class WorkspaceActivity : BaseActivity() {
                 "关闭其他标签",
                 "关闭全部标签",
             )
+        // 页面自己的菜单（Git 的提交/分支/拉取/推送、文件页的新建等）之前从未被渲染，
+        // 这些动作只能靠控制卡，入口等于不存在。这里合并进同一个菜单。
+        val items = baseItems + pageItems.filter { it !in baseItems }
         val sheet = CodaSheet(this).title(root.name.ifEmpty { "工作区" }).subtitle(root.absolutePath)
         sheet.content { column ->
             column.removeAllViews()
@@ -1182,6 +1187,7 @@ class WorkspaceActivity : BaseActivity() {
                                     "关闭当前标签" -> activeId?.let { closeTab(it) }
                                     "关闭其他标签" -> activeId?.let { closeOthers(it) }
                                     "关闭全部标签" -> closeAll()
+                                    else -> page?.onMenuItem(item)
                                 }
                             }
                         }

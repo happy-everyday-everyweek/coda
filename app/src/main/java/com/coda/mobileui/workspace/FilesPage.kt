@@ -345,11 +345,24 @@ open class FilesPage(
         }
         return state
     }
-
-    override fun menuItems(): List<String> = listOf("回到工作区目录", "上一级", "刷新", "新建文件", "新建文件夹", if (dualPane) "切换为单栏" else "双栏显示")
+override fun menuItems(): List<String> =
+        if (::editor.isInitialized && editor.visibility == View.VISIBLE) {
+            // 编辑器页不该出现「新建文件」这类与当前内容无关的动作。
+            listOf("保存", "关闭编辑器", "刷新")
+        } else {
+            listOf("回到工作区目录", "上一级", "刷新", "新建文件", "新建文件夹", if (dualPane) "切换为单栏" else "双栏显示")
+        }
 
     override fun onMenuItem(label: String) {
         when (label) {
+            "保存" -> {
+                saveEditor()
+            }
+
+            "关闭编辑器" -> {
+                closeEditor()
+            }
+
             "回到工作区目录" -> {
                 open(host.root)
             }
