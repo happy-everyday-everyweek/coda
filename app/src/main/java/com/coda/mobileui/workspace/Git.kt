@@ -194,6 +194,31 @@ object Git {
         name: String,
     ): Result = run(env, root, listOf("checkout", name))
 
+    /**
+     * 检出远端分支：在本地建同名（去掉 remote 前缀）分支并跟踪它。
+     *
+     * 直接 `git checkout origin/x` 会进游离 HEAD，用户在分支页点「检出」就得到一个
+     * 不能提交的状态。这里显式 -b，语义与命令行一致。
+     */
+    fun checkoutTracking(
+        env: LinuxEnv,
+        root: File,
+        remoteBranch: String,
+    ): Result {
+        val local = remoteBranch.substringAfterLast('/')
+        if (local.isEmpty()) return Result(false, "分支名不合法：$remoteBranch")
+        return run(env, root, listOf("checkout", "-b", local, "--track", remoteBranch))
+    }
+
+    /** 当前 HEAD 的完整 hash；没有提交或不在仓库里时返回空串。 */
+    fun headHash(
+        env: LinuxEnv,
+        root: File,
+    ): String {
+        val result = run(env, root, listOf("rev-parse", "HEAD"))
+        return if (result.ok) result.output.trim().lineSequence().firstOrNull().orEmpty() else ""
+    }
+
     fun createBranch(
         env: LinuxEnv,
         root: File,

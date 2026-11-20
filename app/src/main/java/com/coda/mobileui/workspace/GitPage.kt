@@ -69,6 +69,19 @@ class GitPage(
     private var picked: Git.Commit? = null
     private var busy = false
 
+    /** 一次只跑一个 Git 写操作：拉取/提交/切分支同时跑会撞 index.lock。 */
+    private data class WriteOp(
+        val label: String,
+        val action: () -> Git.Result,
+        val done: (Git.Result) -> Unit,
+    )
+
+    private val writeQueue = ArrayDeque<WriteOp>()
+    private var writing = false
+
+    /** 合并失败时顺带查到的冲突文件；非空才进冲突流程。 */
+    private var pendingConflicts: List<String> = emptyList()
+
     /** 画布上的操作步骤。合并是"选源 → 选目标 → 确认"三段，状态就放在这里。 */
     private var pickingTarget = false
     private var merging = false
@@ -129,9 +142,18 @@ class GitPage(
     override fun saveState(): JSONObject = JSONObject().apply { picked?.let { put("selected", it.hash) } }
 
     override fun menuItems(): List<String> {
-        val items = mutableListOf("刷新", "提交变更", "分支管理", "拉取", "推送")
+        val items = mutableListOf("刷新")
         val current = snapshot
-        if (current != null && current.repo && !current.stateIgnored) items.add("忽略 ${Workspaces.STATE_DIR}")
+        if (current != null && current.repo) {
+            items += "提交变更"
+            items += "分支管理"
+            // 没有远端就没有可拉取/推送的对象，菜单不该给出空动作。
+            if (current.remotes.isNotEmpty()) {
+                items += "拉取"
+                items += "推送"
+            }
+            if (!current.stateIgnored) items += "忽略 ${Workspaces.STATE_DIR}"
+        }
         return items
     }
 
@@ -258,7 +280,22 @@ class GitPage(
                     picked = picked?.hash?.let { hash -> result.commits.firstOrNull { it.hash == hash } }
                     canvas.selected = picked?.hash
                     canvas.commits = result.commits
-                    if (firstLoad) canvas.fitTo(result.commits.firstOrNull()?.hash)
+                    if (firstLoad) {
+                        canvas.fitTo(result.commits.firstOrNull()?.hash)
+                        // 恢复上次选中的提交；之前 saveState 存了 selected 却没人读，
+                        // 重建后选中态总是丢。
+                        val savedHash = saved.optString("selected")
+                        if (savedHash.isNotEmpty()) {
+                            val target =
+                                result.commits.firstOrNull { it.hash == savedHash }
+                                    ?: result.commits.firstOrNull { it.hash.startsWith(savedHash) }
+                            if (target != null) {
+                                picked = target
+                                canvas.selected = target.hash
+                                canvas.fitTo(target.hash)
+                            }
+                        }
+                    }
                     rebuildControl()
                 },
                 onError = {
@@ -568,13 +605,24 @@ class GitPage(
         // 立刻切到"正在合并"：合并可能要几秒，期间按钮不该还能点。
         merging = true
         rebuildControl()
-        busy = true
-        host.background(
-            work = { Git.mergeInto(host.env, host.root, target, source) },
-            then = { result ->
-                busy = false
-                merging = false
-                if (result.ok) {
+        var conflicts: List<String> = emptyList()
+        enqueueWrite(
+            "合并",
+            action = {
+                val result = Git.mergeInto(host.env, host.root, target, source)
+                // 只有真的产生冲突时才进冲突流程；其它失败（切分支失败、钩子失败等）不是冲突。
+                conflicts =
+                    if (result.ok) {
+                        emptyList()
+                    } else {
+                        runCatching { Git.conflicts(host.env, host.root) }.getOrDefault(emptyList())
+                    }
+                result
+            },
+        ) { result ->
+            merging = false
+            when {
+                result.ok -> {
                     toast("合并完成")
                     // 合并后目标分支的尖端会变成新的合并提交；先在旧尖端上放一次扩散环，
                     // 让"结果落在哪里"这件事有个明确的视觉落点。
@@ -584,23 +632,25 @@ class GitPage(
                         }
                     resetMerge()
                     if (tip != null) canvas.pulse(tip)
-                } else {
+                }
+
+                conflicts.isEmpty() -> {
+                    resetMerge()
+                    toast("合并失败")
+                    showResult("合并失败", result)
+                }
+
+                else -> {
                     conflictText = result.output.ifEmpty { "合并失败，没有输出" }
                     pickingTarget = false
                     mergeTarget = null
                     canvas.candidates = emptySet()
                     canvas.dimOthers = false
                 }
-                rebuildControl()
-                refresh()
-            },
-            onError = {
-                busy = false
-                merging = false
-                toast("合并失败")
-                rebuildControl()
-            },
-        )
+            }
+            rebuildControl()
+            refresh()
+        }
     }
 
     private fun cancelMerge() {
@@ -703,7 +753,22 @@ class GitPage(
                 }
                 rows.add(SettingRow.Header("操作"))
                 rows.add(SettingRow.Value("标记全部已解决", "不改内容，只把改动放进暂存区", "add"))
-                keys["add"] = { conflictOp("标记已解决") { Git.addAll(host.env, host.root) } }
+                keys["add"] = {
+                    conflictOp("标记已解决") {
+                        val files = Git.conflicts(host.env, host.root)
+                        if (files.isEmpty()) {
+                            Git.Result(false, "没有冲突文件")
+                        } else {
+                            // 只 stage 冲突文件：add -A 会把无关改动一起带进这次合并提交。
+                            var last = Git.Result(true, "")
+                            for (file in files) {
+                                last = Git.addFile(host.env, host.root, file)
+                                if (!last.ok) break
+                            }
+                            last
+                        }
+                    }
+                }
                 rows.add(SettingRow.Value("完成合并", "用 merge 已经写好的信息提交", "commit"))
                 keys["commit"] = {
                     conflictOp("完成合并", finish = true) { Git.commitMerge(host.env, host.root) }
@@ -760,26 +825,22 @@ class GitPage(
         finish: Boolean = false,
         action: () -> Git.Result,
     ) {
-        host.background(
-            work = action,
-            then = { result ->
-                if (result.ok) {
-                    toast("$label 完成")
-                    if (finish) {
-                        resetMerge()
-                        closeDetail()
-                        refresh()
-                    } else {
-                        pages.lastOrNull()?.render?.invoke()
-                    }
+        enqueueWrite(label, action) { result ->
+            if (result.ok) {
+                toast("$label 完成")
+                if (finish) {
+                    resetMerge()
+                    closeDetail()
+                    refresh()
                 } else {
-                    pushPage(label, "未能完成") {
-                        detail.showCode(result.output.ifEmpty { "没有输出" })
-                    }
+                    pages.lastOrNull()?.render?.invoke()
                 }
-            },
-            onError = { toast("$label 失败") },
-        )
+            } else {
+                pushPage(label, "未能完成") {
+                    detail.showCode(result.output.ifEmpty { "没有输出" })
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 分支
@@ -828,7 +889,7 @@ class GitPage(
                     rows.add(SettingRow.Header("远端"))
                     for (name in remotes) {
                         rows.add(SettingRow.Value(name, "", "r:$name"))
-                        keys["r:$name"] = { showBranch(name, false) }
+                        keys["r:$name"] = { showBranch(name, false, remote = true) }
                     }
                 }
                 rows.add(SettingRow.Header("操作"))
@@ -847,11 +908,38 @@ class GitPage(
     private fun showBranch(
         name: String,
         isCurrent: Boolean,
+        remote: Boolean = false,
     ) {
-        openDetail(name, if (isCurrent) "当前分支" else "本地分支")
+        openDetail(
+            name,
+            when {
+                isCurrent -> "当前分支"
+                remote -> "远端分支"
+                else -> "本地分支"
+            },
+        )
         if (isCurrent) {
             val rows = listOf(SettingRow.Value("这是当前分支", "检出与删除都不可用", ""))
             bindRows(rows, emptyMap())
+            return
+        }
+        if (remote) {
+            // 远端分支不是本地引用：直接 checkout 会进游离 HEAD，删除要 push --delete。
+            val rows =
+                listOf(
+                    SettingRow.Value("检出到本地", "新建同名分支并跟踪它", "checkout"),
+                    SettingRow.Value("合并到当前分支", "", "merge"),
+                    SettingRow.Value("远端分支", "删除需要推送 --delete，本页不提供", ""),
+                )
+            bindRows(
+                rows,
+                mapOf(
+                    "checkout" to {
+                        operate("检出 $name") { Git.checkoutTracking(host.env, host.root, name) }
+                    },
+                    "merge" to { operate("合并 $name") { Git.merge(host.env, host.root, name, false) } },
+                ),
+            )
             return
         }
         val rows =
@@ -954,8 +1042,10 @@ class GitPage(
         val view = openDetail(commit.hash.take(8), commit.subject)
         view.showLoading("正在读取提交内容…")
         host.background(
-            work = { Git.show(host.env, host.root, commit.hash).output },
-            then = { output ->
+            work = { Git.show(host.env, host.root, commit.hash).output to Git.headHash(host.env, host.root) },
+            then = { payload ->
+                val output = payload.first
+                val head = payload.second
                 val rows = mutableListOf<SettingRow>()
                 val keys = HashMap<String, () -> Unit>()
                 rows.add(SettingRow.Header("提交"))
@@ -972,7 +1062,7 @@ class GitPage(
                 keys["branch"] = { branchFrom(commit.hash) }
                 rows.add(SettingRow.Value("检出此提交", "", "checkout"))
                 keys["checkout"] = { operate("检出") { Git.checkout(host.env, host.root, commit.hash) } }
-                val isHead = commit.hash == snapshot?.commits?.firstOrNull()?.hash
+                val isHead = head.isNotEmpty() && commit.hash == head
                 if (!isHead) {
                     rows.add(SettingRow.Value("合并到当前分支", "", "merge"))
                     keys["merge"] = { operate("合并") { Git.merge(host.env, host.root, commit.hash, false) } }
@@ -996,23 +1086,48 @@ class GitPage(
         label: String,
         action: () -> Git.Result,
     ) {
+        enqueueWrite(label, action) { result ->
+            if (result.ok) {
+                toast("$label 完成")
+                closeDetail()
+            } else {
+                showResult(label, result)
+            }
+            refresh()
+        }
+    }
+
+    /** 所有写操作都从这里排队：同一时刻只有一个 git 进程能改仓库。 */
+    private fun enqueueWrite(
+        label: String,
+        action: () -> Git.Result,
+        done: (Git.Result) -> Unit,
+    ) {
+        writeQueue.addLast(WriteOp(label, action, done))
+        if (!writing) drainWrites()
+    }
+
+    private fun drainWrites() {
+        val op = writeQueue.removeFirstOrNull()
+        if (op == null) {
+            writing = false
+            busy = false
+            return
+        }
+        writing = true
         busy = true
         host.background(
-            work = action,
+            work = op.action,
             then = { result ->
                 busy = false
-                if (result.ok) {
-                    toast("$label 完成")
-                    closeDetail()
-                } else {
-                    showResult(label, result)
-                }
-                refresh()
+                op.done(result)
+                drainWrites()
             },
             onError = {
                 busy = false
-                toast("$label 失败")
+                toast("${op.label} 失败")
                 rebuildControl()
+                drainWrites()
             },
         )
     }

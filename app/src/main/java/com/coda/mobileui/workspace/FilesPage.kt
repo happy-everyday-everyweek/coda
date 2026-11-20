@@ -270,11 +270,11 @@ open class FilesPage(
     }
 
     /** 磁盘上的文件比载入时新：干净就静默重载，脏则保留当前内容并提示。 */
-    private fun refreshEditorIfChangedOnDisk() {
+    private fun refreshEditorIfChangedOnDisk(force: Boolean = false) {
         val file = editing ?: return
         if (file.length() > MAX_EDIT_BYTES) return
         val mtime = runCatching { file.lastModified() }.getOrDefault(0L)
-        if (mtime <= loadedMtime) return
+        if (!force && mtime <= loadedMtime) return
         if (dirty) {
             loadedMtime = mtime
             toast("磁盘上的文件已被修改，当前未保存内容保留")
@@ -339,8 +339,13 @@ open class FilesPage(
             }
 
             "刷新" -> {
-                renderList()
-                renderRightPane()
+                // 编辑器页的「刷新当前标签」不能是空动作：重新读一次磁盘内容。
+                if (editor.visibility == View.VISIBLE) {
+                    refreshEditorIfChangedOnDisk(force = true)
+                } else {
+                    renderList()
+                    renderRightPane()
+                }
             }
 
             "新建文件" -> {
