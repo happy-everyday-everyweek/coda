@@ -259,14 +259,15 @@ open class FilesPage(
     }
 
     override fun onShown() {
-        if (!::listColumn.isInitialized) return
-        if (editor.visibility != View.VISIBLE) {
-            renderList()
-            renderRightPane()
-        } else {
-            // 切回编辑标签时，磁盘上的文件可能已经被 Agent 改过：内容干净就重新载入。
+        // 编辑器页没有 listColumn：先判编辑器，否则这个短路会让切回编辑标签永远
+        // 不检查磁盘变化。
+        if (::editor.isInitialized && editor.visibility == View.VISIBLE) {
             refreshEditorIfChangedOnDisk()
+            return
         }
+        if (!::listColumn.isInitialized) return
+        renderList()
+        renderRightPane()
     }
 
     /** 磁盘上的文件比载入时新：干净就静默重载，脏则保留当前内容并提示。 */
@@ -324,7 +325,26 @@ open class FilesPage(
         }
     }
 
-    override fun saveState(): JSONObject = JSONObject().put("path", current.absolutePath).put("rightPath", rightDir?.absolutePath ?: "")
+    override fun saveState(): JSONObject {
+        val state =
+            JSONObject()
+                .put("path", current.absolutePath)
+                .put("rightPath", rightDir?.absolutePath ?: "")
+        // 编辑器页持久化的必须是被编辑文件，不是工作区根：否则重启后标签被当成
+        // 「文件已不存在」，用户的标签直接消失。
+        val editorVisible = ::editor.isInitialized && editor.visibility == View.VISIBLE
+        val file = editing
+        if (file != null && (editorOnly || editorVisible)) {
+            state.put("path", file.absolutePath).put("markdown", markdownMode)
+        } else if (editorOnly && saved.optBoolean("readonly")) {
+            // 只读预览没有磁盘路径，沿用原来的 bufferKey，别把状态覆盖成根目录。
+            state
+                .put("readonly", true)
+                .put("name", saved.optString("name"))
+                .put("bufferKey", saved.optString("bufferKey"))
+        }
+        return state
+    }
 
     override fun menuItems(): List<String> = listOf("回到工作区目录", "上一级", "刷新", "新建文件", "新建文件夹", if (dualPane) "切换为单栏" else "双栏显示")
 
@@ -2208,6 +2228,40 @@ open class FilesPage(
                 onDone?.invoke(false)
             },
         )
+    }
+
+    /** 编辑器是否有未保存修改：供关闭标签、切换工作区前询问。 */
+    fun hasUnsavedEditor(): Boolean = editing != null && dirty
+
+    /** 关闭前询问；回调 true 才继续关闭。 */
+    fun requestLeaveEditor(onDone: (Boolean) -> Unit) {
+        val file = editing
+        if (file == null || !dirty) {
+            onDone(true)
+            return
+        }
+        var answered = false
+        fun finish(ok: Boolean) {
+            if (answered) return
+            answered = true
+            onDone(ok)
+        }
+        val sheet = sheet().title("未保存的修改").subtitle(file.name)
+        sheet.content { column ->
+            column.addView(label("关闭前可以先把修改写回文件。", 13f, onSurfaceVariant))
+        }
+        sheet.primaryAction("保存并关闭") {
+            sheet.dismiss()
+            saveEditor { ok -> if (ok) finish(true) }
+        }
+        sheet.secondaryAction("放弃修改") {
+            sheet.dismiss()
+            dirty = false
+            finish(true)
+        }
+        // 点遮罩或返回键等于取消：不关闭标签。
+        sheet.onDismiss { finish(false) }
+        sheet.show()
     }
 
     private fun closeEditor() {

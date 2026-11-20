@@ -44,6 +44,9 @@ import java.util.concurrent.Executors
  */
 class WorkspaceActivity : BaseActivity() {
     companion object {
+        /** 编辑器上限：与文件页保持一致，入口统一把关。 */
+        private const val MAX_EDITOR_BYTES = 2_000_000L
+
         /** 终端底栏的沉浸配色：只有终端页用，进入终端时底栏整条转黑。 */
         private val terminalBarBackground = 0xFF000000.toInt()
         private val terminalBarForeground = 0xFFE0E0E0.toInt()
@@ -238,6 +241,11 @@ class WorkspaceActivity : BaseActivity() {
     fun switchRoot(file: File) {
         val target = file.absolutePath
         if (target == root.absolutePath) return
+        // 切换根目录会重建全部标签：先把未保存的编辑器处理掉，取消就留在原工作区。
+        guardDirtyEditor { switchRootNow(file) }
+    }
+
+    private fun switchRootNow(file: File) {
         persist()
         Workspaces.select(this, target)
         Workspaces.ensureState(file)
@@ -478,6 +486,17 @@ class WorkspaceActivity : BaseActivity() {
             else -> OverviewPage(this, data.state)
         }
 
+    /** 文件页的「以文本打开」也走 openEditor：这里统一挡掉超大与二进制文件。 */
+    private fun blockedEditorReason(file: File): String? {
+        if (!file.isFile) return null
+        if (file.length() > MAX_EDITOR_BYTES) return "文件超过 2 MB，未打开"
+        val head = ByteArray(minOf(8192, file.length().toInt().coerceAtLeast(0)))
+        if (head.isEmpty()) return null
+        runCatching { file.inputStream().use { it.read(head) } }.getOrNull() ?: return null
+        if (head.any { it == 0.toByte() }) return "这是二进制文件，已阻止以文本打开"
+        return null
+    }
+
     /**
      * 打开一个文件到编辑器标签页。
      *
@@ -489,6 +508,11 @@ class WorkspaceActivity : BaseActivity() {
         preview: Boolean = true,
         markdown: Boolean = false,
     ) {
+        // 入口统一把关：文件页的「以文本打开」也会走到这里，不能只在列表层限制。
+        blockedEditorReason(File(path))?.let {
+            android.widget.Toast.makeText(this, it, android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
         val existing =
             tabs.firstOrNull {
                 it.data.kind == WorkspaceTabs.EDITOR && it.data.state.optString("path") == path
@@ -671,6 +695,17 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun closeTab(id: String) {
+        val entry = tabs.firstOrNull { it.data.id == id } ?: return
+        val page = entry.page
+        // 脏编辑器先问过再关：标签栏的 ✕ 与「关闭当前标签」都走这里。
+        if (page is FilesPage && page.hasUnsavedEditor()) {
+            page.requestLeaveEditor { canClose -> if (canClose) closeTabNow(id) }
+            return
+        }
+        closeTabNow(id)
+    }
+
+    private fun closeTabNow(id: String) {
         val index = tabs.indexOfFirst { it.data.id == id }
         if (index < 0) return
         val entry = tabs.removeAt(index)
@@ -700,14 +735,35 @@ class WorkspaceActivity : BaseActivity() {
     }
 
     private fun closeOthers(keep: String) {
-        for (entry in tabs.toList()) {
-            if (entry.data.id != keep) closeTab(entry.data.id)
+        guardDirtyEditor(exceptId = keep) {
+            for (entry in tabs.toList()) {
+                if (entry.data.id != keep) closeTab(entry.data.id)
+            }
+            selectTab(keep)
         }
-        selectTab(keep)
     }
 
     private fun closeAll() {
-        for (entry in tabs.toList()) closeTab(entry.data.id)
+        guardDirtyEditor {
+            for (entry in tabs.toList()) closeTab(entry.data.id)
+        }
+    }
+
+    /** 关闭多个标签或切换根目录前，先处理唯一一个脏编辑器；取消则整步中止。 */
+    private fun guardDirtyEditor(
+        exceptId: String? = null,
+        action: () -> Unit,
+    ) {
+        val dirty =
+            tabs
+                .filter { it.data.id != exceptId }
+                .mapNotNull { it.page as? FilesPage }
+                .firstOrNull { it.hasUnsavedEditor() }
+        if (dirty == null) {
+            action()
+            return
+        }
+        dirty.requestLeaveEditor { canClose -> if (canClose) action() }
     }
 
     private fun updateBar() {
