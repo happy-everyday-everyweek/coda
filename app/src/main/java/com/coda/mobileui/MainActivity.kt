@@ -5355,7 +5355,7 @@ class MainActivity : BaseActivity() {
     private fun showWorkspaceBrowseSheet() {
         if (isFinishing || isDestroyed) return
         val sheet = CodaSheet(this).compact().title("选择工作区").subtitle("绑定到已有的目录")
-        DirectoryPicker.attachTo(sheet, this, "选择工作区目录", File(Workspaces.root(this))) { picked ->
+        DirectoryPicker.attachTo(sheet, this, "选择工作区目录", Workspaces.root(this)) { picked ->
             selectWorkspace(picked.absolutePath)
         }
         sheet.show()

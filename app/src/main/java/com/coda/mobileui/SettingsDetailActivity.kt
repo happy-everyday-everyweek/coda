@@ -2351,7 +2351,7 @@ class SettingsDetailActivity :
                         s.dismiss()
                         startActivity(
                             com.coda.mobileui.workspace.WorkspaceActivity
-                                .intent(this),
+                                .intent(this, null),
                         )
                     }
                     sheet.refreshContent { col ->

@@ -1,6 +1,6 @@
 import json
+import re
 import subprocess
-import urllib.error
 import urllib.request
 
 TOK = subprocess.run(
@@ -9,27 +9,7 @@ TOK = subprocess.run(
     capture_output=True,
     text=True,
 ).stdout.strip()
-
-
-def api(url):
-    req = urllib.request.Request(
-        url, headers={"Authorization": "Bearer " + TOK, "Accept": "application/vnd.github+json"}
-    )
-    return json.load(urllib.request.urlopen(req, timeout=30))
-
-
-runs = api("https://api.github.com/repos/happy-everyday-everyweek/coda/actions/runs?branch=dev&per_page=6")[
-    "workflow_runs"
-]
-bad = [r for r in runs if r["name"] == "Build" and r["conclusion"] == "failure"][0]
-jobs = api(
-    "https://api.github.com/repos/happy-everyday-everyweek/coda/actions/runs/%s/jobs" % bad["id"]
-)["jobs"]
-failed = [j for j in jobs if j["conclusion"] == "failure"]
-jid = failed[0]["id"] if failed else None
-if jid is None:
-    print("no failed job")
-    raise SystemExit(0)
+REPO = "happy-everyday-everyweek/coda"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -37,14 +17,53 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+opener = urllib.request.build_opener(NoRedirect)
+sha = subprocess.run(
+    "cd /home/zcode-mobile-ui && git rev-parse HEAD",
+    shell=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
 req = urllib.request.Request(
-    "https://api.github.com/repos/happy-everyday-everyweek/coda/actions/jobs/%s/logs" % jid,
-    headers={"Authorization": "Bearer " + TOK},
+    "https://api.github.com/repos/%s/actions/runs?head_sha=%s&per_page=5" % (REPO, sha),
+    headers={"Authorization": "Bearer " + TOK, "Accept": "application/vnd.github+json"},
 )
-try:
-    resp = urllib.request.build_opener(NoRedirect).open(req, timeout=30)
-except urllib.error.HTTPError as e:
-    resp = urllib.request.urlopen(e.headers.get("Location"), timeout=60)
-for line in resp.read().decode("utf-8", "replace").splitlines():
-    if "e: file" in line or "Could not resolve" in line or "Execution failed" in line:
-        print(line[-400:])
+runs = json.load(urllib.request.urlopen(req, timeout=30))["workflow_runs"]
+build = [r for r in runs if r["name"] == "Build"]
+if not build:
+    print("no build run")
+    raise SystemExit(0)
+run_id = build[0]["id"]
+jobs = json.load(
+    urllib.request.urlopen(
+        urllib.request.Request(
+            "https://api.github.com/repos/%s/actions/runs/%s/jobs" % (REPO, run_id),
+            headers={"Authorization": "Bearer " + TOK},
+        ),
+        timeout=30,
+    )
+)["jobs"]
+for job in jobs:
+    print("JOB", job["name"], job["conclusion"])
+    for step in job["steps"]:
+        print("  STEP", step["name"], step["conclusion"])
+    if job["conclusion"] != "failure":
+        continue
+    log_req = urllib.request.Request(
+        "https://api.github.com/repos/%s/actions/jobs/%s/logs" % (REPO, job["id"]),
+        headers={"Authorization": "Bearer " + TOK},
+    )
+    try:
+        opener.open(log_req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        location = exc.headers.get("Location")
+        if not location:
+            print("no location", exc.code)
+            continue
+        text = urllib.request.urlopen(
+            urllib.request.Request(location, headers={"User-Agent": "Mozilla/5.0"}),
+            timeout=60,
+        ).read().decode("utf-8", "replace")
+        for line in text.splitlines():
+            if re.search(r"(e: file|e: /|error:|FAILURE|What went wrong|Execution failed)", line):
+                print(line[:400])
