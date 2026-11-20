@@ -148,6 +148,10 @@ dependencies {
     implementation("com.google.android.material:material:1.13.0")
     // AI 回复的 Markdown 渲染（加粗、列表、代码块、引用、链接等）
     implementation("io.noties.markwon:core:4.6.2")
+    // 表格、删除线、任务列表：只注册 CorePlugin 时这些语法会原样显示成符号。
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-strikethrough:4.6.2")
+    implementation("io.noties.markwon:ext-tasklist:4.6.2")
     // 网络层：WebSocket（豆包语音反代）、multipart 上传（ASR 转写）、
     // 超时与取消。之前用裸 HttpURLConnection，豆包那条要走 WebSocket，
     // 手写握手与帧掩码不值得，直接上 OkHttp。

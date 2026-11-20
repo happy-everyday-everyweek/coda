@@ -63,7 +63,7 @@ class CodaBotPage(
     private lateinit var olderHost: LinearLayout
 
     /** 与 Coding Agent 聊天页共用同一套 Markdown 渲染，避免一边渲染一边显示星号。 */
-    private val markwon by lazy { io.noties.markwon.Markwon.create(host) }
+    private val markwon by lazy { com.coda.mobileui.MarkdownRender.create(host) }
 
     /** 录音上限；到点自动结束并转写，不在后台无限占麦克风。 */
     private val recordingTimeout = Runnable { finishRecording(auto = true) }

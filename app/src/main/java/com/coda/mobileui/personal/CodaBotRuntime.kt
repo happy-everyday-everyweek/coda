@@ -48,6 +48,10 @@ class CodaBotRuntime(
     private val pendingPermissionLimit = 20
     private val pendingPermissionTtlMs = 10 * 60 * 1000L
 
+    /** 审批 TTL 的定时器：只在下一个请求到达时清理，会让 Agent 无限等待。 */
+    private val expiryHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val expiryTick = Runnable { prunePendingPermissions() }
+
     /** 宿主事件节流：同一会话在该窗口内的连续事件合并成一条。 */
     private val eventWindowMs = 8_000L
     private val eventLock = Any()
@@ -75,6 +79,9 @@ class CodaBotRuntime(
                 synchronized(pendingPermissions) {
                     pendingPermissions[requestKey] = PendingPermission(requestId, System.currentTimeMillis())
                 }
+                // 即使之后没有新的审批到达，也到点清理一次。
+                expiryHandler.removeCallbacks(expiryTick)
+                expiryHandler.postDelayed(expiryTick, pendingPermissionTtlMs)
                 val tool = params.optString("toolName").ifBlank { params.optString("tool") }
                 notifyHost(
                     "Coding Agent 请求审批：request_key=$requestKey，session_id=$sessionId，工具「$tool」。" +
@@ -425,6 +432,7 @@ class CodaBotRuntime(
 
     fun close() {
         codingAgent.removeListener(hostListener)
+        expiryHandler.removeCallbacks(expiryTick)
         denyPendingPermissions()
         Bg.run {
             runCatching {

@@ -5832,10 +5832,7 @@ class MainActivity : BaseActivity() {
     }
 
     /** Markdown 渲染器：AI 回复里的加粗、列表、代码块等按 Markdown 显示。 */
-    private val markwon by lazy {
-        io.noties.markwon.Markwon
-            .create(this)
-    }
+    private val markwon by lazy { MarkdownRender.create(this) }
 
     /** 按会话渲染消息与工具调用记录：每条会话只显示自己的内容。 */
     private fun showConversation(conversation: DrawerConversation) {

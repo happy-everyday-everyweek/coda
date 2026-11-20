@@ -2413,8 +2413,18 @@ class SettingsDetailActivity :
                     .toString()
                     .trim()
                     .removePrefix("#")
-            val parsed = hex.toLongOrNull(16)?.toInt() ?: return
-            val color = parsed or 0xFF000000.toInt()
+            val parsed =
+                if (hex.length in 3..6 && hex.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+                    hex.toLongOrNull(16)
+                } else {
+                    null
+                }
+            if (parsed == null) {
+                // 非法值之前被静默吞掉：用户以为已生效，实际主题没变。
+                input.error = "请输入 3–6 位十六进制颜色，例如 #6750A4"
+                return
+            }
+            val color = parsed.toInt() or 0xFF000000.toInt()
             store.customAccentHex = "#" + hex.uppercase().padStart(6, '0')
             store.accentIndex = SettingsStore.nearestAccentIndex(color)
             store.autoColor = false

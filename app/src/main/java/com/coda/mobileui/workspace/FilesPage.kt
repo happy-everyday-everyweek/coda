@@ -273,6 +273,12 @@ open class FilesPage(
     /** 磁盘上的文件比载入时新：干净就静默重载，脏则保留当前内容并提示。 */
     private fun refreshEditorIfChangedOnDisk(force: Boolean = false) {
         val file = editing ?: return
+        if (!file.isFile) {
+            // mtime 归零会被当成「没有更新」，保存时静默重建文件。这里明确提示。
+            toast("文件已被外部删除，继续保存会重新创建它")
+            loadedMtime = 0L
+            return
+        }
         if (file.length() > MAX_EDIT_BYTES) return
         val mtime = runCatching { file.lastModified() }.getOrDefault(0L)
         if (!force && mtime <= loadedMtime) return
@@ -477,6 +483,12 @@ override fun menuItems(): List<String> =
             },
             longClick = { showActions(file, Side.RIGHT) },
         )
+
+    /** 与聊天页同一套 Markdown 插件：表格/删除线/任务列表在预览里也要生效。 */
+    private val markwon by lazy { com.coda.mobileui.MarkdownRender.create(host) }
+
+    /** 压缩包内预览：不可写，保存与关闭都不该走正常文件流程。 */
+    private var readOnlyPreview = false
 
     private var loadedMtime = 0L
 
@@ -811,11 +823,13 @@ override fun menuItems(): List<String> =
     ) {
         // 先把编辑目标清空：编辑器只用于阅读，保存动作没有可写目标，不会误改原包。
         editing = null
+        readOnlyPreview = true
+        markdownMode = false
         originalText = content
         dirty = false
         editorRules = CodeHighlighter.detect(name)
         indentUnit = if (editorRules == null) "    " else detectIndentUnit(content)
-        editorTitle.text = "$name（压缩包内，只读）"
+        refreshEditorTitle()
         suppressEdits = true
         editorInput.setText(content)
         editorInput.setSelection(0)
@@ -1471,9 +1485,6 @@ override fun menuItems(): List<String> =
         }
         val preview = markdownPreview.visibility != View.VISIBLE
         if (preview) {
-            val markwon =
-                io.noties.markwon.Markwon
-                    .create(host)
             markwon.setMarkdown(markdownPreviewText, editorInput.text.toString())
         }
         markdownPreview.visibility = if (preview) View.VISIBLE else View.GONE
@@ -1535,14 +1546,32 @@ override fun menuItems(): List<String> =
     }
 
     /**
-     * 当前行底：从行首铺到行尾的半透明色块，随主题。
+     * 当前行底色：从行首铺到行尾的半透明色块，随主题。
      *
-     * 用 BackgroundColorSpan 而不是 ReplacementSpan：后者会接管整段绘制，连带吞掉这一行
-     * 的语法着色。范围铺到行尾，因此行尾空白也会被盖住，视觉上仍是整行。
+     * 用 LineBackgroundSpan 而不是 BackgroundColorSpan：后者对空行、行尾空白都画不出宽度，
+     * 空行时光标所在行没有底色。LineBackgroundSpan 按行绘制整行矩形，颜色由调用方给。
      */
     private class CurrentLineSpan(
-        color: Int,
-    ) : android.text.style.BackgroundColorSpan(color)
+        private val color: Int,
+    ) : android.text.style.LineBackgroundSpan {
+        override fun drawBackground(
+            canvas: android.graphics.Canvas,
+            paint: android.graphics.Paint,
+            left: Int,
+            right: Int,
+            top: Int,
+            baseline: Int,
+            bottom: Int,
+            text: CharSequence,
+            start: Int,
+            end: Int,
+            lineNumber: Int,
+        ) {
+            paint.color = color
+            paint.style = android.graphics.Paint.Style.FILL
+            canvas.drawRect(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), paint)
+        }
+    }
 
     /** 行号槽的一行：当前行用主题色加粗，其余用弱化色。 */
     private fun gutterMarkup(): android.text.SpannableString {
@@ -1603,13 +1632,15 @@ override fun menuItems(): List<String> =
         // 行界来自 layout，而 layout 在文本刚变、重新测量前是旧值：两边都夹紧到
         // 当前文本长度，宁可这帧画短，也不能越界崩溃。
         val start = layout.getLineStart(line).coerceIn(0, length)
-        val end = layout.getLineVisibleEnd(line).coerceAtLeast(start).coerceIn(0, length)
-        if (end <= start) return
+        val rawEnd = layout.getLineVisibleEnd(line).coerceAtLeast(start).coerceIn(0, length)
+        // 空行时可见末尾等于行首：扩一个字符，让 LineBackgroundSpan 仍能落在这一行上。
+        val end = if (rawEnd > start) rawEnd else (start + 1).coerceAtMost(length)
+        if (end <= start && length == 0) return
         text.setSpan(
             CurrentLineSpan(currentLineTint),
-            start,
-            end,
-            android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            if (end > start) start else (start - 1).coerceAtLeast(0),
+            if (end > start) end else start,
+            android.text.Spanned.SPAN_INCLUSIVE_INCLUSIVE,
         )
     }
 
@@ -1679,11 +1710,26 @@ override fun menuItems(): List<String> =
     /** 标题上的脏标记：与 VS Code 的未保存圆点同一语义，未改动则撤下。 */
     private fun refreshDirty() {
         if (suppressEdits) return
+        if (readOnlyPreview) {
+            // 压缩包内预览不可写：内容变化不进脏状态，关闭时不提示。
+            dirty = false
+            return
+        }
         val file = editing ?: return
         val changed = editorInput.text.toString() != originalText
         if (changed == dirty) return
         dirty = changed
-        editorTitle.text = if (changed) "${file.name} ·" else file.name
+        refreshEditorTitle()
+    }
+
+    /** 标题由文件名、Markdown、只读与脏点共同决定，避免几处赋值互相覆盖。 */
+    private fun refreshEditorTitle() {
+        val name = editing?.name ?: saved.optString("name").ifEmpty { "预览" }
+        val parts = mutableListOf(name)
+        if (markdownMode) parts += "Markdown"
+        if (readOnlyPreview) parts += "只读"
+        val base = parts.joinToString(" · ")
+        editorTitle.text = if (dirty) "$base •" else base
     }
 
     /**
@@ -2191,6 +2237,7 @@ override fun menuItems(): List<String> =
     ) {
         editing = file
         markdownMode = markdown
+        readOnlyPreview = false
         originalText = content
         loadedMtime = runCatching { file.lastModified() }.getOrDefault(0L)
         dirty = false
@@ -2206,6 +2253,8 @@ override fun menuItems(): List<String> =
         editorBody.visibility = View.VISIBLE
         markdownPreview.visibility = View.GONE
         editorTitle.text = if (markdown) "${file.name} · Markdown" else file.name
+        // 统一由标题函数拼装，避免覆盖 Markdown 标识或脏点。
+        refreshEditorTitle()
         runHighlight()
         // 当前行底、行号与参考线要靠布局里的行位置，等这一帧量完再上一次。
         editorInput.post { refreshEditorChrome() }
@@ -2218,6 +2267,11 @@ override fun menuItems(): List<String> =
      * 会直接卡住界面，慢存储上更明显。
      */
     private fun saveEditor(onDone: ((Boolean) -> Unit)? = null) {
+        if (readOnlyPreview) {
+            toast("压缩包内文件只读，无法保存")
+            onDone?.invoke(false)
+            return
+        }
         val file = editing ?: return
         val text = editorInput.text.toString()
         host.background(
@@ -2228,7 +2282,7 @@ override fun menuItems(): List<String> =
                     // 写盘之后刷新基线，避免切回来时把自己刚写的内容当成"磁盘被改过"。
                     loadedMtime = runCatching { file.lastModified() }.getOrDefault(loadedMtime)
                     dirty = editorInput.text.toString() != text
-                    editorTitle.text = file.name
+                    refreshEditorTitle()
                     refreshCursorStatus()
                     toast(if (dirty) "已保存先前内容，当前修改未保存" else "已保存")
                 } else {
@@ -2301,6 +2355,7 @@ override fun menuItems(): List<String> =
 
     private fun leaveEditor() {
         editing = null
+        readOnlyPreview = false
         originalText = ""
         editorRules = null
         dirty = false

@@ -1528,7 +1528,12 @@ class ZController private constructor(
         sessionId: String,
         cb: ((Boolean) -> Unit)? = null,
     ) {
-        runtime.call("session/close", JSONObject().put("sessionId", sessionId)) { _, _ ->
+        runtime.call("session/close", JSONObject().put("sessionId", sessionId)) { ok, _ ->
+            // 内核拒绝关闭时不能报成功：否则当前会话被清空，Personal Agent 收到假的「已关闭」。
+            if (!ok) {
+                cb?.invoke(false)
+                return@call
+            }
             if (currentSessionId == sessionId) currentSessionId = null
             refreshSessions(null)
             cb?.invoke(true)

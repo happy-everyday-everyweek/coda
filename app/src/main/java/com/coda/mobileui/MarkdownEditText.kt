@@ -333,9 +333,10 @@ internal object MarkdownSpans {
         for (ch in src) {
             when (ch) {
                 '`', '*', '_', '~', '#', '>', '-', '[', '\\', '+' -> return true
+                // 有序列表的标记是「数字 + 点」：只看数字太宽，但漏掉点会让
+                // 「1. x」永远不进入解析，标记一直原样显示。
+                '.' -> return true
             }
-            // 有序列表：数字后跟点，交给后面的正则，这里只兜住「有数字」的情况太宽，
-            // 交给 ORDERED 判断更准，所以数字不在此列。
         }
         return false
     }
