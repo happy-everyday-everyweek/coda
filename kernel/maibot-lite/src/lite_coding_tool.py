@@ -123,12 +123,12 @@ def _readonly_violation(command: str) -> Optional[str]:
             or arg.startswith("--unset-upstream")
             for arg in args
         ):
-            return "git branch 的写操作（删除/改名/设置上游）不允许"
+            return "只读检查不允许 git branch 的写操作（删除/改名/设置上游）"
         if parts[1] == "tag" and any(
             arg in {"-d", "-a", "-s", "-f", "-m", "-F"} or arg.startswith("-a") or arg.startswith("--delete")
             for arg in args
         ):
-            return "git tag 只能列出现有标签，不能创建或删除"
+            return "只读检查不允许：git tag 只能列出现有标签，不能创建或删除"
         if "-O" in args:
             return "只读检查不允许 -O（会启动分页器执行命令）"
         return None
