@@ -1134,11 +1134,11 @@ class GitPage(
                 op.done(result)
                 drainWrites()
             },
-            onError = { error ->
+            onError = {
                 busy = false
                 // 失败也必须回调 done：调用方靠它复位 merging/busy 这类状态，
                 // 少一次回调界面就永久停在「正在合并…」上，按钮再也点不动。
-                op.done(Git.Result(false, error?.message ?: "执行失败"))
+                op.done(Git.Result(false, "执行失败"))
                 rebuildControl()
                 drainWrites()
             },
