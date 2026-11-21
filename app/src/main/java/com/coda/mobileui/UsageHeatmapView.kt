@@ -189,7 +189,9 @@ class UsageHeatmapView(
         while (!cursor.after(end) || col.isNotEmpty()) {
             val key = formatDate(cursor)
             val v = byDate[key] ?: 0L
-            col += Cell(levelOf(v), v, 0, key)
+            // 首周从周日开始、末周补齐到周六：这两段里有日期根本不在统计范围内。
+            // 发 null 而不是 level=0 的格子，否则点上去会显示「无活动」。
+            col += heatCellFor(key, first, last, v, ::levelOf)
             if (col.size == 7) {
                 out += col
                 col = mutableListOf()
@@ -326,3 +328,23 @@ class UsageHeatmapView(
     /** 当前选中的那格，供页面显示。 */
     internal fun selectedCell(): Cell? = selected
 }
+
+/**
+ * 生成热图的一格；不在 [first]..[last] 区间内的日期返回 null。
+ *
+ * 首周从周日开始、末周补齐到周六，这两段里有日期根本不在统计范围内。之前给它们
+ * 发的是 level=0 的真实格子：颜色与「无活动」相同，点上去还说「无活动」——
+ * 把「没有数据」说成了「统计过但没使用」。ISO 日期字符串可以直接比大小。
+ */
+internal fun heatCellFor(
+    key: String,
+    first: String,
+    last: String,
+    tokens: Long,
+    levelOf: (Long) -> Int,
+): UsageHeatmapView.Cell? =
+    if (key < first || key > last) {
+        null
+    } else {
+        UsageHeatmapView.Cell(levelOf(tokens), tokens, 0, key)
+    }
