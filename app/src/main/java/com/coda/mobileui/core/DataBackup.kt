@@ -166,19 +166,48 @@ object DataBackup {
         return count
     }
 
+    /**
+     * 只做预检：把外部文件落到私有临时文件并跑完所有校验，不写任何正式数据。
+     *
+     * 调用方据此决定要不要先停运行环境：一个损坏或不受支持的包，根本不该让核心停下来。
+     *
+     * @return 预检通过返回 null，否则返回可直接展示的原因。
+     */
+    fun validate(
+        ctx: Context,
+        uri: Uri,
+    ): String? =
+        try {
+            withPackage(ctx, uri) { file -> validatePackage(ctx, file) }
+            null
+        } catch (e: Exception) {
+            AppLog.w("Backup", "备份预检未通过：${e.message}")
+            e.message ?: "无法读取备份文件"
+        }
+
     /** 从给定 Uri 恢复，返回恢复的条目数；失败抛出异常。 */
     fun import(
         ctx: Context,
         uri: Uri,
-    ): Int {
-        // 先把外部输入落到私有临时文件：manifest 可能在包尾，不能在解压流里读到一半才开始写。
+    ): Int =
+        withPackage(ctx, uri) { packageFile ->
+            validatePackage(ctx, packageFile)
+            importPackage(ctx, packageFile)
+        }
+
+    /** 把 Uri 复制到私有临时文件后交给 [block]，结束时一定删掉临时文件。 */
+    private fun <T> withPackage(
+        ctx: Context,
+        uri: Uri,
+        block: (File) -> T,
+    ): T {
+        // manifest 可能在包尾，不能在解压流里读到一半才开始写，所以先落盘。
         val packageFile = File(ctx.cacheDir, "backup-import-${System.nanoTime()}.zip")
         try {
             ctx.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(packageFile).use { output -> input.copyTo(output) }
             } ?: throw IllegalStateException("无法读取备份文件")
-            validatePackage(ctx, packageFile)
-            return importPackage(ctx, packageFile)
+            return block(packageFile)
         } finally {
             packageFile.delete()
         }

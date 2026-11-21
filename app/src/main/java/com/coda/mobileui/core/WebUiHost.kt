@@ -62,6 +62,29 @@ object WebUiHost {
     /** 连接处理池：固定 worker + 有界队列，拒绝时回 503，避免局域网把线程打爆。 */
     private var connPool: ThreadPoolExecutor? = null
 
+    /**
+     * 本次运行的访问凭据：32 字节随机值的十六进制。
+     *
+     * 服务绑全部网卡，`/api/state` 能读全部对话、`/api/send` 能驱动 agent 执行工具，
+     * 没有凭据就等于把这两件事开放给同一局域网。每次启动重新生成，停止即失效。
+     */
+    @Volatile
+    private var accessToken: String = ""
+
+    /** 本次运行的访问凭据；未启动时为空。 */
+    fun token(): String = accessToken
+
+    /**
+     * 带凭据的访问地址：浏览器首次用 `?token=` 换 cookie，之后不必再带。
+     * 端口为 0 说明服务没起来。
+     */
+    fun accessUrl(host: String): String =
+        if (boundPort <= 0 || accessToken.isEmpty()) {
+            ""
+        } else {
+            "http://$host:$boundPort/?${WebUiAuth.QUERY}=$accessToken"
+        }
+
     private const val MAX_HEADER_LINE = 8 * 1024
     private const val MAX_HEADER_COUNT = 100
     private const val MAX_HEADER_BYTES = 32 * 1024
@@ -226,6 +249,10 @@ object WebUiHost {
         }
         lastError = null
         return try {
+            // 每次启动换一份凭据：停止后旧链接立即失效，不会留下长期有效的入口。
+            val fresh = ByteArray(32)
+            java.security.SecureRandom().nextBytes(fresh)
+            accessToken = fresh.joinToString("") { "%02x".format(it) }
             val ss = ServerSocket()
             ss.reuseAddress = true
             ss.bind(InetSocketAddress(0), 16)
@@ -270,6 +297,7 @@ object WebUiHost {
         connPool?.shutdownNow()
         connPool = null
         boundPort = 0
+        accessToken = ""
         lastStatus = "已停止"
         AppLog.i("WebUi", "HTTP 服务已停止")
     }
@@ -360,6 +388,9 @@ object WebUiHost {
             var contentLength = 0
             var headerCount = 0
             var headerBytes = 0
+            var authorization: String? = null
+            var cookieHeader: String? = null
+            var originHeader: String? = null
             while (true) {
                 val line =
                     try {
@@ -378,11 +409,42 @@ object WebUiHost {
                 val idx = line.indexOf(':')
                 if (idx <= 0) continue
                 val name = line.substring(0, idx).trim().lowercase()
-                if (name == "content-length") contentLength = line.substring(idx + 1).trim().toIntOrNull() ?: 0
+                val value = line.substring(idx + 1).trim()
+                when (name) {
+                    "content-length" -> contentLength = value.toIntOrNull() ?: 0
+                    "authorization" -> authorization = value
+                    "cookie" -> cookieHeader = value
+                    "origin" -> originHeader = value
+                }
             }
-            if (contentLength > MAX_BODY_BYTES) {
+            if (contentLength < 0 || contentLength > MAX_BODY_BYTES) {
                 respondJson(output, JSONObject().put("error", "请求体过大"), 413)
                 return
+            }
+            // 凭据校验在读 body 之前：没有凭据的请求连请求体都不该被读进内存。
+            val queryToken =
+                rawPath
+                    .substringAfter('?', "")
+                    .split('&')
+                    .firstOrNull { it.startsWith("${WebUiAuth.QUERY}=") }
+                    ?.substringAfter('=')
+                    ?.takeIf { it.isNotEmpty() }
+            if (!WebUiAuth.authorized(accessToken, authorization, queryToken, cookieHeader)) {
+                respondJson(output, JSONObject().put("error", "需要访问凭据"), 401)
+                return
+            }
+            // 跨站写操作一律拒绝：本机浏览器里的任意网页都可能向局域网端口发 POST。
+            if (method != "GET" && method != "HEAD" && originHeader != null) {
+                val originHost =
+                    runCatching { java.net.URI(originHeader).host }.getOrNull()?.lowercase()
+                val local =
+                    originHost == null ||
+                        originHost in setOf("localhost", "127.0.0.1", "::1") ||
+                        originHost in localAddresses()
+                if (!local) {
+                    respondJson(output, JSONObject().put("error", "跨站请求被拒绝"), 403)
+                    return
+                }
             }
             val path = rawPath.substringBefore('?')
             val body =
@@ -585,14 +647,27 @@ object WebUiHost {
         val reason =
             when (code) {
                 200 -> "OK"
+                401 -> "Unauthorized"
                 403 -> "Forbidden"
                 404 -> "Not Found"
+                413 -> "Payload Too Large"
+                431 -> "Request Header Fields Too Large"
+                503 -> "Service Unavailable"
                 else -> "Error"
+            }
+        // 首次带 ?token= 进来时把凭据写进 cookie，之后前端的 fetch 就不必再带 token。
+        // HttpOnly 让页面脚本读不到，SameSite=Lax 挡住跨站 POST 自动携带。
+        val cookie =
+            if (code == 200 && accessToken.isNotEmpty()) {
+                "Set-Cookie: ${WebUiAuth.COOKIE_NAME}=$accessToken; Path=/; HttpOnly; SameSite=Lax\r\n"
+            } else {
+                ""
             }
         val head =
             "HTTP/1.1 $code $reason\r\n" +
                 "Content-Type: $mime\r\n" +
                 "Content-Length: ${body.size}\r\n" +
+                cookie +
                 "Connection: close\r\n\r\n"
         output.write(head.toByteArray(Charsets.ISO_8859_1))
         output.write(body)

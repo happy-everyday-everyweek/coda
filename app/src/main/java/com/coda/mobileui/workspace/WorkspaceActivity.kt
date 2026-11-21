@@ -13,7 +13,6 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -53,29 +52,29 @@ class WorkspaceActivity : BaseActivity() {
         private val terminalBarDivider = 0xFF2A2A2A.toInt()
         private val terminalBarPill = 0xFF1F1F1F.toInt()
 
-        /** 进入工作区的展开时长，与抽屉展开的缓动节奏一致。 */
-        private const val ENTER_EXPAND_DURATION_MS = 260L
-
-        /**
-         * 跟手进度：主界面左滑时把手指拖出的比例放在这里，进来后从这里接着展开。
-         * 0 表示没有拖过（比如从别处进入），走完整的 0 → 全宽。
-         */
-        @Volatile
-        var startWidthFraction: Float = 0f
-
         /** 编辑器高亮的合并窗口：输入停顿这么久之后才重扫一遍。 */
         private const val HIGHLIGHT_DEBOUNCE_MS = 120L
 
-        /** 打开工作区时可以指定根目录：从会话进入时带会话自己的 workspacePath。 */
+        /**
+         * 打开工作区。
+         *
+         * [startFraction] 是主界面左滑时手指已经拖出的比例：进来后从这个宽度接着展开。
+         * 用 Intent 传参而不是静态变量，两个页面的耦合只剩这一次显式传值。
+         */
         fun intent(
             context: Context,
             rootPath: String?,
+            startFraction: Float = 0f,
         ): Intent =
             Intent(context, WorkspaceActivity::class.java)
                 .putExtra(EXTRA_ROOT, rootPath)
+                .putExtra(EXTRA_START_FRACTION, startFraction.coerceIn(0f, 1f))
 
         /** 入口传入的根目录；空或不是目录时回落到全局默认。 */
         const val EXTRA_ROOT = "workspace_root"
+
+        /** 跟手进度：0 表示没有拖过（比如从工具栏按钮进入），走完整的 0 → 全宽。 */
+        const val EXTRA_START_FRACTION = "workspace_start_fraction"
     }
 
     private data class OpenTab(
@@ -151,6 +150,9 @@ class WorkspaceActivity : BaseActivity() {
         root = requestedRoot ?: Workspaces.root(this)
         setContentView(buildContainer())
         restoreTabs()
+        // 入场完全由上面的 translationX 负责：关掉平台默认的 Activity 转场，
+        // 否则淡入/缩放会和手动平移同时播放，三层动效互相干扰。
+        overridePendingTransition(0, 0)
         enterFromDrawerShape()
         onBackPressedDispatcher.addCallback(
             this,
@@ -285,32 +287,29 @@ class WorkspaceActivity : BaseActivity() {
     // ---------------------------------------------------------------- 装配
 
     /**
-     * 进入工作区的动画：对齐抽屉展开成全屏的语言，但从"完全没有"直接展开到整屏。
+     * 进入工作区的动画：页面从右侧推入，与跟手预览完全同一侧、同一尺寸。
      *
-     * 起点宽度为 0，面板自左侧边缘向右生长到整屏；内容在整个生长过程中保持不透明，
-     * 不做淡入，避免出现"先淡出再淡入"的分段感。缓动曲线与时长沿用抽屉展开那一套，
-     * 从抽屉滑到工作区时观感连续。
+     * 容器始终全宽、只布局一次，用平移来展开：从手指已经拖出的比例接着滑到 0。
+     * 松手时预览占的是屏幕右侧 [fraction] 宽度，这里也从右侧同一位置起步，
+     * 两块矩形重合，才谈得上「接着展开」。时长与缓动统一取 [Motion]。
      */
     private fun enterFromDrawerShape() {
         val screenWidth = resources.displayMetrics.widthPixels
         if (screenWidth <= 0) return
-        // 之前逐帧改 layoutParams.width 并 requestLayout，等于每帧重排整页，内容会边展开边重新折行。
-        // 现在容器始终全宽、只布局一次，用平移来展开：从手指已经拖出的比例接着滑到 0。
-        val fraction = startWidthFraction.coerceIn(0f, 1f)
+        // 跟手比例由入口通过 Intent 传入；没有再回落到完整展开。
+        val fraction = intent.getFloatExtra(EXTRA_START_FRACTION, 0f).coerceIn(0f, 1f)
         container.layoutParams = container.layoutParams.apply { width = MATCH }
         container.requestLayout()
         if (fraction >= 1f) {
             container.translationX = 0f
-            startWidthFraction = 0f
             return
         }
         container.translationX = screenWidth * (1f - fraction)
         container
             .animate()
             .translationX(0f)
-            .setDuration((ENTER_EXPAND_DURATION_MS * (1f - fraction)).toLong().coerceAtLeast(90L))
-            .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
-            .withEndAction { startWidthFraction = 0f }
+            .setDuration((Motion.LARGE_MS * (1f - fraction)).toLong().coerceAtLeast(Motion.SETTLE_MS))
+            .setInterpolator(Motion.standard)
             .start()
     }
 
@@ -710,19 +709,20 @@ class WorkspaceActivity : BaseActivity() {
     /** 编辑器页取只读正文。 */
     fun editorBuffer(key: String): String? = editorBuffers[key]
 
-    /** 预览标签转常驻。 */
-    fun promoteTab(id: String) {
-        val entry = tabs.firstOrNull { it.data.id == id } ?: return
-        if (!entry.data.preview) return
-        entry.data.preview = false
+    /** 预览标签转常驻。@return 真的转换成功时为 true。 */
+    fun promoteTab(id: String): Boolean {
+        val entry = tabs.firstOrNull { it.data.id == id } ?: return false
+        if (!PreviewPromotion.promote(entry.data)) return false
         updateBar()
         if (overview != null) fillGrid()
         persist()
+        return true
     }
 
-    /** 页面用：把自己从预览转成常驻。 */
-    fun promotePage(page: WorkspacePage) {
-        tabs.firstOrNull { it.page === page }?.let { promoteTab(it.data.id) }
+    /** 页面用：把自己从预览转成常驻。找不到标签时返回 false，调用方还能再试。 */
+    fun promotePage(page: WorkspacePage): Boolean {
+        val entry = tabs.firstOrNull { it.page === page } ?: return false
+        return promoteTab(entry.data.id)
     }
 
     /** 页面用：关闭自己所在的标签页。 */

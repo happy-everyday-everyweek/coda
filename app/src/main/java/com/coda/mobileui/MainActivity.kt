@@ -52,6 +52,8 @@ import com.coda.mobileui.core.ZWorkflowLive
 import com.coda.mobileui.core.ZWorkflowPhase
 import com.coda.mobileui.workspace.DirectoryPicker
 import com.coda.mobileui.workspace.WorkspaceActivity
+import com.coda.mobileui.workspace.WorkspaceGestureAction
+import com.coda.mobileui.workspace.WorkspaceGesturePolicy
 import com.google.android.material.snackbar.Snackbar
 import java.io.File
 
@@ -688,6 +690,16 @@ class MainActivity : BaseActivity() {
         sheet.content { col ->
             if (ready != null) {
                 col.addView(updateBodyText("更新包已在后台下载完成并通过校验，点「立即安装」即可。"))
+            }
+            if (UpdateChecker.channel == "dev") {
+                // dev 包由仓库内公开口令的密钥签名，签名本身不构成防线，必须让用户知道。
+                col.addView(
+                    updateBodyText(
+                        "dev 预览版使用公开的调试签名，不具备防伪造能力；" +
+                            "更新清单只从 GitHub 官方直连获取，安装前会核对签名是否与本应用一致。" +
+                            "需要安全保证请改用正式签名的 release 版。",
+                    ),
+                )
             }
             if (r.crossesChannel) {
                 col.addView(
@@ -4570,8 +4582,24 @@ class MainActivity : BaseActivity() {
      */
     private var swipeConsumed = false
 
-    /** 拖出超过这个比例，松手就进工作区；不到就弹回。 */
-    private val workspaceDragCommit = 0.28f
+    /** 本次手势是否已经在拖工作区预览：置位后整个手势归工作区，反向移动只回弹。 */
+    private var workspaceDragActive = false
+
+    /** 当前跟手预览占屏幕的比例，用于判断是否刚跨过提交阈值。 */
+    private var workspaceDragFraction = 0f
+
+    /** 判定手势所需的当前状态。 */
+    private fun gestureContext(): WorkspaceGesturePolicy.Context =
+        WorkspaceGesturePolicy.Context(
+            // 设置页、Bot 页、搜索结果页都不属于会话页：只允许开抽屉，不允许进工作区。
+            outsideSessionPage = showingSettings || showingBot || showingSearch,
+            fullDrawerVisible = fullDrawer?.visibility == View.VISIBLE,
+            drawerOpen = drawerLayout.isDrawerOpen(Gravity.LEFT),
+            workspaceDragActive = workspaceDragActive,
+            dragStartPx = dp(WorkspaceGesturePolicy.DRAG_START_DP),
+            edgePx = dp(WorkspaceGesturePolicy.EDGE_DP),
+            screenWidth = resources.displayMetrics.widthPixels,
+        )
 
     /** 输入法是否正在显示：收起即视为失焦（不看控件的真实焦点）。 */
     private var imeVisible = false
@@ -4596,6 +4624,8 @@ class MainActivity : BaseActivity() {
                 edgeSwipeStartY = ev.y
                 // 上一轮可能异常结束（被父容器拦截等），先清掉残留的跟手预览。
                 finishWorkspaceDrag(0, cancelled = true)
+                workspaceDragActive = false
+                workspaceDragFraction = 0f
                 // 一次手势只允许被消费一次。抽屉在 ACTION_MOVE 里就被关掉之后，
                 // 如果 ACTION_UP 再判一遍，此时抽屉已是关闭态，同一个左滑会落进
                 // "左滑进工作台"分支——这就是左滑关抽屉偶发打开工作区的原因。
@@ -4606,89 +4636,101 @@ class MainActivity : BaseActivity() {
                 if (blocked || swipeConsumed) return super.dispatchTouchEvent(ev)
                 val dx = ev.x - edgeSwipeStartX
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
-                // 设置页：右滑打开抽屉（回到上一级），左滑不做任何事。
-                // 设置页没有自己的会话内容，绝不能复用主界面的"左滑进工作台"。
-                if (showingSettings || showingBot) {
-                    if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
+                when (WorkspaceGesturePolicy.decideMove(dx, dy, gestureContext())) {
+                    WorkspaceGestureAction.DragWorkspace -> {
+                        // 一旦开始拖工作区，本次手势就锁定给工作区：反向移动只回弹，
+                        // 不会又命中抽屉分支，也就不会出现「预览还留着，抽屉又开了」。
+                        workspaceDragActive = true
+                        val fraction = WorkspaceGesturePolicy.fractionOf(dx, resources.displayMetrics.widthPixels)
+                        if (WorkspaceGesturePolicy.crossedCommit(workspaceDragFraction, fraction)) {
+                            // 跨过提交阈值给一次触觉反馈：松手前就知道「现在放手会进去」，
+                            // 不必靠猜 60dp 与 28% 之间那段死区。
+                            drawerLayout.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                        }
+                        workspaceDragFraction = fraction
+                        showWorkspaceDragPreview((-dx).toInt())
+                    }
+
+                    WorkspaceGestureAction.CancelWorkspace -> {
+                        workspaceDragActive = false
+                        workspaceDragFraction = 0f
+                        finishWorkspaceDrag(0, cancelled = true)
+                    }
+
+                    WorkspaceGestureAction.OpenDrawer -> {
                         drawerLayout.openDrawer(Gravity.LEFT)
                         swipeConsumed = true
                     }
-                    return super.dispatchTouchEvent(ev)
-                }
-                // 全屏抽屉可见：左滑回到半屏抽屉
-                if (fullDrawer?.visibility == View.VISIBLE) {
-                    if (dx < -dp(48) && -dx > dy) {
+
+                    WorkspaceGestureAction.ShowFullDrawer -> {
+                        showFullDrawer()
+                        swipeConsumed = true
+                    }
+
+                    WorkspaceGestureAction.HideFullDrawer -> {
                         hideFullDrawer()
                         swipeConsumed = true
                     }
-                    return super.dispatchTouchEvent(ev)
-                }
-                if (dx > dp(48) && dx > dy) {
-                    if (drawerLayout.isDrawerOpen(Gravity.LEFT)) {
-                        // 半屏抽屉：再右滑进入全屏抽屉
-                        showFullDrawer()
-                    } else {
-                        drawerLayout.openDrawer(Gravity.LEFT)
+
+                    WorkspaceGestureAction.CloseDrawer -> {
+                        drawerLayout.closeDrawer(Gravity.LEFT)
+                        swipeConsumed = true
                     }
-                    swipeConsumed = true
-                } else if (dx < -dp(48) && -dx > dy && drawerLayout.isDrawerOpen(Gravity.LEFT)) {
-                    // 半屏抽屉：左滑收起，回到正常页面。
-                    // 这里必须标记已消费，否则抬手时会再判一次而误开工作区。
-                    drawerLayout.closeDrawer(Gravity.LEFT)
-                    swipeConsumed = true
-                } else if (dx < -dp(60) && -dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
-                    // 主界面左滑进入工作区：拖动过程中就实时显示展开进度，
-                    // 松手后才真正跳转。之前是抬手才一次性打开，没有跟手感。
-                    showWorkspaceDragPreview((-dx).toInt())
+
+                    WorkspaceGestureAction.None, WorkspaceGestureAction.CommitWorkspace -> {
+                        // 抬手阶段才决定是否提交，MOVE 阶段不做任何事。
+                    }
                 }
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 // 系统取消（来电、通知栏下拉、父容器拦截）：只收起预览，绝不提交。
                 swipeConsumed = false
+                workspaceDragActive = false
+                workspaceDragFraction = 0f
                 finishWorkspaceDrag(0, cancelled = true)
             }
 
             MotionEvent.ACTION_UP -> {
                 if (blocked) return super.dispatchTouchEvent(ev)
-                // 本手势已在 MOVE 阶段处理过（开/关抽屉、进/出全屏、进工作台），抬手不再重复判定
+                // 本手势已在 MOVE 阶段处理过（开/关抽屉、进/出全屏），抬手不再重复判定
                 if (swipeConsumed) {
                     swipeConsumed = false
+                    workspaceDragActive = false
+                    workspaceDragFraction = 0f
                     finishWorkspaceDrag(0, cancelled = true)
                     return super.dispatchTouchEvent(ev)
                 }
                 val dx = ev.x - edgeSwipeStartX
                 val dy = kotlin.math.abs(ev.y - edgeSwipeStartY)
-                var committed = false
-                // 设置页：抬手也不进入工作台，只允许右滑打开抽屉
-                if (showingSettings || showingBot) {
-                    if (dx > dp(48) && dx > dy && !drawerLayout.isDrawerOpen(Gravity.LEFT)) {
+                when (WorkspaceGesturePolicy.decideUp(dx, dy, gestureContext())) {
+                    WorkspaceGestureAction.CommitWorkspace -> {
+                        finishWorkspaceDrag((-dx).toInt(), cancelled = false)
+                    }
+
+                    WorkspaceGestureAction.OpenDrawer -> {
                         drawerLayout.openDrawer(Gravity.LEFT)
                     }
-                    finishWorkspaceDrag(0, cancelled = true)
-                    return super.dispatchTouchEvent(ev)
-                }
-                if (fullDrawer?.visibility == View.VISIBLE) {
-                    if (dx < -dp(48) && -dx > dy) {
+
+                    WorkspaceGestureAction.ShowFullDrawer -> {
+                        showFullDrawer()
+                    }
+
+                    WorkspaceGestureAction.HideFullDrawer -> {
                         hideFullDrawer()
                     }
-                } else if (dx > dp(48) && dx > dy) {
-                    if (drawerLayout.isDrawerOpen(Gravity.LEFT)) {
-                        showFullDrawer()
-                    } else {
-                        drawerLayout.openDrawer(Gravity.LEFT)
-                    }
-                } else if (dx < -dp(48) && -dx > dy) {
-                    if (drawerLayout.isDrawerOpen(Gravity.LEFT)) {
+
+                    WorkspaceGestureAction.CloseDrawer -> {
                         drawerLayout.closeDrawer(Gravity.LEFT)
-                    } else if (!showingSettings && !showingBot) {
-                        // 用抬手这一刻的位移换算比例：之前用的是 MOVE 阶段缓存的旧值，
-                        // 快速一划时采样不够就会「明明滑够了却不动」。
-                        finishWorkspaceDrag((-dx).toInt(), cancelled = false)
-                        committed = true
+                    }
+
+                    // 其余分支都是回弹：统一从这里收尾，预览不会残留。
+                    else -> {
+                        finishWorkspaceDrag(0, cancelled = true)
                     }
                 }
-                if (!committed) finishWorkspaceDrag(0, cancelled = true)
+                workspaceDragActive = false
+                workspaceDragFraction = 0f
             }
         }
         return super.dispatchTouchEvent(ev)
@@ -4719,8 +4761,8 @@ class MainActivity : BaseActivity() {
         }
     }
 
-    /** 进入工作台。 */
-    private fun openWorkspace() {
+    /** 进入工作台。[startFraction] 是左滑时已经拖出的比例，工具栏按钮进入时为 0。 */
+    private fun openWorkspace(startFraction: Float = 0f) {
         // 有当前会话时按会话绑定的目录打开：会话工作区与全局默认根是两套值，
         // 从会话进来必须落在同一个目录上。
         val sessionRoot =
@@ -4728,8 +4770,11 @@ class MainActivity : BaseActivity() {
                 .firstOrNull { it.id == zc.currentSessionId }
                 ?.workspacePath
                 ?.takeIf { it.isNotBlank() }
-        startActivity(WorkspaceActivity.intent(this, sessionRoot))
+        startActivity(WorkspaceActivity.intent(this, sessionRoot, startFraction))
     }
+
+    /** 当前拖拽预览的代号：延迟移除只对同一轮的预览生效。 */
+    private var workspacePreviewToken = 0
 
     /**
      * 主界面左滑时的跟手预览。
@@ -4738,9 +4783,6 @@ class MainActivity : BaseActivity() {
      * 所以这里在窗口上叠一层与工作区同底色的卡片，宽度跟着手指走；
      * 松手时把比例交给 WorkspaceActivity，让它从该宽度继续展开，观感是连续的。
      */
-    /** 当前拖拽预览的代号：延迟移除只对同一轮的预览生效。 */
-    private var workspacePreviewToken = 0
-
     private fun showWorkspaceDragPreview(distance: Int) {
         val screen = resources.displayMetrics.widthPixels
         if (screen <= 0) return
@@ -4804,9 +4846,8 @@ class MainActivity : BaseActivity() {
                 120,
             )
         }
-        if (!cancelled && fraction >= workspaceDragCommit) {
-            WorkspaceActivity.startWidthFraction = fraction
-            openWorkspace()
+        if (!cancelled && fraction >= WorkspaceGesturePolicy.COMMIT_FRACTION) {
+            openWorkspace(fraction)
         }
     }
 

@@ -29,9 +29,9 @@ class EditorPage(
 
     override fun onEditorContentChanged() {
         if (pinned) return
-        pinned = true
-        // 宿主对已经不是预览的标签会直接返回，这里不用先查自己的状态。
-        host.promotePage(this)
+        // 只有宿主真的把标签从预览转成常驻才置位：找不到标签或已经不是预览时
+        // 保持 false，下一次改动还会再试，不会把标签永久留在会被顶掉的状态。
+        pinned = host.promotePage(this)
     }
 
     override fun menuItems(): List<String> = listOf("保存", "关闭标签")

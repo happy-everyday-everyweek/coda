@@ -131,6 +131,15 @@ object UpdateInstaller {
         apk: File,
     ): Boolean {
         if (!apk.isFile || apk.length() == 0L) return false
+        // 安装前比对签名者：清单里的 sha256 与 apkUrl 同源，被劫持的镜像能一起改写，
+        // 只有「签名证书与本应用一致」这条不来自网络的约束能挡住伪造更新。
+        val mine = ownSigner(ctx)
+        val theirs = archiveSigner(ctx, apk)
+        if (!UpdateTrust.signerMatches(mine, theirs)) {
+            AppLog.w("Update", "更新包签名与本应用不一致，已拒绝安装")
+            runCatching { apk.delete() }
+            return false
+        }
         return try {
             val uri =
                 FileProvider.getUriForFile(
@@ -149,6 +158,47 @@ object UpdateInstaller {
         } catch (_: Throwable) {
             false
         }
+    }
+
+    /**
+     * 本应用当前的签名证书 SHA-256。
+     *
+     * 以运行时自身的证书为基准，dev 与 release 各自成立，不需要构建期注入常量；
+     * 取不到时返回 null，调用方据此拒绝安装。
+     */
+    private fun ownSigner(ctx: Context): String? =
+        runCatching {
+            val info =
+                ctx.packageManager.getPackageInfo(
+                    ctx.packageName,
+                    android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
+                )
+            signerOf(info.signingInfo)
+        }.getOrNull()
+
+    /** 待安装 APK 的签名证书 SHA-256。 */
+    private fun archiveSigner(
+        ctx: Context,
+        apk: File,
+    ): String? =
+        runCatching {
+            val info =
+                ctx.packageManager.getPackageArchiveInfo(
+                    apk.absolutePath,
+                    android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
+                ) ?: return null
+            signerOf(info.signingInfo)
+        }.getOrNull()
+
+    /** 从 signingInfo 取第一个签名者的证书指纹；多签名者时只认第一个（本应用单签名）。 */
+    private fun signerOf(signingInfo: android.content.pm.SigningInfo?): String? {
+        val signatures = signingInfo?.apkContentsSigners ?: return null
+        val cert = signatures.firstOrNull()?.toByteArray() ?: return null
+        val digest =
+            java.security.MessageDigest
+                .getInstance("SHA-256")
+                .digest(cert)
+        return digest.joinToString("") { "%02X".format(it) }
     }
 
     /**

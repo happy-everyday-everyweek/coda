@@ -100,8 +100,9 @@ jobs:
           KEY_PASSWORD: ${{ secrets.CODA_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_B64" ]; then
-            echo "未配置 CODA_KEYSTORE_BASE64，release 回落到仓库内固定密钥（keystore/coda-debug.jks）"
-            exit 0
+            echo "未配置 CODA_KEYSTORE_BASE64：release 必须用正式密钥签名。" >&2
+            echo "仓库内 keystore/coda-debug.jks 口令公开，任何人都能用它签出可覆盖安装的包，不能作为 release 回落。" >&2
+            exit 1
           fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/coda-release.jks"
           {
@@ -130,9 +131,11 @@ jobs:
           cd webui && zip -q ../coda-webui.zip index.html && cd ..
           cat app/build/outputs/apk/release/output-metadata.json
 
-      # 正式版同样要求签名固定：签名一换，老用户就装不上新版本。
-      # 未配置 CODA_KEYSTORE_BASE64 时用的是仓库内固定密钥，摘要与下面一致。
+      # 正式版必须签名固定：签名一换，老用户就装不上新版本。
+      # 期望指纹来自 CODA_RELEASE_SIGNER_SHA256（正式密钥的证书摘要）。
       - name: 核对签名
+        env:
+          RELEASE_SIGNER: ${{ secrets.CODA_RELEASE_SIGNER_SHA256 }}
         run: |
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           [ -x "$APKSIGNER" ] || APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
@@ -141,8 +144,23 @@ jobs:
           SIGNER="$("$APKSIGNER" verify --print-certs "coda-$CODA_VERSION_NAME.apk" \
             | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ':' | tr 'A-Z' 'a-z')"
           echo "签名摘要 $SIGNER"
-          if [ "$SIGNER" != "$CODA_SIGNER_SHA256" ] && [ -z "$CODA_KEYSTORE_PATH" ]; then
-            echo "!! 签名与仓库固定密钥不一致：期望 $CODA_SIGNER_SHA256" >&2
+          if [ -z "$SIGNER" ]; then
+            echo "!! 读不到签名摘要" >&2
+            exit 1
+          fi
+          # 正式包绝不能由仓库内公开口令的 debug 密钥签出。
+          if [ "$SIGNER" = "$CODA_SIGNER_SHA256" ]; then
+            echo "!! release 使用了仓库内公开 debug 密钥，拒绝发布" >&2
+            exit 1
+          fi
+          # 外部密钥路径同样要 pin：没有期望值就不发布，避免签名悄悄换掉。
+          if [ -z "$RELEASE_SIGNER" ]; then
+            echo "!! 未配置 CODA_RELEASE_SIGNER_SHA256，无法核对正式签名，拒绝发布" >&2
+            exit 1
+          fi
+          EXPECTED="$(echo "$RELEASE_SIGNER" | tr -d ':' | tr 'A-Z' 'a-z')"
+          if [ "$SIGNER" != "$EXPECTED" ]; then
+            echo "!! 签名与期望的正式密钥不一致：期望 $EXPECTED" >&2
             exit 1
           fi
 

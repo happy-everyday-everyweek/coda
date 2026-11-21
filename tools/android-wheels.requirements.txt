@@ -1,0 +1,12 @@
+# Android 轮子构建用的源码包，按 sha256 固定。
+#
+# 这些 sdist 会被交叉编译成 .so 打进 APK，等于把原生代码的信任交给下载来源。
+# 没有 --require-hashes 时，一个被污染的镜像或包就能注入任意原生代码。
+# 哈希取自 PyPI 官方 JSON API（https://pypi.org/pypi/<name>/<version>/json 的
+# urls[].digests.sha256），升级版本时必须同步更新，不要手填。
+#
+# pip download 必须带 --require-hashes -r 本文件，且不能加 --no-deps 之外的依赖解析。
+pydantic-core==2.50.2 \
+    --hash=sha256:1b0e8dc3932cf4e9ed5727570325cacc716b9409ffc794a221c0ccc72e8eb775
+jiter==0.18.0 \
+    --hash=sha256:a0ca63fd9450a212e4e658d4cfe0ab4977c4f9b0003c68828b843c65e27662ff

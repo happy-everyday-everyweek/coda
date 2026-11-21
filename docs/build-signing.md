@@ -13,10 +13,10 @@ CI 每次都在全新 runner 上跑，Gradle 会当场生成一把临时 debug k
 它是调试用途的密钥，仅为让包与包之间签名一致，不用于对外发行的安全承诺。
 
 ## 各处的接线
-
-`app/build.gradle.kts` 的 `signingConfigs` 在密钥文件存在时把 `debug` 配置指向它；`release` 在没有外部密钥（`CODA_KEYSTORE_PATH` 等环境变量）时复用它，所以本地与 CI 出的包签名相同。
-
-可选的正式发行密钥走环境变量：CI 从 secrets 的 `CODA_KEYSTORE_BASE64`、`CODA_KEYSTORE_PASSWORD`、`CODA_KEY_ALIAS`、`CODA_KEY_PASSWORD` 还原 `CODA_KEYSTORE_PATH`。这套配置只在仓库 secrets 里存在时才生效，没有时自动回落到仓库内固定密钥。换用外部密钥会让摘要变化，届时需要同步改工作流里的期望值。
+`app/build.gradle.kts` 的 `signingConfigs` 在密钥文件存在时把 `debug` 配置指向它。`release` 不再回落 debug：缺少 `CODA_KEYSTORE_PATH` 等环境变量时直接抛 `GradleException` 中止构建，因为仓库内那把 debug 密钥口令是公开的 `android`，任何人都能用它签出可覆盖安装的包。本机想装调试包请用 `assembleDebug`。
+正式发行密钥走环境变量：CI 从 secrets 的 `CODA_KEYSTORE_BASE64`、`CODA_KEYSTORE_PASSWORD`、`CODA_KEY_ALIAS`、`CODA_KEY_PASSWORD` 还原 `CODA_KEYSTORE_PATH`；同时必须提供 `CODA_RELEASE_SIGNER_SHA256`，流水线用它 pin 正式证书指纹，缺这个值同样拒绝发布。
+## dev 渠道的签名不具安全性
+dev 预览版必然由仓库内公开口令的 debug 密钥签名。这意味着任何人都能签出一个签名一致、可覆盖安装的 dev 包，签名本身不构成防线。为缩小影响面，客户端做了两件事：更新清单只从 github.com 等官方域名直连获取（第三方镜像只用于搬 APK 大文件，不参与提供 sha256），安装前再比对 APK 与本应用的签名证书指纹，不一致就删包拒装。需要真正安全保证的场景请使用正式签名的 release 包。
 
 ## 签名方案
 
@@ -28,7 +28,7 @@ CI 每次都在全新 runner 上跑，Gradle 会当场生成一把临时 debug k
 
 ## 核对
 
-`.github/workflows/dev-prerelease.yml` 与 `release.yml` 在收集产物后都有一步“核对签名”：用 apksigner 打印证书并取第一签名者的 SHA-256 摘要，与 `CODA_SIGNER_SHA256` 比对，不一致直接失败。签名换了，流水线当场报错，不会等到装不上才发现。
+`.github/workflows/dev-prerelease.yml` 在收集产物后用 apksigner 打印证书并取第一签名者的 SHA-256 摘要，与 `CODA_SIGNER_SHA256` 比对，不一致直接失败。`release.yml` 的核对更严：读不到摘要、摘要等于仓库内公开 debug 密钥、未配置 `CODA_RELEASE_SIGNER_SHA256`、或摘要与该期望值不符，四种情况都拒绝发布。签名换了，流水线当场报错，不会等到装不上才发现。
 
 ## 换签名的一次性代价
 

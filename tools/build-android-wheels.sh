@@ -59,7 +59,9 @@ export RUSTFLAGS="${RUSTFLAGS:-} -L native=/tmp/fakelib"
 echo "==> pydantic-core $PYDANTIC_VERSION"
 rm -rf /tmp/pc
 mkdir -p /tmp/pc
-"$PYTHON" -m pip download "pydantic-core==$PYDANTIC_VERSION" --no-binary=:all: --no-deps -d /tmp/pc -q
+# sdist 会被编译成 .so 打进 APK：必须按 sha256 固定，否则被污染的镜像就能注入原生代码。
+# 校验值来自 tools/android-wheels.requirements.txt，下载后逐个比对，不符即中止。
+"$PYTHON" tools/fetch-sdist.py pydantic-core "$PYDANTIC_VERSION" /tmp/pc
 tar -xf "/tmp/pc/pydantic_core-$PYDANTIC_VERSION.tar.gz" -C /tmp/pc
 (cd "/tmp/pc/pydantic_core-$PYDANTIC_VERSION" && cargo build --release --target aarch64-linux-android --features pyo3/extension-module)
 "$PYTHON" tools/build-pydantic-wheel.py
@@ -67,7 +69,7 @@ tar -xf "/tmp/pc/pydantic_core-$PYDANTIC_VERSION.tar.gz" -C /tmp/pc
 echo "==> jiter $JITER_VERSION"
 rm -rf /tmp/jt
 mkdir -p /tmp/jt
-"$PYTHON" -m pip download "jiter==$JITER_VERSION" --no-binary=:all: --no-deps -d /tmp/jt -q
+"$PYTHON" tools/fetch-sdist.py jiter "$JITER_VERSION" /tmp/jt
 tar -xf "/tmp/jt/jiter-$JITER_VERSION.tar.gz" -C /tmp/jt
 (cd "/tmp/jt/jiter-$JITER_VERSION" && cargo build --release --target aarch64-linux-android -p jiter-python --features pyo3/extension-module)
 "$PYTHON" tools/build-jiter-wheel.py "/tmp/jt/jiter-$JITER_VERSION"

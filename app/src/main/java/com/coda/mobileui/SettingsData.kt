@@ -957,7 +957,8 @@ object SettingsData {
         if (running) {
             val addr = WebUiHost.localAddresses().firstOrNull()
             rows.add(SettingRow.Value("状态", WebUiHost.status()))
-            rows.add(SettingRow.Value("访问地址", "http://${addr ?: "本机IP"}:${WebUiHost.port()}"))
+            // 地址必须带本次运行的凭据：服务对全部局域网设备开放，裸地址会被 401 拒绝。
+            rows.add(SettingRow.Value("访问地址", WebUiHost.accessUrl(addr ?: "本机IP")))
             rows.add(SettingRow.Value("停止服务", "断开局域网访问", "webui_stop"))
         } else {
             rows.add(SettingRow.Value("状态", WebUiHost.status()))

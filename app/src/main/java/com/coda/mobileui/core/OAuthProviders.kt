@@ -8,7 +8,10 @@ package com.coda.mobileui.core
  * 接口。把它们收成一张表，加供应商就只是加一条表项，UI 与流程不用改。
  *
  * 插件由 CLIProxyAPI 宿主加载（每个插件编译成该架构的 .so），我们不碰 Go 源码。
- * [sha] 指向仓库里该 arm64 压缩包的 blob，用来按内容校验下载结果。
+ * [Provider.asset] 是 release-asset 的文件名（不是仓库内路径），[Provider.size] 是该压缩包
+ * 的确切字节数，下载后按它校验，长度不符一律拒绝安装。
+ * 这里不再保存摘要：之前存的是 SHA-1（40 位十六进制），既没人读取、也不足以做内容校验，
+ * 留着只会让人误以为已有校验。真正的摘要校验在网关二进制那条路径上（[ArtifactDigest]）。
  */
 object OAuthProviders {
     /** 登录时客户端需要呈现什么。 */
@@ -30,7 +33,7 @@ object OAuthProviders {
      * 一个 OAuth 供应商。
      *
      * [pluginId] 同时也是宿主的插件标识与模型名前缀来源；[asset] 是该插件 arm64 压缩包在
-     * 仓库 release-assets 下的路径。
+     * Release 里的附件文件名，与 [downloadUrl] 拼出的地址一致；[size] 是该附件的确切字节数。
      */
     data class Provider(
         val id: String,
@@ -39,7 +42,6 @@ object OAuthProviders {
         val pluginId: String,
         val version: String,
         val asset: String,
-        val sha: String,
         val size: Long,
         val flow: Flow,
         val note: String,
@@ -59,7 +61,6 @@ object OAuthProviders {
                 pluginId = "workbuddy-provider",
                 version = "0.16.5",
                 asset = "workbuddy-provider_0.16.5_linux_arm64.zip",
-                sha = "e2338e74e291fdb920e91bd167cdd1b54d823de9",
                 size = 2_952_859L,
                 flow = Flow.QRCODE,
                 note = "国内版与国际版统一入口，签到、积分与故障转移由插件负责",
@@ -71,7 +72,6 @@ object OAuthProviders {
                 pluginId = "workbuddy-ai-provider",
                 version = "0.1.17",
                 asset = "workbuddy-ai-provider_0.1.17_linux_arm64.zip",
-                sha = "6196f12201eacc397debbd299dc554a36e826836",
                 size = 2_938_717L,
                 flow = Flow.QRCODE,
                 note = "独立国际站点，扫码登录",
@@ -83,7 +83,6 @@ object OAuthProviders {
                 pluginId = "copilot-provider",
                 version = "0.1.9",
                 asset = "copilot-provider_0.1.9_linux_arm64.zip",
-                sha = "c7df4b4d05535694c34cd949b614ea9f1e2bba89",
                 size = 2_889_990L,
                 flow = Flow.DEVICE_CODE,
                 note = "设备码授权，无需密码，订阅额度直连",
@@ -95,7 +94,6 @@ object OAuthProviders {
                 pluginId = "zcode-provider",
                 version = "0.1.32",
                 asset = "zcode-provider_0.1.32_linux_arm64.zip",
-                sha = "19cbd1fb033d1be17834e52132ea821278bc0224",
                 size = 2_999_216L,
                 flow = Flow.LINK,
                 note = "Coding Plan 订阅，授权后按 Anthropic 协议转出",
@@ -107,7 +105,6 @@ object OAuthProviders {
                 pluginId = "qoderwork-provider",
                 version = "0.9.44",
                 asset = "qoderwork-provider_0.9.44_linux_arm64.zip",
-                sha = "3833af8962b5ba375991c2e91d6f48c8507e91c4",
                 size = 2_928_644L,
                 flow = Flow.LINK,
                 note = "设备授权，登录后自动领取试用",
@@ -119,7 +116,6 @@ object OAuthProviders {
                 pluginId = "qoder-ai-provider",
                 version = "0.1.24",
                 asset = "qoder-ai-provider_0.1.24_linux_arm64.zip",
-                sha = "d0292b18c08547e14fa5f27e5fe17d790606853c",
                 size = 2_961_918L,
                 flow = Flow.LINK,
                 note = "设备授权，含每日签到",
@@ -131,7 +127,6 @@ object OAuthProviders {
                 pluginId = "traework-provider",
                 version = "0.2.14",
                 asset = "traework-provider_0.2.14_linux_arm64.zip",
-                sha = "c0168e303e6377b1c9dade7d31f93cc89573fa44",
                 size = 2_961_476L,
                 flow = Flow.LINK,
                 note = "浏览器授权，无需安装桌面端",
@@ -143,7 +138,6 @@ object OAuthProviders {
                 pluginId = "cursor-provider",
                 version = "0.1.6",
                 asset = "cursor-provider_0.1.6_linux_arm64.zip",
-                sha = "62d98969793db0c398febbe5ad49f41b2f633ecc",
                 size = 3_598_253L,
                 flow = Flow.LINK,
                 note = "会话凭据授权，走 Connect-RPC 转译",

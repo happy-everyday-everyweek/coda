@@ -29,7 +29,9 @@ android {
         }
     }
     signingConfigs {
-        // 本地或 CI 提供密钥时才启用；否则 release 复用 debug 签名，保证产物可安装。
+        // 只有本地或 CI 提供密钥时才创建 release 签名配置。
+        // 缺密钥不再静默回落 debug：仓库内的 coda-debug.jks 口令是公开的 "android"，
+        // 任何人都能用它签出一个「可覆盖安装」的包，等于没有签名防线。
         val ksPath = System.getenv("CODA_KEYSTORE_PATH")
         if (!ksPath.isNullOrBlank()) {
             create("release") {
@@ -65,6 +67,8 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // 缺正式密钥时不再静默用公开的 debug 密钥签名。校验放在任务执行前而不是配置阶段：
+            // 配置阶段抛异常会让 debug 构建与单元测试也一起跑不起来。
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             // 正式发行版：只从正式 Release 取更新（GitHub 的 releases/latest 会自动跳过 prerelease）
             buildConfigField("String", "UPDATE_CHANNEL", "\"release\"")
@@ -176,4 +180,19 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // 让解析类逻辑能在 JVM 上真跑 org.json，而不是对着 android.jar 的桩断言
     testImplementation("org.json:json:20240303")
+}
+
+// release 必须用正式密钥签名：仓库内 keystore/coda-debug.jks 的口令是公开的 "android"，
+// 任何人都能用它签出一个「可覆盖安装」的包，用它发 release 等于没有签名防线。
+// 只拦 release 打包任务本身，debug 构建与单元测试不受影响。
+tasks.matching { it.name == "packageRelease" || it.name == "assembleRelease" }.configureEach {
+    doFirst {
+        if (System.getenv("CODA_KEYSTORE_PATH").isNullOrBlank()) {
+            throw GradleException(
+                "release 构建需要正式签名：请设置 CODA_KEYSTORE_PATH / CODA_KEYSTORE_PASSWORD / " +
+                    "CODA_KEY_ALIAS / CODA_KEY_PASSWORD。仓库内 debug 密钥口令公开，不能用于 release；" +
+                    "本机需要可安装的调试包请用 assembleDebug。",
+            )
+        }
+    }
 }

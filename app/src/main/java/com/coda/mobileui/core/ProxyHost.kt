@@ -316,10 +316,25 @@ object ProxyHost {
         target: File,
     ): Boolean {
         val archive = "CLIProxyAPI_${VERSION}_linux_aarch64.tar.gz"
+        // 摘要必须来自上游官方 API 直连，不走镜像：镜像同时给包和摘要就等于自证清白。
+        val expected = releaseAssetDigest(archive)
+        if (expected == null) {
+            lastError = "网关程序无法校验：上游未提供 $archive 的 SHA-256 摘要，已拒绝安装"
+            AppLog.w("ProxyHost", lastError ?: "")
+            return false
+        }
         val url = "https://github.com/router-for-me/CLIProxyAPI/releases/download/v$VERSION/$archive"
         val zip = File(dirFor(ctx), archive)
         if (!download(ctx, url, zip)) {
             lastError = "网关程序下载失败：$url"
+            return false
+        }
+        // 先校验下载包本身，再解包执行：解出来的二进制同样要过 ELF 与体积检查。
+        val actual = AssetFetcher.sha256(zip)
+        if (!ArtifactDigest.matches(expected, actual)) {
+            lastError = "网关程序摘要不符，已拒绝安装（可能是镜像被污染或传输被篡改）"
+            AppLog.w("ProxyHost", lastError ?: "")
+            runCatching { zip.delete() }
             return false
         }
         val extracted =
@@ -342,6 +357,35 @@ object ProxyHost {
         Os.chmod(target.absolutePath, 493) // 0755
         return installGlibc(ctx)
     }
+
+    /**
+     * 从上游官方 API 取某个 Release 附件的 SHA-256。
+     *
+     * 只连 api.github.com，不经 GhMirrors：镜像能同时替换附件与元数据，
+     * 用它取摘要等于让不可信来源给自己背书。取不到就返回 null，由调用方拒绝安装。
+     */
+    private fun releaseAssetDigest(assetName: String): String? =
+        runCatching {
+            val conn =
+                (
+                    URL("https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/tags/v$VERSION")
+                        .openConnection() as HttpURLConnection
+                ).apply {
+                    connectTimeout = 15_000
+                    readTimeout = 20_000
+                    setRequestProperty("Accept", "application/vnd.github+json")
+                }
+            if (conn.responseCode !in 200..299) return null
+            val text = conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+            conn.disconnect()
+            val assets = org.json.JSONObject(text).optJSONArray("assets") ?: return null
+            for (i in 0 until assets.length()) {
+                val asset = assets.optJSONObject(i) ?: continue
+                if (asset.optString("name") != assetName) continue
+                return ArtifactDigest.fromReleaseAsset(asset.optString("digest"))
+            }
+            null
+        }.getOrNull()
 
     /** 在 tar 流里找到指定文件名并解出；其余条目跳过。 */
     private fun extractTarEntry(
@@ -1060,6 +1104,14 @@ object ProxyHost {
         val zip = File(dirFor(ctx), "${provider.pluginId}.zip")
         if (!download(ctx, OAuthProviders.downloadUrl(provider), zip)) {
             lastError = "获取 ${provider.name} 插件失败：安装包内没有该插件，联网下载也未成功"
+            return false
+        }
+        // 注册表里记了附件的确切字节数，这里真的按它校验：只看「大于 500KB」的话，
+        // 一个被截断或被替换但仍超过阈值的 zip 照样会被解包并加载执行。
+        if (provider.size > 0 && zip.length() != provider.size) {
+            lastError = "${provider.name} 插件大小与预期不符（期望 ${provider.size}B，实际 ${zip.length()}B），已拒绝安装"
+            AppLog.w("ProxyHost", lastError ?: "")
+            zip.delete()
             return false
         }
 

@@ -1366,26 +1366,37 @@ class SettingsDetailActivity :
 
     private fun doImportBackup(uri: Uri) {
         snack("导入")
-        // 导入会覆盖 linux 根文件系统与内核数据。进程还在跑时写这些文件，
-        // 既可能写坏正在使用的配置，也可能让旧网关继续占着端口与凭据。
-        // 先收干净，再由重启后的新进程重新加载。
-        runCatching { com.coda.mobileui.core.WorkBuddyGateway.stop() }
-        runCatching { com.coda.mobileui.core.ProxyHost.stop() }
-        runCatching { ZController.get(this).runtime.stopCore() }
+        // 先在后台做预检：一个损坏或不受支持的包，不该先把核心停下来。
         Thread {
-            val result = runCatching { DataBackup.import(this, uri) }
-            val count = result.getOrNull()
-            val err = result.exceptionOrNull()?.message
+            val precheckFailure = com.coda.mobileui.core.DataBackup.validate(this, uri)
             runOnUiThread {
-                if (count == null || count <= 0) {
-                    snack("导入失败：${err ?: "文件里没有可恢复的数据"}")
+                if (!com.coda.mobileui.core.BackupImportFlow.shouldStopRuntime(precheckFailure)) {
+                    snack("导入失败：${precheckFailure ?: "备份不可用"}（未改动任何数据）")
                     return@runOnUiThread
                 }
-                // 恢复覆盖的是设置、数据库、Linux 环境与内核数据，只重启内核不够：
-                // SharedPreferences、主题与已打开的数据库都还留在当前进程里。
-                // 这里直接重启应用，保证用户看到的是备份时的完整状态。
-                android.widget.Toast.makeText(this, "已导入，应用将重启以完全生效", android.widget.Toast.LENGTH_LONG).show()
-                window.decorView.postDelayed({ relaunchApp() }, 900)
+                // 预检通过才收运行环境：进程还在跑时写 rootfs 与数据库，既可能写坏配置，
+                // 也可能让旧网关继续占着端口与凭据。
+                runCatching { com.coda.mobileui.core.WorkBuddyGateway.stop() }
+                runCatching { com.coda.mobileui.core.ProxyHost.stop() }
+                runCatching { ZController.get(this).runtime.stopCore() }
+                Thread {
+                    val result = runCatching { DataBackup.import(this, uri) }
+                    val count = result.getOrNull()
+                    val err = result.exceptionOrNull()?.message
+                    runOnUiThread {
+                        // 成功要重启才能完全生效；失败同样要重启——失败往往发生在已写入若干条目之后，
+                        // 停在半途的进程里核心是停的、界面还按旧 SharedPreferences 显示。
+                        val relaunch = com.coda.mobileui.core.BackupImportFlow.mustRelaunch(count)
+                        val message =
+                            if (count != null && count > 0) {
+                                "已导入，应用将重启以完全生效"
+                            } else {
+                                "导入失败：${err ?: "文件里没有可恢复的数据"}，应用将重启以恢复一致状态"
+                            }
+                        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+                        if (relaunch) window.decorView.postDelayed({ relaunchApp() }, 900)
+                    }
+                }.start()
             }
         }.start()
     }
@@ -2101,7 +2112,8 @@ class SettingsDetailActivity :
                     sheet.refreshContent { col ->
                         col.addView(sheetBodyText(if (startErr == null) "已就绪（$version）" else "资产已就绪（$version），服务启动失败：$startErr"))
                         if (startErr == null && port > 0) {
-                            col.addView(sheetBodyText("访问地址：http://${addr ?: "本机IP"}:$port"))
+                            // 带凭据的地址：裸地址会被服务以 401 拒绝。
+                            col.addView(sheetBodyText("访问地址：${WebUiHost.accessUrl(addr ?: "本机IP")}"))
                         }
                     }
                 } else {
@@ -2302,7 +2314,7 @@ class SettingsDetailActivity :
             snack(err)
         } else {
             val addr = WebUiHost.localAddresses().firstOrNull()
-            snack("已启动：http://${addr ?: "本机IP"}:${WebUiHost.port()}")
+            snack("已启动：${WebUiHost.accessUrl(addr ?: "本机IP")}")
         }
         renderPage()
     }

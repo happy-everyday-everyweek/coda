@@ -225,8 +225,15 @@ object UpdateChecker {
                 },
             )
         for (mirror in ranked) {
+            // 清单是信任根：它同时决定 apkUrl 与 sha256，第三方镜像能一起改写，
+            // 「校验自洽」照样通过。所以清单只走官方直连，镜像只用于搬 APK 大文件。
+            val candidate = GhMirrors.wrap(mirror.prefix, url)
+            if (!UpdateTrust.trustedManifestUrl(candidate)) {
+                AppLog.i(TAG, "跳过非官方清单源 ${mirror.id}")
+                continue
+            }
             val t0 = System.currentTimeMillis()
-            val json = fetchJson(GhMirrors.wrap(mirror.prefix, url), headers)
+            val json = fetchJson(candidate, headers)
             val cost = System.currentTimeMillis() - t0
             if (json != null) {
                 ctx?.let {

@@ -85,6 +85,9 @@ class ZController private constructor(
     var currentSessionId: String? = null
         private set
 
+    /** 会话切换代际：旧会话的迟到回调据此丢弃，避免把界面切回上一个会话。 */
+    private val switchGuard = SessionSwitchGuard()
+
     @Volatile
     var messages: MutableList<ZMessage> = mutableListOf()
 
@@ -712,13 +715,17 @@ class ZController private constructor(
             refreshing = false
             if (ok) {
                 val list = ZParse.parseMessages(body)
+                // 缓存按会话分开存：旧会话的消息写进自己的 key 是安全的，也要写，
+                // 否则切回去还得重新拉一次。
                 if (!cacheOnly) SessionCache.saveMessages(app, sid, list)
                 post {
+                    // 界面只接受当前目标会话的数据：旧会话的 400ms 刷新晚到就丢弃。
+                    if (!switchGuard.accepts(sid)) return@post
                     messages = list.toMutableList()
                     for (l in listeners) l.onStateChanged()
                 }
                 // 工具结果变化往往意味着子代理起停，顺手对齐一次花名册。
-                refreshSubagents()
+                if (switchGuard.accepts(sid)) refreshSubagents()
             }
             if (refreshAgain) {
                 refreshAgain = false
@@ -743,6 +750,8 @@ class ZController private constructor(
             if (ok) {
                 val list = ZWorkflowKit.parseSubagents(body)
                 post {
+                    // 花名册同样按会话归属：旧会话的回调不能覆盖当前会话的子代理列表。
+                    if (!switchGuard.accepts(sid)) return@post
                     subagents = list
                     for (l in listeners) l.onStateChanged()
                 }
@@ -931,10 +940,13 @@ class ZController private constructor(
      */
     fun openCachedSession(sessionId: String): Boolean {
         if (!SessionCache.hasMessages(app, sessionId)) return false
+        // 读缓存也是异步的：期间点了别的会话，这份缓存就不能再落地。
+        val token = switchGuard.begin(sessionId)
         Thread {
             val cached = SessionCache.loadMessages(app, sessionId)
             if (cached.isEmpty()) return@Thread
             post {
+                if (!switchGuard.isCurrent(token)) return@post
                 cacheOnly = true
                 currentSessionId = sessionId
                 messages = cached.toMutableList()
@@ -1453,13 +1465,16 @@ class ZController private constructor(
         sessionId: String,
         cb: ((Boolean) -> Unit)?,
     ) {
+        // 每次打开都领一个新代际：旧请求（订阅、恢复、拉消息）返回时据此丢弃，
+        // 否则用户点 C 之后还会被 B 的迟到回调切回去。
+        val token = switchGuard.begin(sessionId)
         // 只读态直接读缓存：内核没起来，订阅请求必然失败，
         // 先发一次再回退只会白等一轮超时，还会闪一下错误提示。
         if (cacheOnly && openCachedSession(sessionId)) {
             cb?.invoke(true)
             return
         }
-        subscribeSession(sessionId) { ok, msg ->
+        subscribeSession(sessionId, token) { ok, msg ->
             if (ok) {
                 cb?.invoke(true)
                 return@subscribeSession
@@ -1468,7 +1483,7 @@ class ZController private constructor(
             if (msg != null && msg.contains("not active", ignoreCase = true)) {
                 resumeSession(sessionId) { rok, rmsg ->
                     if (rok) {
-                        subscribeSession(sessionId) { ok2, msg2 ->
+                        subscribeSession(sessionId, token) { ok2, msg2 ->
                             if (!ok2 && msg2 != null) notif { onNotice("打开会话失败: $msg2") }
                             cb?.invoke(ok2)
                         }
@@ -1493,6 +1508,7 @@ class ZController private constructor(
     /** 订阅会话（打开会话的第二段；冷会话需先 resumeSession 恢复）。 */
     private fun subscribeSession(
         sessionId: String,
+        token: Long,
         cb: ((Boolean, String?) -> Unit)?,
     ) {
         val params =
@@ -1503,6 +1519,11 @@ class ZController private constructor(
         runtime.call("session/subscribe", params) { ok, body ->
             if (ok) {
                 post {
+                    // 旧代际：期间用户已经点开别的会话，这次结果只属于历史，不能再落地。
+                    if (!switchGuard.isCurrent(token)) {
+                        cb?.invoke(false, null)
+                        return@post
+                    }
                     currentSessionId = sessionId
                     body.optJSONObject("snapshot")?.let { applySnapshot(it) }
                     notif {

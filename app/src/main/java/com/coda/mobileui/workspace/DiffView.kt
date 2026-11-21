@@ -52,11 +52,22 @@ internal class DiffView(
             addView(hint("没有内容"))
             return
         }
-        val lines = text.split('\n')
+        // 先截到预算内：后面的 split 与逐文件建卡片都在这个上界之内进行。
+        val trimmed = DiffBudget.trimText(text)
+        val lines = trimmed.text.split('\n')
         if (mode == Mode.DIFF) addView(statLine(lines))
-        val groups = groupFiles(lines)
-        for (group in groups) addView(fileCard(group, mode))
+        val grouped = groupFiles(lines)
+        val visible = DiffBudget.visibleFiles(grouped.total)
+        for (group in grouped.groups.take(visible.visible)) addView(fileCard(group, mode))
+        if (visible.omitted > 0) addView(hint("还有 ${visible.omitted} 个文件未渲染，先用文件列表查看"))
+        if (trimmed.truncated) addView(hint("diff 过长，已截断显示"))
     }
+
+    /** 分组结果：只保留前 [DiffBudget.MAX_FILES] 组内容，[total] 仍是真实文件数。 */
+    private class Grouped(
+        val groups: List<Group>,
+        val total: Int,
+    )
 
     // ------------------------------------------------------------ 统计
 
@@ -92,21 +103,25 @@ internal class DiffView(
     // ------------------------------------------------------------ 分组
 
     /** 按 `diff --git` 切开；前面若有提交头之类的行，单独成一组。 */
-    private fun groupFiles(lines: List<String>): List<Group> {
+    private fun groupFiles(lines: List<String>): Grouped {
         val groups = mutableListOf<Group>()
-        var current = mutableListOf<String>()
+        var current: MutableList<String>? = mutableListOf()
         var name = ""
+        var total = 0
         for (line in lines) {
             if (line.startsWith("diff --git ")) {
-                if (current.isNotEmpty()) groups.add(Group(name, current.toList()))
-                current = mutableListOf()
+                total++
+                current?.let { if (it.isNotEmpty()) groups.add(Group(name, it)) }
                 // "diff --git a/lib/x.kt b/lib/x.kt" 取后半段，路径更好读。
                 name = parseDiffName(line.removePrefix("diff --git ").trim())
+                // 卡片数到上限后不再累积内容：后面的文件只计数，不保存行，也不建视图。
+                current = if (groups.size < DiffBudget.MAX_FILES) mutableListOf() else null
             }
-            current.add(line)
+            current?.add(line)
         }
-        if (current.isNotEmpty()) groups.add(Group(name, current.toList()))
-        return groups
+        current?.let { if (it.isNotEmpty()) groups.add(Group(name, it)) }
+        // 没有 diff 头的纯文本也会成一组，此时 total 至少按实际组数算。
+        return Grouped(groups, total.coerceAtLeast(groups.size))
     }
 
     /**
