@@ -786,7 +786,13 @@ override fun menuItems(): List<String> =
         )
         listColumn.addView(groupSpacing())
         if (entries.isEmpty()) {
-            listColumn.addView(hint(if (archivePath.isEmpty()) "这个压缩包里没有条目" else "此目录下没有内容"))
+            // 「读不了」与「确实是空的」必须分开说：容器没就绪时 tar 分支只能返回空列表，
+            // 复用「没有条目」会让用户以为文件损坏或内容丢了。
+            val unavailable = ArchiveKit.unavailableReason(pack, host.env, kind)
+            val message =
+                unavailable
+                    ?: if (archivePath.isEmpty()) "这个压缩包里没有条目" else "此目录下没有内容"
+            listColumn.addView(hint(message))
             listColumn.addView(tail())
             return
         }

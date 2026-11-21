@@ -54,8 +54,20 @@ object ArchiveKit {
         }
     }
 
-    /** 是否是可浏览的压缩包（用于列表里换图标与点击行为）。 */
-    fun isArchive(file: File): Boolean = !file.isDirectory && kindOf(file) != Kind.UNKNOWN
+    /**
+     * 是否是可浏览的压缩包（用于列表里换图标与点击行为）。
+     *
+     * 纯 `.gz` 排除在外：它只是单个文件的压缩流，没有成员表，
+     * 而 list/readText 也没有对应分支。放进来只会得到一个永远为空的列表，
+     * 让用户分不清「包是空的」与「不支持这个格式」。
+     */
+    fun isArchive(file: File): Boolean {
+        if (file.isDirectory) return false
+        return when (kindOf(file)) {
+            Kind.UNKNOWN, Kind.GZ -> false
+            else -> true
+        }
+    }
 
     /**
      * 按文件头判断是不是 zip 容器。
@@ -108,6 +120,27 @@ object ArchiveKit {
     }
 
     /**
+     * 现在能不能读这个压缩包。
+     *
+     * tar 系要靠容器里的 tar，容器没就绪时 [list] 只能返回空列表——那与「包确实是空的」
+     * 在界面上长得一模一样。调用方先用这个判断，不可读就提示「暂时无法读取」而不是「没有条目」。
+     *
+     * @return null 表示可读；否则是可直接展示的原因。
+     */
+    fun unavailableReason(
+        file: File,
+        env: LinuxEnv?,
+        kind: Kind? = null,
+    ): String? =
+        when (kind ?: kindOf(file)) {
+            Kind.TAR, Kind.TAR_GZ ->
+                if (env == null) "运行环境尚未就绪，暂时无法读取该压缩包" else null
+            Kind.UNKNOWN -> "不支持的压缩包格式"
+            Kind.GZ -> "单个 gzip 文件不支持按目录浏览"
+            else -> if (!file.isFile) "压缩包文件不存在" else null
+        }
+
+    /**
      * 列出某个目录层级下的直接条目。
      *
      * [dirPath] 是包内路径，空串表示根。只返回这一层的直接子项：中间目录由调用方
@@ -146,6 +179,17 @@ object ArchiveKit {
 
     // ------------------------------------------------------------------ zip
 
+    /**
+     * 条目的修改时间。
+     *
+     * `ZipEntry.getTime()` 在没有时间戳时返回 -1（流式生成的包很常见），
+     * 直接交给 UI 会渲染成 1969-12-31。这里退回压缩包自身的修改时间。
+     */
+    internal fun entryTime(
+        raw: Long,
+        archive: File,
+    ): Long = raw.takeIf { it > 0 } ?: archive.lastModified()
+
     private fun listZip(
         file: File,
         dirPath: String,
@@ -175,7 +219,7 @@ object ArchiveKit {
                                     isDir = true,
                                     size = 0,
                                     compressedSize = 0,
-                                    modifiedAt = e.time,
+                                    modifiedAt = entryTime(e.time, file),
                                 )
                         }
                     } else {
@@ -188,7 +232,7 @@ object ArchiveKit {
                                         isDir = true,
                                         size = 0,
                                         compressedSize = 0,
-                                        modifiedAt = e.time,
+                                        modifiedAt = entryTime(e.time, file),
                                     )
                             }
                         } else {
@@ -199,7 +243,7 @@ object ArchiveKit {
                                     isDir = false,
                                     size = e.size,
                                     compressedSize = e.compressedSize,
-                                    modifiedAt = e.time,
+                                    modifiedAt = entryTime(e.time, file),
                                 )
                         }
                     }
@@ -242,33 +286,65 @@ object ArchiveKit {
     // ------------------------------------------------------------------ tar
 
     /**
-     * 通过容器里的 tar 列目录。
+     * 同一个压缩包的完整成员表缓存。
      *
-     * 容器自带 busybox tar，但它对 --exclude 之类的 GNU 参数支持不全，
-     * 所以只用最朴素的 `tar -tf`，目录层级的裁剪在 Kotlin 侧做。
+     * 进出子目录只是换个前缀筛选，不需要重新 `tar -tvf` 一遍。大包每层都全量扫描
+     * 会把导航拖得很慢，所以按「路径 + 长度 + 修改时间」缓存解析结果。
      */
+    private data class TarCacheKey(
+        val path: String,
+        val length: Long,
+        val modified: Long,
+    )
+
+    private val tarCache = LinkedHashMap<TarCacheKey, List<TarListing.Member>>()
+
+    /** 缓存上限：压缩包可能很大，只留最近几个包的成员表。 */
+    private const val TAR_CACHE_MAX = 4
+
+    private fun tarMembers(
+        file: File,
+        env: LinuxEnv,
+    ): List<TarListing.Member>? {
+        val key = TarCacheKey(file.absolutePath, file.length(), file.lastModified())
+        synchronized(tarCache) {
+            tarCache[key]?.let { return it }
+        }
+        // -tvf 而不是 -tf：只有详细列表才带大小与修改时间，否则列表全是 0 B 与 1970。
+        val raw =
+            runCatching {
+                val result = env.exec(listOf("tar", "-tvf", file.absolutePath))
+                if (!result.ok) return null
+                result.output
+            }.getOrNull() ?: return null
+        val members = raw.split('\n').mapNotNull { TarListing.parseLine(it) }
+        synchronized(tarCache) {
+            if (tarCache.size >= TAR_CACHE_MAX) {
+                tarCache.remove(tarCache.keys.first())
+            }
+            tarCache[key] = members
+        }
+        return members
+    }
+
     private fun listTar(
         file: File,
         dirPath: String,
         env: LinuxEnv,
     ): List<Entry> {
-        val list =
-            runCatching {
-                env.exec(listOf("tar", "-tf", file.absolutePath)).output.split('\n')
-            }.getOrElse { return emptyList() }
+        val members = tarMembers(file, env) ?: return emptyList()
         val base = normalizeDir(dirPath)
         val dirs = LinkedHashMap<String, Entry>()
         val out = ArrayList<Entry>()
-        for (raw in list) {
-            val line = raw.trim('\r', ' ', '"')
-            if (line.isEmpty()) continue
-            if (base.isNotEmpty() && !line.startsWith(base)) continue
-            val rest = line.removePrefix(base)
+        for (m in members) {
+            if (base.isNotEmpty() && !m.path.startsWith(base)) continue
+            val rest = m.path.removePrefix(base)
             if (rest.isEmpty()) continue
             val slash = rest.indexOf('/')
             if (slash >= 0) {
                 val dirName = rest.substring(0, slash)
                 if (dirName.isNotEmpty() && !dirs.containsKey(dirName)) {
+                    // 中间目录：tar 里不一定有对应条目，先按占位建，遇到真条目再覆盖。
                     dirs[dirName] =
                         Entry(
                             path = base + dirName,
@@ -279,20 +355,27 @@ object ArchiveKit {
                             modifiedAt = 0L,
                         )
                 }
+            } else if (m.isDir) {
+                dirs[rest] =
+                    Entry(
+                        path = m.path,
+                        name = rest,
+                        isDir = true,
+                        size = 0,
+                        compressedSize = 0,
+                        modifiedAt = m.modifiedAt.takeIf { it > 0 } ?: file.lastModified(),
+                    )
             } else {
-                // tar -tf 不带尾部斜杠区分不了目录与空文件，按"尾部原样有斜杠"判断
-                val isDir = line.endsWith("/")
-                if (!isDir) {
-                    out +=
-                        Entry(
-                            path = base + rest,
-                            name = rest,
-                            isDir = false,
-                            size = 0,
-                            compressedSize = 0,
-                            modifiedAt = 0L,
-                        )
-                }
+                out +=
+                    Entry(
+                        path = m.path,
+                        name = rest,
+                        isDir = false,
+                        size = m.size,
+                        // tar 本身不压缩，压缩后大小与原始一致。
+                        compressedSize = m.size,
+                        modifiedAt = m.modifiedAt.takeIf { it > 0 } ?: file.lastModified(),
+                    )
             }
         }
         return (dirs.values + out).sortedWith(compareBy({ !it.isDir }, { it.name.lowercase() }))
@@ -311,7 +394,9 @@ object ArchiveKit {
             val limit = (maxBytes + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
             val result = env.exec(listOf("tar", "-xOf", file.absolutePath, member), maxOutputBytes = limit)
             if (!result.ok) return null
-            if (result.output.length > maxBytes) return null
+            // 按字节判上限，不是字符数：UTF-8 中文一个字符占三字节，
+            // 用 output.length 比较会让实际内存占用达到上限的三倍。
+            if (result.output.toByteArray(Charsets.UTF_8).size.toLong() > maxBytes) return null
             result.output
         }.getOrNull()
 
