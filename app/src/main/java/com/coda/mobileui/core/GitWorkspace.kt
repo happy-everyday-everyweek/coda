@@ -29,7 +29,10 @@ object GitWorkspace {
     fun inspect(path: String?): Info? {
         if (path.isNullOrEmpty()) return null
         val now = System.currentTimeMillis()
-        cache[path]?.let { (at, info) -> if (now - at < TTL_MS) return info }
+        // HashMap 不是线程安全的：抽屉与工作区页会并发查同一份缓存，读也要进锁。
+        synchronized(cache) {
+            cache[path]?.let { (at, info) -> if (now - at < TTL_MS) return info }
+        }
         val info = read(File(path))
         synchronized(cache) { cache[path] = now to info }
         return info
@@ -41,23 +44,34 @@ object GitWorkspace {
     }
 
     private fun read(start: File): Info? {
-        val gitDir = findGitDir(start) ?: return null
-        val workTree = if (gitDir.name == ".git") gitDir.parentFile else start
-        val pair = parseOwnerRepo(readRemoteUrl(gitDir))
+        val repo = findRepo(start) ?: return null
+        val pair = parseOwnerRepo(readRemoteUrl(repo.gitDir))
         return Info(
-            root = workTree?.absolutePath ?: start.absolutePath,
-            branch = readBranch(gitDir),
+            root = repo.workTree.absolutePath,
+            branch = readBranch(repo.gitDir),
             owner = pair?.first,
             repo = pair?.second,
         )
     }
 
-    /** 向上找到最近的 `.git`；worktree 与 submodule 的 `.git` 是文件，内容为 `gitdir: <路径>`。 */
-    private fun findGitDir(start: File): File? {
+    /** 一次解析出的仓库位置：git 目录 + 工作树根目录。 */
+    private data class Repo(
+        val gitDir: File,
+        val workTree: File,
+    )
+
+    /**
+     * 向上找到最近的 `.git`。
+     *
+     * worktree 与 submodule 的 `.git` 是文件（内容 `gitdir: <路径>`），此时工作树根是
+     * 「包含这个文件的目录」，不是 gitdir 本身——之前一律用传入路径，从子目录进来
+     * 就会把 root 报成子目录。
+     */
+    private fun findRepo(start: File): Repo? {
         var cur: File? = if (start.isFile) start.parentFile else start
         while (cur != null) {
             val dot = File(cur, ".git")
-            if (dot.isDirectory) return dot
+            if (dot.isDirectory) return Repo(dot, cur)
             if (dot.isFile) {
                 val text = runCatching { dot.readText() }.getOrNull() ?: return null
                 val target =
@@ -68,7 +82,8 @@ object GitWorkspace {
                         ?.trim()
                         ?: return null
                 val resolved = File(target)
-                return if (resolved.isAbsolute) resolved else File(cur, target)
+                val gitDir = if (resolved.isAbsolute) resolved else File(cur, target)
+                return Repo(gitDir, cur)
             }
             cur = cur.parentFile
         }
@@ -85,9 +100,25 @@ object GitWorkspace {
         }
     }
 
-    /** 取 config 里第一个 remote 的 url（通常是 origin）。 */
+    /**
+     * 取远端地址。
+     *
+     * worktree 的 gitdir 里没有 config：真正的远端挂在 `commondir` 指向的主仓库。
+     * submodule 的 gitdir 自己有 config，第一步就能取到。
+     */
     private fun readRemoteUrl(gitDir: File): String? {
-        val text = runCatching { File(gitDir, "config").readText() }.getOrNull() ?: return null
+        readConfig(gitDir)?.let { return it }
+        val common = runCatching { File(gitDir, "commondir").readText().trim() }.getOrNull() ?: return null
+        if (common.isEmpty()) return null
+        val main = File(common).let { if (it.isAbsolute) it else File(gitDir, common) }
+        return readConfig(main)
+    }
+
+    /** 读某个 git 目录下 config 里第一个 remote 的 url（通常是 origin）。 */
+    private fun readConfig(gitDir: File): String? {
+        val file = File(gitDir, "config")
+        if (!file.isFile) return null
+        val text = runCatching { file.readText() }.getOrNull() ?: return null
         var inRemote = false
         for (raw in text.lineSequence()) {
             val line = raw.trim()
