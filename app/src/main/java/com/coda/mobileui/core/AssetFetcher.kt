@@ -32,6 +32,12 @@ object AssetFetcher {
 
     /** 下载进度回调：当前、总量（字节）。 */
     fun interface Progress {
+        /**
+         * 下载进度。
+         *
+         * [total] 是总字节数，**保证大于 0**：总长度未知时本回调不会被调用，
+         * 所以实现里可以直接做 `done * 100 / total` 而不必防除零。
+         */
         fun onBytes(
             done: Long,
             total: Long,
@@ -69,7 +75,9 @@ object AssetFetcher {
         onLog: (String) -> Unit = {},
     ): Boolean {
         // 1. 已经就位：先校验，避免把上次写坏的半截文件当成好的。
-        if (target.isFile && target.length() > 0) {
+        // 只判 isFile，不额外要求非空：合法的空资源（spec.size == 0）也该能复用，
+        // 有效性交给 verify 判断——它在没给 size 与 sha256 时才退化为「文件非空」。
+        if (target.isFile) {
             if (verify(target, spec)) {
                 onLog("已就位：${target.name}")
                 return true
@@ -86,13 +94,22 @@ object AssetFetcher {
         // 2. 先看 APK 内有没有。
         if (assetExists(ctx, spec.assetPath)) {
             if (extractAsset(ctx, spec.assetPath, tmp) && verify(tmp, spec)) {
-                if (tmp.renameTo(target)) {
-                    onLog("从安装包释放：${target.name}")
-                    return true
+                when (val placed = AssetPlacement.place(tmp, target)) {
+                    is AssetPlacement.Result.Placed -> {
+                        onLog("从安装包释放：${target.name}")
+                        return true
+                    }
+
+                    is AssetPlacement.Result.Failed -> {
+                        // 校验已经过了，失败在文件系统这一步。归因到「校验失败」会误导排查。
+                        AppLog.w(TAG, "释放资产未能就位 ${target.name}：${placed.reason}")
+                        onLog("释放资产失败（写入）：${target.name}，转下载")
+                    }
                 }
+            } else {
+                onLog("安装包内资产校验失败，转下载：${target.name}")
             }
             runCatching { tmp.delete() }
-            onLog("安装包内资产校验失败，转下载：${target.name}")
         }
 
         // 3. 联网：ping 筛活 → 测速排序 → 按序下载。
@@ -123,18 +140,38 @@ object AssetFetcher {
             val got = download(url, tmp, spec, onProgress)
             val cost = System.currentTimeMillis() - t0
             if (got && verify(tmp, spec)) {
-                if (tmp.renameTo(target)) {
-                    MirrorScoreboard.record(
-                        ctx,
-                        net,
-                        m.id,
-                        MirrorScoreboard.Outcome.VERIFIED,
-                        bytes = tmp.length(),
-                        elapsedMs = cost,
-                    )
-                    onLog("完成（${m.id}）：${target.name}")
-                    AppLog.i(TAG, "资产就位 ${target.name} 来源=${m.id} 体积=${target.length()}")
-                    return true
+                when (val placed = AssetPlacement.place(tmp, target)) {
+                    is AssetPlacement.Result.Placed -> {
+                        MirrorScoreboard.record(
+                            ctx,
+                            net,
+                            m.id,
+                            MirrorScoreboard.Outcome.VERIFIED,
+                            // 用就位后的真实字节数：tmp 已被重命名，读它会得到 0，
+                            // 而账本只在 bytes > 0 时累加吞吐，记 0 等于测速样本全作废。
+                            bytes = placed.bytes,
+                            elapsedMs = cost,
+                        )
+                        onLog("完成（${m.id}）：${target.name}")
+                        AppLog.i(TAG, "资产就位 ${target.name} 来源=${m.id} 体积=${placed.bytes}")
+                        return true
+                    }
+
+                    is AssetPlacement.Result.Failed -> {
+                        // 下载与校验都成功了，失败在写入。不能不记分也不能不记错误，
+                        // 否则最后只剩一句「所有源都失败：」而详情是空的。
+                        MirrorScoreboard.record(
+                            ctx,
+                            net,
+                            m.id,
+                            MirrorScoreboard.Outcome.VERIFIED,
+                            bytes = tmp.length(),
+                            elapsedMs = cost,
+                        )
+                        AppLog.w(TAG, "资产未能就位 ${target.name} 来源=${m.id}：${placed.reason}")
+                        onLog("${m.id} 下载成功但写入失败：${placed.reason}")
+                        errors.append(m.id).append(":place ")
+                    }
                 }
             } else if (got) {
                 // 大小对、内容不对：镜像返回了被改写的内容。换源重试，这是唯一可靠的应对。
@@ -289,17 +326,46 @@ object AssetFetcher {
         val buf = ByteArray(256 * 1024)
         var done = 0L
         var lastReport = 0L
+        var emptyReads = 0
         while (true) {
             val n = input.read(buf)
-            if (n <= 0) break
+            // 只有负值才是 EOF。返回 0 表示这次没读到字节，不是流结束——
+            // 当成 EOF 会静默截断下载内容，随后 sha256 必然失败并被误记成镜像的问题。
+            if (n < 0) break
+            if (n == 0) {
+                // 连续空读做上限保护，避免极端情况下空转。
+                emptyReads++
+                if (emptyReads > MAX_EMPTY_READS) {
+                    throw java.io.IOException("输入流连续 $emptyReads 次返回 0 字节")
+                }
+                continue
+            }
+            emptyReads = 0
             out.write(buf, 0, n)
             done += n
             // 每 1MB 报一次，够画进度又不会把主线程刷爆。
             if (done - lastReport >= 1_048_576L) {
                 lastReport = done
-                p?.onBytes(done, total)
+                reportProgress(p, done, total)
             }
         }
-        p?.onBytes(done, total)
+        reportProgress(p, done, total)
     }
+
+    /**
+     * 进度回调。
+     *
+     * [total] 为 0 表示总长度未知（`spec.size` 的约定就是 0 == 未知）。
+     * 这时不按已知总长回调，否则调用方做 `done * 100 / total` 会除零。
+     */
+    private fun reportProgress(
+        p: Progress?,
+        done: Long,
+        total: Long,
+    ) {
+        if (total > 0) p?.onBytes(done, total)
+    }
+
+    /** 连续空读的上限：超过就认为流异常，而不是无限空转。 */
+    private const val MAX_EMPTY_READS = 64
 }
