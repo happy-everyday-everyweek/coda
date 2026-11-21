@@ -38,6 +38,8 @@ class OAuthAccountsSheet(
     private val io = Executors.newSingleThreadExecutor()
     private var column: LinearLayout? = null
     private var busy = false
+    @Volatile
+    private var closed = false
 
     private fun dp(v: Float): Int = (v * host.resources.displayMetrics.density + 0.5f).toInt()
 
@@ -86,8 +88,24 @@ class OAuthAccountsSheet(
                 render(col)
             }.primaryAction("全部签到") { checkinAll() }
             .secondaryAction("关闭") { self -> self.dismiss() }
-            .onDismiss { io.shutdown() }
+            .onDismiss {
+                closed = true
+                io.shutdownNow()
+            }
             .show()
+    }
+
+    /** 关闭后不再接收任务，也不把结果写回已分离的视图。 */
+    private fun submit(work: () -> Unit) {
+        if (closed) return
+        try {
+            io.execute {
+                if (closed) return@execute
+                work()
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // 已关闭，忽略。
+        }
     }
 
     /** 一个平台的账号数，用于列表里展示。 */
@@ -100,30 +118,45 @@ class OAuthAccountsSheet(
     private fun render(col: LinearLayout) {
         col.removeAllViews()
         col.addView(hint("正在读取账号…"))
-
-        io.execute {
-            val store =
-                com.coda.mobileui.core.ProviderStore
-                    .load(host)
-            // 指定了平台就只画它一张卡：从某条 provider 点进来时，用户看的是
-            // 「这条供应商下有几个账号」，铺出其它平台只是噪声。
-            val platforms =
-                onlyProviderId
-                    ?.let { id -> OAuthProviders.all.filter { it.id == id } }
-                    ?: OAuthProviders.all
-            val rows =
-                platforms.map { p ->
-                    // 只有已经落成 provider 的平台才去问账号，没授权过的平台问了也是空的。
-                    val authorized = store.any { it.id == p.id }
-                    PlatformRow(p, if (authorized) OAuthAccounts.list(host, p) else emptyList())
+        // 捕获本次要写入的容器，不要把结果写回可能已经换过的字段。
+        val target = col
+        submit {
+            try {
+                val store =
+                    com.coda.mobileui.core.ProviderStore
+                        .load(host)
+                val platforms =
+                    onlyProviderId
+                        ?.let { id -> OAuthProviders.all.filter { it.id == id } }
+                        ?: OAuthProviders.all
+                val rows =
+                    platforms.map { p ->
+                        val authorized = store.any { it.id == p.id }
+                        PlatformRow(p, if (authorized) OAuthAccounts.list(host, p) else emptyList())
+                    }
+                main.post {
+                    if (closed) return@post
+                    target.removeAllViews()
+                    if (rows.all { it.accounts.isEmpty() }) {
+                        target.addView(hint("还没有账号。点右上角 ＋ 选一个平台授权，同一个平台可以加多个账号。"))
+                    }
+                    rows.forEach { row -> target.addView(platformCard(row.provider, row.accounts)) }
                 }
-            main.post {
-                val target = column ?: return@post
-                target.removeAllViews()
-                if (rows.all { it.accounts.isEmpty() }) {
-                    target.addView(hint("还没有账号。点右上角 ＋ 选一个平台授权，同一个平台可以加多个账号。"))
+            } catch (e: Throwable) {
+                main.post {
+                    if (closed) return@post
+                    target.removeAllViews()
+                    target.addView(hint("读取账号失败：${e.message ?: "网络或网关异常"}"))
+                    target.addView(
+                        TextView(host).apply {
+                            text = "重试"
+                            setTextColor(color(androidx.appcompat.R.attr.colorPrimary, onSurface))
+                            textSize = 13f
+                            setPadding(0, dp(4f), 0, dp(10f))
+                            setOnClickListener { render(target) }
+                        },
+                    )
                 }
-                rows.forEach { row -> target.addView(platformCard(row.provider, row.accounts)) }
             }
         }
     }
@@ -315,28 +348,37 @@ class OAuthAccountsSheet(
      * 失败与「今天已签」都算正常情况，只有真的报错才提示。
      */
     private fun checkinAll() {
-        if (busy) return
+        if (busy || closed) return
         busy = true
         Toast.makeText(host, "正在签到…", Toast.LENGTH_SHORT).show()
-        io.execute {
-            val store =
-                com.coda.mobileui.core.ProviderStore
-                    .load(host)
-            val lines = mutableListOf<String>()
-            var anyFail = false
-            OAuthProviders.all.forEach { p ->
-                if (store.none { it.id == p.id }) return@forEach
-                val caps = OAuthAccounts.capabilities(host, p)
-                if (!caps.checkin) return@forEach
-                val r = OAuthAccounts.checkin(host, p, "")
-                lines += "${p.name}：${r.message}"
-                if (!r.ok) anyFail = true
-            }
-            main.post {
-                busy = false
-                val text = if (lines.isEmpty()) "没有可签到的账号" else lines.joinToString("\n")
-                Toast.makeText(host, text + if (anyFail) "\n部分失败" else "", Toast.LENGTH_LONG).show()
-                render(column ?: return@post)
+        submit {
+            try {
+                val store =
+                    com.coda.mobileui.core.ProviderStore
+                        .load(host)
+                val lines = mutableListOf<String>()
+                var anyFail = false
+                OAuthProviders.all.forEach { p ->
+                    if (store.none { it.id == p.id }) return@forEach
+                    val caps = OAuthAccounts.capabilities(host, p)
+                    if (!caps.checkin) return@forEach
+                    val r = OAuthAccounts.checkin(host, p, "")
+                    lines += "${p.name}：${r.message}"
+                    if (!r.ok) anyFail = true
+                }
+                main.post {
+                    if (closed) return@post
+                    val text = if (lines.isEmpty()) "没有可签到的账号" else lines.joinToString("\n")
+                    Toast.makeText(host, text + if (anyFail) "\n部分失败" else "", Toast.LENGTH_LONG).show()
+                    column?.let { render(it) }
+                }
+            } catch (e: Throwable) {
+                main.post {
+                    if (!closed) Toast.makeText(host, "签到失败：${e.message ?: "网络异常"}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                // 无论成功、失败还是异常，都要复位；否则批量签到会永久失效。
+                main.post { busy = false }
             }
         }
     }

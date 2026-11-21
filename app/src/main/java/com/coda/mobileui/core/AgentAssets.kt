@@ -96,7 +96,9 @@ object AgentAssets {
                 path = f.absolutePath,
                 body = body,
             )
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            // 解析失败要能定位到文件，而不是静默从列表里消失。
+            AppLog.w("AgentAssets", "解析资产失败：${f.absolutePath} ${e.message}")
             null
         }
 
@@ -121,7 +123,14 @@ object AgentAssets {
             val idx = line.indexOf(':')
             if (idx <= 0) continue
             val k = line.substring(0, idx).trim().lowercase()
-            val v = line.substring(idx + 1).trim().trim('"')
+            val raw = line.substring(idx + 1).trim()
+            // 写盘时对引号与反斜杠做了转义，读回必须还原，否则再保存会累积转义、值被截断。
+            val v =
+                if (raw.length >= 2 && raw.startsWith("\"") && raw.endsWith("\"")) {
+                    raw.substring(1, raw.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
+                } else {
+                    raw
+                }
             fm[k] = v
         }
         val body = lines.subList(end + 1, lines.size).joinToString("\n").trimStart('\n')
@@ -143,42 +152,71 @@ object AgentAssets {
         if (!name.matches(Regex("[A-Za-z0-9_-]+"))) {
             return "名称只能包含字母、数字、连字符与下划线"
         }
-        val target: File =
-            if (editingPath != null) {
-                File(editingPath)
-            } else {
+        val root = rootDir(ctx, kind).canonicalFile
+        val target: File
+        if (editingPath != null) {
+            // 编辑路径来自外部 Intent/状态：必须落在该 kind 的资产根内，不能写任意文件。
+            target = File(editingPath).canonicalFile
+            if (!inside(target, root)) return "路径不在${kind.label}目录内"
+        } else {
+            target =
                 when (kind) {
-                    Kind.SKILL -> File(File(rootDir(ctx, kind), name), "SKILL.md")
-                    else -> File(rootDir(ctx, kind), "$name.md")
+                    Kind.SKILL -> File(File(root, name), "SKILL.md")
+                    else -> File(root, "$name.md")
                 }
-            }
+            if (File(root, name).exists() || target.exists()) return "同名${kind.label}已存在"
+        }
         return try {
             target.parentFile?.mkdirs()
             val sb = StringBuilder()
             sb.append("---\n")
-            sb.append("name: \"").append(name.replace("\"", "\\\"")).append("\"\n")
+            sb.append("name: \"").append(escape(name)).append("\"\n")
             if (description.isNotEmpty()) {
-                sb.append("description: \"").append(description.replace("\"", "\\\"")).append("\"\n")
+                sb.append("description: \"").append(escape(description)).append("\"\n")
             }
             sb.append("---\n\n")
             sb.append(body)
             if (!body.endsWith("\n")) sb.append("\n")
-            target.writeText(sb.toString())
+            // 原子替换：写一半失败不会留下损坏的资产文件。
+            val tmp = File(target.parentFile, "${target.name}.tmp")
+            tmp.writeText(sb.toString())
+            if (!tmp.renameTo(target)) {
+                tmp.delete()
+                return "写入失败: 无法替换 ${target.name}"
+            }
             null
         } catch (t: Throwable) {
             "写入失败: ${t.message}"
         }
     }
 
-    fun delete(path: String) {
-        val f = File(path)
-        try {
+    private fun inside(
+        target: File,
+        root: File,
+    ): Boolean = target == root || target.path.startsWith(root.path + File.separator)
+
+    private fun escape(value: String): String = value.replace("\\", "\\\\").replace("\"", "\\\"")
+
+    fun delete(
+        ctx: Context,
+        kind: Kind,
+        path: String,
+    ): Boolean {
+        val root = rootDir(ctx, kind).canonicalFile
+        val f = File(path).canonicalFile
+        if (!inside(f, root) || f == root) return false
+        return try {
             if (f.name == "SKILL.md") {
-                f.parentFile?.deleteRecursively()
+                // 只删技能自己的目录，且必须正好是 root 的直接子目录。
+                val dir = f.parentFile?.canonicalFile ?: return false
+                if (dir.parentFile?.canonicalFile != root) return false
+                dir.deleteRecursively()
             } else {
                 f.delete()
             }
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            AppLog.w("AgentAssets", "删除资产失败：$path ${e.message}")
+            false
         }
     }
 }

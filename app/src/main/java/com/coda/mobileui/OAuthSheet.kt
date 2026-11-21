@@ -55,6 +55,9 @@ class OAuthSheet(
     private var authorized = false
     private var webView: WebView? = null
     private var statusText: TextView? = null
+    @Volatile
+    private var closed = false
+    private var pollTick: Runnable? = null
 
     /**
      * 网关准备阶段的日志面板。
@@ -249,11 +252,17 @@ class OAuthSheet(
             // 把最后一条进度记下来：失败时它就是真实原因，不能再盖成一句笼统的提示。
             val lastStep = arrayOf("")
             val ok =
-                OAuthLogin.prepare(host, provider) { text ->
-                    lastStep[0] = text
-                    main.post { progressPanel?.append(text) }
+                try {
+                    OAuthLogin.prepare(host, provider) { text ->
+                        lastStep[0] = text
+                        main.post { if (!closed) progressPanel?.append(text) }
+                    }
+                } catch (e: Throwable) {
+                    lastStep[0] = "准备异常：${e.message ?: e.javaClass.simpleName}"
+                    false
                 }
             main.post {
+                if (closed) return@post
                 val p = progressPanel
                 if (!ok) {
                     // 之前这里硬编码「请检查网络后重试」，把真实原因盖掉了。网关与插件都已随包
@@ -261,6 +270,9 @@ class OAuthSheet(
                     val reason = ProxyHost.lastError ?: lastStep[0].ifEmpty { "未知原因" }
                     p?.finish()
                     p?.append("网关启动失败：$reason", emphasis = true)
+                    // 失败后主按钮改成重试，用户不必关闭卡片重来。
+                    hostSheet.primaryAction("重试") { renderAuthorize(column) }
+                    column.addView(button("重新准备网关") { renderAuthorize(column) })
                     return@post
                 }
                 p?.append("网关已就绪", emphasis = true)
@@ -269,9 +281,17 @@ class OAuthSheet(
                 // 之前这一步踩了：prepare 走的是后台线程，到了 begin 却已经
                 // 被 main.post 切回主线程，于是网关什么都准备好了，卡在最后一步。
                 Thread {
-                    val started = OAuthLogin.begin(host, provider, realm)
-                    val reason = OAuthLogin.lastBeginError
+                    val reasonHolder = arrayOfNulls<String>(1)
+                    val started =
+                        try {
+                            OAuthLogin.begin(host, provider, realm)
+                        } catch (e: Throwable) {
+                            reasonHolder[0] = e.message ?: e.javaClass.simpleName
+                            null
+                        }
+                    val reason = reasonHolder[0] ?: OAuthLogin.lastBeginError
                     main.post {
+                        if (closed) return@post
                         session = started
                         if (started == null) {
                             // 不再只说「请重试」：panelJson 里已经把状态码、响应体、
@@ -351,15 +371,31 @@ class OAuthSheet(
         column: LinearLayout,
         url: String,
     ) {
-        runCatching {
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
-            WebStorage.getInstance().deleteAllData()
+        var built = false
+
+        fun build() {
+            if (built || closed) return
+            built = true
+            column.removeAllViews()
+            column.addView(hint("完成授权后返回，这一步会自动继续"))
+            // ... 后续创建 WebView
+            buildWebView(column, url)
         }
 
-        column.removeAllViews()
-        column.addView(hint("完成授权后返回，这一步会自动继续"))
+        val cookies = CookieManager.getInstance()
+        // 必须等清理回调再加载页面，否则第一次请求可能还带着上一个账号的 Cookie。
+        cookies.removeAllCookies {
+            runCatching { WebStorage.getInstance().deleteAllData() }
+            main.post { build() }
+        }
+        // 极端情况下系统不回调：留一个兜底，避免界面永远空白。
+        main.postDelayed({ build() }, 1_500)
+    }
 
+    private fun buildWebView(
+        column: LinearLayout,
+        url: String,
+    ) {
         // WebView 的触摸必须由它自己处理：授权页（Google/各家 OAuth）的表单与页面滚动
         // 全在 WebView 内部完成。外层卡片是 ScrollView，竖直手势会被它先截走，页面
         // 就滚不动了——这里声明"别拦截我"，WebView 自己滚；同时意味着卡片拖拽在
@@ -371,6 +407,9 @@ class OAuthSheet(
                 settings.allowContentAccess = false
                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 settings.domStorageEnabled = true
+                // window.open 只有在开启多窗口支持后才会回调 onCreateWindow。
+                settings.setSupportMultipleWindows(true)
+                settings.javaScriptCanOpenWindowsAutomatically = true
                 CookieManager.getInstance().setAcceptCookie(true)
                 // 授权页一律用桌面端 UA。
                 //
@@ -658,6 +697,7 @@ class OAuthSheet(
         val tick =
             object : Runnable {
                 override fun run() {
+                    if (closed || !polling) return
                     val current = session ?: return
                     // 插件的登录会话默认 5 分钟过期，过期后 poll 会一直回 wait。
                     // 客户端必须自己收口，否则界面会永远停在"等待授权"。
@@ -669,6 +709,8 @@ class OAuthSheet(
                     Thread {
                         val result = OAuthLogin.poll(host, current)
                         main.post {
+                            // 卡片已关闭或已开始新一轮：旧请求的结果直接丢弃。
+                            if (closed || !polling) return@post
                             when (result) {
                                 is OAuthLogin.Result.Ready -> {
                                     polling = false
@@ -690,6 +732,7 @@ class OAuthSheet(
                     }.apply { isDaemon = true }.start()
                 }
             }
+        pollTick = tick
         main.postDelayed(tick, POLL_INTERVAL_MS)
     }
 
@@ -730,7 +773,12 @@ class OAuthSheet(
     }
 
     private fun teardown() {
+        closed = true
         polling = false
+        pollTick?.let { main.removeCallbacks(it) }
+        pollTick = null
+        session = null
+        progressPanel = null
         webView?.let { view ->
             runCatching {
                 view.stopLoading()

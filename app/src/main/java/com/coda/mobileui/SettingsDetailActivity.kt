@@ -3576,11 +3576,11 @@ class SettingsDetailActivity :
         if (item != null) {
             sheet.headerAction("删除") { s ->
                 s.dismiss()
-                AgentAssets.delete(item.path)
+                val removed = AgentAssets.delete(this, kind, item.path)
                 if (kind == AgentAssets.Kind.COMMAND) {
                     ZController.get(this).refreshWorkspacePresentation(null)
                 }
-                snack("已删除")
+                snack(if (removed) "已删除" else "删除失败：路径不在资产目录内")
                 renderPage()
             }
         }
