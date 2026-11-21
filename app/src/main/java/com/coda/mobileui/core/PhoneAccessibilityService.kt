@@ -98,6 +98,8 @@ class PhoneAccessibilityService : AccessibilityService() {
         try {
             appendChildren(root, nodes, 0, maxDepth, counter, maxNodes, includeInvisible)
         } catch (_: Throwable) {
+        } finally {
+            runCatching { root.recycle() }
         }
         out.put("nodeCount", counter[0])
         out.put("truncated", counter[0] >= maxNodes)
@@ -118,13 +120,21 @@ class PhoneAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             if (counter[0] >= maxNodes) return
             val child = node.getChild(i) ?: continue
-            val obj = nodeToJson(child, includeInvisible)
-            if (obj != null) {
-                counter[0]++
+            try {
+                val obj = nodeToJson(child, includeInvisible)
+                if (obj != null) counter[0]++
+                // 即使当前节点被过滤，也必须继续遍历它的后代：布局容器本身通常没有文本。
                 val kids = JSONArray()
                 appendChildren(child, kids, depth + 1, maxDepth, counter, maxNodes, includeInvisible)
-                if (kids.length() > 0) obj.put("children", kids)
-                into.put(obj)
+                if (obj != null) {
+                    if (kids.length() > 0) obj.put("children", kids)
+                    into.put(obj)
+                } else if (kids.length() > 0) {
+                    // 被过滤的容器：把子节点提升到当前层，避免整棵子树消失。
+                    for (k in 0 until kids.length()) into.put(kids.get(k))
+                }
+            } finally {
+                runCatching { child.recycle() }
             }
         }
     }
@@ -154,7 +164,7 @@ class PhoneAccessibilityService : AccessibilityService() {
         if (node.isCheckable) obj.put("checkable", true).also { if (node.isChecked) obj.put("checked", true) }
         if (node.isSelected) obj.put("selected", true)
         if (!node.isEnabled) obj.put("disabled", true)
-        if (obj.length() <= 1) return null // 只有 bounds 的空壳节点，跳过
+        // 只有 bounds 的容器也要保留：它是子控件的挂载点，删掉会连带丢掉整棵子树。
         return obj
     }
 
@@ -212,15 +222,16 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     /** 向当前焦点输入框写入文本；无焦点时尝试第一个可编辑节点。 */
     fun setText(text: String): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val target = findFocusedEditable(root) ?: findFirstEditable(root) ?: return false
-        val args =
-            Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-            }
         return try {
+            val root = rootInActiveWindow ?: return false
+            val target = findFocusedEditable(root) ?: findFirstEditable(root) ?: return false
+            val args =
+                Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                }
             target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            // 包括 StackOverflowError 在内的任何失败都按 false 返回，不能让进程崩溃。
             false
         }
     }
@@ -236,10 +247,19 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     private fun findFirstEditable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        if (root.isEditable && root.isVisibleToUser) return root
-        for (i in 0 until root.childCount) {
-            val child = root.getChild(i) ?: continue
-            findFirstEditable(child)?.let { return it }
+        // 迭代 + 预算：无障碍树异常深或成环时，递归会 StackOverflow 直接把进程打崩。
+        val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        stack.addLast(root to 0)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < 900) {
+            val (node, depth) = stack.removeLast()
+            visited++
+            if (node.isEditable && node.isVisibleToUser) return node
+            if (depth >= 50) continue
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                stack.addLast(child to depth + 1)
+            }
         }
         return null
     }
@@ -266,20 +286,26 @@ class PhoneAccessibilityService : AccessibilityService() {
     /** 截图（Android 11+；低版本返回 null）。 */
     fun screenshotBitmap(timeoutMs: Long = 8000L): Bitmap? {
         if (Build.VERSION.SDK_INT < 30) return null
+        // 回调由主线程执行，主线程同步等待会自锁到超时并可能 ANR：直接拒绝，交由后台线程调用。
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            AppLog.w("PhoneAccessibility", "截图必须在后台线程调用")
+            return null
+        }
         val latch = CountDownLatch(1)
         var result: Bitmap? = null
         val callback =
             object : TakeScreenshotCallback {
                 override fun onSuccess(screenshot: ScreenshotResult) {
+                    val buffer = screenshot.hardwareBuffer
                     try {
-                        val buffer = screenshot.hardwareBuffer
                         result =
                             Bitmap
                                 .wrapHardwareBuffer(buffer, screenshot.colorSpace)
                                 ?.copy(Bitmap.Config.ARGB_8888, false)
-                        buffer.close()
                     } catch (_: Throwable) {
                     } finally {
+                        // 系统级图形缓冲无论成功失败都要释放。
+                        runCatching { buffer.close() }
                         latch.countDown()
                     }
                 }
@@ -290,7 +316,12 @@ class PhoneAccessibilityService : AccessibilityService() {
             }
         return try {
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback)
-            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            try {
+                latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                null
+            } ?: return null
             result
         } catch (_: Throwable) {
             null

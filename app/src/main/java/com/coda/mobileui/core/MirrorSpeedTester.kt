@@ -87,13 +87,15 @@ object MirrorSpeedTester {
         val error: String? = null,
     )
 
-    /** 从 prefix 里取出主机名（`https://host/path` → `host`）。 */
-    private fun hostOf(prefix: String): String? =
-        Regex("^https?://([^/]+)")
-            .find(prefix)
-            ?.groupValues
-            ?.get(1)
-            ?.substringBefore(':')
+    /** 从 prefix 里取出主机与端口（`https://host:8443/path` → host to 8443）。 */
+    private fun hostOf(prefix: String): Pair<String, Int>? {
+        val authority =
+            URL(prefix).authority ?: return null
+        val host = authority.substringBefore(':')
+        val port = authority.substringAfter(':', "443").toIntOrNull() ?: 443
+        if (host.isBlank()) return null
+        return host to port
+    }
 
     /**
      * 第一道筛：只做 TCP 连通性与延迟。
@@ -127,13 +129,13 @@ object MirrorSpeedTester {
         mirror: GhMirror,
         timeoutMs: Int,
     ): PingResult {
-        val host =
+        val (host, port) =
             hostOf(mirror.prefix)
                 ?: return PingResult(mirror, false, error = "无法解析主机")
         val t0 = System.currentTimeMillis()
         return try {
             java.net.Socket().use { s ->
-                s.connect(java.net.InetSocketAddress(host, 443), timeoutMs)
+                s.connect(java.net.InetSocketAddress(host, port), timeoutMs)
             }
             PingResult(mirror, true, System.currentTimeMillis() - t0)
         } catch (t: Throwable) {
@@ -156,28 +158,36 @@ object MirrorSpeedTester {
         val shuffled = mirrors.shuffled()
         val done = ArrayList<Result>(shuffled.size)
         val picked = AtomicBoolean(false)
+        val pickedResult = java.util.concurrent.atomic.AtomicReference<Result?>(null)
         val pool = Executors.newFixedThreadPool(CONCURRENCY)
-
         try {
             val futures =
                 shuffled.map { m ->
                     pool.submit(
                         Callable {
-                            // 已经选出够快的源，剩下的直接放弃，不再浪费流量。
                             if (picked.get()) return@Callable null
                             val r = probe(m, url)
-                            if (r.ok && r.sustainedBps >= firstPick) picked.set(true)
+                            if (r.ok && r.sustainedBps >= firstPick) {
+                                pickedResult.set(r)
+                                picked.set(true)
+                            }
                             r
                         },
                     )
                 }
+            // 等待上限要覆盖最坏路径：连接 5s + 窗口 6s + 读取结束 8s，另留余量。
+            val waitMs = WINDOW_MS + 15_000L
             for (f in futures) {
-                val r = runCatching { f.get(WINDOW_MS + 8_000L, TimeUnit.MILLISECONDS) }.getOrNull()
+                val r = runCatching { f.get(waitMs, TimeUnit.MILLISECONDS) }.getOrNull()
                 if (r != null) done.add(r)
                 if (picked.get()) break
             }
+            // 触发早停的那条可能排在后面没被取到：补进来，否则最快镜像反而丢失。
+            pickedResult.get()?.let { best -> if (done.none { it.mirror == best.mirror }) done.add(best) }
         } finally {
             pool.shutdownNow()
+            // 给正在阻塞的 read 一点退出时间；超时也继续返回已有结果。
+            runCatching { pool.awaitTermination(10, TimeUnit.SECONDS) }
         }
         return done.sortedByDescending { it.score }
     }
@@ -204,15 +214,22 @@ object MirrorSpeedTester {
                 }
             try {
                 val code = conn.responseCode
-                // 403/404/429/5xx 直接判死，不浪费时间读流。
-                if (code == 403 || code == 404 || code == 429 || code >= 500) {
+                // 只接受 200/206：其余状态码（401/403/416/3xx/5xx）都没有可用的数据流。
+                if (code != 200 && code != 206) {
                     return Result(mirror, false, error = "HTTP $code")
                 }
                 val buf = ByteArray(128 * 1024)
+                var readError: String? = null
                 conn.inputStream.use { input ->
                     while (true) {
                         if (System.currentTimeMillis() - start > WINDOW_MS) break
-                        val n = runCatching { input.read(buf) }.getOrDefault(-1)
+                        val n =
+                            try {
+                                input.read(buf)
+                            } catch (e: Throwable) {
+                                readError = "读取中断：${e.message ?: e.javaClass.simpleName}"
+                                break
+                            }
                         if (n <= 0) break
                         total += n
                         val now = System.currentTimeMillis()
@@ -223,12 +240,16 @@ object MirrorSpeedTester {
                         if (total >= PROBE_BYTES) break
                     }
                 }
+                if (readError != null) {
+                    return Result(mirror, false, error = readError)
+                }
             } finally {
                 conn.disconnect()
             }
-            return analyze(mirror, samples, total, firstByteMs, null)
+            val elapsed = System.currentTimeMillis() - start
+            return analyze(mirror, samples, total, firstByteMs, elapsed, null)
         } catch (t: Throwable) {
-            return analyze(mirror, samples, total, firstByteMs, t.message ?: t.javaClass.simpleName)
+            return Result(mirror, false, error = t.message ?: t.javaClass.simpleName)
         }
     }
 
@@ -237,10 +258,16 @@ object MirrorSpeedTester {
         samples: List<Sample>,
         total: Long,
         firstByteMs: Long,
+        elapsedMs: Long,
         error: String?,
     ): Result {
-        val elapsed = samples.lastOrNull()?.timeMs ?: 0
-        if (total <= 0) return Result(mirror, false, error = error ?: "无数据")
+        if (error != null) return Result(mirror, false, error = error)
+        if (total <= 0) return Result(mirror, false, error = "无数据")
+        // 样本太少或时间窗口过短时无法判断持续速度，不能靠一次突发算出“极速”。
+        if (samples.size < 3 || elapsedMs < 500) {
+            return Result(mirror, false, error = "响应过短，无法评估")
+        }
+        val elapsed = elapsedMs.coerceAtLeast(1)
 
         fun avg(range: IntRange): Long {
             if (range.isEmpty()) return 0

@@ -18,6 +18,9 @@ import org.json.JSONObject
  * 其余家只能列出凭据文件。所以能力要按插件探测，界面据此决定显示哪些按钮。
  */
 object OAuthAccounts {
+    /** 能力探测缓存：按 provider 缓存，避免每次刷新都串行发 7 次探测请求。 */
+    private val capabilityCache = java.util.concurrent.ConcurrentHashMap<String, Capabilities>()
+
     /** 一个已登录账号。字段取自插件 dashboard，缺失的一律给默认值。 */
     data class Account(
         /** 宿主侧账号索引，所有账号操作都用它。 */
@@ -184,13 +187,26 @@ object OAuthAccounts {
         ctx: Context,
         provider: OAuthProviders.Provider,
     ): Capabilities {
+        val cacheKey = "${provider.id}:${provider.pluginId}"
+        capabilityCache[cacheKey]?.let { return it }
         val html = ProxyHost.resourceText(ctx, "/v0/resource/plugins/${provider.pluginId}/panel")
         val panelRoutes = if (html == null) emptySet() else parseRoutes(html)
 
+        // 主机不可达（null）之后继续探测没有意义：直接短路，避免 7 次超时串联。
+        var reachable = true
+
         // 面板没提到、但可能存在的路由，用 GET 探测真值。GET 不会有副作用。
-        fun exists(path: String): Boolean =
-            panelRoutes.contains(path) ||
-                ProxyHost.managementStatus(ctx, base(provider) + path, "GET", null)?.let { it != 404 } == true
+        fun exists(path: String): Boolean {
+            if (!reachable) return false
+            if (panelRoutes.contains(path)) return true
+            val code = ProxyHost.managementStatus(ctx, base(provider) + path, "GET", null)
+            if (code == null) {
+                reachable = false
+                return false
+            }
+            // 只有 2xx 与“路由存在但拒绝方法/参数”的状态码算存在；401/403/429/5xx 是未知，不是能力。
+            return code in 200..299 || code == 400 || code == 405 || code == 422
+        }
 
         if (panelRoutes.isEmpty() && !exists("/accounts")) {
             return Capabilities(
@@ -199,7 +215,7 @@ object OAuthAccounts {
                 growth = false,
                 refresh = false,
                 keepalive = false,
-            )
+            ).also { if (reachable) capabilityCache[cacheKey] = it }
         }
 
         val routes = mutableSetOf<String>()
@@ -228,7 +244,7 @@ object OAuthAccounts {
                 },
             unfreeze = routes.contains("/unfreeze"),
             routes = routes,
-        )
+        ).also { if (reachable) capabilityCache[cacheKey] = it }
     }
 
     /**
@@ -273,12 +289,21 @@ object OAuthAccounts {
             val item = array.optJSONObject(i) ?: continue
             val type = item.optString("provider").ifEmpty { item.optString("type") }
             val name = item.optString("name")
-            // provider 字段匹配不上时，再看文件名是否以插件名开头（workbuddy-<uid>.json）。
-            val matches = type in wanted || wanted.any { w -> w.isNotEmpty() && name.startsWith(w) }
+            // provider 字段匹配不上时，再看文件名是否以插件名加分隔符开头（workbuddy-<uid>.json）。
+            // 只比较纯前缀会让 workbuddy 命中 workbuddy-ai-<uid>.json，造成跨平台串台。
+            val matches =
+                type in wanted ||
+                    wanted.any { w ->
+                        w.isNotEmpty() &&
+                            (name == w || name.startsWith("$w-") || name.startsWith("$w."))
+                    }
             if (!matches) continue
+            val authIndex = item.optString("auth_index")
+            // 空 authIndex 的账号无法定位：所有操作都会被插件理解为“整个平台”。
+            if (authIndex.isBlank()) continue
             out +=
                 Account(
-                    authIndex = item.optString("auth_index"),
+                    authIndex = authIndex,
                     authId = item.optString("id"),
                     name = name,
                     nickname = item.optString("label").ifEmpty { name },
@@ -424,18 +449,27 @@ object OAuthAccounts {
 
         // 没有 summary 就自己数一遍。
         var ok = 0
+        var skipped = 0
         var failed = 0
         for (i in 0 until results.length()) {
             val item = results.optJSONObject(i) ?: continue
+            val reason = item.optString("reason")
             if (item.optString("error").isNotEmpty()) {
                 failed++
             } else if (item.optBoolean("success")) {
                 ok++
+            } else if (reason == "already" || reason == "global") {
+                // 与 summary 口径一致：已签到与国际版不支持都不是失败。
+                skipped++
             } else {
                 failed++
             }
         }
-        return Outcome(failed == 0, "$ok 个成功，$failed 个失败")
+        val parts = mutableListOf<String>()
+        if (ok > 0) parts += "$ok 个成功"
+        if (skipped > 0) parts += "$skipped 个无需操作"
+        if (failed > 0) parts += "$failed 个失败"
+        return Outcome(failed == 0, if (parts.isEmpty()) "没有可签到的账号" else parts.joinToString("，"))
     }
 
     /** 把插件返回的英文错误压成一句能看懂的话，认不出就原样带出。 */
