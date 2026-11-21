@@ -166,6 +166,13 @@ class ZController private constructor(
     private val listeners = CopyOnWriteArrayList<Listener>()
     /** 待应答的权限请求参数（requestId → requestPermission 的原始 params），只保留最近 10 条。 */
     private val pendingPermissionParams = java.util.Collections.synchronizedMap(linkedMapOf<String, JSONObject>())
+    /**
+     * 会话 id → 模式。
+     *
+     * 审批回调在读取线程执行，直接遍历 [sessions] 会撞上主线程的增删改；
+     * 这里单独维护一份线程安全的副本，只用于「这条请求该不该自动放行」。
+     */
+    private val sessionModes = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val main = Handler(Looper.getMainLooper())
     private val prefs = app.getSharedPreferences("zcode_bridge", Context.MODE_PRIVATE)
 
@@ -330,8 +337,15 @@ class ZController private constructor(
             ): Boolean =
                 when (method) {
                     "interaction/requestPermission" -> {
-                        runtime.log("[perm] requestPermission tool=${params.optString("toolName")} mode=$mode")
-                        if (mode == "yolo") {
+                        // 审批必须按发起请求的会话判定，不能用界面上可见会话的 mode：
+                        // 后台自动化或其它会话发来的请求，会被可见会话的 yolo 顺带放行。
+                        val reqSid = params.optString("sessionId")
+                        val reqMode = requesterMode(reqSid)
+                        runtime.log(
+                            "[perm] requestPermission tool=${params.optString("toolName")} " +
+                                "session=$reqSid mode=$reqMode visible=$mode",
+                        )
+                        if (reqMode == "yolo") {
                             // 全权模式：自动放行（优先使用选项里的允许应答）
                             val resp = findAllowResponse(params) ?: JSONObject().put("decision", "allow")
                             runtime.respond(requestId, resp)
@@ -392,6 +406,18 @@ class ZController private constructor(
         return null
     }
 
+    /**
+     * 请求所属会话的模式。
+     *
+     * 只有能确定归属时才返回模式；找不到会话就返回空串，让调用方进入需要用户确认的分支。
+     * 不能退回可见会话的 mode —— 那正是跨会话误放行的来源。
+     */
+    private fun requesterMode(sessionId: String): String {
+        if (sessionId.isEmpty()) return mode
+        if (sessionId == currentSessionId) return mode
+        return sessionModes[sessionId].orEmpty()
+    }
+
     private fun findDenyResponse(params: JSONObject): JSONObject? {
         val opts = params.optJSONArray("options") ?: return null
         for (i in 0 until opts.length()) {
@@ -406,27 +432,36 @@ class ZController private constructor(
 
     // ---------------------------------------------------------------- 状态应用
 
-    private fun applySnapshot(root: JSONObject) {
+    private fun applySnapshot(rawRoot: JSONObject) {
+        // 有的响应是 { snapshot: {...} }，有的直接是快照本体（或只带变更字段的增量），
+        // 统一在这里解包，调用方不必各自记得先取 snapshot 再传进来。
+        val root = rawRoot.optJSONObject("snapshot") ?: rawRoot
+        val session = root.optJSONObject("session")
         val sid = ZParse.parseSessionIdFromSnapshot(root) ?: currentSessionId
         if (sid != null) {
             currentSessionId = sid
-            val title = ZParse.parseTitleFromSnapshot(root)
-            val status = ZParse.parseStatusFromSnapshot(root)
+            // 缺失字段不能当空值：只切换模式或模型的响应不带 title/status，
+            // 无条件赋值会把会话标题抹成空串，还会把 running 误判为 false。
+            val title = if (session?.has("title") == true) ZParse.parseTitleFromSnapshot(root) else null
+            val status = if (session?.has("status") == true) ZParse.parseStatusFromSnapshot(root) else ""
             val m = ZParse.parseModeFromSnapshot(root)
             var info = sessions.find { it.id == sid }
             if (info == null) {
-                info = ZSessionInfo(sid, title, status, m, System.currentTimeMillis(), null, null)
+                info = ZSessionInfo(sid, title ?: "", status, m, System.currentTimeMillis(), null, null)
                 sessions.add(0, info)
             } else {
-                info.title = title
-                info.status = status
+                if (title != null) info.title = title
+                if (status.isNotEmpty()) info.status = status
                 if (m.isNotEmpty()) info.mode = m
                 info.updatedAt = System.currentTimeMillis()
             }
-            if (m.isNotEmpty()) mode = m
-            if (status == "running" || status == "waiting") running = true else running = false
+            if (m.isNotEmpty()) {
+                mode = m
+                sessionModes[sid] = m
+            }
+            if (status.isNotEmpty()) running = (status == "running" || status == "waiting")
         }
-        messages = ZParse.parseMessages(root).toMutableList()
+        if (root.has("messages")) messages = ZParse.parseMessages(root).toMutableList()
         // 顺手把消息落到本地缓存，内核退出后还能只读回看。
         // 只在拿到真实数据时写，避免把缓存内容又写回缓存。
         // sid 在这里是可空的（拿不到会话 id 就没有归属，不落盘）。
@@ -456,11 +491,15 @@ class ZController private constructor(
         val patch = params.optJSONObject("patch") ?: return
         val st = patch.optString("status")
         if (st.isNotEmpty()) running = (st == "running" || st == "waiting")
+        val stateSid = params.optString("sessionId").ifEmpty { currentSessionId.orEmpty() }
         patch
             .optJSONObject("mode")
             ?.optString("current")
             ?.takeIf { it.isNotEmpty() }
-            ?.let { mode = it }
+            ?.let {
+                mode = it
+                if (stateSid.isNotEmpty()) sessionModes[stateSid] = it
+            }
         patch.optJSONObject("model")?.let { mo ->
             val root = JSONObject().put("settings", JSONObject().put("model", mo))
             val list = ZParse.parseModelOptions(root)
@@ -903,6 +942,8 @@ class ZController private constructor(
                 post {
                     cacheOnly = false
                     sessions = list.toMutableList()
+                    sessionModes.clear()
+                    for (s in list) if (s.mode.isNotEmpty()) sessionModes[s.id] = s.mode
                     for (l in listeners) l.onStateChanged()
                 }
             } else {
@@ -1622,9 +1663,18 @@ class ZController private constructor(
         }
         val maxBytes = 20 * 1024 * 1024
         val chunkLimit = 512 * 1024
+        // 20MB / 512KB 约 40 块；留一批余量再兜一个硬上限，挡住「偏移一直涨但没数据」的空转。
+        val maxPages = 256
         val out = java.io.ByteArrayOutputStream()
 
-        fun step(offset: Long) {
+        fun step(
+            offset: Long,
+            pages: Int,
+        ) {
+            if (pages > maxPages) {
+                post { cb(false, null) }
+                return
+            }
             val params =
                 JSONObject()
                     .put("sessionId", sid)
@@ -1632,7 +1682,7 @@ class ZController private constructor(
                     .put("offset", offset)
                     .put("limit", chunkLimit)
             runtime.call("v4/attachment/read", params) { ok, body ->
-                if (!ok || body == null) {
+                if (!ok) {
                     post { cb(false, null) }
                     return@call
                 }
@@ -1648,15 +1698,20 @@ class ZController private constructor(
                 }
                 out.write(bytes)
                 val nextRaw = body.opt("nextOffset")
-                if (nextRaw == null || nextRaw == JSONObject.NULL || out.size() >= maxBytes) {
-                    val data = out.toByteArray()
-                    post { cb(true, data) }
-                } else {
-                    step(body.optLong("nextOffset", 0L))
+                val next = if (nextRaw == null || nextRaw == JSONObject.NULL) -1L else body.optLong("nextOffset", -1L)
+                when {
+                    // 偏移不再前进：按旧偏移再请求只会拿到同一块，递归下去内存会一直涨。
+                    next <= offset -> {
+                        val data = out.toByteArray()
+                        post { cb(true, data) }
+                    }
+                    // 到上限就是截断。截断的附件解不出来，报成功只会让上层以为拿到了完整内容。
+                    out.size() >= maxBytes -> post { cb(false, null) }
+                    else -> step(next, pages + 1)
                 }
             }
         }
-        step(0L)
+        step(0L, 0)
     }
 
     fun stop(cb: ((Boolean, String) -> Unit)? = null) {

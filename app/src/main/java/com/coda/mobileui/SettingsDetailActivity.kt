@@ -2790,7 +2790,7 @@ class SettingsDetailActivity :
                                     .trim()
                                     .ifEmpty { id },
                             apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
-                            baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString()),
+                            baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString(), typeOfRecord),
                             // 内核的 access.apiKey 是非空必填：留空会让整条供应商在注册阶段被跳过，
                             // 模型随之消失。无鉴权的本地网关也必须有字符串占位。
                             apiKey =
@@ -3101,7 +3101,7 @@ class SettingsDetailActivity :
                                     .trim()
                                     .ifEmpty { id },
                             apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
-                            baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString()),
+                            baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString(), typeOfRecord),
                             // 内核的 access.apiKey 是非空必填：留空会让整条供应商在注册阶段被跳过，
                             // 模型随之消失。无鉴权的本地网关也必须有字符串占位。
                             apiKey =
@@ -3155,7 +3155,7 @@ class SettingsDetailActivity :
                                 .trim()
                                 .ifEmpty { id },
                         apiType = typeOfRecord.ifEmpty { "openai-chat-completions" },
-                        baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString()),
+                        baseUrl = ProviderStore.normalizeBaseUrl(urlInput.text.toString(), typeOfRecord),
                         // 内核的 access.apiKey 是非空必填：留空会让整条供应商在注册阶段被跳过，
                         // 模型随之消失。无鉴权的本地网关也必须有字符串占位。
                         apiKey =

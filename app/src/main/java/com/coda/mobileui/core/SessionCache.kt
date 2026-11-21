@@ -36,6 +36,23 @@ object SessionCache {
             Thread(r, "coda-session-cache").apply { isDaemon = true }
         }
 
+    /** 一条待缓存的消息：只留离线要显示的那四个字段。 */
+    private class MsgRow(
+        val id: String,
+        val role: String,
+        val createdAt: Long,
+        val text: String,
+    )
+
+    /**
+     * 待落盘的会话快照。
+     *
+     * 流式输出时快照会连续刷新，每轮都全量写一次盘没有意义：同一会话只保留最新一份，
+     * 排队的旧快照直接丢弃，最后落盘的仍然是最新内容。
+     */
+    private val pendingMessages = java.util.concurrent.ConcurrentHashMap<String, List<MsgRow>>()
+    private val pendingFlush = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private fun dir(ctx: Context): File = File(ctx.filesDir, DIR).apply { mkdirs() }
 
     private fun msgFile(
@@ -52,14 +69,20 @@ object SessionCache {
         file: File,
         text: String,
     ) {
-        io.execute {
-            runCatching {
-                val tmp = File(file.parentFile, file.name + ".tmp")
-                tmp.writeText(text)
-                if (!tmp.renameTo(file)) {
-                    file.writeText(text)
-                    tmp.delete()
-                }
+        io.execute { writeFileNow(file, text) }
+    }
+
+    /** 同上，但由调用方保证已经在缓存线程里执行。 */
+    private fun writeFileNow(
+        file: File,
+        text: String,
+    ) {
+        runCatching {
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            tmp.writeText(text)
+            if (!tmp.renameTo(file)) {
+                file.writeText(text)
+                tmp.delete()
             }
         }
     }
@@ -119,20 +142,55 @@ object SessionCache {
         list: List<ZMessage>,
     ) {
         if (sessionId.isEmpty() || list.isEmpty()) return
-        val array = JSONArray()
-        // 只留尾部：离线看的是「聊到哪了」，前面几百条对判断上下文没有额外价值。
-        for (m in list.takeLast(MAX_MESSAGES)) {
-            array.put(
-                JSONObject()
-                    .put("id", m.id)
-                    .put("role", m.role)
-                    .put("createdAt", m.createdAt)
-                    .put("text", m.text()),
-            )
+        // 主线程只做一次浅拷贝并把文本取出来（纯字符串拼接，不碰磁盘），
+        // 序列化与写盘全在缓存线程完成：历史变长后不会再卡住每轮对话。
+        val rows =
+            list.takeLast(MAX_MESSAGES).map {
+                MsgRow(it.id, it.role, it.createdAt, it.text())
+            }
+        pendingMessages[sessionId] = rows
+        scheduleFlush(ctx.applicationContext ?: ctx)
+    }
+
+    /** 把排队的快照写到盘上；同一时刻只有一个刷盘任务在跑。 */
+    private fun scheduleFlush(ctx: Context) {
+        if (!pendingFlush.compareAndSet(false, true)) return
+        io.execute {
+            try {
+                while (true) {
+                    val id = pendingMessages.keys.firstOrNull() ?: break
+                    val rows = pendingMessages.remove(id) ?: continue
+                    writeMessages(ctx, id, rows)
+                }
+                prune(ctx)
+            } finally {
+                pendingFlush.set(false)
+                // 刷盘期间可能又来了新快照，补一次调度，保证最后一次写入生效。
+                if (pendingMessages.isNotEmpty()) scheduleFlush(ctx)
+            }
         }
-        val payload = JSONObject().put("v", 1).put("sessionId", sessionId).put("messages", array)
-        writeAtomic(msgFile(ctx, sessionId), payload.toString())
-        io.execute { prune(ctx) }
+    }
+
+    private fun writeMessages(
+        ctx: Context,
+        sessionId: String,
+        rows: List<MsgRow>,
+    ) {
+        runCatching {
+            val array = JSONArray()
+            // 只留尾部：离线看的是「聊到哪了」，前面几百条对判断上下文没有额外价值。
+            for (m in rows) {
+                array.put(
+                    JSONObject()
+                        .put("id", m.id)
+                        .put("role", m.role)
+                        .put("createdAt", m.createdAt)
+                        .put("text", m.text),
+                )
+            }
+            val payload = JSONObject().put("v", 1).put("sessionId", sessionId).put("messages", array)
+            writeFileNow(msgFile(ctx, sessionId), payload.toString())
+        }
     }
 
     /** 读回某个会话的缓存消息；没有缓存时返回空表。 */

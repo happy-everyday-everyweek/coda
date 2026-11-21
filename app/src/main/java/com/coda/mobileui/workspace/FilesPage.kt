@@ -195,6 +195,12 @@ open class FilesPage(
             host.closePage(this)
             return
         }
+        // 恢复持久化标签同样要守 2MB 上限，否则重启后可能把大文件整份读进内存。
+        if (file.length() > MAX_EDIT_BYTES) {
+            toast("文件超过 2 MB，未打开")
+            host.closePage(this)
+            return
+        }
         // 文件页刚读过一遍正文：直接用它，别为了同一个文件再读一次。
         val prefetched = host.takePrefetched(path)
         if (prefetched != null) {
@@ -356,8 +362,9 @@ open class FilesPage(
         val mtime = runCatching { file.lastModified() }.getOrDefault(0L)
         if (!force && mtime <= loadedMtime) return
         if (dirty) {
-            loadedMtime = mtime
-            toast("磁盘上的文件已被修改，当前未保存内容保留")
+            // 不推进 loadedMtime：否则这次冲突会被“记住已处理”，保存时直接覆盖外部改动。
+            externalConflict = true
+            toast("磁盘上的文件已被修改，当前未保存内容保留；保存前会再确认")
             return
         }
         readInto(
@@ -565,6 +572,9 @@ override fun menuItems(): List<String> =
     private var readOnlyPreview = false
 
     private var loadedMtime = 0L
+
+    /** 磁盘内容在编辑器脏状态下变过：保存前必须再次确认，不能静默覆盖。 */
+    private var externalConflict = false
 
     /** 当前选中的文件（用于复制/移动到另一栏）。 */
     private var selectedFile: File? = null
@@ -930,8 +940,9 @@ override fun menuItems(): List<String> =
                     extractZip(pack, target)
                 } else {
                     target.mkdirs()
-                    // 给 tar 一个上限：包损坏或体积很大时会一直挂着，
-                    // 后面每次进这个目录都卡在「正在解压…」。
+                    // tar 条目名与链接目标都要预检：绝对路径、.. 或指向目录外的链接
+                    // 会把文件写到目标目录之外。ZIP 分支已有同等校验。
+                    if (!tarEntriesSafe(pack, target)) return@background false
                     val r =
                         host.env.exec(
                             listOf("tar", "-xf", pack.absolutePath, "-C", target.absolutePath),
@@ -950,6 +961,30 @@ override fun menuItems(): List<String> =
             },
             onError = { toast("解压失败") },
         )
+    }
+
+    /** tar 条目预检：拒绝绝对路径、`..` 组件与指向归档外的符号链接。 */
+    private fun tarEntriesSafe(
+        pack: File,
+        target: File,
+    ): Boolean {
+        val listed = host.env.exec(listOf("tar", "-tf", pack.absolutePath), timeoutMs = 60_000L)
+        if (!listed.ok) return false
+        fun unsafe(path: String): Boolean = path.startsWith("/") || path.split('/').any { it == ".." }
+        if (listed.output.lineSequence().any { it.isNotBlank() && unsafe(it.trim()) }) return false
+        val detailed = host.env.exec(listOf("tar", "-tvf", pack.absolutePath), timeoutMs = 60_000L)
+        if (detailed.ok) {
+            for (line in detailed.output.lineSequence()) {
+                if (!line.startsWith("l")) continue
+                val link = line.substringAfter(" -> ", "").trim()
+                if (link.isEmpty() || unsafe(link)) return false
+                // 相对链接必须仍落在目标目录内。
+                val resolved = File(target, link).canonicalFile
+                val root = target.canonicalFile
+                if (resolved != root && !resolved.path.startsWith(root.path + File.separator)) return false
+            }
+        }
+        return true
     }
 
     /**
@@ -1188,6 +1223,17 @@ override fun menuItems(): List<String> =
     }
 
     private fun move(file: File) {
+        protectedReason(file)?.let {
+            toast(it)
+            return
+        }
+        val srcCanonical = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+        val rootCanonical = runCatching { host.root.canonicalPath }.getOrDefault(host.root.absolutePath)
+        // 工作区自身或它的上级被移走，标签、配置与 rootfs 全部失效。
+        if (rootCanonical == srcCanonical || rootCanonical.startsWith(srcCanonical + File.separator)) {
+            toast("不能移动工作区目录或它的上级目录")
+            return
+        }
         DirectoryPicker.show(host, "移动到目录", current) { targetDir ->
             val target = File(targetDir, file.name)
             if (target.absolutePath == file.absolutePath) return@show

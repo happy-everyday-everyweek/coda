@@ -160,7 +160,9 @@ class LinuxEnv(
                     break
                 }
             }
-            return isReady()
+            // 等到的环境必须正是本次要的版本：并发装配时对方可能装的是旧资产，
+            // 只看 isReady 会启动到过期 rootfs，随后所有依赖新版本的操作都会莫名失败。
+            return isReady() && runCatching { marker.readText().trim() }.getOrNull() == wanted
         }
 
         return try {
@@ -384,6 +386,9 @@ class LinuxEnv(
      */
     private fun ensureResolvConf() {
         val target = File(rootfs, "etc/resolv.conf")
+        // 这个路径在 rootfs 里常常是指向宿主 /etc/resolv.conf 的链接。isFile 会跟随链接，
+        // 直接 writeText 就写穿到宿主机上了；链接一律先删掉，再落成普通文件。
+        if (isSymlink(target) || (target.exists() && !target.isFile)) target.delete()
         val existing =
             runCatching {
                 if (target.isFile) target.readText() else ""
@@ -576,9 +581,15 @@ class LinuxEnv(
                     }
 
                     type == '2' -> {
-                        target.parentFile?.mkdirs()
-                        target.delete()
-                        runCatching { Os.symlink(linkName, target.absolutePath) }
+                        // 链接指向归档外就等于给容器留了一条写到宿主机的通道，
+                        // 装上去之后 rm -rf / 之类的操作会穿透到真机目录。
+                        if (symlinkStaysInside(dest, relative, linkName)) {
+                            target.parentFile?.mkdirs()
+                            target.delete()
+                            runCatching { Os.symlink(linkName, target.absolutePath) }
+                        } else {
+                            AppLog.w("LinuxEnv", "跳过越界的符号链接：$relative -> $linkName")
+                        }
                     }
 
                     isRegular -> {
@@ -597,6 +608,24 @@ class LinuxEnv(
             val padding = (512L - (payload % 512L)) % 512L
             if (padding > 0) skipExactly(input, padding, buffer)
         }
+    }
+
+    /**
+     * 符号链接是否仍落在解包目录内。
+     *
+     * 只做词法归一：绝对路径直接拒绝，`..` 逐段消解后比较前缀。
+     * 归档里的链接不需要先存在，所以不能靠 canonicalPath（它会跟随已存在的链接）。
+     */
+    private fun symlinkStaysInside(
+        dest: File,
+        relative: String,
+        linkName: String,
+    ): Boolean {
+        if (linkName.isEmpty() || linkName.startsWith("/")) return false
+        val base = dest.absolutePath.trimEnd('/')
+        val parent = File(dest, relative).parentFile?.absolutePath ?: base
+        val resolved = java.nio.file.Paths.get(parent, linkName).normalize().toString()
+        return resolved == base || resolved.startsWith("$base/")
     }
 
     private fun readBlock(
@@ -794,7 +823,17 @@ class LinuxEnv(
     }
 
     private fun deleteRecursive(file: File) {
-        if (file.isDirectory) file.listFiles()?.forEach { deleteRecursive(it) }
+        // 符号链接本身不展开：链接到目录时 isDirectory 为真，跟进去就会删到链接目标
+        // （rootfs 里存在指向宿主 /etc 之类的链接），删的已经不是本应用的文件了。
+        if (!isSymlink(file) && file.isDirectory) file.listFiles()?.forEach { deleteRecursive(it) }
         file.delete()
     }
+
+    /** 判断是否是符号链接（不跟随）。 */
+    private fun isSymlink(file: File): Boolean =
+        try {
+            android.system.OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
+        } catch (_: Throwable) {
+            false
+        }
 }

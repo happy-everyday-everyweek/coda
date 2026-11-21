@@ -34,6 +34,12 @@ object ShizukuShell {
             grantResults.isNotEmpty() &&
             grantResults[0] == PackageManager.PERMISSION_GRANTED
 
+    /** 本应用的无障碍服务组件名，供启停时精确定位。 */
+    const val SELF_ACCESSIBILITY = "com.coda.mobileui/com.coda.mobileui.core.PhoneAccessibilityService"
+
+    /** 合法的组件名：包名/类名，只允许字母数字下划线与点。 */
+    private val COMPONENT = Regex("^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$")
+
     fun exec(command: String): Result<String> {
         if (!isReady()) return Result.failure(IllegalStateException("Shizuku 未授权"))
         return runCatching {
@@ -54,21 +60,69 @@ object ShizukuShell {
                     arrayOf<String>(),
                     "/",
                 ) as Process
-            val output = process.inputStream.bufferedReader().readText()
-            process.waitFor()
-            output.trim()
+            try {
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                val code = process.waitFor()
+                // 退出码必须检查：settings/input 失败时同样是空输出，
+                // 不看退出码就会把「没写进去」当成执行成功。
+                if (code != 0) {
+                    throw IllegalStateException("命令失败（退出码 $code）：${output.trim().take(200)}")
+                }
+                output.trim()
+            } finally {
+                // 管道不关会漏 FD，调用几百次后进程就开不出新管道了。
+                runCatching { process.inputStream.close() }
+                runCatching { process.errorStream.close() }
+                runCatching { process.outputStream.close() }
+                if (process.isAlive) runCatching { process.destroy() }
+            }
         }
     }
 
+    /** 当前已启用的无障碍服务列表（过滤掉非法项，避免把设置里的脏数据拼进命令）。 */
+    private fun enabledAccessibility(): List<String> =
+        exec("settings get secure enabled_accessibility_services")
+            .getOrNull()
+            .orEmpty()
+            .split(':')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != "null" && COMPONENT.matches(it) }
+
     /** 打开指定无障碍服务，参数形如 `com.coda.mobileui/com.coda.mobileui.XxxService`。 */
-    fun enableAccessibility(service: String): Result<String> =
-        exec(
-            "settings put secure enabled_accessibility_services $service; " +
+    fun enableAccessibility(service: String): Result<String> {
+        if (!COMPONENT.matches(service)) {
+            return Result.failure(IllegalArgumentException("非法的服务组件名：$service"))
+        }
+        // 直接 put 会覆盖整个列表，把用户在系统设置里开过的其它无障碍服务一起关掉；
+        // 这里先读现有列表再追加，本应用已在列表里时不重复添加。
+        val list = enabledAccessibility()
+        val merged = if (list.contains(service)) list else list + service
+        return exec(
+            "settings put secure enabled_accessibility_services '${merged.joinToString(":")}'; " +
                 "settings put secure accessibility_enabled 1",
         )
+    }
 
-    fun disableAccessibility(): Result<String> =
-        exec("settings put secure accessibility_enabled 0")
+    /**
+     * 关掉本应用的无障碍服务。
+     *
+     * 只从列表里摘掉自己这一项：把 accessibility_enabled 置 0 会把用户开着的所有
+     * 无障碍服务一起关掉（读屏、输入法等），影响远超本应用。
+     */
+    fun disableAccessibility(service: String = SELF_ACCESSIBILITY): Result<String> {
+        if (!COMPONENT.matches(service)) {
+            return Result.failure(IllegalArgumentException("非法的服务组件名：$service"))
+        }
+        val rest = enabledAccessibility().filter { it != service }
+        val command =
+            if (rest.isEmpty()) {
+                "settings put secure enabled_accessibility_services null; " +
+                    "settings put secure accessibility_enabled 0"
+            } else {
+                "settings put secure enabled_accessibility_services '${rest.joinToString(":")}'"
+            }
+        return exec(command)
+    }
 
     fun tap(
         x: Int,
@@ -85,18 +139,23 @@ object ShizukuShell {
 
     fun key(code: Int): Result<String> = exec("input keyevent $code")
 
-    fun screenSize(): Pair<Int, Int>? =
-        exec("wm size")
-            .getOrNull()
-            ?.lines()
-            ?.firstOrNull { it.contains("Override size") || it.contains("Physical size") }
-            ?.substringAfter(':')
-            ?.trim()
-            ?.split('x')
-            ?.takeIf { it.size == 2 }
+    fun screenSize(): Pair<Int, Int>? {
+        val text = exec("wm size").getOrNull() ?: return null
+        // 有 Override size 时它才是当前生效的分辨率；按行序取第一条会拿到 Physical size，
+        // 虚拟显示或改过分辨率的情况下坐标就会整体偏移。
+        val line =
+            text.lines().firstOrNull { it.contains("Override size") }
+                ?: text.lines().firstOrNull { it.contains("Physical size") }
+                ?: return null
+        return line
+            .substringAfter(':')
+            .trim()
+            .split('x')
+            .takeIf { it.size == 2 }
             ?.let { (w, h) ->
                 w.trim().toIntOrNull()?.let { ww -> h.trim().toIntOrNull()?.let { hh -> ww to hh } }
             }
+    }
 
     /**
      * 起一块虚拟副屏（系统自带的「模拟副屏」开关），spec 形如 `1280x720/160`。

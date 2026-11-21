@@ -77,8 +77,13 @@ object ProviderStore {
      * `.../v1/chat/completions/chat/completions`，请求 404，而界面上端点看起来完全正确。
      *
      * 只做保守裁剪：去掉尾部斜杠，以及已知的接口后缀；不动路径中间的部分。
+     * [apiType] 用来处理协议差异：Anthropic 由内核自己补 `/v1`，端点留下 `/v1` 就会拼成
+     * `.../v1/v1/messages`。
      */
-    fun normalizeBaseUrl(raw: String): String {
+    fun normalizeBaseUrl(
+        raw: String,
+        apiType: String = "",
+    ): String {
         var v = raw.trim().trimEnd('/')
         // 本地网关最常见的写法是 `127.0.0.1:8317/v1` 或 `localhost:7864/v1`，
         // 缺协议。内核按 URL 校验 baseUrl，缺 http:// 会让整条供应商在注册阶段被跳过。
@@ -113,26 +118,46 @@ object ProviderStore {
                 }
             }
         }
+        // Anthropic 的版本段由内核补：这里再留一层 /v1，最终就是 /v1/v1/messages。
+        if (apiType.startsWith("anthropic")) {
+            while (v.endsWith("/v1")) {
+                v = v.removeSuffix("/v1").trimEnd('/')
+            }
+        }
         return v
     }
 
     fun load(ctx: Context): MutableList<Provider> {
+        // 每轮读取重新判定：用户修好或删掉损坏文件后，迁移逻辑应该恢复工作。
+        sidecarCorrupt = false
         val f = fileFor(ctx)
         var legacyMarker = false
+        // 主文件解析失败时只读降级：任何自动迁移都不能把一份还能手工抢救的配置换成空内容。
+        var corrupt = false
         val parsed =
             if (!f.exists()) {
                 mutableListOf()
             } else {
-                try {
-                    val text = f.readText()
-                    // 先解析成功再判断旧字段：解析失败时若把 marker 置真，
-                    // 下面的「重写干净格式」会把一份坏掉但可能可救的配置直接清空。
-                    val root = JSONObject(text)
-                    val list = parse(root)
-                    legacyMarker = text.contains("codaKind") || text.contains("codaOrigin")
-                    list
-                } catch (_: Throwable) {
+                val text = runCatching { f.readText() }.getOrNull()
+                if (text == null) {
+                    corrupt = true
+                    backupCorrupt(f)
+                    AppLog.w("ProviderStore", "读取 ${f.name} 失败，已备份原件并跳过自动迁移")
                     mutableListOf()
+                } else {
+                    try {
+                        // 先解析成功再判断旧字段：解析失败时若把 marker 置真，
+                        // 下面的「重写干净格式」会把一份坏掉但可能可救的配置直接清空。
+                        val root = JSONObject(text)
+                        val list = parse(root)
+                        legacyMarker = text.contains("codaKind") || text.contains("codaOrigin")
+                        list
+                    } catch (t: Throwable) {
+                        corrupt = true
+                        backupCorrupt(f)
+                        AppLog.w("ProviderStore", "解析 ${f.name} 失败：${t.message ?: t.javaClass.simpleName}，已备份原件")
+                        mutableListOf()
+                    }
                 }
             }
         // ASR 供应商单独存：它们不该进内核的供应商文件，否则 whisper 这类
@@ -150,7 +175,7 @@ object ProviderStore {
         // supportsImage=false 的旧模型规则，升级后视觉模型依旧收不到图片。
         val metaHasCapabilities = runCatching { metaFile(ctx).readText() }.getOrDefault("").contains("supportsImage")
         for (p in combined) {
-            val normalized = normalizeBaseUrl(p.baseUrl)
+            val normalized = normalizeBaseUrl(p.baseUrl, p.apiType)
             if (normalized != p.baseUrl) {
                 p.baseUrl = normalized
                 repaired = true
@@ -170,6 +195,12 @@ object ProviderStore {
         // 旧版本把 ASR 也写在内核文件里；检测到就迁移到独立文件，
         // 否则内核仍会把 whisper 这类模型注册进聊天模型列表。
         val kernelHasAsr = parsed.any { it.kind == ProviderKind.ASR }
+        // 任何一份文件坏掉都不做自动迁移：内存里此时只有「能解析出来的那部分」，
+        // 照常 save() 会把损坏文件连同旁路数据一起覆盖成空。
+        if (corrupt || sidecarCorrupt) {
+            AppLog.w("ProviderStore", "供应商配置或其旁路文件解析失败，本次跳过自动迁移，保留磁盘原文件")
+            return mergeBuiltins(combined)
+        }
         if (legacyMarker || kernelHasAsr || repaired || (combined.any { it.kind == ProviderKind.LLM } && !metaHasCapabilities)) {
             AppLog.i("ProviderStore", "迁移旧供应商配置：清理 Coda 字段、修端点并把 ASR 移出内核文件")
             save(ctx, combined)
@@ -193,6 +224,41 @@ object ProviderStore {
     /** 备份与诊断需要拿到旁路文件的位置；内核只认 provider_config.json。 */
     fun metaFileFor(ctx: Context): File = metaFile(ctx)
 
+    /**
+     * 旁路文件（ASR / meta）出现过解析失败。
+     *
+     * [load] 看到它就不再执行自动迁移：此时内存里只有能解析的那部分，
+     * 照常重写会把损坏但可能可救的文件换成空内容。
+     */
+    @Volatile
+    private var sidecarCorrupt = false
+
+    /** 把解析失败的文件留一份原件；已有备份时不覆盖最早那份。 */
+    private fun backupCorrupt(f: File) {
+        runCatching {
+            val backup = File(f.parentFile, f.name + ".corrupt")
+            if (f.isFile && !backup.exists()) {
+                f.copyTo(backup, overwrite = false)
+                AppLog.w("ProviderStore", "已备份损坏的 ${f.name} → ${backup.name}")
+            }
+        }.onFailure {
+            AppLog.w("ProviderStore", "备份 ${f.name} 失败：${it.message ?: it.javaClass.simpleName}")
+        }
+    }
+
+    /** 读一份旁路 JSON；解析失败时备份、记日志并置位 [sidecarCorrupt]。 */
+    private fun readJsonObject(f: File): JSONObject? {
+        if (!f.isFile) return null
+        return try {
+            JSONObject(f.readText())
+        } catch (t: Throwable) {
+            sidecarCorrupt = true
+            backupCorrupt(f)
+            AppLog.w("ProviderStore", "解析 ${f.name} 失败：${t.message ?: t.javaClass.simpleName}，已备份原件")
+            null
+        }
+    }
+
     /** 旁路元数据：内核不认识的字段都放这里。 */
     private data class Meta(
         val kind: ProviderKind,
@@ -206,15 +272,13 @@ object ProviderStore {
     )
 
     private fun readMeta(ctx: Context): Map<String, Meta> {
-        val f = metaFile(ctx)
-        if (!f.isFile) return emptyMap()
+        val items = readJsonObject(metaFile(ctx))?.optJSONObject("providers") ?: return emptyMap()
         return runCatching {
-            val root = JSONObject(f.readText()).optJSONObject("providers") ?: return emptyMap()
             val out = mutableMapOf<String, Meta>()
-            val keys = root.keys()
+            val keys = items.keys()
             while (keys.hasNext()) {
                 val id = keys.next()
-                val o = root.optJSONObject(id) ?: continue
+                val o = items.optJSONObject(id) ?: continue
                 val kind = if (o.optString("kind") == "asr") ProviderKind.ASR else ProviderKind.LLM
                 val origin =
                     when (o.optString("origin")) {
@@ -241,34 +305,32 @@ object ProviderStore {
     private fun writeMeta(
         ctx: Context,
         providers: List<Provider>,
-    ) {
-        runCatching {
-            val root = JSONObject()
-            val items = JSONObject()
-            for (p in providers) {
-                if (isBuiltin(p)) continue
-                items.put(
-                    p.id,
-                    JSONObject()
-                        .put("kind", if (p.kind == ProviderKind.ASR) "asr" else "llm")
-                        .put(
-                            "origin",
-                            when (p.origin) {
-                                ProviderOrigin.OAUTH -> "oauth"
-                                ProviderOrigin.BUILTIN -> "builtin"
-                                else -> "manual"
-                            },
-                        ).put("contextWindow", p.contextWindow)
-                        .put("supportsImage", p.supportsImage)
-                        .put("supportsVideo", p.supportsVideo)
-                        .put("supportsAudio", p.supportsAudio)
-                        .put("supportsPdf", p.supportsPdf)
-                        .put("supportsToolCall", p.supportsToolCall),
-                )
-            }
-            root.put("providers", items)
-            writeTextAtomic(metaFile(ctx), root.toString(2))
+    ): Boolean {
+        val root = JSONObject()
+        val items = JSONObject()
+        for (p in providers) {
+            if (isBuiltin(p)) continue
+            items.put(
+                p.id,
+                JSONObject()
+                    .put("kind", if (p.kind == ProviderKind.ASR) "asr" else "llm")
+                    .put(
+                        "origin",
+                        when (p.origin) {
+                            ProviderOrigin.OAUTH -> "oauth"
+                            ProviderOrigin.BUILTIN -> "builtin"
+                            else -> "manual"
+                        },
+                    ).put("contextWindow", p.contextWindow)
+                    .put("supportsImage", p.supportsImage)
+                    .put("supportsVideo", p.supportsVideo)
+                    .put("supportsAudio", p.supportsAudio)
+                    .put("supportsPdf", p.supportsPdf)
+                    .put("supportsToolCall", p.supportsToolCall),
+            )
         }
+        root.put("providers", items)
+        return writeTextAtomic(metaFile(ctx), root.toString(2))
     }
 
     private fun applyMeta(
@@ -304,10 +366,8 @@ object ProviderStore {
     fun asrFileFor(ctx: Context): File = asrFile(ctx)
 
     private fun readAsr(ctx: Context): List<Provider> {
-        val f = asrFile(ctx)
-        if (!f.isFile) return emptyList()
+        val root = readJsonObject(asrFile(ctx)) ?: return emptyList()
         return runCatching {
-            val root = JSONObject(f.readText())
             val arr = root.optJSONArray("providers") ?: return emptyList()
             val out = mutableListOf<Provider>()
             for (i in 0 until arr.length()) {
@@ -340,7 +400,7 @@ object ProviderStore {
     private fun writeAsr(
         ctx: Context,
         providers: List<Provider>,
-    ) {
+    ): Boolean {
         val arr = JSONArray()
         for (p in providers) {
             val modelArray = JSONArray()
@@ -355,26 +415,41 @@ object ProviderStore {
                     .put("models", modelArray),
             )
         }
-        writeTextAtomic(asrFile(ctx), JSONObject().put("providers", arr).toString(2))
+        return writeTextAtomic(asrFile(ctx), JSONObject().put("providers", arr).toString(2))
     }
 
-    /** 先写临时文件再改名：内核可能正在读同一份配置，不能让它看到半截 JSON。 */
+    /**
+     * 所有写入共用一把锁：save / writeAsr / writeMeta 可能由 UI 线程与迁移逻辑同时触发，
+     * 只保证单个文件原子替换还不够，三份文件的先后顺序也不能交错。
+     */
+    private val writeLock = Any()
+
+    /**
+     * 先写临时文件再改名：内核可能正在读同一份配置，不能让它看到半截 JSON。
+     *
+     * 临时名带纳秒后缀：多个写入者共用 `<name>.tmp` 时，一个线程会把另一个线程
+     * 尚未写完的内容 rename 上线，正好产生本方法要避免的半截文件。
+     */
     private fun writeTextAtomic(
         target: File,
         text: String,
-    ) {
-        runCatching {
-            target.parentFile?.mkdirs()
-            val tmp = File(target.parentFile, target.name + ".tmp")
-            tmp.writeText(text)
-            if (!tmp.renameTo(target)) {
-                target.writeText(text)
-                tmp.delete()
-            }
-        }.onFailure {
-            AppLog.w("ProviderStore", "写 ${target.name} 失败：${it.message ?: it.javaClass.simpleName}")
+    ): Boolean =
+        synchronized(writeLock) {
+            runCatching {
+                target.parentFile?.mkdirs()
+                val tmp = File(target.parentFile, target.name + "." + System.nanoTime() + ".tmp")
+                try {
+                    tmp.writeText(text)
+                    // 失败时不回退成 writeText(target)：那会在目标文件上留下半截 JSON。
+                    if (!tmp.renameTo(target)) throw IllegalStateException("替换 ${target.name} 失败")
+                    true
+                } finally {
+                    if (tmp.exists()) runCatching { tmp.delete() }
+                }
+            }.onFailure {
+                AppLog.w("ProviderStore", "写 ${target.name} 失败：${it.message ?: it.javaClass.simpleName}")
+            }.getOrDefault(false)
         }
-    }
 
     // ------------------------------------------------------------ 内置供应商
 
@@ -466,10 +541,11 @@ object ProviderStore {
         return out
     }
 
+    @Synchronized
     fun save(
         ctx: Context,
         providers: List<Provider>,
-    ) {
+    ): Boolean {
         val root = JSONObject()
         root.put("schemaVersion", 1)
         val config = JSONObject()
@@ -554,10 +630,19 @@ object ProviderStore {
         )
 
         root.put("config", config)
+        // 先写旁路文件，最后替换内核配置：内核文件是提交点。
+        // 反过来做的话，迁移时从内核文件裁掉的 ASR 条目会有一段时间既不在内核文件、
+        // 也没写进 sidecar，中间崩溃它们就彻底没了。
+        if (!writeAsr(ctx, asr)) {
+            AppLog.w("ProviderStore", "写 ASR 供应商失败，保留原内核配置")
+            return false
+        }
+        if (!writeMeta(ctx, all)) {
+            AppLog.w("ProviderStore", "写供应商元数据失败，保留原内核配置")
+            return false
+        }
         // 原子替换：内核可能正好在这次写盘期间读取配置，直接 writeText 会让它读到
         // 半截 JSON，strict 解析失败后当作「没有任何供应商」，模型列表瞬间全空。
-        writeTextAtomic(fileFor(ctx), root.toString(2))
-        writeAsr(ctx, asr)
-        writeMeta(ctx, all)
+        return writeTextAtomic(fileFor(ctx), root.toString(2))
     }
 }
