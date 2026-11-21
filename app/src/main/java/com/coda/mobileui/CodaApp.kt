@@ -16,26 +16,49 @@ class CodaApp : Application() {
         super.onCreate()
         // 日志要最先初始化：后面的每一步都可能在日志里留下唯一的线索
         AppLog.init(this)
-        AppCompatDelegate.setDefaultNightMode(SettingsStore.get(this).nightMode)
-        // 崩溃拦截：不闪退，展示崩溃页面并落盘日志
+        // 崩溃拦截必须排在所有设置读取之前：SharedPreferences 损坏这类早期失败
+        // 也要能落到崩溃页与日志里，否则启动阶段的问题永远查不到
         CrashGuard.install(this)
+        AppCompatDelegate.setDefaultNightMode(readNightMode())
         // 手机控制：开关开启时恢复本地 MCP 服务器（供内核连接）
         try {
             PhoneControl.startIfEnabled(this)
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
+            // 只吞可恢复异常，并留下线索；OOM、栈溢出这类 Error 交给崩溃防护
+            AppLog.e(TAG, "手机控制启动失败", e)
         }
-        // 拓展：登记已开放分类并完成首次装载；内置拓展的二进制在这一步释放到运行目录
-        try {
-            Extensions.engine(this)
-        } catch (_: Throwable) {
-        }
-        // 更新包清理：安装成功后旧包就没用了，但它有几十 MB。
-        // 放到后台是因为要遍历目录，启动路径上不该做文件 IO。
         Bg.run {
+            // 拓展：登记分类并完成首次装载。内置拓展的二进制在这一步释放到运行目录，
+            // 是实打实的文件 IO，不能挂在 onCreate 上
             try {
-                UpdateInstaller.cleanup(this@CodaApp, BuildConfig.VERSION_CODE)
-            } catch (_: Throwable) {
+                Extensions.engine(applicationContext)
+            } catch (e: Exception) {
+                AppLog.e(TAG, "扩展装载失败，本次会话扩展不可用", e)
+            }
+            // 更新包清理：安装成功后旧包就没用了，但它有几十 MB
+            try {
+                UpdateInstaller.cleanup(applicationContext, BuildConfig.VERSION_CODE)
+            } catch (e: Exception) {
+                AppLog.e(TAG, "更新包清理失败", e)
             }
         }
+    }
+
+    /**
+     * 读取夜间模式设置。
+     *
+     * 设置存储可能因为文件损坏、读到半个 JSON 等原因在启动时抛异常。
+     * 这里退回「跟随系统」——对它来说任何取值都能用，不至于让应用起不来。
+     */
+    private fun readNightMode(): Int =
+        try {
+            SettingsStore.get(this).nightMode
+        } catch (e: Exception) {
+            AppLog.e(TAG, "读取夜间模式失败，本次跟随系统", e)
+            AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+        }
+
+    private companion object {
+        const val TAG = "CodaApp"
     }
 }

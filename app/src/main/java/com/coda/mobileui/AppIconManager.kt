@@ -3,6 +3,7 @@ package com.coda.mobileui
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
+import com.coda.mobileui.core.AppLog
 
 /**
  * 应用图标套件切换。
@@ -25,6 +26,65 @@ object AppIconManager {
             "LauncherOrange",
         )
 
+    /** 别名清单，测试与实现共用同一份顺序。 */
+    internal val ALIAS_NAMES: List<String> = ALIASES.toList()
+
+    /** 与 PackageManager 的 COMPONENT_ENABLED_STATE_* 取值一致，便于在 JVM 单测里断言。 */
+    internal const val STATE_ENABLED = 1
+
+    /** 见 [STATE_ENABLED]。 */
+    internal const val STATE_DISABLED = 2
+
+    private const val PREFS = "app_icon"
+    private const val KEY_APPLIED = "appliedSlot"
+    private const val TAG = "AppIcon"
+
+    /**
+     * 组件设置序列：先启用目标，再禁用其余。
+     *
+     * 顺序是有意义的——之前先禁用旧别名、再启用新别名，两步之间的空档里桌面上
+     * 一个可用入口都没有，图标会闪一下甚至消失。
+     */
+    internal fun planFor(slot: Int): List<Pair<String, Int>> {
+        val target = slot.coerceIn(0, ALIASES.size - 1)
+        val plan = ArrayList<Pair<String, Int>>(ALIASES.size)
+        plan += ALIASES[target] to STATE_ENABLED
+        ALIASES.forEachIndexed { index, alias ->
+            if (index != target) plan += alias to STATE_DISABLED
+        }
+        return plan
+    }
+
+    /**
+     * 是否需要真的写组件状态。
+     *
+     * 每个页面创建都会走一次切换，而每次写入都会让启动器刷新图标。槽位没变、
+     * 目标别名也仍处于启用状态时直接返回。
+     */
+    internal fun shouldSkip(
+        slot: Int,
+        applied: Int,
+        targetEnabled: Boolean,
+    ): Boolean = applied == slot && targetEnabled
+
+    /**
+     * 按 [planFor] 逐个设置组件，单个失败不中断后续。
+     *
+     * 返回是否全部成功。任何一个别名在清单里缺失或受限配置下抛 SecurityException，
+     * 都只影响它自己：目标别名的启用排在最前面，已经落地。
+     */
+    internal fun applyWith(
+        slot: Int,
+        set: (alias: String, state: Int) -> Boolean,
+    ): Boolean {
+        var allOk = true
+        for ((alias, state) in planFor(slot)) {
+            val ok = runCatching { set(alias, state) }.getOrElse { false }
+            if (!ok) allOk = false
+        }
+        return allOk
+    }
+
     /** 启用第 slot 套图标（0=自动取色，1..8 对应色板顺序）。 */
     fun apply(
         context: Context,
@@ -33,16 +93,38 @@ object AppIconManager {
         val packageName = context.packageName
         val manager = context.packageManager
         val target = slot.coerceIn(0, ALIASES.size - 1)
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val targetComponent = ComponentName(packageName, "$packageName.${ALIASES[target]}")
+        val targetEnabled = runCatching { isEnabled(manager, targetComponent) }.getOrDefault(false)
+        if (shouldSkip(target, prefs.getInt(KEY_APPLIED, -1), targetEnabled)) return
 
-        ALIASES.forEachIndexed { index, alias ->
-            val component = ComponentName(packageName, "$packageName.$alias")
-            val state =
-                if (index == target) {
-                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                } else {
-                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-                }
-            manager.setComponentEnabledSetting(component, state, PackageManager.DONT_KILL_APP)
+        val allOk =
+            applyWith(target) { alias, state ->
+                val component = ComponentName(packageName, "$packageName.$alias")
+                manager.setComponentEnabledSetting(component, state, PackageManager.DONT_KILL_APP)
+                true
+            }
+        if (allOk) {
+            prefs.edit().putInt(KEY_APPLIED, target).apply()
+        } else {
+            // 有别名没设置成功：不记为已应用，下次进入页面还会再试一次
+            AppLog.w(TAG, "图标切换未全部成功，槽位 $target 不记为已应用")
         }
     }
+
+    /**
+     * 目标别名当前是否启用。
+     *
+     * 从未设置过的组件处于 COMPONENT_ENABLED_STATE_DEFAULT，此时以清单声明为准：
+     * 只有 LauncherAuto 是 enabled="true"。
+     */
+    private fun isEnabled(
+        manager: PackageManager,
+        component: ComponentName,
+    ): Boolean =
+        when (manager.getComponentEnabledSetting(component)) {
+            STATE_ENABLED -> true
+            STATE_DISABLED -> false
+            else -> component.className.endsWith(".LauncherAuto")
+        }
 }
