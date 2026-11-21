@@ -377,27 +377,60 @@ object AutomationSchedule {
     ): JSONObject {
         val parts = cronExpr.trim().split(ws)
 
-        fun single(idx: Int): Int? {
+        /**
+         * 展开 cron 字段：支持 `*`、单值、逗号、区间（`1-5`）与步长（`*/2`、`1-15/3`）。
+         *
+         * 旧实现只接受纯整数，`1-5` 会被静默丢掉并回退成单日，用户设置的规则形同被改写。
+         */
+        fun expand(
+            idx: Int,
+            min: Int,
+            max: Int,
+        ): List<Int>? {
             if (idx >= parts.size) return null
-            val s = parts[idx]
+            val s = parts[idx].trim()
             if (s == "*" || s == "?") return null
-            return s.toIntOrNull()
+            val out = sortedSetOf<Int>()
+            for (token in s.split(',')) {
+                val body = token.trim()
+                if (body.isEmpty()) throw AutomationException("无效的 cron 字段: $s")
+                val step = body.substringAfter('/', "1").toIntOrNull()
+                    ?: throw AutomationException("无效的 cron 步长: $body")
+                if (step < 1) throw AutomationException("无效的 cron 步长: $body")
+                val range = body.substringBefore('/')
+                val (lo, hi) =
+                    when {
+                        range == "*" -> min to max
+                        '-' in range -> {
+                            val pair = range.split('-', limit = 2)
+                            val a = pair[0].toIntOrNull() ?: throw AutomationException("无效的 cron 区间: $body")
+                            val b = pair[1].toIntOrNull() ?: throw AutomationException("无效的 cron 区间: $body")
+                            a to b
+                        }
+                        else -> {
+                            val v = range.toIntOrNull() ?: throw AutomationException("无效的 cron 字段: $body")
+                            v to v
+                        }
+                    }
+                if (lo < min || hi > max || lo > hi) throw AutomationException("cron 字段超出范围: $body")
+                var v = lo
+                while (v <= hi) {
+                    out += v
+                    v += step
+                }
+            }
+            if (out.isEmpty()) throw AutomationException("无效的 cron 字段: $s")
+            return out.toList()
         }
 
-        fun list(idx: Int): List<Int>? {
-            if (idx >= parts.size) return null
-            val s = parts[idx]
-            if (s == "*" || s == "?") return null
-            val v = s.split(',').mapNotNull { it.toIntOrNull() }
-            return v.ifEmpty { null }
-        }
+        fun single(idx: Int): Int? = expand(idx, 0, 59)?.takeIf { it.size == 1 }?.first()
         val zone = ZoneId.systemDefault()
         val anchor = Instant.ofEpochMilli(anchorAt).atZone(zone)
         val minute = single(0) ?: anchor.minute
         val hour = single(1) ?: anchor.hour
-        val monthDays = list(2) ?: listOf(anchor.dayOfMonth)
-        val months = list(3) ?: listOf(anchor.monthValue)
-        val weekdays = list(4) ?: listOf(1)
+        val monthDays = expand(2, 1, 31) ?: listOf(anchor.dayOfMonth)
+        val months = expand(3, 1, 12) ?: listOf(anchor.monthValue)
+        val weekdays = expand(4, 0, 7) ?: listOf(1)
         val o = JSONObject().put("interval", interval).put("anchorAt", anchorAt)
         when (unit) {
             "minute" -> {
@@ -456,6 +489,11 @@ class AutomationStore(
     @Volatile
     private var db: SQLiteDatabase? = null
 
+    /** 认领超时：超过这个时间仍是 running=1，视为孤儿认领，可被回收。 */
+    private val claimTimeoutMs = 10 * 60_000L
+
+    private val tag = "AutomationStore"
+
     private val schemaStatements =
         listOf(
             "CREATE TABLE IF NOT EXISTS automations (" +
@@ -491,17 +529,23 @@ class AutomationStore(
                     )
                 try {
                     d.execSQL("PRAGMA busy_timeout=5000")
-                } catch (_: Throwable) {
+                } catch (e: Throwable) {
+                    AppLog.w(tag, "设置 busy_timeout 失败：${e.message}")
                 }
                 for (stmt in schemaStatements) {
                     try {
                         d.execSQL(stmt)
-                    } catch (_: Throwable) {
+                    } catch (e: Throwable) {
+                        // 建表失败不能返回一个半初始化句柄：关掉连接并抛出，调用方会拿到 null。
+                        AppLog.e(tag, "初始化表结构失败：$stmt", e)
+                        runCatching { d.close() }
+                        throw IllegalStateException("初始化 automations 表失败", e)
                     }
                 }
                 db = d
                 d
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                AppLog.e(tag, "打开任务库失败", e)
                 null
             }
         }
@@ -535,30 +579,45 @@ class AutomationStore(
         val d = open() ?: return false
         return try {
             d.insertWithOnConflict("automations", null, values, SQLiteDatabase.CONFLICT_REPLACE) != -1L
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            AppLog.e(tag, "插入任务失败", e)
             false
         }
     }
 
-    fun getRow(id: String): JSONObject? {
+    fun getRow(
+        id: String,
+        workspaceKey: String? = null,
+    ): JSONObject? {
         val d = open() ?: return null
         return try {
-            d.rawQuery("SELECT * FROM automations WHERE automation_id = ?", arrayOf(id)).use { c ->
+            val (where, args) =
+                if (workspaceKey == null) {
+                    "automation_id = ?" to arrayOf(id)
+                } else {
+                    "automation_id = ? AND workspace_key = ?" to arrayOf(id, workspaceKey)
+                }
+            d.rawQuery("SELECT * FROM automations WHERE $where", args).use { c ->
                 if (c.moveToNext()) rowToJson(c) else null
             }
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            AppLog.e(tag, "读取任务失败：$id", e)
             null
         }
     }
 
-    fun listRows(): List<JSONObject> {
+    fun listRows(workspaceKey: String): List<JSONObject> {
         val d = open() ?: return emptyList()
         val out = mutableListOf<JSONObject>()
         try {
-            d.rawQuery("SELECT * FROM automations ORDER BY created_at DESC", null).use { c ->
+            d.rawQuery(
+                "SELECT * FROM automations WHERE workspace_key = ? ORDER BY created_at DESC",
+                arrayOf(workspaceKey),
+            ).use { c ->
                 while (c.moveToNext()) out += rowToJson(c)
             }
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            AppLog.e(tag, "列出任务失败", e)
         }
         return out
     }
@@ -566,20 +625,38 @@ class AutomationStore(
     fun update(
         id: String,
         values: ContentValues,
+        workspaceKey: String? = null,
     ): Boolean {
         val d = open() ?: return false
         return try {
-            d.update("automations", values, "automation_id = ?", arrayOf(id)) > 0
-        } catch (_: Throwable) {
+            val (where, args) =
+                if (workspaceKey == null) {
+                    "automation_id = ?" to arrayOf(id)
+                } else {
+                    "automation_id = ? AND workspace_key = ?" to arrayOf(id, workspaceKey)
+                }
+            d.update("automations", values, where, args) > 0
+        } catch (e: Throwable) {
+            AppLog.e(tag, "更新任务失败：$id", e)
             false
         }
     }
 
-    fun delete(id: String): Boolean {
+    fun delete(
+        id: String,
+        workspaceKey: String? = null,
+    ): Boolean {
         val d = open() ?: return false
         return try {
-            d.delete("automations", "automation_id = ?", arrayOf(id)) > 0
-        } catch (_: Throwable) {
+            val (where, args) =
+                if (workspaceKey == null) {
+                    "automation_id = ?" to arrayOf(id)
+                } else {
+                    "automation_id = ? AND workspace_key = ?" to arrayOf(id, workspaceKey)
+                }
+            d.delete("automations", where, args) > 0
+        } catch (e: Throwable) {
+            AppLog.e(tag, "删除任务失败：$id", e)
             false
         }
     }
@@ -607,13 +684,15 @@ class AutomationStore(
         try {
             d
                 .rawQuery(
-                    "SELECT * FROM automations WHERE enabled = 1 AND running = 0 AND lifecycle_status = 'active' AND " +
+                    "SELECT * FROM automations WHERE enabled = 1 AND running = 0 AND lifecycle_status = 'active' " +
+                        "AND dispatch_status IN ('idle','retry') AND " +
                         "((next_run_at IS NOT NULL AND next_run_at <= ?) OR (retry_at IS NOT NULL AND retry_at <= ?))",
                     arrayOf(now.toString(), now.toString()),
                 ).use { c ->
                     while (c.moveToNext()) out += rowToJson(c)
                 }
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            AppLog.e(tag, "查询到期任务失败", e)
         }
         return out
     }
@@ -679,27 +758,51 @@ class AutomationStore(
     ) {
         val d = open() ?: return
         try {
-            var attempts = 0L
-            d.rawQuery("SELECT dispatch_attempts FROM automations WHERE automation_id = ?", arrayOf(id)).use { c ->
-                if (c.moveToNext()) attempts = c.getLong(0)
+            d.beginTransaction()
+            try {
+                var attempts = 0L
+                d.rawQuery("SELECT dispatch_attempts FROM automations WHERE automation_id = ?", arrayOf(id)).use { c ->
+                    if (c.moveToNext()) attempts = c.getLong(0)
+                }
+                val attemptsAfter = attempts + 1
+                if (attemptsAfter >= 3) {
+                    // 到达上限进入终态：清掉 next_run_at 与重试时刻，listDue 不会再取到这一行。
+                    d.execSQL(
+                        "UPDATE automations SET running = 0, claimed_at = NULL, dispatch_status = 'failed_to_dispatch', " +
+                            "dispatch_attempts = ?, retry_at = NULL, next_run_at = NULL, lifecycle_status = 'failed', " +
+                            "enabled = 0, last_error = ?, updated_at = ? WHERE automation_id = ?",
+                        arrayOf<Any?>(attemptsAfter, message.take(500), now, id),
+                    )
+                } else {
+                    // 退避必须同时写进 next_run_at：只写 retry_at 会被 OR 条件里的旧 next_run_at 短路。
+                    val retryAt = now + 300_000L
+                    d.execSQL(
+                        "UPDATE automations SET running = 0, claimed_at = NULL, dispatch_status = 'retry', " +
+                            "dispatch_attempts = ?, retry_at = ?, next_run_at = ?, last_error = ?, updated_at = ? " +
+                            "WHERE automation_id = ?",
+                        arrayOf<Any?>(attemptsAfter, retryAt, retryAt, message.take(500), now, id),
+                    )
+                }
+                d.setTransactionSuccessful()
+            } finally {
+                d.endTransaction()
             }
-            val attemptsAfter = attempts + 1
-            val retryAt: Long? = if (attemptsAfter < 3) now + 300_000L else null
-            d.execSQL(
-                "UPDATE automations SET running = 0, claimed_at = NULL, dispatch_status = 'failed_to_dispatch', " +
-                    "dispatch_attempts = ?, retry_at = ?, last_error = ?, updated_at = ? WHERE automation_id = ?",
-                arrayOf<Any?>(attemptsAfter, retryAt, message.take(500), now, id),
-            )
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            AppLog.e(tag, "记录派发失败时出错：$id", e)
         }
     }
 
-    /** 进程重启后清理僵死的运行标记。 */
-    fun resetStaleRunning() {
+    /** 回收孤儿认领：只清理超过认领超时时间、仍标记为运行中的行。 */
+    fun resetStaleRunning(now: Long) {
         val d = open() ?: return
         try {
-            d.execSQL("UPDATE automations SET running = 0, claimed_at = NULL WHERE running = 1")
-        } catch (_: Throwable) {
+            d.execSQL(
+                "UPDATE automations SET running = 0, claimed_at = NULL WHERE running = 1 " +
+                    "AND (claimed_at IS NULL OR claimed_at < ?)",
+                arrayOf<Any?>(now - claimTimeoutMs),
+            )
+        } catch (e: Throwable) {
+            AppLog.e(tag, "回收孤儿认领失败", e)
         }
     }
 
@@ -882,7 +985,8 @@ object AutomationHost {
         return toProtocol(row)
     }
 
-    fun list(ctrl: ZController): List<JSONObject> = AutomationStore(ctrl.appContext()).listRows().map { toProtocol(it) }
+    fun list(ctrl: ZController): List<JSONObject> =
+        AutomationStore(ctrl.appContext()).listRows(ctrl.workspacePath()).map { toProtocol(it) }
 
     fun update(
         ctrl: ZController,
@@ -891,7 +995,9 @@ object AutomationHost {
         val id = params.optString("automationId")
         if (id.isEmpty()) throw AutomationException("automationId is required")
         val store = AutomationStore(ctrl.appContext())
-        val cur = store.getRow(id) ?: return null
+        val wp = ctrl.workspacePath()
+        // 先按工作区取行：跨工作区访问一律按“不存在”处理，不泄露其存在性。
+        val cur = store.getRow(id, wp) ?: return null
         val now = System.currentTimeMillis()
         val cv = ContentValues()
         var newCron = cur.optString("cron_expr")
@@ -929,13 +1035,16 @@ object AutomationHost {
             cv.put("enabled", 0)
         } else {
             cv.put("next_run_at", next)
+            // 暂停或已完成的任务编辑出有效计划后要真正复活，否则 listDue 永远取不到它。
+            cv.put("enabled", 1)
+            cv.put("lifecycle_status", "active")
         }
         cv.putNull("retry_at")
         cv.put("dispatch_attempts", 0)
         cv.putNull("last_error")
         cv.put("updated_at", now)
-        store.update(id, cv)
-        val row = store.getRow(id) ?: return null
+        store.update(id, cv, wp)
+        val row = store.getRow(id, wp) ?: return null
         return toProtocol(row)
     }
 
@@ -945,7 +1054,7 @@ object AutomationHost {
     ): Boolean {
         val id = params.optString("automationId")
         if (id.isEmpty()) throw AutomationException("automationId is required")
-        return AutomationStore(ctrl.appContext()).delete(id)
+        return AutomationStore(ctrl.appContext()).delete(id, ctrl.workspacePath())
     }
 
     fun checkBinding(
@@ -1013,9 +1122,6 @@ class AutomationScheduler private constructor(
     @Volatile
     private var running = false
 
-    @Volatile
-    private var resetDone = false
-
     private val tick =
         object : Runnable {
             override fun run() {
@@ -1038,17 +1144,21 @@ class AutomationScheduler private constructor(
     private fun runDue() {
         if (!ctrl.runtime.isRunning) return
         val store = AutomationStore(ctrl.appContext())
-        if (!resetDone) {
-            store.resetStaleRunning()
-            resetDone = true
-        }
         val now = System.currentTimeMillis()
+        // 每个 tick 都回收超时的孤儿认领：只在进程启动时清一次会让漏回调的任务永久卡死。
+        store.resetStaleRunning(now)
         val due = store.listDue(now)
         for (row in due) {
             val id = row.optString("automation_id")
             if (id.isEmpty()) continue
             if (!store.claim(id, now)) continue
-            dispatch(row, store)
+            try {
+                dispatch(row, store)
+            } catch (e: Throwable) {
+                // 同步抛异常时也必须释放认领，不能等回调。
+                AppLog.e("AutomationScheduler", "派发任务失败：$id", e)
+                failRow(store, id, e.message ?: e.toString())
+            }
         }
     }
 
@@ -1057,7 +1167,17 @@ class AutomationScheduler private constructor(
         store: AutomationStore,
     ) {
         val id = row.optString("automation_id")
-        val wp = ctrl.workspacePath()
+        // 工作区以行内记录为准：用当前控制器的默认目录会把 A 工作区的任务派发到 B。
+        val wp =
+            row.optString("workspace_path").takeIf { it.isNotEmpty() && it != "null" }
+                ?: row.optString("workspace_key").takeIf { it.isNotEmpty() && it != "null" }
+                ?: ctrl.workspacePath()
+        val target = row.optString("target_task_id").takeIf { it.isNotEmpty() && it != "null" }
+        if (target != null) {
+            // 已绑定目标会话：直接发给它，不再新建会话。
+            sendPrompt(row, store, target)
+            return
+        }
         val create =
             JSONObject()
                 .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
@@ -1074,14 +1194,23 @@ class AutomationScheduler private constructor(
                 failRow(store, id, "会话创建失败：响应中没有会话 ID")
                 return@call
             }
-            val send = JSONObject().put("sessionId", sid).put("content", row.optString("prompt"))
-            parseSel(row)?.let { send.put("modelSelection", it) }
-            ctrl.runtime.call("session/send", send) { ok2, body2 ->
-                if (ok2) {
-                    settleRow(row, store, System.currentTimeMillis())
-                } else {
-                    failRow(store, id, "发送失败: " + errText(body2))
-                }
+            sendPrompt(row, store, sid)
+        }
+    }
+
+    private fun sendPrompt(
+        row: JSONObject,
+        store: AutomationStore,
+        sid: String,
+    ) {
+        val id = row.optString("automation_id")
+        val send = JSONObject().put("sessionId", sid).put("content", row.optString("prompt"))
+        parseSel(row)?.let { send.put("modelSelection", it) }
+        ctrl.runtime.call("session/send", send) { ok, body ->
+            if (ok) {
+                settleRow(row, store, System.currentTimeMillis())
+            } else {
+                failRow(store, id, "发送失败: " + errText(body))
             }
         }
     }
