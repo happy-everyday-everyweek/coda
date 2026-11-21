@@ -653,7 +653,8 @@ class GitPage(
                 else -> {
                     conflictText = result.output.ifEmpty { "合并失败，没有输出" }
                     pickingTarget = false
-                    mergeTarget = null
+                    // 保留 mergeTarget：冲突卡片要显示「源 → 目标」，"让 Agent 解决"
+                    // 也靠它定位分支；清空只会让文案出现 null、按钮点了没反应。
                     canvas.candidates = emptySet()
                     canvas.dimOthers = false
                 }
@@ -1133,9 +1134,11 @@ class GitPage(
                 op.done(result)
                 drainWrites()
             },
-            onError = {
+            onError = { error ->
                 busy = false
-                toast("${op.label} 失败")
+                // 失败也必须回调 done：调用方靠它复位 merging/busy 这类状态，
+                // 少一次回调界面就永久停在「正在合并…」上，按钮再也点不动。
+                op.done(Git.Result(false, error?.message ?: "执行失败"))
                 rebuildControl()
                 drainWrites()
             },

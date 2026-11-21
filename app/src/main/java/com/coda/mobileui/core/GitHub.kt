@@ -19,6 +19,16 @@ object GitHub {
     private const val UA = "Coda-Android"
     private const val PREFS = "github_bridge"
 
+    /**
+     * PR 是否已合并。
+     *
+     * `merged_at` 在未合并时是 JSON null，而 org.json 的 optString 会把 null 变成 ""，
+     * 直接判 isNotEmpty() 会把每个未合并 PR 都标成已合并。必须先判 null。
+     */
+    private fun mergedOf(p: org.json.JSONObject): Boolean =
+        p.optBoolean("merged", false) ||
+            (!p.isNull("merged_at") && p.optString("merged_at").isNotEmpty())
+
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
     private fun ui(block: () -> Unit) {
@@ -31,7 +41,12 @@ object GitHub {
     fun loginName(ctx: Context): String? = prefs(ctx).getString("login", null)?.takeIf { it.isNotEmpty() }
 
     fun logout(ctx: Context) {
-        prefs(ctx).edit().clear().apply()
+        // 先作废 PR 缓存：否则换号后抽屉里还会显示上一个账号的 PR。
+        invalidatePullCache()
+        // 用 commit 而不是 apply：清不掉令牌必须能被发现，否则用户以为已退出，
+        // 实际推送仍带着旧 token。失败要留下日志。
+        val cleared = prefs(ctx).edit().clear().commit()
+        if (!cleared) AppLog.w("GitHub", "清除本地 GitHub 令牌失败，退出登录未完全生效")
         // 容器里的 hosts.yml/.gitconfig 必须同步清理，否则旧令牌留在 rootfs 里，
         // git push 仍会带着它去认证。文件写放在后台，不阻塞界面。
         Bg.run { runCatching { LinuxEnv(ctx).syncGitHubCredentials() } }
@@ -44,11 +59,14 @@ object GitHub {
         token: String,
         login: String?,
     ) {
+        val previous = loginName(ctx)
         prefs(ctx)
             .edit()
             .putString("token", token)
             .putString("login", login ?: "")
             .apply()
+        // 换了账号就作废旧缓存，避免把上一个账号的 PR 当成当前账号的。
+        if (previous != null && previous != login) invalidatePullCache()
         // 登录/换号成功即把凭据推进容器，不用等下次 App 重启：
         // 此前只有启动时同步一次，登录完成后容器里还是旧凭据（或没有凭据）。
         runCatching { LinuxEnv(ctx).syncGitHubCredentials() }
@@ -289,7 +307,7 @@ object GitHub {
                             number = p.optInt("number"),
                             title = p.optString("title"),
                             state = p.optString("state"),
-                            merged = p.optBoolean("merged", false) || p.optString("merged_at").isNotEmpty(),
+                            merged = mergedOf(p),
                             draft = p.optBoolean("draft", false),
                             user = p.optJSONObject("user")?.optString("login").orEmpty(),
                             headRef = p.optJSONObject("head")?.optString("ref").orEmpty(),
@@ -320,7 +338,9 @@ object GitHub {
     ) {
         if (owner.isEmpty() || repo.isEmpty() || branch.isEmpty()) return ui { cb(null) }
         val token = token(ctx) ?: return ui { cb(null) }
-        val key = "$owner/$repo#$branch"
+        // 缓存键带上账号：同一工作区里换号后，旧账号的 PR 不能命中新账号的查询。
+        val account = loginName(ctx).orEmpty()
+        val key = "$account@$owner/$repo#$branch"
         val now = System.currentTimeMillis()
         synchronized(pullByBranch) {
             pullByBranch[key]?.let { (at, pull) ->
@@ -342,7 +362,7 @@ object GitHub {
                             number = p.optInt("number"),
                             title = p.optString("title"),
                             state = p.optString("state"),
-                            merged = p.optBoolean("merged", false) || p.optString("merged_at").isNotEmpty(),
+                            merged = mergedOf(p),
                             draft = p.optBoolean("draft", false),
                             user = p.optJSONObject("user")?.optString("login").orEmpty(),
                             headRef = branch,

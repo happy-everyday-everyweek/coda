@@ -211,7 +211,29 @@ object Git {
         env: LinuxEnv,
         root: File,
         name: String,
-    ): Result = run(env, root, listOf("checkout", name))
+    ): Result {
+        if (!isSafeRef(name)) return Result(false, "分支名不合法：$name")
+        return run(env, root, listOf("checkout", name))
+    }
+
+    /**
+     * 分支/引用名是否安全。
+     *
+     * 以 `-` 开头的名字会被 git 当成选项（例如 `--orphan`），能改配置甚至执行外部命令；
+     * 空白、控制字符与 `..` 也会让参数越过单值语义。这里在不误伤正常分支名的前提下挡掉它们。
+     */
+    internal fun isSafeRef(value: String): Boolean {
+        if (value.isEmpty() || value.startsWith("-")) return false
+        if (value.contains("..") || value.contains("//")) return false
+        val forbidden = setOf('~', '^', ':', '?', '*', '[', '\\', ' ')
+        return value.none { it.code < 0x20 || it in forbidden }
+    }
+
+    /** 远端地址是否安全：同样挡掉被 git 当作选项的写法。 */
+    internal fun isSafeUrl(value: String): Boolean =
+        value.isNotBlank() &&
+            !value.startsWith("-") &&
+            value.none { it.code < 0x20 || it == ' ' }
 
     /**
      * 检出远端分支：在本地建同名（去掉 remote 前缀）分支并跟踪它。
@@ -226,6 +248,9 @@ object Git {
     ): Result {
         val local = remoteBranch.substringAfter('/')
         if (local.isEmpty()) return Result(false, "分支名不合法：$remoteBranch")
+        if (!isSafeRef(local) || !isSafeRef(remoteBranch)) {
+            return Result(false, "分支名不合法：$remoteBranch")
+        }
         return run(env, root, listOf("checkout", "-b", local, "--track", remoteBranch))
     }
 
@@ -243,26 +268,37 @@ object Git {
         root: File,
         name: String,
         startPoint: String?,
-    ): Result =
-        if (startPoint.isNullOrEmpty()) {
+    ): Result {
+        if (!isSafeRef(name)) return Result(false, "分支名不合法：$name")
+        if (!startPoint.isNullOrEmpty() && !isSafeRef(startPoint)) {
+            return Result(false, "起点不合法：$startPoint")
+        }
+        return if (startPoint.isNullOrEmpty()) {
             run(env, root, listOf("checkout", "-b", name))
         } else {
             run(env, root, listOf("checkout", "-b", name, startPoint))
         }
+    }
 
     fun deleteBranch(
         env: LinuxEnv,
         root: File,
         name: String,
         force: Boolean,
-    ): Result = run(env, root, listOf("branch", if (force) "-D" else "-d", name))
+    ): Result {
+        if (!isSafeRef(name)) return Result(false, "分支名不合法：$name")
+        return run(env, root, listOf("branch", if (force) "-D" else "-d", name))
+    }
 
     fun merge(
         env: LinuxEnv,
         root: File,
         name: String,
         noFastForward: Boolean,
-    ): Result = run(env, root, if (noFastForward) listOf("merge", "--no-ff", name) else listOf("merge", name))
+    ): Result {
+        if (!isSafeRef(name)) return Result(false, "分支名不合法：$name")
+        return run(env, root, if (noFastForward) listOf("merge", "--no-ff", name) else listOf("merge", name))
+    }
 
     fun mergeAbort(
         env: LinuxEnv,
@@ -307,13 +343,16 @@ object Git {
         env: LinuxEnv,
         url: String,
         targetDir: File,
-    ): Result =
-        run(
+    ): Result {
+        // 以 `-` 开头的地址会被 git 当成选项（--upload-pack 之类可执行外部命令）。
+        if (!isSafeUrl(url)) return Result(false, "仓库地址不合法：$url")
+        return run(
             env,
             targetDir.parentFile ?: targetDir,
             listOf("clone", url, targetDir.name),
             timeoutMs = CLONE_TIMEOUT_MS,
         )
+    }
 
     /** 组装展示用的状态摘要。 */
     fun summarize(
@@ -442,8 +481,18 @@ object Git {
                 }.getOrNull()
             val path = line?.removePrefix("gitdir:")?.trim()
             if (!path.isNullOrEmpty()) {
-                val target = File(path)
-                return if (target.isAbsolute) target else File(root, path)
+                val raw = if (File(path).isAbsolute) File(path) else File(root, path)
+                val base = runCatching { root.canonicalFile }.getOrElse { root.absoluteFile }
+                val target = runCatching { raw.canonicalFile }.getOrElse { return null }
+                // `.git` 文件的内容来自仓库本身，而仓库内容可能由 Agent 或远程代码写进来：
+                // 不限定范围就相当于让仓库指定任意目录当 gitdir，随后修对象目录时会写到那里。
+                val inside =
+                    target == base ||
+                        target.path.startsWith(base.path + File.separator) ||
+                        target.path.contains("${File.separator}.git${File.separator}") ||
+                        target.path.endsWith("${File.separator}.git")
+                if (!inside) return null
+                return target
             }
         }
         return null
@@ -484,7 +533,12 @@ object Git {
         file: String,
         limit: Int = 60_000,
     ): String {
-        val target = File(root, file)
+        val base = runCatching { root.canonicalFile }.getOrElse { root.absoluteFile }
+        val target = runCatching { File(root, file).canonicalFile }.getOrElse { return "路径无效：$file" }
+        // 冲突文件名同样来自仓库内容；放开 `..` 就能把它变成「读任意文件」。
+        if (target != base && !target.path.startsWith(base.path + File.separator)) {
+            return "路径越界：$file"
+        }
         if (!target.isFile) return "读不到文件：$file"
         val text = runCatching { target.readText() }.getOrElse { return "读取失败：$file" }
         return if (text.length > limit) text.take(limit) + "\n\n（内容过长，已截断）" else text
