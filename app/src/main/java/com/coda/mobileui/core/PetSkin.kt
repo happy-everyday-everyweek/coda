@@ -261,7 +261,11 @@ class PetSkin(
         val pixels = HashMap<Int, HashMap<Int, Char>>()
         for (name in names) {
             val part = parts[name] ?: continue
+            // 坐标来自 manifest：损坏或被改过时可能是 Int.MIN_VALUE，
+            // 直接参与包围盒计算会溢出成负宽度，进而按负长度分配缓冲区。
+            if (!isPlausiblePartOrigin(part.x, part.y)) continue
             part.rows.forEachIndexed { r, line ->
+                if (!isPlausiblePartLine(line)) return@forEachIndexed
                 line.forEachIndexed { c, ch ->
                     if (ch != '.') {
                         val y = part.y + r
@@ -454,8 +458,10 @@ class PetSkin(
                             val p = pickArr?.optJSONArray(i) ?: continue
                             picks.add(WeightedClip(p.optString(0), p.optInt(1, 1).coerceAtLeast(1)))
                         }
-                        val lo = every?.optInt(0) ?: 60
-                        val hi = every?.optInt(1, lo) ?: lo
+                        // 周期必须至少为 1：0 会被消费方拿去做取模（tick % every）直接除零，
+                        // 负数则每个 tick 都触发。下限与 periodMs 等字段保持一致。
+                        val lo = (every?.optInt(0) ?: 60).coerceAtLeast(1)
+                        val hi = (every?.optInt(1, lo) ?: lo).coerceAtLeast(1)
                         fidget = FidgetSpec(minOf(lo, hi), maxOf(lo, hi), picks)
                     }
                     var sleep: SleepSpec? = null
@@ -484,8 +490,8 @@ class PetSkin(
                                 glyph = b.optString("glyph", "bang"),
                                 color = b.optString("color", "#FF9F0A"),
                                 x = b.optInt("x", 16),
-                                hopEvery = b.optInt("hopEvery", 20),
-                                impatientHopEvery = b.optInt("impatientHopEvery", 8),
+                                hopEvery = b.optInt("hopEvery", 20).coerceAtLeast(1),
+                                impatientHopEvery = b.optInt("impatientHopEvery", 8).coerceAtLeast(1),
                             )
                     }
                     var gaze: GazePoses? = null
@@ -596,6 +602,23 @@ class PetSkin(
         }
     }
 }
+
+/** 部件允许画到基框外的最大格数。手绘皮肤会用到负坐标（抬手、垂腿），但不会到几十格。 */
+internal const val PET_PART_MAX_ORIGIN = 64
+
+/** 一行像素的最大长度。基框 18×10 用不到这么宽，超了说明 manifest 被改过或损坏。 */
+internal const val PET_PART_MAX_LINE = 256
+
+/** 部件原点是可信的：坐标有界，包围盒就不会溢出成负宽度。 */
+internal fun isPlausiblePartOrigin(
+    x: Int,
+    y: Int,
+): Boolean =
+    x >= -PET_PART_MAX_ORIGIN && x <= PET_PART_MAX_ORIGIN &&
+        y >= -PET_PART_MAX_ORIGIN && y <= PET_PART_MAX_ORIGIN
+
+/** 部件的行长度可信：避免为一行超长字符分配巨量内存。 */
+internal fun isPlausiblePartLine(line: String): Boolean = line.length <= PET_PART_MAX_LINE
 
 /** 一次栅格化后的姿态：包围盒 + 逐行字符。 */
 class PixelGrid(

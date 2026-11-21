@@ -13,6 +13,8 @@ import java.io.File
  * 这里不再自造任何像素：要改形象就改 manifest，代码不认识具体部件名。
  */
 object PetSkins {
+    private const val TAG = "PetSkins"
+
     /** assets 下的五个内置形象，顺序与原项目设置页一致。 */
     private val BUILTIN = listOf("clawd", "sprig", "mochi", "peep", "bristle", "deepy", "whalegirl")
 
@@ -34,7 +36,15 @@ object PetSkins {
         cache?.let { if (it.isNotEmpty()) return mergeCustom(ctx, it) }
         val loaded = ArrayList<PetSkin>(BUILTIN.size)
         for (name in BUILTIN) {
-            val skin = runCatching { loadAsset(ctx, name) }.getOrNull() ?: continue
+            // 不能静默跳过：资产缺失时后面 resolve 会回落到默认皮肤并抛异常，
+            // 没有这里的日志就查不到是哪一个 manifest 坏的。
+            val skin =
+                try {
+                    loadAsset(ctx, name)
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "内置皮肤 $name 加载失败：${e.message ?: e.javaClass.simpleName}")
+                    continue
+                }
             loaded.add(skin)
         }
         cache = loaded
@@ -73,7 +83,12 @@ object PetSkins {
         return list.firstOrNull { it.id == id }
             ?: list.firstOrNull { it.id == defaultId }
             ?: list.firstOrNull()
-            ?: loadAsset(ctx, defaultId)
+            ?: runCatching { loadAsset(ctx, defaultId) }.getOrElse { e ->
+                // 内置资产随包提供，走到这里说明打包已经坏了。带上皮肤名抛出去，
+                // 比让上层看到一个没有上下文的 IO 异常更容易定位。
+                AppLog.e(TAG, "默认皮肤 $defaultId 加载失败", e)
+                throw IllegalStateException("内置皮肤资源缺失：$defaultId", e)
+            }
     }
 
     /** 读一份内置 manifest。读不到是真错误（assets 应该随包提供），抛出来便于定位。 */

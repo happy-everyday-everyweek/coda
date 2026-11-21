@@ -206,6 +206,8 @@ class PetActor(
         if (spec.cycle.isNotEmpty()) group.addAll(spec.cycle[cycleIndex % spec.cycle.size])
         val out = ArrayList<Particle>()
         for (p in group) {
+            // 没有颜色就画不出粒子：跳过整组，而不是拿 0 去做除数
+            if (p.colors.isEmpty()) continue
             for (i in 0 until p.count.coerceAtLeast(1)) {
                 val color = p.colors[i % p.colors.size]
                 out.add(
@@ -261,6 +263,9 @@ class PetActor(
         if (!animate) return
         if (reduceMotion) {
             onceActive = false
+            // 只清 onceActive 不够：current 还停在旧片段上，而 baseClip 已经换成新状态。
+            // 关掉减少动态后会接着播一半的旧片段，这里把循环重新对齐。
+            resumeLoop()
             return
         }
         val enter =
@@ -327,7 +332,9 @@ class PetActor(
         for (p in particles) p.step(dt)
         particles.removeAll { !it.alive }
         val spec = accessorySpec
-        if (spec?.twinkleEvery != null && spec.twinkle != null && clock % spec.twinkleEvery == 0) {
+        // 周期为 0 时 clock % 0 直接抛 ArithmeticException；负数则每 tick 都闪
+        val twinkleEvery = spec?.twinkleEvery ?: 0
+        if (spec?.twinkle != null && twinkleEvery > 0 && clock % twinkleEvery == 0) {
             emit(spec.twinkle)
         }
         advanceKey()
