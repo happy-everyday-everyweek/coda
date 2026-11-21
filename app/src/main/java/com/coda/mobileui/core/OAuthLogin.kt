@@ -19,6 +19,14 @@ object OAuthLogin {
     /** 一次登录的中间状态。插件按 [providerId] 区分，[state] 由插件发给我们。 */
     data class Session(
         val providerId: String,
+        /**
+         * 宿主插件标识。
+         *
+         * 管理面路由是按它命名的（`/plugins/<pluginId>/...`），而 [providerId] 是平台 id，
+         * 两者不一定相同（traework 与 traework-provider）。轮询若拿平台 id 拼路径，
+         * 请求会 404，界面就停在「等待授权」。
+         */
+        val pluginId: String,
         val state: String,
         /** 需要用户打开或扫码的地址。 */
         val authUrl: String,
@@ -148,7 +156,7 @@ object OAuthLogin {
                 lastBeginError = "面板响应缺少字段：${raw.take(300)}"
                 return null
             }
-            return Session(provider.id, state, url, "")
+            return Session(provider.id, provider.pluginId, state, url, "")
         }
         // TRAE SOLO 的登录链路与其余家不同，不能用通用的 `<pluginId>-auth-url`。
         //
@@ -199,7 +207,9 @@ object OAuthLogin {
                 return null
             }
             AppLog.i(TAG, "TRAE 浏览器授权已发起 state=${state.take(8)}…")
-            return Session(provider.id, state, url, "")
+            // 轮询读的是插件自己的结果接口，路径按 pluginId 拼：平台 id 是 traework，
+            // 插件标识是 traework-provider，用前者会 404。
+            return Session(provider.id, provider.pluginId, state, url, "")
         }
         val authUrlPath = "/v0/management/${provider.pluginId}-auth-url"
         val body =
@@ -240,7 +250,7 @@ object OAuthLogin {
             lastBeginError = "宿主管理面响应缺少 state/url 字段：${body.toString().take(300)}"
             return null
         }
-        return Session(provider.id, state, url, code)
+        return Session(provider.id, provider.pluginId, state, url, code)
     }
 
     /**
@@ -264,9 +274,10 @@ object OAuthLogin {
             val body =
                 runCatching { org.json.JSONObject(raw) }.getOrNull()
                     ?: return Result.Failed("网关返回无法解析")
-            if (body.optBoolean("done", false)) return Result.Ready
+            // 先判 error：失败响应也可能带 done=true，先判 done 会把失败当成功落库
             val err = body.optString("error")
             if (err.isNotEmpty()) return Result.Failed(err)
+            if (body.optBoolean("done", false)) return Result.Ready
             // 设备流通常要用户在浏览器里点确认，未完成时正常返回 pending。
             return Result.Pending
         }
@@ -274,7 +285,7 @@ object OAuthLogin {
         // bridge 页结算后把结果写进 state 会话，这里读 /browser-login/result
         // （read-once：读走即删）。
         if (OAuthProviders.usesBrowserLoginSubmit(session.providerId)) {
-            val path = "/v0/management/plugins/${session.providerId}/browser-login/result"
+            val path = "/v0/management/plugins/${session.pluginId}/browser-login/result"
             val payload =
                 org.json
                     .JSONObject()
@@ -329,25 +340,28 @@ object OAuthLogin {
         // 去空、去重：网关偶尔把同一模型注册两次（多账号各注册一份），
         // 重复项会让内核的模型下拉出现两行一样的名字。
         val clean = models.filter { it.isNotBlank() }.distinct()
-        val list = ProviderStore.load(ctx)
-        list.removeAll { it.id == provider.id }
-        list +=
-            ProviderStore.Provider(
-                id = provider.id,
-                name = provider.name,
-                apiType = "openai-chat-completions",
-                // 指向本机网关，内核照旧走它原有的 OpenAI 兼容通路。
-                baseUrl = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1",
-                // 网关对下游的密钥；宿主用同一个管理密钥即可，本机回环不外露。
-                apiKey = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey(),
-                models = clean.toMutableList(),
-                // 关键：标成 OAuth 来源。列表页据此把它认作「OAuth 添加的供应商」，
-                // 点进去直接回到对应平台的管理页，而不是甩一堆手填字段给它看。
-                // 不标记的话，落库后就是一条普通 api-key 供应商，用户会觉得「我明明是授权登录的」。
-                kind = ProviderStore.ProviderKind.LLM,
-                origin = ProviderStore.ProviderOrigin.OAUTH,
+        // 读改写必须在同一把锁内：两次并发授权各自 load 再 save，
+        // 后写的那次会把前一次整条覆盖，刚授权完的账号凭空消失。
+        ProviderStore.update(ctx) { list ->
+            ProviderStore.upsert(
+                list,
+                ProviderStore.Provider(
+                    id = provider.id,
+                    name = provider.name,
+                    apiType = "openai-chat-completions",
+                    // 指向本机网关，内核照旧走它原有的 OpenAI 兼容通路。
+                    baseUrl = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1",
+                    // 网关对下游的密钥；宿主用同一个管理密钥即可，本机回环不外露。
+                    apiKey = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey(),
+                    models = clean.toMutableList(),
+                    // 关键：标成 OAuth 来源。列表页据此把它认作「OAuth 添加的供应商」，
+                    // 点进去直接回到对应平台的管理页，而不是甩一堆手填字段给它看。
+                    // 不标记的话，落库后就是一条普通 api-key 供应商，用户会觉得「我明明是授权登录的」。
+                    kind = ProviderStore.ProviderKind.LLM,
+                    origin = ProviderStore.ProviderOrigin.OAUTH,
+                ),
             )
-        ProviderStore.save(ctx, list)
+        }
     }
 
     /** 从 `/v1/models` 的两种形状里读出模型 id 列表。 */
@@ -384,13 +398,13 @@ object OAuthLogin {
                 ProxyHost.clientJson(ctx, "/v1/models")?.let { readModelIds(it) }.orEmpty()
             }
         // 插件按自家前缀注册模型；网关里同时挂着别家账号时不能全收。
-        val prefix = OAuthProviders.modelPrefix(provider)
-        val mine = raw.filter { it.startsWith(prefix) }
+        // 归属按最长前缀判定：`trae-` 是 `traework-` 的前缀，只判 startsWith 会互相吞并。
+        val prefixes = OAuthProviders.all.map { it.id to OAuthProviders.modelPrefix(it) }
+        val mine = raw.filter { OAuthProviders.ownerOf(it, prefixes) == provider.id }
         if (mine.isNotEmpty()) return mine
         // 有些插件本来就不带前缀。但要先确认网关里这批名字不是别家的：
-        // 若它们命中其它供应商的前缀，宁可返回空，也不要把别家模型写进这条配置。
-        val others = OAuthProviders.all.filter { it.id != provider.id }.map { OAuthProviders.modelPrefix(it) }
-        val looksForeign = raw.any { model -> others.any { p -> p.isNotEmpty() && model.startsWith(p) } }
+        // 只要有一条命中某家的前缀，就宁可返回空，也不要把别家模型写进这条配置。
+        val looksForeign = raw.any { OAuthProviders.ownerOf(it, prefixes) != null }
         return if (looksForeign) emptyList() else raw
     }
 

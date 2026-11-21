@@ -541,6 +541,31 @@ object ProviderStore {
         return out
     }
 
+    /** 把一条供应商合并进列表：同 id 替换，不同 id 追加。 */
+    fun upsert(
+        list: MutableList<Provider>,
+        incoming: Provider,
+    ) {
+        list.removeAll { it.id == incoming.id }
+        list += incoming
+    }
+
+    /**
+     * 在写锁内完成「读-改-写」。
+     *
+     * OAuth 授权落库、设置页编辑、旧配置迁移都会调用 save，各自先 load 再 save 的话，
+     * 两次并发保存里后写的那次会把前一次的改动整条覆盖掉。锁必须在读之前拿。
+     */
+    fun update(
+        ctx: Context,
+        block: (MutableList<Provider>) -> Unit,
+    ): Boolean =
+        synchronized(writeLock) {
+            val list = load(ctx)
+            block(list)
+            save(ctx, list)
+        }
+
     @Synchronized
     fun save(
         ctx: Context,

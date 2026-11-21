@@ -175,6 +175,21 @@ object OAuthProviders {
      */
     fun usesBrowserLoginSubmit(id: String): Boolean = id == "traework"
 
+    /**
+     * 模型名归属：命中多个前缀时归最长的那一家。
+     *
+     * 前缀是「插件标识去掉 -provider」，天然有包含关系：`trae-` 是 `traework-` 的前缀。
+     * 只判 startsWith 会让短前缀把长前缀的模型一起吞掉，授权 A 却把 B 的模型写进配置。
+     */
+    fun ownerOf(
+        model: String,
+        prefixes: List<Pair<String, String>>,
+    ): String? =
+        prefixes
+            .filter { it.second.isNotEmpty() && model.startsWith(it.second) }
+            .maxByOrNull { it.second.length }
+            ?.first
+
     /** 插件在磁盘上的文件名：宿主按 `.so` 扫描插件目录。 */
     fun pluginFile(provider: Provider): String = provider.pluginId + ".so"
 

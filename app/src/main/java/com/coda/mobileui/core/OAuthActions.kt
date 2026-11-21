@@ -173,6 +173,17 @@ object OAuthActions {
     fun byId(id: String): Action? = all.firstOrNull { it.id == id }
 
     /**
+     * 这个动作是否因为缺少账号索引而必须拒绝。
+     *
+     * 只对账号范围的动作成立：平台范围的动作（刷新额度之类）本来就不带索引。
+     * 空白串也算缺失——插件对空串与不传的处理是一样的，都会退化成「全部账号」。
+     */
+    fun rejectsMissingAccountIndex(
+        scope: Scope,
+        authIndex: String,
+    ): Boolean = scope == Scope.ACCOUNT && authIndex.isBlank()
+
+    /**
      * 该平台实际可用的动作。
      *
      * 判据是 [OAuthAccounts.capabilities] 逐条试探出来的结果，而不是平台名字。
@@ -215,8 +226,13 @@ object OAuthActions {
         action: Action,
         authIndex: String,
     ): OAuthAccounts.Outcome {
+        if (rejectsMissingAccountIndex(action.scope, authIndex)) {
+            // 账号范围的动作不带 auth_index 时，插件会把它当成"该平台全部账号"，
+            // 一次签到/删除就落到所有人头上。宁可拒绝，也不能猜。
+            return OAuthAccounts.Outcome(false, "缺少账号索引，已取消：该动作只对单个账号生效")
+        }
         val body = JSONObject()
-        if (action.scope == Scope.ACCOUNT && authIndex.isNotEmpty()) {
+        if (action.scope == Scope.ACCOUNT) {
             body.put("auth_index", authIndex)
         }
         val path = "/v0/management/plugins/${provider.pluginId}${action.path}"
