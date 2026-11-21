@@ -39,12 +39,33 @@ object BrowserControl {
     private const val BACKEND_TYPE = "iab"
 
     private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * 反向请求全部排到这一条线程上执行。
+     *
+     * 以前每个请求各起一条线程，两次浏览器动作会同时改同一个 WebView、共享
+     * generation/导航状态，表现为加载卡死或点错页面。串行化后语义与真实浏览器一致。
+     */
+    private val worker =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "coda-browser").apply { isDaemon = true }
+        }
     private var web: WebView? = null
     private var generation = 1
     private var viewportWidth = 1080
     private var viewportHeight = 1920
     private var activityRef: WeakReference<Activity>? = null
+
+    /** 页面加载完成的信号；主线程 onPageFinished 与等待方跨线程共享。 */
+    @Volatile
     private var pageLoaded = CountDownLatch(0)
+
+    /** WebView 的 url/title 只能在主线程读，这里在主线程写入、任意线程读缓存。 */
+    @Volatile
+    private var cachedUrl = ""
+
+    @Volatile
+    private var cachedTitle = ""
 
     // ------------------------------------------------------------ 开关与状态
 
@@ -69,9 +90,9 @@ object BrowserControl {
         }
 
     /** 统计页面数据（缓存、Cookie 等）。 */
-    fun pageTitle(): String = web?.title ?: ""
+    fun pageTitle(): String = cachedTitle
 
-    fun currentUrl(): String = web?.url ?: ""
+    fun currentUrl(): String = cachedUrl
 
     fun clearData(ctx: Context) {
         onMain {
@@ -107,7 +128,8 @@ object BrowserControl {
         params: JSONObject,
     ): Boolean {
         if (method != "interaction/browserList" && method != "interaction/browserExecute") return false
-        Thread({
+        // 串行执行：浏览器同一时刻只能处理一个动作，并发请求会互相覆盖导航状态。
+        worker.execute {
             val started = System.currentTimeMillis()
             val body =
                 try {
@@ -124,7 +146,7 @@ object BrowserControl {
                     }
                 }
             rt.respond(id, body)
-        }, "coda-browser").start()
+        }
         return true
     }
 
@@ -168,6 +190,11 @@ object BrowserControl {
         if (method.isEmpty()) {
             return errorResult(params, "execution_error", "缺少 command.method", started)
         }
+        // 会阻塞等待页面的三条命令必须留在当前（后台）线程执行：
+        // 放进 onMain 里等 onPageFinished，等于让主线程等自己，20 秒后必然 ANR。
+        if (method == "navigate" || method == "reload" || method == "waitFor") {
+            return executeBlocking(ctx, method, cmd, params, started)
+        }
         var result: JSONObject? = null
         onMain {
             result =
@@ -180,6 +207,81 @@ object BrowserControl {
         return result ?: errorResult(params, "timeout", "浏览器主线程阻塞超时", started)
     }
 
+    /** navigate / reload / waitFor：只在主线程做视图操作，等待部分留在后台线程。 */
+    private fun executeBlocking(
+        ctx: Activity,
+        method: String,
+        cmd: JSONObject,
+        params: JSONObject,
+        started: Long,
+    ): JSONObject {
+        when (method) {
+            "navigate" -> {
+                val url = cmd.optString("url")
+                if (url.isEmpty()) return errorResult(params, "execution_error", "缺少 url", started)
+                val view =
+                    onMainGet { ensureEngineOn(ctx) }
+                        ?: return errorResult(params, "backend_unavailable", "无法创建内置浏览器", started)
+                val latch = CountDownLatch(1)
+                onMain {
+                    pageLoaded = latch
+                    cachedUrl = url
+                    view.loadUrl(url)
+                }
+                val loaded = latch.await(20, TimeUnit.SECONDS)
+                if (!loaded) return errorResult(params, "timeout", "页面加载超时", started)
+                val state = onMainGet { pageState(view) } ?: tabSummary()
+                return okResult(params, started) { it.put("state", state) }
+            }
+
+            "reload" -> {
+                val view =
+                    onMainGet { ensureEngineOn(ctx) }
+                        ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
+                val latch = CountDownLatch(1)
+                onMain {
+                    pageLoaded = latch
+                    view.reload()
+                }
+                val loaded = latch.await(20, TimeUnit.SECONDS)
+                if (!loaded) return errorResult(params, "timeout", "页面重新加载超时", started)
+                val state = onMainGet { pageState(view) } ?: tabSummary()
+                return okResult(params, started) { it.put("state", state) }
+            }
+
+            else -> {
+                // waitFor：轮询在后台线程做，每次探测再由 jsRaw 投到主线程。
+                val selector = cmd.optString("selector")
+                val text = cmd.optString("text")
+                val timeout = cmd.optInt("timeoutMs", 10000).coerceIn(200, 60000)
+                val view =
+                    onMainGet { ensureEngineOn(ctx) }
+                        ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
+                val deadline = System.currentTimeMillis() + timeout
+                var found = false
+                while (System.currentTimeMillis() < deadline) {
+                    val probe =
+                        when {
+                            selector.isNotEmpty() -> "!!document.querySelector(${jsString(selector)})"
+                            text.isNotEmpty() -> "document.body && document.body.innerText.indexOf(${jsString(text)}) >= 0"
+                            else -> "true"
+                        }
+                    if (jsRaw(view, probe) == "true") {
+                        found = true
+                        break
+                    }
+                    Thread.sleep(200)
+                }
+                val state = onMainGet { pageState(view) } ?: tabSummary()
+                return if (found) {
+                    okResult(params, started) { it.put("state", state) }
+                } else {
+                    errorResult(params, "timeout", "等待条件未在限定时间内满足", started)
+                }
+            }
+        }
+    }
+
     private fun runCommand(
         ctx: Activity,
         method: String,
@@ -188,23 +290,10 @@ object BrowserControl {
         started: Long,
     ): JSONObject =
         when (method) {
-            "navigate" -> {
-                val url = cmd.optString("url")
-                if (url.isEmpty()) {
-                    errorResult(params, "execution_error", "缺少 url", started)
-                } else {
-                    val view = ensureEngineOn(ctx)
-                    if (view == null) {
-                        errorResult(params, "backend_unavailable", "无法创建内置浏览器", started)
-                    } else {
-                        val latch = CountDownLatch(1)
-                        pageLoaded = latch
-                        view.loadUrl(url)
-                        latch.await(20, TimeUnit.SECONDS)
-                        okResult(params, started) { it.put("state", pageState(view)) }
-                    }
-                }
-            }
+            // 这三条会阻塞等待页面，统一由 executeBlocking 在后台线程处理，
+            // 放到主线程里等 onPageFinished 会让主线程等自己，20 秒后 ANR。
+            "navigate", "reload", "waitFor" ->
+                errorResult(params, "internal_error", "该命令应由 executeBlocking 处理", started)
 
             "back" -> {
                 val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
@@ -218,14 +307,8 @@ object BrowserControl {
                 okResult(params, started) { it.put("state", pageState(view)) }
             }
 
-            "reload" -> {
-                val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
-                val latch = CountDownLatch(1)
-                pageLoaded = latch
-                view.reload()
-                latch.await(20, TimeUnit.SECONDS)
-                okResult(params, started) { it.put("state", pageState(view)) }
-            }
+            "reload" ->
+                errorResult(params, "internal_error", "该命令应由 executeBlocking 处理", started)
 
             "snapshot" -> {
                 val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
@@ -242,6 +325,7 @@ object BrowserControl {
             "click" -> {
                 val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
                 val ref = cmd.optString("ref")
+                if (!isSafeRefValue(ref)) return errorResult(params, "invalid_ref", "ref 参数不合法", started)
                 val script =
                     if (ref.isNotEmpty()) {
                         "(function(){var el=document.querySelector('[data-coda-ref=\"$ref\"]');if(!el)return 'missing';el.scrollIntoView({block:'center'});el.click();return 'ok';})()"
@@ -261,6 +345,7 @@ object BrowserControl {
             "fill", "type" -> {
                 val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
                 val ref = cmd.optString("ref")
+                if (!isSafeRefValue(ref)) return errorResult(params, "invalid_ref", "ref 参数不合法", started)
                 val text = if (method == "fill") cmd.optString("value") else cmd.optString("text")
                 val script =
                     if (ref.isNotEmpty()) {
@@ -295,6 +380,7 @@ object BrowserControl {
             "scroll" -> {
                 val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
                 val ref = cmd.optString("ref")
+                if (!isSafeRefValue(ref)) return errorResult(params, "invalid_ref", "ref 参数不合法", started)
                 val script =
                     if (ref.isNotEmpty()) {
                         "(function(){var el=document.querySelector('[data-coda-ref=\"$ref\"]');if(!el)return 'missing';el.scrollIntoView({block:'center'});return 'ok';})()"
@@ -339,32 +425,8 @@ object BrowserControl {
                 }
             }
 
-            "waitFor" -> {
-                val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
-                val selector = cmd.optString("selector")
-                val text = cmd.optString("text")
-                val timeout = cmd.optInt("timeoutMs", 10000).coerceIn(200, 60000)
-                val deadline = System.currentTimeMillis() + timeout
-                var found = false
-                while (System.currentTimeMillis() < deadline) {
-                    val probe =
-                        when {
-                            selector.isNotEmpty() -> "!!document.querySelector(${jsString(selector)})"
-                            text.isNotEmpty() -> "document.body && document.body.innerText.indexOf(${jsString(text)}) >= 0"
-                            else -> "true"
-                        }
-                    if (jsRaw(view, probe) == "true") {
-                        found = true
-                        break
-                    }
-                    Thread.sleep(200)
-                }
-                if (found) {
-                    okResult(params, started) { it.put("state", pageState(view)) }
-                } else {
-                    errorResult(params, "timeout", "等待条件未在限定时间内满足", started)
-                }
-            }
+            "waitFor" ->
+                errorResult(params, "internal_error", "该命令应由 executeBlocking 处理", started)
 
             "screenshot" -> {
                 val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
@@ -456,7 +518,7 @@ object BrowserControl {
             .put("browserGeneration", params.optInt("browserGeneration", generation))
             .put("openTabIds", JSONArray().put(TAB_ID))
             .put("tabId", TAB_ID)
-            .put("currentUrl", web?.url ?: "")
+            .put("currentUrl", cachedUrl)
             .put("lifecycle", "active")
 
     private fun pageState(view: WebView): JSONObject =
@@ -473,13 +535,22 @@ object BrowserControl {
     private fun tabSummary(): JSONObject =
         JSONObject()
             .put("tabId", TAB_ID)
-            .put("url", web?.url ?: "")
-            .put("title", web?.title ?: "")
+            .put("url", cachedUrl)
+            .put("title", cachedTitle)
             .put("viewport", JSONObject().put("width", viewportWidth).put("height", viewportHeight))
             .put("active", true)
             .put("lifecycle", "active")
 
     // ------------------------------------------------------------ 引擎管理
+
+    /**
+     * ref 是否可以直接拼进 JS 选择器。
+     *
+     * 内核生成的 ref 形如 `r1`；直接把任意字符串塞进 `[data-coda-ref="..."]` 里，
+     * 一个引号就能闭合选择器并注入任意脚本。
+     */
+    private fun isSafeRefValue(ref: String): Boolean =
+        ref.isEmpty() || Regex("^[A-Za-z0-9_-]{1,64}$").matches(ref)
 
     private fun engineOrNull(
         params: JSONObject,
@@ -524,6 +595,9 @@ object BrowserControl {
                         w: WebView,
                         url: String,
                     ) {
+                        // url/title 只能在主线程读，这里顺手缓存给其它线程用。
+                        cachedUrl = url
+                        cachedTitle = w.title ?: ""
                         pageLoaded.countDown()
                     }
                 }
@@ -690,6 +764,26 @@ object BrowserControl {
         } catch (_: Throwable) {
             null
         }
+
+    /** 在主线程取值并返回；已经身处主线程时直接执行，避免自我等待。 */
+    private fun <T> onMainGet(
+        timeoutMs: Long = 30000,
+        block: () -> T,
+    ): T? {
+        if (Looper.myLooper() == Looper.getMainLooper()) return block()
+        var value: T? = null
+        val latch = CountDownLatch(1)
+        main.post {
+            try {
+                value = block()
+            } catch (_: Throwable) {
+            } finally {
+                latch.countDown()
+            }
+        }
+        latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        return value
+    }
 
     /** 在主线程执行并等待完成。 */
     private fun onMain(
