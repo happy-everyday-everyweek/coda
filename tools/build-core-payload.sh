@@ -58,17 +58,37 @@ stream_digest() {
   fi
 }
 
-# 输入指纹只取仓库跟踪的内核源文件，加上 SEA 基础镜像与脚本自身。dist 与 node_modules 是
-# 构建产物，不参与计算，因此同一个提交在本地与 CI 上得到的值一致，可以直接当缓存键。
+# 输入指纹覆盖所有会被打进载荷的东西：仓库跟踪的内核源文件、SEA 基础镜像、脚本自身，
+# 以及随包但不参与内核构建的运行时输入（内置供应商配置、rg、core/lib 下的 .so）。
+# dist 与 node_modules 是构建产物，不参与计算，因此同一个提交在本地与 CI 上值一致。
+# third-party/runtime/sources.json 与生成的 node-*-LICENSE.txt 排除在外：它们会被本脚本
+# 的许可证登记步骤改写，算进指纹会让 stamp 永远对不上、每次都全量重建，还会弄脏工作树。
 kernel_inputs_fingerprint() {
   {
     printf 'script %s\n' "$(file_digest "$ROOT/tools/build-core-payload.sh")"
     printf 'node-base %s\n' "$(file_digest "$NODE_BASE")"
+    # 这些文件换了内容就是换了载荷的运行时输入，必须让跳过判定失效。
+    for extra in assets/provider/zcode-builtin.json assets/rg; do
+      if [ -f "$ROOT/$extra" ]; then
+        printf '%s %s\n' "$extra" "$(file_digest "$ROOT/$extra")"
+      else
+        printf '%s missing\n' "$extra"
+      fi
+    done
+    if [ -d "$ROOT/assets/core/lib" ]; then
+      find "$ROOT/assets/core/lib" -type f -name '*.so' -print0 \
+        | LC_ALL=C sort -z \
+        | while IFS= read -r -d '' path; do
+            printf '%s %s\n' "${path#"$ROOT"/}" "$(file_digest "$path")"
+          done
+    fi
     git -C "$ROOT" ls-files -z -- kernel/zcode \
       | LC_ALL=C sort -z \
       | while IFS= read -r -d '' path; do
           case "$path" in
             */dist/*|*/node_modules/*|*.tsbuildinfo) continue ;;
+            */third-party/runtime/sources.json) continue ;;
+            */third-party/runtime/node-*-LICENSE.txt) continue ;;
           esac
           printf '%s %s\n' "$path" "$(file_digest "$ROOT/$path")"
         done
@@ -90,12 +110,21 @@ payload_line() {
 # 载荷清单：应用解包后据此核对 files/core 里的文件就是随包这一份，字节数或摘要对不上就重新
 # 解包。少了它，应用只能凭一个固定标记判断，换了载荷也可能继续沿用上一版解出来的二进制。
 write_payload_manifest() {
+  # 必须原子写：重定向会先截断 payload.txt，而 payload_line 在文件缺失时 exit 1。
+  # 中途失败会留下一份被截断的清单，应用侧 mapNotNull 会静默丢掉坏行，
+  # 于是被省略的文件跳过摘要校验——正是清单要防的那种情况。
+  local tmp="$ASSETS/payload.txt.tmp.$$"
   {
     payload_line zcode
     payload_line zcode.cjs
     payload_line node
     payload_line rg
-  } > "$ASSETS/payload.txt"
+  } > "$tmp" || {
+    rm -f "$tmp"
+    echo "!! 载荷清单生成失败，保留上一份 payload.txt" >&2
+    exit 1
+  }
+  mv -f "$tmp" "$ASSETS/payload.txt"
   echo "   已写出载荷清单 payload.txt"
 }
 
@@ -155,6 +184,11 @@ fi
 
 # 2) 编 bundle：先构建 workspace 依赖包，再用 esbuild 打 CLI 单文件
 echo "== [2/3] 构建内核 bundle"
+# 先删掉预期产物：只判断「文件存在」的话，上一轮留下的旧文件就能满足检查。
+# 构建器若退出 0 却没写出东西（比如输出路径改了名），会把过期产物当新的拷进 assets。
+if [ "${DRY_RUN:-0}" != "1" ]; then
+  rm -f "$BUNDLE" "$SEA_OUT"
+fi
 # turbo 是内核仓库根的依赖，必须从根目录调用（与上游 apps/zcode-cli 的 build:sea 脚本一致）
 run pnpm --dir "$KERNEL" exec turbo --skip-infer \
   --cwd apps/zcode-cli run build --filter='!@zcode/cli' --force
@@ -171,10 +205,14 @@ fi
 
 # 3) SEA：注入 bundle + 内嵌资源，输出 Android 可用可执行文件
 # SEA 的许可证声明要求 third-party/runtime/sources.json 登记当前 node 版本。
-# 宿主 node 的小版本可能与基础镜像不一致（CI 已把 node 固定成与镜像相同的版本，
-# 本地则可能领先一两个补丁），缺登记时按同一大版本补一条，避免被无关差异挡住构建。
-NODE_VER="$(node -v | sed 's/^v//')"
-echo "   宿主 node : v$NODE_VER"
+# 版本必须取自基础镜像而不是宿主 node：SEA 二进制里嵌的是 $NODE_BASE，
+# 宿主可能领先一两个补丁，用宿主版本会登记一个根本不随包发布的运行时。
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  NODE_VER="dry-run"
+else
+  NODE_VER="$("$NODE_BASE" -p 'process.versions.node')"
+fi
+echo "   基础镜像 node : v$NODE_VER"
 if [ "${DRY_RUN:-0}" != "1" ]; then
   node -e '
 const fs=require("fs"),crypto=require("crypto"),path=require("path");
@@ -188,17 +226,19 @@ const rel=path.posix.join("third-party/runtime","node-"+version+"-LICENSE.txt");
 fs.writeFileSync(path.join(root,rel),bytes);
 json.node.push({version,source:"https://raw.githubusercontent.com/nodejs/node/v"+version+"/LICENSE",file:rel,sha256:crypto.createHash("sha256").update(bytes).digest("hex")});
 fs.writeFileSync(sourcesPath,JSON.stringify(json,null,2)+"\n");
-console.log("   已为宿主 node "+version+" 登记许可证来源（复用 "+base.version+" 的许可证文本）");
+console.log("   已为基础镜像 node "+version+" 登记许可证来源（复用 "+base.version+" 的许可证文本）");
 ' "$KERNEL/third-party/runtime/sources.json" "$NODE_VER" "$KERNEL"
 fi
 echo "== [3/3] 生成 SEA 二进制"
 # SEA 的资源闭包会用到仓库根 packages/* 下的 workspace 包，而它们不在
 # apps/zcode-cli 这个 turbo 范围里，可能缺 dist。缺哪个就补编哪个，最多补 4 轮。
-if [ "${DRY_RUN:-0}" = "1" ]; then
-  run node "$CLI_PKG/scripts/build-sea.mjs" \
-    --target "$SEA_TARGET" \
-    --node-binary "$SEA_TARGET=$NODE_BASE"
-else
+# dry-run 与真实构建走同一个函数：否则两条路径手工维护，DRY_RUN=1 看不到
+# 可能的 tsc 补编与输出重定向，预览就不忠实。
+build_sea_with_retry() {
+  if [ "${DRY_RUN:-0}" = "1" ]; then
+    echo "+ node $CLI_PKG/scripts/build-sea.mjs --target $SEA_TARGET --node-binary $SEA_TARGET=$NODE_BASE（失败时按缺 dist 的包补编 tsc，最多 4 轮）"
+    return 0
+  fi
   SEA_LOG="$(mktemp)"
   # 中间任何一步失败（set -e）都不能把临时文件留在 /tmp：只用显式 rm 覆盖不到
   # pnpm/tsc 这类中途退出。
@@ -219,11 +259,21 @@ else
     fi
     attempt=$((attempt + 1))
     echo "== 补齐根 workspace 包：$missing"
-    pnpm --dir "$KERNEL" exec tsc -p "packages/${missing#@zcode/}/tsconfig.json"
+    # 报错里的包名不一定对应 packages/<去掉 scope 的名字>/tsconfig.json：
+    # 嵌套包、改过名的包、或根本没有 tsconfig 的包都会让 tsc 直接失败，
+    # 在 set -e 下脚本会以 tsc 错误中止，而不是给出「SEA 生成失败」的诊断。
+    missing_tsconfig="$KERNEL/packages/${missing#@zcode/}/tsconfig.json"
+    if [ ! -f "$missing_tsconfig" ]; then
+      echo "!! SEA 生成失败：缺少 $missing 的 dist，且找不到 $missing_tsconfig 可用于补编" >&2
+      tail -20 "$SEA_LOG" >&2
+      rm -f "$SEA_LOG"
+      exit 1
+    fi
+    pnpm --dir "$KERNEL" exec tsc -p "$missing_tsconfig"
   done
   rm -f "$SEA_LOG"
-fi
-
+}
+build_sea_with_retry
 if [ "${DRY_RUN:-0}" != "1" ] && [ ! -f "$SEA_OUT" ]; then
   echo "!! SEA 二进制未生成：$SEA_OUT" >&2
   exit 1
