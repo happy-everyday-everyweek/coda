@@ -31,6 +31,10 @@ def main(path):
     size = len(data)
     print("== 载荷结构核对 %s" % path)
     print("   字节数 %d" % size)
+    # 先把「文件够不够读一个 ELF64 头」判掉：载荷被截断时下面每一条 unpack_from
+    # 都会抛 IndexError，脚本变成崩在 traceback 上，看不出到底缺了什么。
+    if size < 64:
+        return report(["文件太短，不足一个 ELF64 头（%d 字节）" % size])
     if data[:4] != b"\x7fELF":
         return report(["不是 ELF 文件"])
     if data[4] != 2:
@@ -50,6 +54,12 @@ def main(path):
     problems = []
     loads = []
     notes = []
+    # 程序头表本身先校验：e_phoff/e_phnum/e_phentsize 任意一个被写坏，
+    # 下面的 unpack_from 都会越界抛出，而不是给出一句人能看懂的结论。
+    if e_phentsize < 56:
+        return report(["程序头条目长度异常：%d" % e_phentsize])
+    if e_phoff + e_phnum * e_phentsize > size:
+        return report(["程序头表越出文件尾（偏移 %d、%d 项）" % (e_phoff, e_phnum)])
     for i in range(e_phnum):
         head = struct.unpack_from("<IIQQQQQQ", data, e_phoff + i * e_phentsize)
         if head[0] == 1:
@@ -86,20 +96,42 @@ def main(path):
 
     if not e_shoff or e_shoff + e_shnum * e_shentsize > size:
         problems.append("节头表越出文件尾")
+    elif e_shentsize < 64:
+        problems.append("节头条目长度异常：%d" % e_shentsize)
+    elif e_shstrndx == 0xFFFF:
+        problems.append("节头字符串表使用 SHN_XINDEX，本脚本不处理")
+    elif e_shstrndx >= e_shnum:
+        problems.append("节头字符串表索引越界：%d（共 %d 项）" % (e_shstrndx, e_shnum))
     else:
-        str_off = struct.unpack_from("<Q", data, e_shoff + e_shstrndx * e_shentsize + 24)[0]
-        names = []
-        for i in range(e_shnum):
-            head = struct.unpack_from("<IIQQQQIIQQ", data, e_shoff + i * e_shentsize)
-            name_off = head[0]
-            end = data.find(b"\x00", str_off + name_off)
-            name = data[str_off + name_off:end].decode("utf-8", "replace")
-            names.append(name)
-            if head[4] + head[5] != loaded_end:
-                print("   节 %s 偏移=%d 长度=%d" % (name, head[4], head[5]))
-        print("   节数 %d，节头表结束于 %d" % (len(names), e_shoff + e_shnum * e_shentsize))
-        if e_shoff + e_shnum * e_shentsize != size:
-            print("   提示：节头表未铺到文件尾，尾部还有 %d 字节" % (size - e_shoff - e_shnum * e_shentsize))
+        str_head = e_shoff + e_shstrndx * e_shentsize
+        if str_head + 64 > size:
+            problems.append("节头字符串表的节头越出文件尾")
+        else:
+            str_off = struct.unpack_from("<Q", data, str_head + 24)[0]
+            if str_off >= size:
+                problems.append("节名字符串偏移越出文件尾：%d" % str_off)
+            else:
+                names = []
+                for i in range(e_shnum):
+                    head = struct.unpack_from("<IIQQQQIIQQ", data, e_shoff + i * e_shentsize)
+                    name_off = head[0]
+                    end = data.find(b"\x00", str_off + name_off)
+                    # find 找不到 NUL 时返回 -1：拿 -1 去切片会得到一段莫名其妙的
+                    # 字符串（甚至是空串），把「表被写坏」掩盖成「节名为空」。
+                    if end < 0:
+                        problems.append("节名字符串没有以 NUL 结束（第 %d 项）" % i)
+                        name = ""
+                    else:
+                        name = data[str_off + name_off:end].decode("utf-8", "replace")
+                    names.append(name)
+                    if head[4] + head[5] != loaded_end:
+                        print("   节 %s 偏移=%d 长度=%d" % (name, head[4], head[5]))
+                print("   节数 %d，节头表结束于 %d" % (len(names), e_shoff + e_shnum * e_shentsize))
+                if e_shoff + e_shnum * e_shentsize != size:
+                    print(
+                        "   提示：节头表未铺到文件尾，尾部还有 %d 字节"
+                        % (size - e_shoff - e_shnum * e_shentsize)
+                    )
 
     fuse_at = data.find(b"NODE_SEA_FUSE_")
     if fuse_at < 0:
