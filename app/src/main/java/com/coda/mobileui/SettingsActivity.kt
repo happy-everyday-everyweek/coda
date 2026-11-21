@@ -12,6 +12,9 @@ import com.google.android.material.snackbar.Snackbar
  * 设置（一级）：分类列表，对齐桌面端的全部设置分区。
  */
 class SettingsActivity : BaseActivity() {
+    private var swipeStartX = 0f
+    private var swipeStartY = 0f
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupEdgeToEdge()
@@ -20,7 +23,6 @@ class SettingsActivity : BaseActivity() {
         findViewById<View>(R.id.settings_root).applySystemBarsInset()
 
         findViewById<View>(R.id.btn_back).setOnClickListener { backToDrawer() }
-        attachRightSwipe()
         findViewById<View>(R.id.btn_more).setOnClickListener { view ->
             Snackbar.make(view, R.string.settings_more_placeholder, Snackbar.LENGTH_SHORT).show()
         }
@@ -37,34 +39,31 @@ class SettingsActivity : BaseActivity() {
         }
     }
 
-    /** 设置首页与对话页同级：右滑回到抽屉。 */
-    private fun attachRightSwipe() {
-        var startX = 0f
-        var startY = 0f
-        findViewById<View>(R.id.settings_root).setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    startX = event.x
-                    startY = event.y
-                    false
-                }
+    /**
+     * 右滑返回：只观察事件，不抢着消费。
+     *
+     * 之前挂在根布局的 OnTouchListener 上，且 ACTION_DOWN 返回 false——列表项、
+     * 按钮这些可交互子控件先把事件吃掉，根布局根本收不到 ACTION_UP，手势在这些
+     * 区域自然失效。放在 Activity 的事件入口就绕开了这一层：子控件照常收到事件，
+     * 只有确认是右滑的那一次抬手才被消费。
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                swipeStartX = ev.x
+                swipeStartY = ev.y
+            }
 
-                MotionEvent.ACTION_UP -> {
-                    val dx = event.x - startX
-                    val dy = kotlin.math.abs(event.y - startY)
-                    if (dx > dp(36) && dx > dy) {
-                        backToDrawer()
-                        true
-                    } else {
-                        false
-                    }
-                }
-
-                else -> {
-                    false
+            MotionEvent.ACTION_UP -> {
+                val dx = ev.x - swipeStartX
+                val dy = kotlin.math.abs(ev.y - swipeStartY)
+                if (isRightBackSwipe(dx, dy, dp(36).toFloat())) {
+                    backToDrawer()
+                    return true
                 }
             }
         }
+        return super.dispatchTouchEvent(ev)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -75,3 +74,10 @@ class SettingsActivity : BaseActivity() {
         finish()
     }
 }
+
+/** 右滑返回判定：横向位移过阈值，且明显大于纵向（避免把竖滑当成返回）。 */
+internal fun isRightBackSwipe(
+    dx: Float,
+    dy: Float,
+    thresholdPx: Float,
+): Boolean = dx > thresholdPx && dx > dy

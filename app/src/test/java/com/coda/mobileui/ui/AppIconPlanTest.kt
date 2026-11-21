@@ -1,5 +1,6 @@
-package com.coda.mobileui
+package com.coda.mobileui.ui
 
+import com.coda.mobileui.AppIconManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

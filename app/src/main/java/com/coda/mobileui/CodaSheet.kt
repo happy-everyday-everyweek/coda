@@ -45,6 +45,18 @@ class CodaSheet(
 
         /** 卡片圆角。 */
         private const val CARD_CORNER_DP = 28f
+
+        /**
+         * 退出动画结束时是否还能去清理引用。
+         *
+         * 一次 dismiss 的动画要跑 200ms，这段时间里完全可能再 show 一次：
+         * 旧回调若无条件把 root/panel 置空，清掉的是新卡片刚建好的引用，
+         * 新弹窗从此既关不掉也 navigate 不了。用代际号把两者隔开。
+         */
+        internal fun shouldApplyDismiss(
+            generatedAt: Long,
+            current: Long,
+        ): Boolean = generatedAt == current
     }
 
     private var titleText: String? = null
@@ -85,6 +97,12 @@ class CodaSheet(
 
     /** navigate() 的过渡进行中标记，防止连点导致两次换页叠加。 */
     private var navigating = false
+
+    /** 每次 show/dismiss 递增；退出动画用它判断自己是否已经过期。 */
+    private var generation = 0L
+
+    /** 已关闭但动画未结束时又被 show 打断，那个回调仍要补一次。 */
+    private var pendingDismissBlock: (() -> Unit)? = null
 
     var isShowing: Boolean = false
         private set
@@ -137,9 +155,43 @@ class CodaSheet(
 
     private fun cardHeightPx(): Int = (fullScreenH * HALF_RATIO).toInt()
 
+    /**
+     * 作废上一次尚未跑完的退出动画。
+     *
+     * 退出动画的结束回调会清空 root/panel 等引用；若这期间同一实例又 show 了一次，
+     * 被清掉的就是新卡片的引用。这里先把旧视图从窗口摘掉，并补一次关闭回调，
+     * 让调用方有机会复位自己的状态，然后旧动画的结束回调会因为代际不符而跳过。
+     */
+    private fun abandonClosingSheet() {
+        val oldRoot = root ?: return
+        panel?.animate()?.cancel()
+        cancelPanelAnim()
+        (oldRoot.parent as? ViewGroup)?.removeView(oldRoot)
+        root = null
+        scrim = null
+        panel = null
+        grabberRow = null
+        footerRow = null
+        backCallback?.let {
+            it.isEnabled = false
+            it.remove()
+        }
+        backCallback = null
+        livePanel = null
+        liveScroll = null
+        liveContentCol = null
+        liveColors = null
+        navigating = false
+        val block = pendingDismissBlock
+        pendingDismissBlock = null
+        block?.invoke()
+    }
+
     /** 显示半屏卡片（常规模式默认停靠卡片态；紧凑模式自适应内容高度）。 */
     fun show() {
         if (isShowing) return
+        abandonClosingSheet()
+        generation += 1
         val decor = activity.window.decorView as ViewGroup
         val screenH = activity.resources.displayMetrics.heightPixels
         statusBarH = statusBarHeightPx()
@@ -498,7 +550,12 @@ class CodaSheet(
         // 应用是 edge-to-edge，Android 11 起 adjustResize 不再缩小窗口：
         // 不自己处理 ime inset，键盘会直接盖住输入框与底部按钮。
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, insets ->
-            val ime = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+            val ime =
+                insets
+                    .getInsets(
+                        androidx.core.view.WindowInsetsCompat.Type
+                            .ime(),
+                    ).bottom
             if (ime != imeInset) {
                 imeInset = ime
                 view.setPadding(0, 0, 0, ime)
@@ -847,24 +904,30 @@ class CodaSheet(
         // 过渡期间再来一次会叠加两个 postDelayed，内容次序会乱，直接忽略。
         if (navigating) return
         navigating = true
-        // 先记下当前页描述，便于新页在同一实例上重建
-        val oldTitle = titleText
-        val oldSubtitle = subtitleText
-        val oldHeaderActionText = headerActionText
-        val oldHeaderActionBlock = headerActionBlock
-        val oldPrimaryText = primaryText
-        val oldPrimaryBlock = primaryBlock
-        val oldSecondaryText = secondaryText
-        val oldSecondaryBlock = secondaryBlock
-        val oldContentBlock = contentBlock
+        val myGen = generation
+        // 先记下当前页描述：新页若什么都没定义，要原样填回去
+        val old =
+            PageSnapshot(
+                title = titleText,
+                subtitle = subtitleText,
+                headerActionText = headerActionText,
+                headerActionBlock = headerActionBlock,
+                primaryText = primaryText,
+                primaryBlock = primaryBlock,
+                secondaryText = secondaryText,
+                secondaryBlock = secondaryBlock,
+                contentBlock = contentBlock,
+            )
 
-        // 关掉旧页：内容区与底部按钮一起淡出并轻微左移
+        // 关掉旧页：内容区与底部按钮一起淡出并轻微左移。
+        // 这里原来漏了 start()，内容区其实从未淡出，只有底栏在动。
         val fadeOut = 110L
         col
             .animate()
             .alpha(0f)
             .translationX(-dp(12f).toFloat())
             .setDuration(fadeOut)
+            .start()
         footerRow
             ?.animate()
             ?.alpha(0f)
@@ -872,74 +935,114 @@ class CodaSheet(
             ?.start()
 
         col.postDelayed({
-            // 复位动画状态
-            col.animate().cancel()
-            col.alpha = 1f
-            col.translationX = 0f
-            // 重置为一页干净的描述，再让调用方填新页
-            titleText = null
-            subtitleText = null
-            headerActionText = null
-            headerActionBlock = null
-            primaryText = null
-            primaryBlock = null
-            secondaryText = null
-            secondaryBlock = null
-            contentBlock = null
-
-            // 在同一个实例上应用新一页
-            block()
-
-            // 先判断这一页是不是真的定义了内容。判断必须放在动画之前：
-            // 否则会先给空页播一遍淡入，再回滚，屏幕上会闪一下。
-            val pageDefined =
-                titleText != null || subtitleText != null ||
-                    headerActionText != null || contentBlock != null ||
-                    primaryText != null || secondaryText != null
-            if (!pageDefined) {
-                // 调用方没定义任何东西：把旧页原样填回去，卡片保持不可用状态而不是空白
-                titleText = oldTitle
-                subtitleText = oldSubtitle
-                headerActionText = oldHeaderActionText
-                headerActionBlock = oldHeaderActionBlock
-                primaryText = oldPrimaryText
-                primaryBlock = oldPrimaryBlock
-                secondaryText = oldSecondaryText
-                secondaryBlock = oldSecondaryBlock
-                contentBlock = oldContentBlock
+            // 卡片已被关掉，或同一实例又换了一代：这次过渡没有接收者了。
+            // 必须放开 navigating，否则这张卡片之后再也换不了页。
+            if (!shouldApplyDismiss(myGen, generation) || !col.isAttachedToWindow) {
+                navigating = false
+                return@postDelayed
             }
+            try {
+                applyNextPage(col, old, block)
+            } finally {
+                // 重建中途抛异常也要放开限制
+                navigating = false
+            }
+        }, fadeOut + 10)
+    }
 
-            // 重建这一页：标题 + 内容 + 底部按钮
-            rebuildPage()
+    /** navigate() 过渡开始前那一页的描述，新页为空时用它原样填回。 */
+    private data class PageSnapshot(
+        val title: String?,
+        val subtitle: String?,
+        val headerActionText: String?,
+        val headerActionBlock: ((CodaSheet) -> Unit)?,
+        val primaryText: String?,
+        val primaryBlock: ((CodaSheet) -> Unit)?,
+        val secondaryText: String?,
+        val secondaryBlock: ((CodaSheet) -> Unit)?,
+        val contentBlock: ((LinearLayout) -> Unit)?,
+    )
 
-            // 新页从右侧轻轻推入（内容区与底栏一起）
-            col.alpha = 0f
-            col.translationX = dp(16f).toFloat()
-            col
+    /** 把已淡出的卡片重建成新一页，并播放入场。 */
+    private fun applyNextPage(
+        col: LinearLayout,
+        old: PageSnapshot,
+        block: CodaSheet.() -> Unit,
+    ) {
+        // 复位动画状态
+        col.animate().cancel()
+        col.alpha = 1f
+        col.translationX = 0f
+        // 重置为一页干净的描述，再让调用方填新页
+        titleText = null
+        subtitleText = null
+        headerActionText = null
+        headerActionBlock = null
+        primaryText = null
+        primaryBlock = null
+        secondaryText = null
+        secondaryBlock = null
+        contentBlock = null
+
+        // 在同一个实例上应用新一页
+        block()
+
+        // 先判断这一页是不是真的定义了内容。判断必须放在动画之前：
+        // 否则会先给空页播一遍淡入，再回滚，屏幕上会闪一下。
+        val pageDefined =
+            titleText != null || subtitleText != null ||
+                headerActionText != null || contentBlock != null ||
+                primaryText != null || secondaryText != null
+        if (!pageDefined) {
+            // 调用方没定义任何东西：把旧页原样填回去，卡片保持不可用状态而不是空白
+            titleText = old.title
+            subtitleText = old.subtitle
+            headerActionText = old.headerActionText
+            headerActionBlock = old.headerActionBlock
+            primaryText = old.primaryText
+            primaryBlock = old.primaryBlock
+            secondaryText = old.secondaryText
+            secondaryBlock = old.secondaryBlock
+            contentBlock = old.contentBlock
+        }
+
+        // 重建这一页：标题 + 内容 + 底部按钮
+        rebuildPage()
+
+        // 新页从右侧轻轻推入（内容区与底栏一起）
+        col.alpha = 0f
+        col.translationX = dp(16f).toFloat()
+        col
+            .animate()
+            .alpha(1f)
+            .translationX(0f)
+            .setDuration(160)
+            .start()
+        footerRow?.let {
+            it.alpha = 0f
+            it
                 .animate()
                 .alpha(1f)
                 .translationX(0f)
                 .setDuration(160)
                 .start()
-            footerRow?.let {
-                it.alpha = 0f
-                it
-                    .animate()
-                    .alpha(1f)
-                    .setDuration(160)
-                    .start()
-            }
-            // 过渡结束，放开连点限制
-            col.postDelayed({ navigating = false }, 170)
-        }, fadeOut + 10)
+        }
     }
 
     /** 关闭半屏卡片（播放退出动画后移除）。 */
     fun dismiss() {
         if (!isShowing) return
         isShowing = false
+        // 记下这次关闭的代际与回调：动画跑完前可能又 show 一次，
+        // 那时清理与回调都由 show 侧的 abandonClosingSheet 负责
+        val myGen = ++generation
+        pendingDismissBlock = onDismissBlock
         cancelPanelAnim()
-        val rootView = root ?: return
+        val rootView = root
+        if (rootView == null) {
+            pendingDismissBlock = null
+            return
+        }
         val scrimView = scrim
         val panelView = panel
         backCallback?.let {
@@ -954,6 +1057,7 @@ class CodaSheet(
             ?.translationY(exit)
             ?.setDuration(200)
             ?.withEndAction {
+                if (!shouldApplyDismiss(myGen, generation)) return@withEndAction
                 (rootView.parent as? ViewGroup)?.removeView(rootView)
                 root = null
                 scrim = null
@@ -967,7 +1071,9 @@ class CodaSheet(
                 liveContentCol = null
                 liveColors = null
                 navigating = false
-                onDismissBlock?.invoke()
+                val block = pendingDismissBlock
+                pendingDismissBlock = null
+                block?.invoke()
             }?.start()
         scrimView
             ?.animate()

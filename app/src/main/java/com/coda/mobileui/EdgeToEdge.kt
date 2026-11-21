@@ -1,6 +1,8 @@
 package com.coda.mobileui
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.res.Configuration
 import android.os.Build
 import android.view.View
@@ -9,6 +11,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 /**
@@ -71,8 +74,9 @@ fun Context.topSafeInsetPx(): Int {
     val statusBar = if (id > 0) resources.getDimensionPixelSize(id) else dpPx(26)
     val cutout =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val activity = this as? android.app.Activity
-            activity
+            // 页面拿到的 Context 常被主题包装过（ContextThemeWrapper 等），
+            // 直接 `as? Activity` 会失败，刘海避让就悄悄退回状态栏高度
+            findHostActivity()
                 ?.window
                 ?.decorView
                 ?.rootWindowInsets
@@ -82,6 +86,16 @@ fun Context.topSafeInsetPx(): Int {
             0
         }
     return maxOf(statusBar, cutout)
+}
+
+/** 沿 ContextWrapper 链往上找宿主 Activity；找不到返回 null。 */
+internal fun Context.findHostActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return current as? Activity
 }
 
 /** 底部避让高度：系统导航栏高度；取不到时用 24dp 兜底。 */
@@ -100,14 +114,39 @@ private fun Context.dpPx(v: Int): Int = (v * resources.displayMetrics.density).r
  */
 fun View.padForTopSafeInset() {
     val extra = context.topSafeInsetPx()
-    setPadding(paddingLeft, paddingTop + extra, paddingRight, paddingBottom)
+    val applied = topPads[this] ?: 0
+    val top = EdgeToEdge.toppedPadding(paddingTop, applied, extra)
+    topPads[this] = extra
+    setPadding(paddingLeft, top, paddingRight, paddingBottom)
 }
 
 /** 给一个底部组件加导航栏避让。 */
 fun View.padForBottomSafeInset() {
     val extra = context.bottomSafeInsetPx()
-    setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom + extra)
+    val applied = bottomPads[this] ?: 0
+    val bottom = paddingBottom - applied + extra
+    bottomPads[this] = extra
+    setPadding(paddingLeft, paddingTop, paddingRight, bottom)
 }
+
+/**
+ * 安全区内边距的纯计算部分。
+ *
+ * 单独拆出来是因为它是这条链路上唯一能脱离 View 验证的一环：之前直接写
+ * `paddingTop + extra`，页面每次重建都调用一次，内边距就一路累加。
+ */
+internal object EdgeToEdge {
+    /** 在已加过 [previouslyAdded] 的内边距上，改设成 [extra]。 */
+    fun toppedPadding(
+        current: Int,
+        previouslyAdded: Int,
+        extra: Int,
+    ): Int = current - previouslyAdded + extra
+}
+
+/** 记录每个 View 上一次加了多少安全区，供下次调用时扣掉，避免重复累加。 */
+private val topPads = WeakHashMap<View, Int>()
+private val bottomPads = WeakHashMap<View, Int>()
 
 /** 底部内边距：取系统栏与输入法（键盘）的较大者，并叠加原有底部间距。 */
 fun View.applyBottomInsetWithIme() {

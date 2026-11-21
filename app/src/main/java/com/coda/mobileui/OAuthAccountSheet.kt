@@ -17,6 +17,7 @@ import com.coda.mobileui.core.OAuthActions
 import com.coda.mobileui.core.OAuthProviders
 import com.google.android.material.color.MaterialColors
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * 单个账号的控制面板。
@@ -127,18 +128,52 @@ class OAuthAccountSheet(
 
 /** 拉一次最新状态：能力与账号数据一起更新，然后重画。 */
     private fun reload() {
-        io.execute {
-            val c = OAuthAccounts.capabilities(host, provider)
-            // 账号可能已经被删掉，这时列表里找不到，保留原值让界面不至于空白。
-            val fresh =
-                OAuthAccounts.list(host, provider).firstOrNull { it.authIndex == account.authIndex }
-                    ?: account
+        submit {
+            // 读接口在后台线程，异常不接住会直接杀死进程；接住后要在界面上给出结果，
+            // 不能把界面留在“正在读取账号状态…”。
+            val loaded =
+                runCatching {
+                    val c = OAuthAccounts.capabilities(host, provider)
+                    // 账号可能已经被删掉，这时列表里找不到，保留原值让界面不至于空白。
+                    val fresh =
+                        OAuthAccounts
+                            .list(host, provider)
+                            .firstOrNull { it.authIndex == account.authIndex } ?: account
+                    c to fresh
+                }
             main.post {
-                caps = c
-                account = fresh
-                render()
+                loaded
+                    .onSuccess { (c, fresh) ->
+                        caps = c
+                        account = fresh
+                        render()
+                    }.onFailure { e ->
+                        renderLoadFailure(e)
+                    }
             }
         }
+    }
+
+    /**
+     * 提交一个后台任务。
+     *
+     * 面板关闭时 onDismiss 已经 shutdown 线程池，此后任何延迟提交都会抛
+     * RejectedExecutionException——它发生在主线程，等于直接崩溃。关闭后的回调直接丢弃。
+     */
+    private fun submit(block: () -> Unit) {
+        try {
+            io.execute(block)
+        } catch (e: RuntimeException) {
+            if (!OAuthSheetErrors.isPoolClosed(e)) throw e
+        }
+    }
+
+    /** 读取失败也要有可见结果，否则卡片会一直停在加载态。 */
+    private fun renderLoadFailure(e: Throwable) {
+        val col = column ?: return
+        col.removeAllViews()
+        col.addView(hint(OAuthSheetErrors.reloadMessage(e)))
+        col.addView(hint("可以关闭这张卡片后重新打开再试。"))
     }
 
     private fun renderLoading() {
@@ -568,16 +603,34 @@ class OAuthAccountSheet(
 
     // ---------------------------------------------------------------- 动作
 
-    /** 所有动作统一走这里：跑在后台、防重入、结果提示、完成后刷新。 */
-    private fun run(block: () -> OAuthAccounts.Outcome) {
+    /**
+     * 所有动作统一走这里：跑在后台、防重入、结果提示、完成后刷新。
+     *
+     * [onSuccess] 只在动作真的成功时执行。删除这类不可逆操作要靠它关面板——
+     * 之前不看结果就关，失败时用户会以为已经删掉了。
+     */
+    private fun run(
+        onSuccess: (() -> Unit)? = null,
+        block: () -> OAuthAccounts.Outcome,
+    ) {
         if (working) return
         working = true
-        io.execute {
-            val result = runCatching(block).getOrElse { OAuthAccounts.Outcome(false, it.message ?: "操作失败") }
+        submit {
+            val result =
+                runCatching(block).getOrElse {
+                    OAuthAccounts.Outcome(false, it.message ?: "操作失败")
+                }
             main.post {
                 working = false
                 Toast.makeText(host, result.message, Toast.LENGTH_LONG).show()
-                if (result.ok) onChanged()
+                if (result.ok) {
+                    onChanged()
+                    if (onSuccess != null) {
+                        onSuccess()
+                        // 页面已经关掉或换走：不再刷新，避免操作已移除的视图
+                        return@post
+                    }
+                }
                 // 无论成败都重读一次，避免界面停在旧状态。
                 reload()
             }
@@ -610,11 +663,14 @@ class OAuthAccountSheet(
             }.primaryAction("删除") { self ->
                 self.dismiss()
                 val action = OAuthActions.byId("delete")
-                if (action != null) {
-                    run { OAuthActions.run(host, provider, action, account.authIndex) }
+                if (action == null) {
+                    Toast.makeText(host, "删除动作不可用", Toast.LENGTH_LONG).show()
+                    return@primaryAction
                 }
-                // 删掉后这个账号已不存在，面板本身也该关掉。
-                hostSheet.dismiss()
+                // 只有真的删成功才关面板：失败时面板要留着，错误提示可见、可以重试
+                run(onSuccess = { hostSheet.dismiss() }) {
+                    OAuthActions.run(host, provider, action, account.authIndex)
+                }
             }.secondaryAction("取消") { self -> self.dismiss() }
             .show()
     }
@@ -627,4 +683,18 @@ class OAuthAccountSheet(
             setLineSpacing(dp(3f).toFloat(), 1f)
             setPadding(0, dp(10f), 0, dp(10f))
         }
+}
+
+/**
+ * 账号面板错误处理的判定。
+ *
+ * 这两条都是“边界”，不是格式偏好：既要只吞关闭后预期的拒绝执行异常（不能连 OOM
+ * 一起吞），也要保证读取失败时界面上有一句非空提示，而不是停在加载态。
+ */
+internal object OAuthSheetErrors {
+    /** 线程池已关闭导致的提交失败：面板关掉之后才会出现，可以丢弃。 */
+    fun isPoolClosed(e: Throwable): Boolean = e is RejectedExecutionException
+
+    /** 读取失败的提示文本；异常没有 message 时退回类名，保证不是空串。 */
+    fun reloadMessage(e: Throwable): String = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
 }
