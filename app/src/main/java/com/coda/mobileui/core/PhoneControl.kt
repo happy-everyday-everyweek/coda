@@ -97,23 +97,30 @@ object PhoneControl {
         ctx: Context,
         enable: Boolean,
     ): String? {
-        ctx
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean("enabled", enable)
-            .apply()
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (enable) {
+            // 先写内核配置，失败就不改开关状态，避免界面显示已开启但 agent 根本连不上。
+            if (!syncMcpConfig(ctx, true)) return "写入内核 MCP 配置失败"
             val err = startServer(ctx)
-            if (err != null) return "服务启动失败：$err"
-            syncMcpConfig(ctx, true)
+            if (err != null) {
+                syncMcpConfig(ctx, false)
+                return "服务启动失败：$err"
+            }
+            prefs.edit().putBoolean("enabled", true).commit()
             return null
         }
         stopServer()
-        syncMcpConfig(ctx, false)
+        if (!syncMcpConfig(ctx, false)) return "移除内核 MCP 配置失败"
+        prefs.edit().putBoolean("enabled", false).commit()
         return null
     }
 
-    /** 去掉 MCP 配置里的手机控制条目（卸载/停用时保持内核配置干净）。 */
+    /**
+     * 增删 MCP 配置里的手机控制条目。
+     *
+     * 配置读取失败时直接返回 false：把损坏文件当成空对象会把用户其它 MCP 配置一起覆盖掉。
+     * 写入走临时文件再替换，避免中断留下半个 JSON。
+     */
     fun syncMcpConfig(
         ctx: Context,
         enable: Boolean,
@@ -121,12 +128,8 @@ object PhoneControl {
         try {
             val f = configFile(ctx)
             val root =
-                if (f.exists()) {
-                    try {
-                        JSONObject(f.readText())
-                    } catch (_: Throwable) {
-                        JSONObject()
-                    }
+                if (f.exists() && f.length() > 0L) {
+                    JSONObject(f.readText())
                 } else {
                     JSONObject()
                 }
@@ -148,9 +151,16 @@ object PhoneControl {
                 servers.remove(SERVER_NAME)
             }
             f.parentFile?.mkdirs()
-            f.writeText(root.toString(2))
-            true
-        } catch (_: Throwable) {
+            val tmp = File(f.parentFile, "config.json.coda-tmp")
+            tmp.writeText(root.toString(2))
+            if (!tmp.renameTo(f)) {
+                tmp.delete()
+                false
+            } else {
+                true
+            }
+        } catch (e: Throwable) {
+            AppLog.w("PhoneControl", "同步 MCP 配置失败：${e.message}")
             false
         }
 
@@ -236,9 +246,18 @@ class PhoneControlServer(
             val path = parts[1].substringBefore('?')
             var contentLength = 0
             var auth: String? = null
+            var headerCount = 0
+            var headerBytes = 0
+            var chunked = false
             while (true) {
                 val line = readLine(input) ?: return
                 if (line.isEmpty()) break
+                headerCount++
+                headerBytes += line.length
+                if (headerCount > MAX_HEADER_COUNT || headerBytes > MAX_HEADER_TOTAL) {
+                    writeEmpty(output, 431)
+                    return
+                }
                 val idx = line.indexOf(':')
                 if (idx <= 0) continue
                 val name = line.substring(0, idx).trim().lowercase()
@@ -246,13 +265,23 @@ class PhoneControlServer(
                 when (name) {
                     "content-length" -> contentLength = value.toIntOrNull() ?: 0
                     "authorization" -> auth = value
+                    "transfer-encoding" -> chunked = value.contains("chunked", ignoreCase = true)
                 }
+            }
+            // 不实现 chunked：明确回 411，而不是把空 body 当完整请求解析。
+            if (chunked) {
+                writeEmpty(output, 411)
+                return
             }
             if (contentLength < 0 || contentLength > MAX_BODY_BYTES) {
                 writeEmpty(output, 413)
                 return
             }
             val body = if (contentLength > 0) readExactly(input, contentLength) else ByteArray(0)
+            if (body == null) {
+                writeEmpty(output, 400)
+                return
+            }
             route(output, method, path, auth, body)
         } catch (_: Throwable) {
         } finally {
@@ -345,7 +374,7 @@ class PhoneControlServer(
     private fun readExactly(
         input: InputStream,
         length: Int,
-    ): ByteArray {
+    ): ByteArray? {
         val buf = ByteArray(length)
         var total = 0
         while (total < length) {
@@ -353,11 +382,14 @@ class PhoneControlServer(
             if (r < 0) break
             total += r
         }
-        return if (total == length) buf else buf.copyOf(total)
+        // 短读是连接中断，不是“内容变短”：返回 null，让调用方回 400。
+        return if (total == length) buf else null
     }
 
     companion object {
         private const val MAX_HEADER_BYTES = 32 * 1024
+        private const val MAX_HEADER_TOTAL = 64 * 1024
+        private const val MAX_HEADER_COUNT = 100
         private const val MAX_BODY_BYTES = 2 * 1024 * 1024
     }
 }
@@ -618,30 +650,38 @@ object PhoneMcp {
             }
 
             "tap" -> {
-                val ok = service().tap(args.optDouble("x", 0.0).toFloat(), args.optDouble("y", 0.0).toFloat())
-                ToolOutput(if (ok) "已点击 (${args.optInt("x")}, ${args.optInt("y")})" else "点击失败")
+                val x = requireCoord(args, "x")
+                val y = requireCoord(args, "y")
+                val ok = service().tap(x, y)
+                ToolOutput(if (ok) "已点击 (${fmt(x)}, ${fmt(y)})" else "点击失败")
             }
 
             "long_press" -> {
+                val x = requireCoord(args, "x")
+                val y = requireCoord(args, "y")
                 val ok =
                     service().longPress(
-                        args.optDouble("x", 0.0).toFloat(),
-                        args.optDouble("y", 0.0).toFloat(),
+                        x,
+                        y,
                         args.optLong("duration_ms", 600L).coerceIn(100L, 10_000L),
                     )
-                ToolOutput(if (ok) "已长按 (${args.optInt("x")}, ${args.optInt("y")})" else "长按失败")
+                ToolOutput(if (ok) "已长按 (${fmt(x)}, ${fmt(y)})" else "长按失败")
             }
 
             "swipe" -> {
+                val x1 = requireCoord(args, "x1")
+                val y1 = requireCoord(args, "y1")
+                val x2 = requireCoord(args, "x2")
+                val y2 = requireCoord(args, "y2")
                 val ok =
                     service().swipe(
-                        args.optDouble("x1", 0.0).toFloat(),
-                        args.optDouble("y1", 0.0).toFloat(),
-                        args.optDouble("x2", 0.0).toFloat(),
-                        args.optDouble("y2", 0.0).toFloat(),
+                        x1,
+                        y1,
+                        x2,
+                        y2,
                         args.optLong("duration_ms", 300L),
                     )
-                ToolOutput(if (ok) "已滑动" else "滑动失败")
+                ToolOutput(if (ok) "已从 (${fmt(x1)}, ${fmt(y1)}) 滑到 (${fmt(x2)}, ${fmt(y2)})" else "滑动失败")
             }
 
             "tap_element" -> {
@@ -676,6 +716,21 @@ object PhoneMcp {
             }
         }
 
+    /** 必填坐标：缺参直接报错，不能退化成 0 在左上角静默点击。 */
+    private fun requireCoord(
+        args: JSONObject,
+        key: String,
+    ): Float {
+        if (!args.has(key) || args.isNull(key)) throw ToolException("缺少参数: $key")
+        val value =
+            args.optDouble(key, Double.NaN)
+        if (value.isNaN() || value.isInfinite()) throw ToolException("参数 $key 不是有效数字")
+        return value.toFloat()
+    }
+
+    private fun fmt(value: Float): String =
+        if (value == value.toInt().toFloat()) value.toInt().toString() else String.format(java.util.Locale.US, "%.1f", value)
+
     private fun screenshot(
         ctx: Context,
         inline: Boolean,
@@ -683,26 +738,32 @@ object PhoneMcp {
         val bmp =
             service().screenshotBitmap()
                 ?: throw ToolException("截图失败（需要 Android 11+，且无障碍服务已授权）")
-        // 落到应用自己的外部私有目录：Android 10 起普通应用无权在 /sdcard 下任意建目录，
-        // 原硬编码 /sdcard/Coda/workspace/.coda/screenshots 会在 FileOutputStream 打开时抛异常，
-        // 被上层 catch 成"截图保存失败"，Agent 再也拿不到图。
-        // 该目录在容器内同样可见（LinuxEnv 的绑定表把 /storage/emulated/0 挂成 /sdcard）。
+        val width = bmp.width
+        val height = bmp.height
         val dir = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "screenshots")
         dir.mkdirs()
         val f = File(dir, "screen-${System.currentTimeMillis()}.png")
         try {
-            FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        } catch (e: Throwable) {
-            throw ToolException("截图保存失败: ${e.message}")
-        }
-        val info = "saved: ${f.absolutePath} (${bmp.width}x${bmp.height})"
-        if (!inline) return ToolOutput(info)
-        return try {
-            val baos = ByteArrayOutputStream()
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, baos)
-            ToolOutput(info, Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
-        } catch (_: Throwable) {
-            ToolOutput(info)
+            val bytes =
+                try {
+                    ByteArrayOutputStream().apply { bmp.compress(Bitmap.CompressFormat.PNG, 100, this) }.toByteArray()
+                } catch (e: Throwable) {
+                    throw ToolException("截图编码失败: ${e.message}")
+                }
+            try {
+                FileOutputStream(f).use { it.write(bytes) }
+            } catch (e: Throwable) {
+                throw ToolException("截图保存失败: ${e.message}")
+            }
+            val info = "saved: ${f.absolutePath} (${width}x${height})"
+            return if (inline) {
+                ToolOutput(info, Base64.encodeToString(bytes, Base64.NO_WRAP))
+            } else {
+                ToolOutput(info)
+            }
+        } finally {
+            // native 像素缓冲不靠 GC 及时回收：循环截图必须显式释放。
+            bmp.recycle()
         }
     }
 
@@ -781,23 +842,23 @@ object PhoneMcp {
         if (target == null && query == null) throw ToolException("需提供 name 或 package")
         val pm = ctx.packageManager
         if (target == null && query != null) {
+            // Android 11+ 的包可见性会过滤 getInstalledApplications；只查可启动应用既准确又更快。
+            val launchable =
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
             val apps =
                 try {
-                    pm.getInstalledApplications(0)
-                } catch (_: Throwable) {
+                    pm.queryIntentActivities(launchable, 0)
+                } catch (e: Throwable) {
+                    AppLog.w("PhoneControl", "枚举可启动应用失败：${e.message}")
                     emptyList()
                 }
             val hit =
-                apps.firstOrNull { a ->
-                    val label =
-                        try {
-                            pm.getApplicationLabel(a).toString()
-                        } catch (_: Throwable) {
-                            ""
-                        }
-                    label.contains(query, ignoreCase = true) || a.packageName.contains(query, ignoreCase = true)
-                } ?: throw ToolException("未找到应用：$query")
-            target = hit.packageName
+                apps.firstOrNull { info ->
+                    val pkg = info.activityInfo?.packageName ?: return@firstOrNull false
+                    val label = runCatching { info.loadLabel(pm).toString() }.getOrDefault("")
+                    label.contains(query, ignoreCase = true) || pkg.contains(query, ignoreCase = true)
+                } ?: throw ToolException("未找到可启动的应用：$query")
+            target = hit.activityInfo?.packageName
         }
         val pkg = target ?: throw ToolException("需提供 name 或 package")
         val intent =

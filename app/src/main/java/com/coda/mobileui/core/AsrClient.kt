@@ -53,7 +53,7 @@ class AsrClient(
     }
 
     /** 本 client 派生的任务都挂在这个 scope 下，close() 一锅端。 */
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** 同一时刻只允许一个录音，避免两个测试抢麦克风。 */
     private val busy = AtomicBoolean(false)
@@ -152,6 +152,9 @@ class AsrClient(
                     }
                 }
                 result
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 取消是控制流，不是一次失败：清理后必须原样抛回上层。
+                throw e
             } catch (e: Throwable) {
                 AppLog.i(TAG, "transcribe 异常：${e.javaClass.simpleName}: ${e.message}")
                 AsrTester.Result.Fail("${e.javaClass.simpleName}: ${e.message}")
@@ -175,13 +178,19 @@ class AsrClient(
     ): AsrTester.Result {
         val stop = CompletableDeferred<Unit>()
         // 到点自动放行。用 scope 而不是当前协程，避免把 await 卡在主流程上。
-        scope.launch {
-            delay(maxMs)
-            stop.complete(Unit)
+        val timer =
+            scope.launch {
+                delay(maxMs)
+                stop.complete(Unit)
+            }
+        try {
+            // 外层给的超时要比内层略长：内层到点正常结束录音并转写，
+            // 外层只是兜底，不能抢先掐掉——否则手上这段音频白录。
+            return transcribe(provider, model, maxMs + 3_000, stopSignal = stop)
+        } finally {
+            // 提前返回时别把计时任务留到 maxMs 之后。
+            timer.cancel()
         }
-        // 外层给的超时要比内层略长：内层到点正常结束录音并转写，
-        // 外层只是兜底，不能抢先掐掉——否则手上这段音频白录。
-        return transcribe(provider, model, maxMs + 3_000, stopSignal = stop)
     }
 
     // ------------------------------------------------------------ 流式
@@ -226,7 +235,11 @@ class AsrClient(
                         TAG,
                         "流式片段 #$chunkCount final=$isFinal seg=$segment len=${text.length} text=${text.take(60)}",
                     )
-                    trySend(Chunk(text, isFinal, segment))
+                    val sent = trySend(Chunk(text, isFinal, segment))
+                    if (sent.isFailure) {
+                        // 通道满/已关闭时最终文本会丢：至少留下日志，便于定位。
+                        AppLog.w(TAG, "流式片段发送失败：final=$isFinal len=${text.length} ${sent.exceptionOrNull()?.message}")
+                    }
                 }
             try {
                 // 显式指定 IO：建连要从豆包首页拉游客身份，是同步网络请求。
@@ -235,6 +248,11 @@ class AsrClient(
                 // 这里把边界写死，不依赖 collect 方的调度器。
                 withContext(Dispatchers.IO) { live.start() }
                 AppLog.i(TAG, "流式会话已建立，耗时=${System.currentTimeMillis() - startedAt}ms")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                activeLive = null
+                runCatching { live.cancel() }
+                release()
+                throw e
             } catch (e: Throwable) {
                 AppLog.i(TAG, "流式建连失败：${e.javaClass.simpleName}: ${e.message}")
                 activeLive = null
@@ -246,8 +264,20 @@ class AsrClient(
             activeLive = live
             val recorder = AsrTester.Recorder(ctx)
             val recorderStarted =
-                withContext(Dispatchers.IO) {
-                    recorder.start { pcm -> live.feed(pcm) }
+                try {
+                    withContext(Dispatchers.IO) {
+                        recorder.start { pcm -> live.feed(pcm) }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // 启动窗口内被取消：awaitClose 还没注册，必须在这里自己清理。
+                    activeLive = null
+                    runCatching { live.cancel() }
+                    runCatching { recorder.cancel() }
+                    release()
+                    throw e
+                } catch (e: Throwable) {
+                    AppLog.w(TAG, "流式录音启动异常：${e.message}")
+                    false
                 }
             if (!recorderStarted) {
                 AppLog.i(TAG, "流式识别录音启动失败：麦克风不可用")
@@ -266,6 +296,8 @@ class AsrClient(
                     AppLog.i(TAG, "流式识别到达上限 ${maxMs}ms，自动收尾")
                     runCatching { recorder.stop() }
                     runCatching { live.finish() }
+                    // finish 的回调是异步的：留一段时间等最终片段送达再关闭通道。
+                    delay(800)
                     close()
                 }
             awaitClose {
@@ -276,8 +308,9 @@ class AsrClient(
                 timeoutJob.cancel()
                 runCatching { recorder.stop() }
                 runCatching { live.cancel() }
-                activeRecorder = null
-                activeLive = null
+                // 只清理属于这次会话的共享字段：不能把新会话刚设好的引用置空。
+                if (activeRecorder === recorder) activeRecorder = null
+                if (activeLive === live) activeLive = null
                 release()
             }
         }.flowOn(Dispatchers.IO)
@@ -300,7 +333,8 @@ class AsrClient(
                 runCatching { live.finish() }
                     .getOrNull()
                     ?.let { (it as? AsrTester.Result.Ok)?.text }
-            release()
+            // 不在这里 release：Flow 仍持有这次会话，等 awaitClose 收尾后再释放，
+            // 否则新会话能通过 acquire，旧 Flow 退出时还会拆掉新会话的资源。
             text
         }
 
@@ -321,7 +355,11 @@ class AsrClient(
             activeRecorder = null
             runCatching { activeLive?.cancel() }
             activeLive = null
-            scope.coroutineContext[Job]?.cancelAndJoin()
+            // 取消旧 scope 后换一个新的：否则 close() 之后再调 transcribeFor 的计时协程
+            // 会永远 launch 不出去，只能干等完整超时。
+            val old = scope
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            old.coroutineContext[Job]?.cancelAndJoin()
             release()
             Unit
         }
