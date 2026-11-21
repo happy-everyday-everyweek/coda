@@ -59,6 +59,7 @@ class ExtensionEngine private constructor(
     private val entries = LinkedHashMap<String, Entry>()
     private val listeners = mutableListOf<Listener>()
     private var loaded = false
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
     val packageRoot: File get() = File(ctx.filesDir, "extensions")
     val builtinRoot: File get() = File(ctx.filesDir, "extensions-builtin")
@@ -94,15 +95,30 @@ class ExtensionEngine private constructor(
     @Synchronized
     fun ensureLoaded() {
         if (loaded) return
-        loaded = true
-        scan()
+        try {
+            scan()
+            // 扫描成功后才置位：中途抛异常时保持未加载，下一次调用还能重试。
+            loaded = true
+        } catch (e: Throwable) {
+            com.coda.mobileui.core.AppLog.e("ExtensionEngine", "扫描扩展失败", e)
+            for (entry in entries.values) unloadEntry(entry)
+            entries.clear()
+            loaded = false
+        }
     }
 
     /** 重新扫描磁盘并按当前状态装载。 */
     @Synchronized
     fun reload(): List<Record> {
-        loaded = true
-        scan()
+        try {
+            scan()
+            loaded = true
+        } catch (e: Throwable) {
+            com.coda.mobileui.core.AppLog.e("ExtensionEngine", "重载扩展失败", e)
+            for (entry in entries.values) unloadEntry(entry)
+            entries.clear()
+            loaded = false
+        }
         return records()
     }
 
@@ -147,14 +163,26 @@ class ExtensionEngine private constructor(
                     builtin = builtin,
                     enabled = enabled,
                 )
-            if (enabled) loadEntry(entry)
+            if (enabled) {
+                try {
+                    loadEntry(entry)
+                } catch (e: Throwable) {
+                    // 单个包失败只记录在该条目上，不能中断其余包的扫描。
+                    entry.error = e.message ?: e.toString()
+                    entry.provider?.release()
+                    entry.provider = null
+                    com.coda.mobileui.core.AppLog.e("ExtensionEngine", "装载扩展失败：${manifest.id}", e)
+                }
+            }
             entries[manifest.id] = entry
         }
     }
 
     private fun loadEntry(entry: Entry) {
-        entry.error = null
+        // 旧 provider 必须先释放：重复启用时直接置 null 会泄漏它持有的句柄与线程。
+        entry.provider?.release()
         entry.provider = null
+        entry.error = null
         val category = categories[entry.manifest.category]
         if (category == null) {
             entry.error = "分类未开放：${entry.manifest.category}"
@@ -167,18 +195,29 @@ class ExtensionEngine private constructor(
         }
         entry.runtimeDir.mkdirs()
         val provider =
-            category.load(
-                ExtensionLoadContext(entry.packageDir, entry.runtimeDir, entry.manifest),
-            )
+            try {
+                category.load(ExtensionLoadContext(entry.packageDir, entry.runtimeDir, entry.manifest))
+            } catch (e: Throwable) {
+                entry.error = "装载异常：${e.message}"
+                return
+            }
         if (provider == null) {
             entry.error = "不符合分类契约"
             return
         }
         if (!releaseBinaries(entry)) {
+            provider.release()
             entry.error = "二进制释放失败"
             return
         }
-        if (!provider.prepare()) {
+        val prepared =
+            try {
+                provider.prepare()
+            } catch (e: Throwable) {
+                false
+            }
+        if (!prepared) {
+            provider.release()
             entry.error = "拓展装载失败"
             return
         }
@@ -303,17 +342,26 @@ class ExtensionEngine private constructor(
             val version = ExtensionManifest.parse(manifestText)?.version ?: continue
             val dest = File(builtinRoot, id)
             val stamp = File(dest, ".version")
-            if (stamp.isFile && stamp.readText().trim() == version) continue
+            val stamped = runCatching { stamp.takeIf { it.isFile }?.readText()?.trim() }.getOrNull()
+            if (stamped == version) continue
             deleteRecursive(dest)
-            copyAssetDir(assetPath, dest)
-            stamp.writeText(version)
+            // 拷贝成功才写版本戳：任一文件失败都保留“未释放”状态，下次启动重试。
+            val copied = copyAssetDir(assetPath, dest)
+            if (copied) {
+                runCatching { stamp.writeText(version) }
+                    .onFailure { com.coda.mobileui.core.AppLog.e("ExtensionEngine", "写入内置扩展版本戳失败：$id", it) }
+            } else {
+                com.coda.mobileui.core.AppLog.w("ExtensionEngine", "释放内置扩展不完整：$id")
+                deleteRecursive(dest)
+            }
         }
     }
 
+    /** 递归释放 assets 目录；任一文件失败返回 false。 */
     private fun copyAssetDir(
         assetPath: String,
         dest: File,
-    ) {
+    ): Boolean {
         val children =
             try {
                 ctx.assets.list(assetPath)
@@ -322,16 +370,21 @@ class ExtensionEngine private constructor(
             }
         if (children.isNullOrEmpty()) {
             dest.parentFile?.mkdirs()
-            try {
+            return try {
                 ctx.assets.open(assetPath).use { input ->
                     FileOutputStream(dest).use { out -> input.copyTo(out, 256 * 1024) }
                 }
+                true
             } catch (_: Throwable) {
+                false
             }
-            return
         }
-        dest.mkdirs()
-        for (child in children) copyAssetDir("$assetPath/$child", File(dest, child))
+        if (!dest.isDirectory && !dest.mkdirs()) return false
+        var ok = true
+        for (child in children) {
+            if (!copyAssetDir("$assetPath/$child", File(dest, child))) ok = false
+        }
+        return ok
     }
 
     // ---------------------------------------------------------------- 状态
@@ -371,6 +424,8 @@ class ExtensionEngine private constructor(
     ): Boolean {
         ensureLoaded()
         val entry = entries[id] ?: return false
+        // 幂等：状态没变就不重复装载，避免叠出未释放的 provider。
+        if (entry.enabled == enabled) return true
         prefs.edit().putBoolean(KEY_ENABLED + id, enabled).apply()
         entry.enabled = enabled
         if (enabled) loadEntry(entry) else unloadEntry(entry)
@@ -393,10 +448,27 @@ class ExtensionEngine private constructor(
         val manifest = ExtensionManifest.parse(text) ?: return null
         if (!categories.containsKey(manifest.category)) return null
         val dest = File(packageRoot, manifest.id)
+        val sourcePath = runCatching { sourceDir.canonicalPath }.getOrElse { sourceDir.absolutePath }
+        val destPath = runCatching { dest.canonicalPath }.getOrElse { dest.absolutePath }
+        // 从已安装目录重装时，先删 dest 会把源目录本身删掉。
+        if (sourcePath == destPath || sourcePath.startsWith(destPath + File.separator)) return null
+        packageRoot.mkdirs()
+        // 先拷到临时目录，成功后再替换：失败不会留下半截包，也不会破坏旧版本。
+        val staging = File(packageRoot, ".${manifest.id}.partial-${System.nanoTime()}")
         try {
-            if (dest.exists()) deleteRecursive(dest)
-            copyDir(sourceDir, dest)
-        } catch (_: Throwable) {
+            deleteRecursive(staging)
+            copyDir(sourceDir, staging)
+            if (dest.exists() && !deleteRecursive(dest)) {
+                deleteRecursive(staging)
+                return null
+            }
+            if (!staging.renameTo(dest)) {
+                deleteRecursive(staging)
+                return null
+            }
+        } catch (e: Throwable) {
+            com.coda.mobileui.core.AppLog.e("ExtensionEngine", "安装扩展失败：${manifest.id}", e)
+            deleteRecursive(staging)
             return null
         }
         scan()
@@ -409,9 +481,19 @@ class ExtensionEngine private constructor(
     fun uninstall(id: String): Boolean {
         ensureLoaded()
         val entry = entries[id] ?: return false
-        if (entry.builtin) return false
+        // 同 id 用户包被内置包遮蔽时，卸载对象应是用户包：清掉它并重扫，否则永远删不掉。
+        val userDir = File(packageRoot, id)
+        if (entry.builtin) {
+            if (!userDir.isDirectory) return false
+            if (!deleteRecursive(userDir)) return false
+            prefs.edit().remove(KEY_ENABLED + id).apply()
+            scan()
+            notifyChanged()
+            return true
+        }
         unloadEntry(entry)
-        deleteRecursive(entry.packageDir)
+        // 包目录删不掉就保留条目与状态：否则下次扫描会把磁盘残包当新扩展重新启用。
+        if (!deleteRecursive(entry.packageDir)) return false
         deleteRecursive(entry.runtimeDir)
         entries.remove(id)
         prefs.edit().remove(KEY_ENABLED + id).apply()
@@ -446,10 +528,14 @@ class ExtensionEngine private constructor(
     // ---------------------------------------------------------------- 工具
 
     private fun notifyChanged() {
-        for (listener in listeners.toList()) {
-            try {
-                listener.onExtensionsChanged()
-            } catch (_: Throwable) {
+        // 调用方都持有引擎监视器：回调改投主线程，避免在锁内执行宿主的重活或重入引擎。
+        val snapshot = synchronized(this) { listeners.toList() }
+        main.post {
+            for (listener in snapshot) {
+                try {
+                    listener.onExtensionsChanged()
+                } catch (_: Throwable) {
+                }
             }
         }
     }
@@ -469,9 +555,13 @@ class ExtensionEngine private constructor(
         }
     }
 
-    private fun deleteRecursive(file: File) {
-        if (file.isDirectory) file.listFiles()?.forEach { deleteRecursive(it) }
-        file.delete()
+    private fun deleteRecursive(file: File): Boolean {
+        var ok = true
+        if (file.isDirectory) {
+            file.listFiles()?.forEach { if (!deleteRecursive(it)) ok = false }
+        }
+        if (file.exists() && !file.delete()) ok = false
+        return ok && !file.exists()
     }
 
     /** 判断清单里是否存在某个点路径的键（形如 `terminal.shell`）且取值非空。 */
