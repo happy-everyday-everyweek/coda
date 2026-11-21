@@ -98,23 +98,34 @@ object ZWorkflowKit {
         if (o == null) return ""
         val direct =
             firstNonEmpty(
-                o.optString("parentToolUseId"),
-                o.optString("parentToolCallId"),
+                stringOrNull(o, "parentToolUseId"),
+                stringOrNull(o, "parentToolCallId"),
             )
         if (direct.isNotEmpty()) return direct
         val meta = o.optJSONObject("_meta") ?: return ""
         val fromMeta =
             firstNonEmpty(
-                meta.optString("parentToolUseId"),
-                meta.optString("parentToolCallId"),
+                stringOrNull(meta, "parentToolUseId"),
+                stringOrNull(meta, "parentToolCallId"),
             )
         if (fromMeta.isNotEmpty()) return fromMeta
         val zcode = meta.optJSONObject("zcode") ?: return ""
         return firstNonEmpty(
-            zcode.optString("parentToolUseId"),
-            zcode.optString("parentToolCallId"),
+            stringOrNull(zcode, "parentToolUseId"),
+            stringOrNull(zcode, "parentToolCallId"),
         )
     }
+
+    /**
+     * 读一个字符串字段。
+     *
+     * optString 对显式 null 会给回字符串 "null"：字段看起来有值，实际是被污染的，
+     * 拿它当父级工具调用 id 就会指向一个不存在的调用。
+     */
+    private fun stringOrNull(
+        o: JSONObject,
+        key: String,
+    ): String = if (o.isNull(key)) "" else o.optString(key)
 
     private fun firstNonEmpty(vararg values: String): String = values.firstOrNull { it.isNotEmpty() } ?: ""
 
@@ -483,8 +494,10 @@ object ZWorkflowKit {
         if (direct.isNotEmpty()) return direct
         val site = firstNonEmpty(o.optString("siteId"), o.optString("site"), o.optString("id"))
         if (site.isEmpty()) return ""
-        // ordinal 缺省时只报 siteId，宁可匹配不到也不猜一个错地址
-        return if (o.has("ordinal")) "$site@${o.optInt("ordinal")}" else site
+        // ordinal 缺省时只报 siteId，宁可匹配不到也不猜一个错地址。
+        // 显式 null 也算缺省：has() 只判键存在，optInt 会把它变成 0，拼出 site@0 这种错地址。
+        val ordinal = if (o.isNull("ordinal")) -1 else o.optInt("ordinal", -1)
+        return if (ordinal >= 0) "$site@$ordinal" else site
     }
 
     /**

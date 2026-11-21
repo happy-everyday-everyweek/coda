@@ -1,5 +1,6 @@
 package com.coda.mobileui.core
 
+import org.json.JSONException
 import org.json.JSONObject
 
 /**
@@ -95,7 +96,8 @@ object VoiceGenieProtocol {
             val text = data.toString(Charsets.UTF_8)
             return try {
                 JSONObject(text)
-            } catch (e: Throwable) {
+            } catch (e: JSONException) {
+                // 只接解析失败：OOM、栈溢出、协程取消这类不能当成「帧格式不对」吞掉
                 throw ProtocolError("响应不是有效 JSON：${e.message}")
             }
         }
@@ -152,9 +154,13 @@ object VoiceGenieProtocol {
                 }
 
                 2 -> {
-                    val len = readVarint().toInt()
-                    val end = offset + len
-                    if (end > data.size) throw ProtocolError("响应字段被截断")
+                    val declared = readVarint()
+                    // 先按 Long 校验再用：直接 toInt 会把超长长度截断成负数，
+                    // 随后 copyOfRange 抛的是越界异常，调用方看到的是崩溃而不是协议错误。
+                    if (declared < 0 || declared > (data.size - offset).toLong()) {
+                        throw ProtocolError("响应字段长度越界：$declared")
+                    }
+                    val end = offset + declared.toInt()
                     bytesValue = data.copyOfRange(offset, end)
                     offset = end
                 }

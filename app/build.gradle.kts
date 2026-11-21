@@ -174,4 +174,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     // 单元测试：端点归一化、路径/链接越界判定这类纯逻辑不依赖设备，直接在 JVM 上跑。
     testImplementation("junit:junit:4.13.2")
+    // 让解析类逻辑能在 JVM 上真跑 org.json，而不是对着 android.jar 的桩断言
+    testImplementation("org.json:json:20240303")
 }
