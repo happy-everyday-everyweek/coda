@@ -10,6 +10,13 @@ import subprocess
 import unittest
 
 SCRIPT = pathlib.Path(__file__).with_name("build-core-payload.sh")
+ROOT = SCRIPT.parent.parent
+
+
+def _version_fn():
+    """从脚本里取出 node_base_version 的函数体，供真实执行验证。"""
+    text = SCRIPT.read_text(encoding="utf-8")
+    return "node_base_version() {" + text.split("node_base_version() {", 1)[1].split("\n}", 1)[0] + "\n}"
 
 
 class ScriptTest(unittest.TestCase):
@@ -41,8 +48,25 @@ class ScriptTest(unittest.TestCase):
         self.assertIn("node-*-LICENSE.txt) continue", body)
 
     def test_license_version_comes_from_base_image(self):
-        self.assertIn("NODE_BASE\" -p 'process.versions.node'", self.text)
+        # 基础镜像是 Android aarch64 二进制，在 x86 构建机上执行会 Exec format error，
+        # 所以只能从二进制里读版本字符串，不能运行它。
+        self.assertIn("node_base_version() {", self.text)
+        self.assertIn(r"node\.js/v[0-9]+\.[0-9]+\.[0-9]+", self.text)
         self.assertNotIn('NODE_VER="$(node -v', self.text)
+        self.assertNotIn('"$NODE_BASE" -p', self.text)
+
+    def test_base_image_version_is_readable_without_executing(self):
+        base = ROOT / "app" / "src" / "main" / "assets" / "core" / "node"
+        if not base.is_file():
+            self.skipTest("随包的 node 基础镜像不在本地")
+        out = subprocess.run(
+            ["bash", "-c", 'NODE_BASE="$1"; ' + _version_fn() + "; node_base_version",
+             "_", str(base)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        self.assertRegex(out.stdout.strip(), r"^\d+\.\d+\.\d+$")
 
     def test_stale_outputs_are_removed_before_build(self):
         self.assertRegex(self.text, r'rm -f "\$BUNDLE" "\$SEA_OUT"')

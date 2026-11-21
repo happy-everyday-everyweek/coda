@@ -207,10 +207,29 @@ fi
 # SEA 的许可证声明要求 third-party/runtime/sources.json 登记当前 node 版本。
 # 版本必须取自基础镜像而不是宿主 node：SEA 二进制里嵌的是 $NODE_BASE，
 # 宿主可能领先一两个补丁，用宿主版本会登记一个根本不随包发布的运行时。
+# 但基础镜像是 Android aarch64 二进制，在 x86 构建机上不能执行（Exec format error），
+# 所以从二进制里提取它自报的版本字符串，而不是运行它。
+node_base_version() {
+  # node 二进制里内嵌唯一的 "node.js/vX.Y.Z" 标识（已用随包的 aarch64 node 实测）。
+  # 这个锚点比裸版本号可靠：二进制里还有 v8、openssl 等其他组件的版本字符串。
+  local ver
+  ver="$(LC_ALL=C grep -aoE 'node\.js/v[0-9]+\.[0-9]+\.[0-9]+' "$NODE_BASE" \
+    | sed 's#^node\.js/v##' | sort -u | head -1)"
+  if [ -z "$ver" ]; then
+    # 兜底：取出现次数最多的裸版本号。仍然只读不执行。
+    ver="$(LC_ALL=C grep -aoE 'v[0-9]+\.[0-9]+\.[0-9]+' "$NODE_BASE" \
+      | sed 's/^v//' | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')"
+  fi
+  printf '%s' "$ver"
+}
 if [ "${DRY_RUN:-0}" = "1" ]; then
   NODE_VER="dry-run"
 else
-  NODE_VER="$("$NODE_BASE" -p 'process.versions.node')"
+  NODE_VER="$(node_base_version)"
+  if [ -z "$NODE_VER" ]; then
+    echo "!! 无法从基础镜像读取 node 版本：$NODE_BASE" >&2
+    exit 1
+  fi
 fi
 echo "   基础镜像 node : v$NODE_VER"
 if [ "${DRY_RUN:-0}" != "1" ]; then
