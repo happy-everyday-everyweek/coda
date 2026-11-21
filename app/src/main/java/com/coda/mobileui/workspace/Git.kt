@@ -330,6 +330,7 @@ object Git {
                 .lines()
                 .firstOrNull { it.isNotBlank() }
                 ?: "origin"
+        if (!isSafeRef(remote) || !isSafeRef(current)) return first
         return run(
             env,
             root,
