@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.system.Os
+import com.coda.mobileui.core.AppLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -70,7 +71,25 @@ class ExtensionEngine private constructor(
     /** 注册一个分类；分类是开放集合，注册即可用。 */
     @Synchronized
     fun registerCategory(category: ExtensionCategory) {
+        val isNew = !categories.containsKey(category.id)
         categories[category.id] = category
+        // 分类晚于扫描注册时，扫描阶段拿它判断不了契约的包会停在「分类未开放」；
+        // 这里补一次装载，否则它们在本进程里永远不可用。
+        if (isNew && loaded) loadDeferred(category.id)
+    }
+
+    /** 补装载某个分类下尚未装载的包。只在扫描已完成、分类后注册时调用。 */
+    private fun loadDeferred(categoryId: String) {
+        for (entry in entries.values) {
+            if (entry.manifest.category != categoryId) continue
+            if (!entry.enabled || entry.provider != null) continue
+            try {
+                loadEntry(entry)
+            } catch (e: Throwable) {
+                entry.error = e.message ?: e.toString()
+                AppLog.e("ExtensionEngine", "补装载扩展失败：${entry.manifest.id}", e)
+            }
+        }
     }
 
     @Synchronized
@@ -90,6 +109,10 @@ class ExtensionEngine private constructor(
     }
 
     // ---------------------------------------------------------------- 发现与装载
+
+    /** 是否已经完成过一次扫描。 */
+    @Synchronized
+    fun isLoaded(): Boolean = loaded
 
     /** 首次访问时装载；重复调用无副作用。 */
     @Synchronized
@@ -147,9 +170,9 @@ class ExtensionEngine private constructor(
             val manifest = ExtensionManifest.parse(text) ?: continue
             // 内置包优先；同 id 的用户包不覆盖内置包。
             if (entries.containsKey(manifest.id)) continue
-            // 分类没开放就不装载，避免把不属于任何契约的包当成可用能力。
-            if (!categories.containsKey(manifest.category)) continue
-
+            // 分类是否开放不在扫描阶段过滤：那时分类可能还没注册，直接跳过会让这个包
+            // 既不进 entries、也没有错误记录，之后注册分类也无从补救。
+            // 契约检查放在 loadEntry（它会记「分类未开放」），由 registerCategory 补装载。
             val enabled =
                 prefs.getBoolean(
                     KEY_ENABLED + manifest.id,

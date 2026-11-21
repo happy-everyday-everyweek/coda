@@ -61,6 +61,9 @@ data class ExtensionManifest(
         /** id 用作目录名与存储键，限制在安全字符集内。 */
         fun isValidId(id: String): Boolean =
             id.isNotEmpty() && id.length <= 96 &&
+                // "." 与 ".." 会被当成当前目录/上级目录，释放路径会跑到扩展目录之外；
+                // 以点开头的隐藏名也一并排除，避免和临时文件混在一起。
+                !id.startsWith(".") &&
                 id.all { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }
 
         /** 解析清单；id 或分类缺失即视为非法清单。 */
@@ -120,14 +123,16 @@ data class ExtensionManifest(
             return out
         }
 
-        /** 权限按八进制文本解析（清单里写 `"0755"`）；非法时回退到默认值。 */
-        private fun parseMode(
+        /** 权限按八进制文本解析（清单里写 `"0755"`）；非法或超出 0777 时回退到默认值。 */
+        internal fun parseMode(
             text: String,
             fallback: Int,
         ): Int {
             val raw = text.trim().removePrefix("0o").removePrefix("0O")
             if (raw.isEmpty()) return fallback
-            return raw.toIntOrNull(8) ?: fallback
+            val parsed = raw.toIntOrNull(8) ?: return fallback
+            // 只允许 0..0777：负数与 setuid/setgid/sticky 位都不该由外部清单决定。
+            return if (parsed in 0..0x1FF) parsed else fallback
         }
     }
 }
