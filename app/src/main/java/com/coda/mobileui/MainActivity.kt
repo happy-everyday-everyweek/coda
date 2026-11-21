@@ -660,7 +660,8 @@ class MainActivity : BaseActivity() {
      */
     private fun showUpdatePrompt(r: UpdateChecker.Result) {
         val sizeMb = if (r.apkSize > 0) "%.1f MB".format(r.apkSize / 1024.0 / 1024.0) else "未知大小"
-        val ready = SilentUpdater.readyFile?.takeIf { it.isFile && it.length() > 0 }
+        // readyFile 已经按 Ready.usable() 过滤过（存在且非空），这里不必再判一遍。
+        val ready = SilentUpdater.readyFile
         val sheet =
             CodaSheet(this)
                 .title(if (ready != null) "新版本已就绪" else "发现新版本")
