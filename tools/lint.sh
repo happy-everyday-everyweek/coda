@@ -37,6 +37,21 @@ mkdir -p "$REPORT_DIR"
 # 报告是空的、问题数算成 0，在 CI 或提交钩子里就是一次假通过。
 FAILED=0
 
+# 扫描范围按实际存在的目录构造：detekt 对不存在的路径直接抛 ParameterException，
+# ktlint 则静默忽略。写死 kernel/src 会让 detekt 整个跑不起来（该目录当前不存在）。
+SOURCE_DIRS=()
+for dir in app/src kernel/src; do
+    if [ -d "$ROOT/$dir" ]; then
+        SOURCE_DIRS+=("$dir")
+    fi
+done
+if [ "${#SOURCE_DIRS[@]}" -eq 0 ]; then
+    echo "!! 找不到任何源码目录（app/src / kernel/src）" >&2
+    exit 1
+fi
+# detekt 的 --input 用逗号分隔，ktlint 用空格分隔的位置参数。
+DETEKT_INPUT="$(IFS=,; echo "${SOURCE_DIRS[*]}")"
+
 need_jar() {
     if [ ! -f "$1" ]; then
         echo "缺少 $1，按脚本头部注释里的地址下载到 $LINT_HOME" >&2
@@ -52,7 +67,7 @@ run_ktlint() {
     # 传目录不传 glob：ktlint 自己会递归。
     # 写成 'app/src/**/*.kt' 会被它当成字面文件名，扫不到东西、还会长时间空转。
     ( cd "$ROOT" && java -jar "$KTLINT_JAR" \
-        app/src kernel/src \
+        "${SOURCE_DIRS[@]}" \
         --reporter=plain "$@" ) > "$out" 2>&1
     local rc=$?
     # ktlint 约定：0 无问题、1 有问题、>=2 执行失败（jar 坏、参数错等）。
@@ -76,10 +91,12 @@ run_detekt() {
     echo "=== detekt（坏味道与潜在缺陷）==="
     local out="$REPORT_DIR/detekt.txt"
     local log="$REPORT_DIR/detekt-run.log"
-    # 扫描范围与 ktlint 对齐：只扫 app/src/main/java 会漏掉 kernel 模块与测试源码，
-    # 汇总里看起来「kernel 很干净」其实是根本没扫。
+    # 先删旧报告：留着它的话，这次执行失败也会被「报告存在」判成成功。
+    rm -f "$out"
+    # 扫描范围与 ktlint 对齐：只扫 app/src/main/java 会漏掉测试源码与其他模块，
+    # 汇总里看起来「那些代码很干净」其实是根本没扫。
     ( cd "$ROOT" && java -jar "$DETEKT_JAR" \
-        --input app/src,kernel/src \
+        --input "$DETEKT_INPUT" \
         --config detekt.yml \
         --max-issues 0 \
         --report "txt:$out" \
@@ -99,19 +116,23 @@ run_detekt() {
         FAILED=1
         return 1
     fi
-    # txt 报告的每条 finding 以 [RuleId] 结尾，计数与按规则统计用同一种匹配，
-    # 不再一处按行首 `Rule - `、一处按行尾 `[Rule]`（两者互不兼容）。
+    # txt 报告的实际格式是行首 `RuleId - [symbol] at path:line:col - Signature=...`
+    # （已用本机 detekt 1.23.8 实测）。计数与按规则统计都按行首规则名，
+    # 不再一处按行首、一处按行尾 `[Rule]`——行尾其实是 Signature，永远匹配不到。
     local n
-    n=$(grep -cE '\[[A-Za-z0-9]+\]$' "$out" || true)
+    n=$(grep -cE '^[A-Za-z0-9]+ - ' "$out" || true)
     echo "问题数：$n（报告 $out）"
     echo "按规则统计 top10："
-    sed -nE 's/.*\[([A-Za-z0-9]+)\]$/\1/p' "$out" \
+    sed -nE 's/^([A-Za-z0-9]+) - .*/\1/p' "$out" \
         | sort | uniq -c | sort -rn | head -10 || true
 }
 
 run_lint() {
     echo "=== Android Lint（平台问题）==="
     local log="$REPORT_DIR/lint-gradle.log"
+    # 先删旧报告：gradle 失败时留着上一份，会被误判成这次成功产出了报告。
+    local out="$REPORT_DIR/android-lint.txt"
+    rm -f "$out"
     # 不用 `| head -4`：pipefail 下 head 提前关管道会让整条管道因 SIGPIPE 失败。
     ( cd "$ROOT" && ./gradlew :app:lintDebug --console=plain ) > "$log" 2>&1
     local rc=$?
@@ -124,7 +145,6 @@ run_lint() {
     fi
     # 报告路径由 build.gradle.kts 的 lint.textOutput 显式指定，
     # 不再依赖 AGP 内部的 lint_intermediate_text_report 目录结构（随版本会变）。
-    local out="$REPORT_DIR/android-lint.txt"
     if [ ! -f "$out" ]; then
         echo "!! 找不到 Android Lint 报告：$out" >&2
         FAILED=1

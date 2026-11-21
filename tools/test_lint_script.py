@@ -42,13 +42,32 @@ class ScriptTest(unittest.TestCase):
         self.assertIn("sed -nE", body)
 
     def test_detekt_scans_the_same_sources_as_ktlint(self):
-        body = self.text.split("run_detekt() {", 1)[1].split("\n}", 1)[0]
-        self.assertIn("--input app/src,kernel/src", body)
+        # 两者都从 SOURCE_DIRS 派生，范围不会再次漂移。
+        detekt = self.text.split("run_detekt() {", 1)[1].split("\n}", 1)[0]
+        ktlint = self.text.split("run_ktlint() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn('--input "$DETEKT_INPUT"', detekt)
+        self.assertIn('"${SOURCE_DIRS[@]}"', ktlint)
+        self.assertNotIn("--input app/src/main/java", detekt)
 
     def test_detekt_count_and_grouping_use_one_format(self):
         body = self.text.split("run_detekt() {", 1)[1].split("\n}", 1)[0]
-        self.assertNotIn("^[A-Za-z]+ - ", body)
-        self.assertIn(r"\[[A-Za-z0-9]+\]$", body)
+        # 实测格式是行首 `RuleId - [symbol] at path - Signature=...`，
+        # 行尾是 Signature 而不是 [Rule]，所以两处都按行首规则名匹配。
+        self.assertIn(r"^[A-Za-z0-9]+ - ", body)
+        self.assertIn(r"s/^([A-Za-z0-9]+) - .*/\1/p", body)
+        self.assertNotIn(r"\[([A-Za-z0-9]+)\]$", body)
+
+    def test_scan_dirs_are_filtered_by_existence(self):
+        # detekt 对不存在的路径直接抛异常，写死 kernel/src 会让它整个跑不起来。
+        self.assertIn("SOURCE_DIRS=()", self.text)
+        self.assertIn('if [ -d "$ROOT/$dir" ]; then', self.text)
+        self.assertIn('--input "$DETEKT_INPUT"', self.text)
+        self.assertIn('"${SOURCE_DIRS[@]}"', self.text)
+
+    def test_stale_reports_are_removed_before_running(self):
+        for name in ("run_detekt", "run_lint"):
+            body = self.text.split(name + "() {", 1)[1].split("\n}", 1)[0]
+            self.assertIn('rm -f "$out"', body)
 
     def test_android_lint_uses_a_stable_report_path(self):
         body = self.text.split("run_lint() {", 1)[1].split("\n}", 1)[0]
