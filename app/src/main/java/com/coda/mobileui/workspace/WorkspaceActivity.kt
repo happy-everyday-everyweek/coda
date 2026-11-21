@@ -143,7 +143,11 @@ class WorkspaceActivity : BaseActivity() {
         // 入口带了会话工作区就用它：否则从会话点工作区会打开全局默认目录，
         // 用户在错的目录里提交、删除、跑命令。
         val requestedRoot =
-            intent.getStringExtra(EXTRA_ROOT)?.takeIf { it.isNotBlank() }?.let { File(it) }?.takeIf { it.isDirectory }
+            intent
+                .getStringExtra(EXTRA_ROOT)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { File(it) }
+                ?.takeIf { it.isDirectory }
         root = requestedRoot ?: Workspaces.root(this)
         setContentView(buildContainer())
         restoreTabs()
@@ -301,7 +305,8 @@ class WorkspaceActivity : BaseActivity() {
             return
         }
         container.translationX = screenWidth * (1f - fraction)
-        container.animate()
+        container
+            .animate()
             .translationX(0f)
             .setDuration((ENTER_EXPAND_DURATION_MS * (1f - fraction)).toLong().coerceAtLeast(90L))
             .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
@@ -526,7 +531,9 @@ class WorkspaceActivity : BaseActivity() {
     ) {
         // 入口统一把关：文件页的「以文本打开」也会走到这里，不能只在列表层限制。
         blockedEditorReason(File(path))?.let {
-            android.widget.Toast.makeText(this, it, android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast
+                .makeText(this, it, android.widget.Toast.LENGTH_SHORT)
+                .show()
             return
         }
         val existing =
@@ -831,7 +838,8 @@ class WorkspaceActivity : BaseActivity() {
     private fun closeOthers(keep: String) {
         guardDirtyEditor(exceptId = keep) {
             for (entry in tabs.toList()) {
-                if (entry.data.id != keep) closeTab(entry.data.id)
+                // 已经逐个确认过，直接关，别在 closeTab 里把同一页面再问一次
+                if (entry.data.id != keep) closeTabNow(entry.data.id)
             }
             selectTab(keep)
         }
@@ -839,11 +847,16 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun closeAll() {
         guardDirtyEditor {
-            for (entry in tabs.toList()) closeTab(entry.data.id)
+            // 已经逐个确认过，这里直接关，避免同一页面被再问一次
+            for (entry in tabs.toList()) closeTabNow(entry.data.id)
         }
     }
 
-    /** 关闭多个标签或切换根目录前，先处理唯一一个脏编辑器；取消则整步中止。 */
+    /**
+     * 关闭多个标签或切换根目录前，逐个处理脏编辑器；任何一个拒绝就整步中止。
+     *
+     * 之前只取第一个脏页面，确认后照常执行——其余标签的未保存内容被静默丢弃。
+     */
     private fun guardDirtyEditor(
         exceptId: String? = null,
         action: () -> Unit,
@@ -852,12 +865,28 @@ class WorkspaceActivity : BaseActivity() {
             tabs
                 .filter { it.data.id != exceptId }
                 .mapNotNull { it.page as? FilesPage }
-                .firstOrNull { it.hasUnsavedEditor() }
-        if (dirty == null) {
+                .filter { it.hasUnsavedEditor() }
+        if (dirty.isEmpty()) {
             action()
             return
         }
-        dirty.requestLeaveEditor { canClose -> if (canClose) action() }
+        askDirty(dirty, 0, action)
+    }
+
+    /** 依次询问每一张脏页面；全部同意后才执行 [action]。 */
+    private fun askDirty(
+        dirty: List<FilesPage>,
+        index: Int,
+        action: () -> Unit,
+    ) {
+        if (index >= dirty.size) {
+            action()
+            return
+        }
+        dirty[index].requestLeaveEditor { ok ->
+            if (ok) askDirty(dirty, index + 1, action)
+            // 拒绝即中止：已经处理过的页面保持原样，后续一个都不动
+        }
     }
 
     private fun updateBar() {

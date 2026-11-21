@@ -1,5 +1,7 @@
 package com.coda.mobileui.workspace
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.TimeInterpolator
 import android.animation.ValueAnimator
 import android.view.MotionEvent
@@ -109,18 +111,38 @@ internal fun TextView.crossFadeText(
 ) {
     if (text == newText) return
     animate().cancel()
+    // withEndAction 只在正常结束时执行：动画被取消（列表行回收、视图 detach、
+    // 竞争动画）时不会触发，视图就永久停在 alpha=0、文本还是旧的。
+    // 这里把取消也当成一次收尾，且只应用一次。
+    var applied = false
+
+    fun applyNow(fadeIn: Boolean) {
+        if (applied) return
+        applied = true
+        text = newText
+        if (!fadeIn) {
+            // 被取消：直接落到可见终态，不再补淡入，避免又一次被取消
+            alpha = 1f
+            return
+        }
+        animate()
+            .alpha(1f)
+            .setDuration(duration)
+            .setInterpolator(Motion.standard)
+            .start()
+    }
+
     animate()
         .alpha(0f)
         .setDuration(duration)
         .setInterpolator(Motion.standard)
-        .withEndAction {
-            text = newText
-            animate()
-                .alpha(1f)
-                .setDuration(duration)
-                .setInterpolator(Motion.standard)
-                .start()
-        }.start()
+        .setListener(
+            object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) = applyNow(true)
+
+                override fun onAnimationCancel(animation: Animator) = applyNow(false)
+            },
+        ).start()
 }
 
 /**
@@ -135,12 +157,24 @@ internal fun View.enterFrom(
     animate().cancel()
     alpha = 0f
     translationY = offsetYPx
+
+    // 取消同样要落到终态：否则视图会停在一半的透明度/位移上，后续页面看着像没画完。
+    fun settle() {
+        alpha = 1f
+        translationY = 0f
+    }
     animate()
         .alpha(1f)
         .translationY(0f)
         .setDuration(duration)
         .setInterpolator(Motion.standard)
-        .start()
+        .setListener(
+            object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) = settle()
+
+                override fun onAnimationCancel(animation: Animator) = settle()
+            },
+        ).start()
 }
 
 /** 视图淡出并轻微位移后退场，结束后执行 [after]。 */
@@ -150,13 +184,27 @@ internal fun View.exitTo(
     after: (() -> Unit)? = null,
 ) {
     animate().cancel()
+    // withEndAction 在取消时不执行，after 里的清理与后续导航就永远丢了。
+    // 把取消也当成一次结束，after 只跑一次。
+    var fired = false
+
+    fun fire() {
+        if (fired) return
+        fired = true
+        after?.invoke()
+    }
     animate()
         .alpha(0f)
         .translationY(offsetYPx)
         .setDuration(duration)
         .setInterpolator(Motion.standard)
-        .withEndAction { after?.invoke() }
-        .start()
+        .setListener(
+            object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) = fire()
+
+                override fun onAnimationCancel(animation: Animator) = fire()
+            },
+        ).start()
 }
 
 /**

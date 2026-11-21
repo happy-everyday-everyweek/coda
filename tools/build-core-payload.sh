@@ -200,6 +200,9 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
     --node-binary "$SEA_TARGET=$NODE_BASE"
 else
   SEA_LOG="$(mktemp)"
+  # 中间任何一步失败（set -e）都不能把临时文件留在 /tmp：只用显式 rm 覆盖不到
+  # pnpm/tsc 这类中途退出。
+  trap 'rm -f "$SEA_LOG"' EXIT
   attempt=1
   while :; do
     if node "$CLI_PKG/scripts/build-sea.mjs" \
