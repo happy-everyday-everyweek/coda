@@ -26,14 +26,31 @@ object SilentUpdater {
     /** 正在跑（或已跑过）的标记。跨启动不做持久化：每次冷启动都算新机会。 */
     private val started = AtomicBoolean(false)
 
-    /** 最近一次后台下载完成的包，供界面判断「是不是已经下好了」。 */
-    @Volatile
-    var readyFile: File? = null
-        private set
+    /**
+     * 已经下好、可以安装的包。
+     *
+     * 结果与文件必须成对发布：拆成两个 volatile 字段时，读者可能看到不成对的组合，
+     * 而且每个调用点都要自己重建「是否仍然有效」这个判断，三处写法各不相同。
+     */
+    data class Ready(
+        val result: UpdateChecker.Result,
+        val file: File,
+    ) {
+        /** 包还在且非空才算可用（系统清理缓存后文件可能已消失）。 */
+        fun usable(): Boolean = file.isFile && file.length() > 0L
+    }
 
+    /** 最近一次后台下载完成的包；单个引用发布，保证成对可见。 */
     @Volatile
-    var readyResult: UpdateChecker.Result? = null
-        private set
+    private var ready: Ready? = null
+
+    /** 已就绪的包（可能已被系统清理，用 [Ready.usable] 判断）。 */
+    val readyFile: File?
+        get() = ready?.takeIf { it.usable() }?.file
+
+    /** 已就绪包对应的更新信息。 */
+    val readyResult: UpdateChecker.Result?
+        get() = ready?.takeIf { it.usable() }?.result
 
     /** 上一次静默流程的结论，用于排查（不上界面）。 */
     @Volatile
@@ -43,9 +60,9 @@ object SilentUpdater {
     /**
      * 查一次并在需要时下载。
      *
-     * 同步执行，必须放后台线程。返回「已经下好的包」或 null。
+     * 同步执行，必须放后台线程；结果通过 [onReady] 回调交出，无结果时不回调。
      *
-     * @param onReady 下载完成（或发现同版本已存在）时回调，主线程
+     * @param onReady 下载完成（或发现同版本已存在）时回调，**切到主线程**执行，
      */
     fun checkAndFetch(
         ctx: Context,
@@ -53,15 +70,16 @@ object SilentUpdater {
     ) {
         if (!started.compareAndSet(false, true)) {
             // 已经跑过：如果上次下好了，这次直接把它交出去，不重复下载。
-            val r = readyResult
-            val f = readyFile
             AppLog.i(TAG, "已在本次会话执行过，跳过；上次结果=$lastOutcome")
-            if (r != null && f != null && f.isFile) onReady?.invoke(r, f)
+            // 有效性判定统一走 Ready.usable()，不再各调用点各写一套。
+            ready?.takeIf { it.usable() }?.let { deliver(onReady, it.result, it.file) }
             return
         }
 
         // 全链路用 INFO 而不是 DEBUG：AppLog.minLevel 默认就是 INFO，
         // 用 d() 写的行在正式包里会被直接丢弃，等于没埋点。
+        // 进度步进在这里复位，不依赖 started 闸门隐式保证「只跑一次所以不用重置」。
+        lastStepLogged = -1
         val t0 = System.currentTimeMillis()
         AppLog.i(
             TAG,
@@ -78,7 +96,7 @@ object SilentUpdater {
         val r =
             try {
                 UpdateChecker.check(ctx) { AppLog.i(TAG, it) }
-            } catch (t: Throwable) {
+            } catch (t: Exception) {
                 lastOutcome = "检查失败：${t.javaClass.simpleName}: ${t.message}"
                 AppLog.e(TAG, "检查抛异常：$lastOutcome", t)
                 return
@@ -114,15 +132,18 @@ object SilentUpdater {
                         // 进度回调太密，只在 25% 的整数倍上落日志，避免刷爆文件。
                         if (total > 0) {
                             val p = (done * 100 / total).toInt()
-                            if (p % 25 == 0 && p != lastPctLogged) {
-                                lastPctLogged = p
+                            // 按步进比较而不是精确命中 25 的倍数：进度是按块跳变的，
+                            // 快速下载可能 12 → 41 → 78，倍数一个都命中不了、日志一行不出。
+                            val step = p / 25
+                            if (step > lastStepLogged) {
+                                lastStepLogged = step
                                 AppLog.i(TAG, "下载进度 $p%（${fmtSize(done)}/${fmtSize(total)}）")
                             }
                         }
                     },
                     onLog = { AppLog.i(TAG, it) },
                 )
-            } catch (t: Throwable) {
+            } catch (t: Exception) {
                 lastOutcome = "下载异常：${t.javaClass.simpleName}: ${t.message}"
                 AppLog.e(TAG, "下载抛异常：$lastOutcome", t)
                 return
@@ -135,20 +156,39 @@ object SilentUpdater {
             return
         }
 
-        readyFile = file
-        readyResult = r
+        ready = Ready(r, file)
         lastOutcome = "已就绪：${file.name}"
         AppLog.i(
             TAG,
             "后台下载完成 ${file.name} 体积=${fmtSize(file.length())} 耗时=${dlMs}ms" +
                 " 总计=${System.currentTimeMillis() - t0}ms",
         )
-        onReady?.invoke(r, file)
+        deliver(onReady, r, file)
     }
 
-    /** 上一次记过日志的进度百分比，防止 25% 那条重复写。 */
+    /** 上一次记过日志的进度步进（每 25% 一档），每次流程开始时复位。 */
     @Volatile
-    private var lastPctLogged = -1
+    private var lastStepLogged = -1
+
+    /**
+     * 把就绪结果交给调用方，统一切到主线程。
+     *
+     * 本方法是同步执行、要求放后台线程的，所以直接 invoke 会让回调落在后台线程上——
+     * 而 KDoc 承诺的是主线程，调用方在回调里更新 View 就会崩。这里统一 post。
+     */
+    private fun deliver(
+        onReady: ((UpdateChecker.Result, File) -> Unit)?,
+        result: UpdateChecker.Result,
+        file: File,
+    ) {
+        val callback = onReady ?: return
+        val main = android.os.Looper.getMainLooper()
+        if (android.os.Looper.myLooper() == main) {
+            callback(result, file)
+        } else {
+            android.os.Handler(main).post { callback(result, file) }
+        }
+    }
 
     private fun fmtSize(bytes: Long): String =
         when {
@@ -166,13 +206,14 @@ object SilentUpdater {
      * 就不必再走一遍查询与下载，直接给用户「立即安装」。
      */
     fun takeReady(): Pair<UpdateChecker.Result, File>? {
-        val r = readyResult ?: return null
-        val f = readyFile ?: return null
-        if (!f.isFile || f.length() == 0L) {
-            AppLog.w(TAG, "已记录的包不存在了（可能被系统清理）：${f.absolutePath}")
+        val snapshot = ready ?: return null
+        if (!snapshot.usable()) {
+            AppLog.w(TAG, "已记录的包不存在了（可能被系统清理）：${snapshot.file.absolutePath}")
+            // 清掉失效状态：留着它会让后续每次调用都重复打同一条告警。
+            ready = null
             return null
         }
-        AppLog.i(TAG, "复用已下载的包：${f.name}（${fmtSize(f.length())}）")
-        return r to f
+        AppLog.i(TAG, "复用已下载的包：${snapshot.file.name}（${fmtSize(snapshot.file.length())}）")
+        return snapshot.result to snapshot.file
     }
 }
