@@ -12,6 +12,23 @@ import java.util.Locale
  * 数据来源与桌面端一致：协议（mcp/list、plugins/list、usage/stats 等）+ 本地文件与 SQLite。
  */
 object CodaExtras {
+    private const val TAG = "CodaExtras"
+
+    /** automations 表用到的列，按名字取值。 */
+    private val AUTOMATION_COLUMNS =
+        listOf(
+            "automation_id",
+            "title",
+            "cron_expr",
+            "prompt",
+            "enabled",
+            "lifecycle_status",
+            "recurring",
+            "run_count",
+            "next_run_at",
+            "last_run_at",
+            "last_error",
+        )
     // ---------------------------------------------------------------- MCP
 
     data class McpServerItem(
@@ -420,7 +437,12 @@ object CodaExtras {
         val lastError: String?,
     )
 
-    /** 读 tasks-index.sqlite 的 automations 表（只读；库/表不存在时返回空列表）。 */
+    /**
+     * 读 tasks-index.sqlite 的 automations 表（只读；库/表不存在时返回空列表）。
+     *
+     * 列按名字取，不写死下标：表结构升级（增列、调序）时下标会整体错位，
+     * 字段串到别的列上，界面上看不出错，只是数据全是错的。
+     */
     fun readAutomations(dbFile: File): List<AutomationItem> {
         if (!dbFile.exists()) return emptyList()
         var db: SQLiteDatabase? = null
@@ -439,31 +461,43 @@ object CodaExtras {
                         "FROM automations ORDER BY created_at DESC",
                     null,
                 ).use { c ->
+                    val index = AUTOMATION_COLUMNS.associateWith { c.getColumnIndex(it) }
+                    val missing = index.filterValues { it < 0 }.keys
+                    if (missing.isNotEmpty()) {
+                        AppLog.w(TAG, "automations 表缺少列：${missing.joinToString()}")
+                        return emptyList()
+                    }
+
+                    fun text(name: String): String? = c.getString(index.getValue(name))
+
+                    fun number(name: String): Long? = index.getValue(name).let { at -> if (c.isNull(at)) null else c.getLong(at) }
+
+                    fun count(name: String): Int = c.getInt(index.getValue(name))
+
                     while (c.moveToNext()) {
                         out +=
                             AutomationItem(
-                                id = c.getString(0) ?: "",
-                                title = c.getString(1) ?: "",
-                                cron = c.getString(2) ?: "",
-                                prompt = c.getString(3) ?: "",
-                                enabled = c.getInt(4) != 0,
-                                lifecycle = c.getString(5) ?: "active",
-                                recurring = c.getInt(6) != 0,
-                                runCount = c.getInt(7),
-                                nextRunAt = if (c.isNull(8)) null else c.getLong(8),
-                                lastRunAt = if (c.isNull(9)) null else c.getLong(9),
-                                lastError = if (c.isNull(10)) null else c.getString(10),
+                                id = text("automation_id") ?: "",
+                                title = text("title") ?: "",
+                                cron = text("cron_expr") ?: "",
+                                prompt = text("prompt") ?: "",
+                                enabled = count("enabled") != 0,
+                                lifecycle = text("lifecycle_status") ?: "active",
+                                recurring = count("recurring") != 0,
+                                runCount = count("run_count"),
+                                nextRunAt = number("next_run_at"),
+                                lastRunAt = number("last_run_at"),
+                                lastError = text("last_error"),
                             )
                     }
                 }
             out
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
+            // 库损坏、被内核占用都要能看见是哪种，不能默默给一张空列表。
+            AppLog.w(TAG, "读取定时任务失败 ${dbFile.name}：${e.message ?: e.javaClass.simpleName}")
             emptyList()
         } finally {
-            try {
-                db?.close()
-            } catch (_: Throwable) {
-            }
+            runCatching { db?.close() }
         }
     }
 

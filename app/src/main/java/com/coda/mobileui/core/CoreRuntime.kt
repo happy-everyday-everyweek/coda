@@ -16,6 +16,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -468,18 +469,30 @@ class CoreRuntime(
             env["PATH"] = "/system/bin:/system/xbin:/vendor/bin:/product/bin"
             env["OPENSSL_CONF"] = "/dev/null"
             val process = pb.start()
-            val output =
-                process.inputStream
-                    .bufferedReader()
-                    .readText()
-                    .trim()
-            val code = process.waitFor()
+            // 读输出必须放后台：readText 会一直阻塞到进程退出，若内核在这一步挂住
+            // （等输入、死锁），启动线程就永久停在这里，界面停在「启动中」。
+            val holder = arrayOf("")
+            val reader =
+                Thread {
+                    holder[0] =
+                        runCatching {
+                            process.inputStream.bufferedReader().use { it.readText() }
+                        }.getOrDefault("")
+                }.apply { isDaemon = true }
+            reader.start()
+            val finished = process.waitFor(SELF_CHECK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            if (!finished) {
+                process.destroy()
+                log("[core] 自检超时（${SELF_CHECK_TIMEOUT_MS}ms），已终止子进程")
+            }
+            runCatching { reader.join(500) }
+            val code = if (finished) process.exitValue() else -1
             log(
                 "[core] 自检 --version：" + describeExit(code) + "，耗时 " +
-                    (System.currentTimeMillis() - started) + "ms，输出=" + output.take(160),
+                    (System.currentTimeMillis() - started) + "ms，输出=" + holder[0].trim().take(160),
             )
-        } catch (t: Throwable) {
-            log("!! 自检异常: $t")
+        } catch (e: Exception) {
+            log("!! 自检异常: $e")
         }
     }
 
@@ -721,6 +734,9 @@ class CoreRuntime(
     fun logSnapshot(): String = synchronized(logLock) { logBuf.toString() }
 
     companion object {
+        /** 自检最多等这么久：内核在这步挂住时，不能让启动线程无限等下去。 */
+        private const val SELF_CHECK_TIMEOUT_MS = 10_000L
+
         /**
          * 解包标记前缀。清单内容一变，标记跟着变，上一版的解包结果自然失效。
          *

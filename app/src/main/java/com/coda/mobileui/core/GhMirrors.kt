@@ -1,5 +1,7 @@
 package com.coda.mobileui.core
 
+import android.os.Looper
+
 /**
  * GitHub 加速镜像清单。
  *
@@ -17,6 +19,21 @@ data class GhMirror(
 )
 
 object GhMirrors {
+    private const val TAG = "GhMirrors"
+
+    /**
+     * 不发网络请求的排序：只按历史成绩，没历史就保持清单顺序。
+     *
+     * 主线程调用与离线场景共用这一条路径。
+     */
+    internal fun rankOffline(
+        mirrors: List<GhMirror>,
+        history: Map<String, MirrorScoreboard.Stat>,
+    ): List<GhMirror> {
+        if (history.isEmpty()) return mirrors
+        return mirrors.sortedByDescending { MirrorScoreboard.scoreOf(history[it.id]) }
+    }
+
     /** host 需要以 / 结尾，否则拼出来的 URL 会把主机名和路径粘在一起。 */
     private fun p(host: String): String = if (host.endsWith("/")) host else "$host/"
 
@@ -113,6 +130,14 @@ object GhMirrors {
         onLog: (String) -> Unit = {},
     ): List<GhMirror> {
         require(probeUrl.isNotBlank()) { "rank() 必须给出真实链接用于测速" }
+        // 主线程调到这里时不做任何网络探测：ping 与测速都是阻塞 IO，
+        // 几十条镜像挨个握手足以把界面卡到 ANR。退化成「历史成绩 + 清单顺序」，
+        // 并留下日志说明调用点该挪到后台线程。
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            AppLog.w(TAG, "rank() 在主线程调用，已跳过连通性探测")
+            onLog("在主线程调用镜像排序，跳过连通性探测")
+            return rankOffline(mirrors, history)
+        }
         onLog("探测镜像连通性…")
         val pinged = MirrorSpeedTester.pingAll(mirrors)
         val latencyOf = pinged.filter { it.ok }.associate { it.mirror.id to it.latencyMs }
