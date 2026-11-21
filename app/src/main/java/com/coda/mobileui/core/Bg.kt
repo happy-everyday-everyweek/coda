@@ -1,8 +1,9 @@
 package com.coda.mobileui.core
 
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -16,6 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * 它们需要各自独立且长期存在的线程。
  */
 object Bg {
+    private const val TAG = "Bg"
+
     /** 池内线程上限：短任务以网络等待为主，给得比 CPU 核数宽，又避免无界创建。 */
     private const val MAX_THREADS = 16
 
@@ -25,10 +28,47 @@ object Bg {
             Thread(r, "coda-io-${counter.getAndIncrement()}").apply { isDaemon = true }
         }
 
-    val io: ExecutorService = Executors.newFixedThreadPool(MAX_THREADS, factory)
+    /**
+     * 排队上限。
+     *
+     * 之前直接用 Executors.newFixedThreadPool，它的队列是无界的：调用方狂刷任务时
+     * 内存会一路涨到 OOM，而且没有任何「忙不过来」的信号。
+     */
+    private const val QUEUE_CAPACITY = 128
+
+    /**
+     * 队列满时不丢任务、也不抛给调用方：由提交线程自己执行一次，形成背压。
+     *
+     * 这比 RejectedExecution 直接抛出去好——后者会把一次普通的后台请求变成崩溃。
+     */
+    private val pool =
+        ThreadPoolExecutor(
+            MAX_THREADS,
+            MAX_THREADS,
+            30L,
+            TimeUnit.SECONDS,
+            ArrayBlockingQueue(QUEUE_CAPACITY),
+            factory,
+            ThreadPoolExecutor.CallerRunsPolicy(),
+        )
 
     /** 提交一个后台任务，语义等同原来的 `Thread { block() }.start()`。 */
     fun run(block: () -> Unit) {
-        io.execute(block)
+        try {
+            pool.execute {
+                // 单个任务抛异常不能带走进程：之前异常会从工作线程逃到默认处理器，直接杀进程。
+                try {
+                    block()
+                } catch (e: Exception) {
+                    AppLog.e(TAG, "后台任务失败", e)
+                }
+            }
+        } catch (e: Exception) {
+            // 池已关闭（进程退出阶段）或拒绝策略抛异常：记录后放弃，不把异常抛给调用方。
+            AppLog.w(TAG, "后台任务未被接受：${e.message ?: e.javaClass.simpleName}")
+        }
     }
+
+    /** 池是否已关闭。只用于状态查询：池本身不对外开放，避免被谁 shutdown 掉。 */
+    fun isShutdown(): Boolean = pool.isShutdown
 }

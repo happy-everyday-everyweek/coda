@@ -7,6 +7,7 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.CancellationException
 
 /**
  * 随包资产的解析与获取。
@@ -78,7 +79,9 @@ object AssetFetcher {
         }
 
         target.parentFile?.mkdirs()
-        val tmp = File(target.parentFile, target.name + ".part")
+        // 临时名带纳秒后缀：启动补资源与设置页同时触发同一资产的获取时，
+        // 共用 `<name>.part` 会让一个线程把另一个还没写完的文件 rename 上线。
+        val tmp = File(target.parentFile, target.name + "." + System.nanoTime() + ".part")
 
         // 2. 先看 APK 内有没有。
         if (assetExists(ctx, spec.assetPath)) {
@@ -264,10 +267,15 @@ object AssetFetcher {
             } finally {
                 conn.disconnect()
             }
-        } catch (t: Throwable) {
+        } catch (e: CancellationException) {
+            // 取消不是「这次失败，换下一个源」：吞掉它会让协程取消失效，
+            // 循环继续跑下去，用户已经退出页面了下载还在继续。
+            runCatching { out.delete() }
+            throw e
+        } catch (e: Exception) {
             // 这里以前是 `catch (_: Throwable)`，异常被完全吞掉：
             // 连接重置、TLS 失败、磁盘写满全都不留痕迹，事后完全查不出为什么失败。
-            AppLog.w(TAG, "下载异常 $url：${t.javaClass.simpleName}: ${t.message}")
+            AppLog.w(TAG, "下载异常 $url：${e.javaClass.simpleName}: ${e.message}")
             runCatching { out.delete() }
             false
         }

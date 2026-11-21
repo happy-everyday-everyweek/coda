@@ -125,6 +125,8 @@ object MirrorScoreboard {
                 }
             }
         }.getOrElse {
+            // 备份原件：损坏的账本至少还能手工恢复，不会被下一次记账直接覆盖成空表。
+            backupCorrupt(fileOf(ctx))
             AppLog.w(TAG, "读取镜像账本失败，按空账本处理：${it.javaClass.simpleName}: ${it.message}")
             emptyMap()
         }
@@ -145,10 +147,14 @@ object MirrorScoreboard {
         runCatching {
             synchronized(lock) {
                 val f = fileOf(ctx)
+                // 账本损坏时不能拿空表接着写：那会把还能手工抢救的历史直接抹掉。
                 val root =
                     if (f.isFile) {
-                        runCatching { JSONObject(f.readText()) }.getOrNull()
-                            ?: JSONObject()
+                        runCatching { JSONObject(f.readText()) }.getOrElse { e ->
+                            backupCorrupt(f)
+                            AppLog.w(TAG, "镜像账本解析失败，本次不记账：${e.message}")
+                            return@synchronized
+                        }
                     } else {
                         JSONObject()
                     }
@@ -182,7 +188,9 @@ object MirrorScoreboard {
                         }
                     }
                 bucket.put(id, next)
-                f.writeText(root.toString())
+                if (!writeAtomic(f, root.toString())) {
+                    AppLog.w(TAG, "写镜像账本失败：替换未完成")
+                }
                 AppLog.i(
                     TAG,
                     "记账 $key/$id $outcome bytes=$bytes ms=$elapsedMs " +
@@ -194,6 +202,36 @@ object MirrorScoreboard {
             AppLog.w(TAG, "写镜像账本失败：${it.javaClass.simpleName}: ${it.message}")
         }
     }
+
+    /** 备份一份解析失败的账本；已有备份时保留最早那份。 */
+    private fun backupCorrupt(f: File) {
+        runCatching {
+            val backup = File(f.parentFile, f.name + ".corrupt")
+            if (f.isFile && !backup.exists()) f.copyTo(backup, overwrite = false)
+        }
+    }
+
+    /**
+     * 先写临时文件再改名。
+     *
+     * 直接 writeText 会在目标文件上留下半截 JSON：下载流程同时读账本时读到半截就当空表，
+     * 历史成绩白丢。
+     */
+    private fun writeAtomic(
+        target: File,
+        text: String,
+    ): Boolean =
+        runCatching {
+            target.parentFile?.mkdirs()
+            val tmp = File(target.parentFile, target.name + "." + System.nanoTime() + ".tmp")
+            try {
+                tmp.writeText(text)
+                if (!tmp.renameTo(target)) throw IllegalStateException("替换 ${target.name} 失败")
+                true
+            } finally {
+                if (tmp.exists()) runCatching { tmp.delete() }
+            }
+        }.getOrDefault(false)
 
     private fun bucketKey(net: Net): String =
         when (net) {
