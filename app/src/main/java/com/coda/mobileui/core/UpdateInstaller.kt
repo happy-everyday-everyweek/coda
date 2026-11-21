@@ -46,6 +46,12 @@ object UpdateInstaller {
             onLog("更新信息不完整，无法下载")
             return null
         }
+        // 更新包地址来自清单/接口，必须限制成 https 且带主机名：
+        // 允许 http 或相对地址等于把安装包交给中间人替换。
+        if (!isTrustedUrl(result.apkUrl)) {
+            onLog("更新地址不合法，已拒绝下载：${result.apkUrl.take(120)}")
+            return null
+        }
 
         val dir = File(ctx.filesDir, "updates").apply { mkdirs() }
         // 文件名带版本号，避免上一版的半成品被当成这一版。
@@ -71,12 +77,37 @@ object UpdateInstaller {
             )
         if (!ok) return null
 
-        // 从清单拿到的更新包一定带哈希；没有哈希说明走的是 API 兜底，
-        // 这种情况只保证长度，安装前仍由系统校验签名。
+        // 从清单拿到的更新包一定带哈希；没有哈希说明走的是 API 兜底。
+        // 这时不能只判「文件非空」就交给安装器：截断的 APK 同样非空，
+        // 至少要核对声明大小与 APK 结构（能打开 zip 且含 AndroidManifest）。
         if (result.sha256 == null) {
-            onLog("注意：本次更新包没有哈希，只能依赖系统校验签名")
+            val sizeOk = result.apkSize <= 0L || target.length() == result.apkSize
+            val zipOk =
+                runCatching {
+                    java.util.zip.ZipFile(target).use { z -> z.getEntry("AndroidManifest.xml") != null }
+                }.getOrDefault(false)
+            if (!sizeOk || !zipOk) {
+                onLog("更新包校验失败：缺少哈希，且大小或包结构不符")
+                runCatching { target.delete() }
+                return null
+            }
+            onLog("注意：本次更新包没有哈希，已按大小与包结构校验，安装签名仍由系统校验")
         }
         return target
+    }
+
+    /**
+     * 更新地址是否可信。
+     *
+     * 只接受 https 且带主机名的绝对地址；`file:`、`content:`、`http:` 与相对路径一律拒绝，
+     * 否则镜像被劫持时可以直接把下载目标换成任意地址。
+     */
+    private fun isTrustedUrl(url: String): Boolean {
+        val uri =
+            runCatching { java.net.URI(url.trim()) }.getOrElse { return false }
+        if (!uri.scheme.equals("https", ignoreCase = true)) return false
+        val host = uri.host ?: return false
+        return host.isNotBlank() && !host.contains(' ')
     }
 
     private fun specFor(result: UpdateChecker.Result) =

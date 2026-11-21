@@ -31,19 +31,13 @@ object CrashGuard {
     fun install(app: Application) {
         if (installed) return
         installed = true
-        val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 saveAndShow(app, thread, throwable)
             } catch (_: Throwable) {
             }
-            // 主进程稍后会被结束，让位给崩溃页；这里不再把异常继续抛给系统默认处理器。
-            if (prev != null) {
-                try {
-                    prev.uncaughtException(thread, throwable)
-                } catch (_: Throwable) {
-                }
-            }
+            // 不再转发给系统默认处理器：它会在崩溃页展示前就把进程杀掉，
+            // 延迟 kill 与自绘崩溃页都会失效（用户只看到闪退）。
         }
     }
 
@@ -77,15 +71,25 @@ object CrashGuard {
         AppLog.e("Crash", "未捕获异常（${thread.name}）：$throwable", throwable)
         val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         var saved = "(未写入)"
-        try {
-            val dir =
-                app.getExternalMediaDirs()?.firstOrNull()?.let { File(it, "logs") }
-                    ?: File(app.filesDir, "run-logs")
-            dir.mkdirs()
-            val f = File(dir, "crash-$ts.txt")
-            f.writeText(body)
-            saved = f.absolutePath
-        } catch (_: Throwable) {
+        // 外部媒体目录不可写（未挂载、权限被回收）时回退应用私有目录：
+        // 只试一次外部路径会让崩溃日志彻底丢失，而这正是排查问题唯一的一手材料。
+        val candidates =
+            buildList {
+                app.getExternalMediaDirs()?.firstOrNull()?.let { add(File(it, "logs")) }
+                add(File(app.filesDir, "run-logs"))
+            }
+        for (dir in candidates) {
+            val ok =
+                try {
+                    dir.mkdirs()
+                    val f = File(dir, "crash-$ts.txt")
+                    f.writeText(body)
+                    saved = f.absolutePath
+                    true
+                } catch (_: Throwable) {
+                    false
+                }
+            if (ok) break
         }
         val intent = Intent(app, CrashActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
