@@ -133,6 +133,8 @@ object AssetFetcher {
             )
         onLog("网络环境：${netLabel(net)}")
         val errors = StringBuilder()
+        // 下载并校验通过、但没能就位的临时文件：留着它，换源重下解决不了写入问题。
+        var verifiedTmp: File? = null
         for (m in ranked) {
             val url = GhMirrors.wrap(m.prefix, spec.remoteUrl)
             onLog("下载 ${m.id}…")
@@ -171,6 +173,10 @@ object AssetFetcher {
                         AppLog.w(TAG, "资产未能就位 ${target.name} 来源=${m.id}：${placed.reason}")
                         onLog("${m.id} 下载成功但写入失败：${placed.reason}")
                         errors.append(m.id).append(":place ")
+                        // 内容已经校验通过，写入失败与镜像无关：换源重下解决不了问题，
+                        // 保留这份文件，循环结束后再试一次就位，别白白浪费带宽。
+                        verifiedTmp = tmp
+                        break
                     }
                 }
             } else if (got) {
@@ -196,6 +202,18 @@ object AssetFetcher {
                 errors.append(m.id).append(":fail ")
             }
             runCatching { tmp.delete() }
+        }
+        // 已经下载并校验通过、只是没写进去：再试一次就位（比如目标是目录这种情况，
+        // 用户清理后重试就能成功），不要让用户为一个本地写入问题重新下载几十 MB。
+        verifiedTmp?.let { kept ->
+            if (kept.isFile && verify(kept, spec)) {
+                val retry = AssetPlacement.place(kept, target)
+                if (retry is AssetPlacement.Result.Placed) {
+                    onLog("重试写入成功：${target.name}")
+                    return true
+                }
+            }
+            runCatching { kept.delete() }
         }
         onLog("所有源都失败：$errors")
         // 汇总一行：排错了要看是哪几类失败（:fail 连不上，:hash 内容被改写）。
