@@ -59,9 +59,6 @@ object AsrTester {
         private var file: File? = null
         private var worker: Thread? = null
 
-        /** 实时模式下把每块 PCM 交给它（不落盘）。 */
-        private var sink: ((ByteArray) -> Unit)? = null
-
         /** 目标采样率。8k 在部分机型不支持，16k 是转写端点的通用输入。 */
         private val sampleRate = 16_000
         private val channelMask = android.media.AudioFormat.CHANNEL_IN_MONO
@@ -81,7 +78,6 @@ object AsrTester {
         @android.annotation.SuppressLint("MissingPermission")
         fun start(liveSink: ((ByteArray) -> Unit)? = null): Boolean {
             stopQuietly()
-            sink = liveSink
             val minBuf = android.media.AudioRecord.getMinBufferSize(sampleRate, channelMask, encoding)
             if (minBuf <= 0) {
                 AppLog.i(TAG, "录音启动失败：设备不支持 ${sampleRate}Hz 单声道 PCM16")
@@ -128,12 +124,15 @@ object AsrTester {
                 worker =
                     Thread {
                         val buf = ByteArray(bufSize)
+                        // 用参数里的回调而不是字段：字段会被下一次 start 覆盖，
+                        // 旧线程继续跑就会把这一轮的音频喂进新会话（串音）。
+                        val sink = liveSink
                         try {
                             while (record === rec) {
                                 val n = rec.read(buf, 0, buf.size)
                                 if (n > 0) {
                                     if (sink != null) {
-                                        sink?.invoke(buf.copyOf(n))
+                                        sink.invoke(buf.copyOf(n))
                                     } else {
                                         synchronized(out!!) { out.write(buf, 0, n) }
                                     }
@@ -151,6 +150,8 @@ object AsrTester {
                 true
             } catch (e: Throwable) {
                 AppLog.i(TAG, "录音启动失败：${e.javaClass.simpleName}: ${e.message}")
+                // 启动到一半失败也要还回录音器，否则麦克风句柄一直被占，后续录音全部失败。
+                runCatching { rec.release() }
                 runCatching { out?.close() }
                 f.delete()
                 false
@@ -163,9 +164,11 @@ object AsrTester {
             val f = file
             record = null
             file = null
+            // 先 stop 再 join：读线程阻塞在 read() 里，只有 stop 才能让它返回。
+            // 先 join 只能干等到超时，随后 release 时线程还在读，属于资源竞争。
+            runCatching { rec.stop() }
             worker?.join(1500)
             worker = null
-            runCatching { rec.stop() }
             runCatching { rec.release() }
             if (f == null || !f.exists()) return null
             // 回填 RIFF 头：data 段长度 = 总长 - 44。
@@ -196,10 +199,11 @@ object AsrTester {
         private fun stopQuietly() {
             val rec = record
             record = null
+            // 同 stop()：先停才能让阻塞中的 read 返回，否则 join 只能等满超时。
+            runCatching { rec?.stop() }
             worker?.join(800)
             worker = null
             rec?.let {
-                runCatching { it.stop() }
                 runCatching { it.release() }
             }
         }
@@ -412,17 +416,21 @@ object AsrTester {
         var pos = 12
         while (pos + 8 <= all.size) {
             val id = String(all, pos, 4, Charsets.US_ASCII)
-            val size =
-                (all[pos + 4].toInt() and 0xFF) or
-                    ((all[pos + 5].toInt() and 0xFF) shl 8) or
-                    ((all[pos + 6].toInt() and 0xFF) shl 16) or
-                    ((all[pos + 7].toInt() and 0xFF) shl 24)
+            // 块长度按无符号 32 位解析：按有符号 Int 拼，超过 2GB 会变成负数，
+            // 下面的 pos 就会往回跳，要么死循环要么越界崩溃。用 Long 累加再统一收口。
+            var size = 0L
+            for (i in 0 until 4) {
+                size = size or ((all[pos + 4 + i].toLong() and 0xFF) shl (8 * i))
+            }
             val body = pos + 8
             if (id == "data") {
-                val end = minOf(body + size, all.size)
+                val end = minOf(body + size, all.size.toLong()).toInt()
                 return all.copyOfRange(body, end)
             }
-            pos = body + size + (size and 1)
+            val next = body + size + (size and 1L)
+            // 长度非法（越界或没前进）就停止遍历：再算下去只会无限循环。
+            if (next <= pos || next > all.size) return ByteArray(0)
+            pos = next.toInt()
         }
         return ByteArray(0)
     }

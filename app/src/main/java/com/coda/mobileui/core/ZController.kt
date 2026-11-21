@@ -908,13 +908,18 @@ class ZController private constructor(
 
     fun restoreFromCache(): Boolean {
         if (sessions.isNotEmpty()) return false
-        val cached = SessionCache.loadSessions(app)
-        if (cached.isEmpty()) return false
-        post {
-            cacheOnly = true
-            sessions = cached.toMutableList()
-            for (l in listeners) l.onStateChanged()
-        }
+        // 先用 stat 判断有没有缓存，真正的读盘放后台：冷启动时主线程正在赶首帧，
+        // 同步读几百条消息会直接把启动拖慢。
+        if (!SessionCache.hasSessions(app)) return false
+        Thread {
+            val cached = SessionCache.loadSessions(app)
+            if (cached.isEmpty()) return@Thread
+            post {
+                cacheOnly = true
+                sessions = cached.toMutableList()
+                for (l in listeners) l.onStateChanged()
+            }
+        }.start()
         return true
     }
 
@@ -925,14 +930,17 @@ class ZController private constructor(
      * 还会在界面上报一串错。这里就是要让用户安静地看一眼上次聊了什么。
      */
     fun openCachedSession(sessionId: String): Boolean {
-        val cached = SessionCache.loadMessages(app, sessionId)
-        if (cached.isEmpty()) return false
-        post {
-            cacheOnly = true
-            currentSessionId = sessionId
-            messages = cached.toMutableList()
-            for (l in listeners) l.onStateChanged()
-        }
+        if (!SessionCache.hasMessages(app, sessionId)) return false
+        Thread {
+            val cached = SessionCache.loadMessages(app, sessionId)
+            if (cached.isEmpty()) return@Thread
+            post {
+                cacheOnly = true
+                currentSessionId = sessionId
+                messages = cached.toMutableList()
+                for (l in listeners) l.onStateChanged()
+            }
+        }.start()
         return true
     }
 

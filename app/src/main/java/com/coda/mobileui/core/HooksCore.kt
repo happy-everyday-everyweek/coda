@@ -192,7 +192,9 @@ object HooksCore {
             JSONObject()
                 .put(
                     "workspace",
-                    JSONObject().put("workspacePath", workspacePath).put("workspaceKey", workspacePath),
+                    JSONObject()
+                        .put("workspacePath", workspacePath)
+                        .put("workspaceKey", canonicalWorkspace(workspacePath)),
                 ).put("bundleDigest", bundleDigest)
                 .put("hookDeclarationDigest", declarationDigest)
         rt.call("workspace/hooks/trustGrant", params) { ok, body ->
@@ -215,10 +217,12 @@ object HooksCore {
             if (!trustFile.exists()) return emptySet()
             val root = JSONObject(trustFile.readText())
             val records = root.optJSONArray("records") ?: return emptySet()
+            val wanted = canonicalWorkspace(workspaceKey)
             val out = mutableSetOf<String>()
             for (i in 0 until records.length()) {
                 val r = records.optJSONObject(i) ?: continue
-                if (r.optString("workspaceIdentity") == workspaceKey) {
+                // 两侧都规范化再比：历史记录里可能存的是带尾斜杠或符号链接的写法。
+                if (canonicalWorkspace(r.optString("workspaceIdentity")) == wanted) {
                     val d = r.optString("hookDeclarationDigest")
                     if (d.length == 64) out += d
                 }
@@ -267,43 +271,48 @@ object HooksCore {
     ): String? {
         if (!EVENT_NAMES.contains(event)) return "无效的事件: $event"
         if (command.isBlank()) return "命令不能为空"
-        val f = File(File(workspacePath, ".zcode"), "config.json")
-        val root =
-            if (f.exists()) {
-                try {
-                    JSONObject(f.readText())
-                } catch (_: Throwable) {
-                    return "现有配置 JSON 解析失败"
+        return synchronized(writeLock) {
+            val f = File(File(canonicalWorkspace(workspacePath), ".zcode"), "config.json")
+            val root =
+                if (f.exists()) {
+                    try {
+                        JSONObject(f.readText())
+                    } catch (_: Throwable) {
+                        return "现有配置 JSON 解析失败"
+                    }
+                } else {
+                    JSONObject()
                 }
-            } else {
-                JSONObject()
+            // 已有节点类型不对时必须报错：直接换成新对象会把用户原有的钩子配置静默丢掉。
+            val hooks =
+                root.optJSONObject("hooks")
+                    ?: if (root.has("hooks")) return "结构异常: hooks 不是对象" else JSONObject().also { root.put("hooks", it) }
+            val events =
+                hooks.optJSONObject("events")
+                    ?: if (hooks.has("events")) return "结构异常: events 不是对象" else JSONObject().also { hooks.put("events", it) }
+            val arr =
+                events.optJSONArray(event)
+                    ?: if (events.has(event)) return "结构异常: 事件 $event 不是数组" else JSONArray().also { events.put(event, it) }
+            var target: JSONObject? = null
+            for (i in 0 until arr.length()) {
+                val m = arr.optJSONObject(i) ?: continue
+                if (m.optString("matcher").takeIf { it.isNotEmpty() } == matcher) {
+                    target = m
+                    break
+                }
             }
-        val hooks = root.optJSONObject("hooks") ?: JSONObject().also { root.put("hooks", it) }
-        val events = hooks.optJSONObject("events") ?: JSONObject().also { hooks.put("events", it) }
-        val arr = events.optJSONArray(event) ?: JSONArray().also { events.put(event, it) }
-        var target: JSONObject? = null
-        for (i in 0 until arr.length()) {
-            val m = arr.optJSONObject(i) ?: continue
-            if (m.optString("matcher").takeIf { it.isNotEmpty() } == matcher) {
-                target = m
-                break
+            if (target == null) {
+                target = JSONObject()
+                if (matcher != null && matcher.isNotEmpty()) target.put("matcher", matcher)
+                target.put("hooks", JSONArray())
+                arr.put(target)
             }
-        }
-        if (target == null) {
-            target = JSONObject()
-            if (matcher != null && matcher.isNotEmpty()) target.put("matcher", matcher)
-            target.put("hooks", JSONArray())
-            arr.put(target)
-        }
-        val h = JSONObject().put("type", "command").put("command", command.trim())
-        if (timeoutMs != null && timeoutMs > 0) h.put("timeoutMs", timeoutMs)
-        target.optJSONArray("hooks")?.put(h)
-        return try {
-            f.parentFile?.mkdirs()
-            f.writeText(root.toString(2))
-            null
-        } catch (e: Throwable) {
-            "写入失败: $e"
+            val hooksArr = target.optJSONArray("hooks")
+            if (hooksArr == null) return "结构异常: 事件分组缺少 hooks 数组"
+            val h = JSONObject().put("type", "command").put("command", command.trim())
+            if (timeoutMs != null && timeoutMs > 0) h.put("timeoutMs", timeoutMs)
+            hooksArr.put(h)
+            writeConfigAtomic(f, root)
         }
     }
 
@@ -314,30 +323,71 @@ object HooksCore {
         matcherIndex: Int,
         hookIndex: Int,
     ): String? {
-        val f = File(sourcePath)
-        if (!f.exists()) return "文件不存在"
-        val root =
-            try {
-                JSONObject(f.readText())
-            } catch (_: Throwable) {
-                return "JSON 解析失败"
-            }
-        val hooks = root.optJSONObject("hooks") ?: return "没有 hooks 段"
-        val events = hooks.optJSONObject("events") ?: return "没有 events 段"
-        val arr = events.optJSONArray(event) ?: return "事件不存在"
-        if (matcherIndex >= arr.length()) return "索引越界"
-        val m = arr.optJSONObject(matcherIndex) ?: return "结构异常"
-        val hs = m.optJSONArray("hooks") ?: return "结构异常"
-        if (hookIndex >= hs.length()) return "索引越界"
-        hs.remove(hookIndex)
-        if (hs.length() == 0) arr.remove(matcherIndex)
-        return try {
-            f.writeText(root.toString(2))
-            null
-        } catch (e: Throwable) {
-            "写入失败: $e"
+        if (matcherIndex < 0 || hookIndex < 0) return "索引越界"
+        return synchronized(writeLock) {
+            val f =
+                try {
+                    File(sourcePath).canonicalFile
+                } catch (_: Throwable) {
+                    return "路径无效"
+                }
+            if (!f.exists()) return "文件不存在"
+            // 只允许改 .zcode/config.json（用户级来源是 .zcode/cli/config.json）：
+            // 不收敛路径的话，这个方法能被用来改工作区外的任意 JSON 文件。
+            val parent = f.parentFile
+            val allowed =
+                f.name == "config.json" &&
+                    (parent?.name == ".zcode" || (parent?.name == "cli" && parent.parentFile?.name == ".zcode"))
+            if (!allowed) return "只允许修改 hooks 配置文件"
+            val root =
+                try {
+                    JSONObject(f.readText())
+                } catch (_: Throwable) {
+                    return "JSON 解析失败"
+                }
+            val hooks = root.optJSONObject("hooks") ?: return "没有 hooks 段"
+            val events = hooks.optJSONObject("events") ?: return "没有 events 段"
+            val arr = events.optJSONArray(event) ?: return "事件不存在"
+            if (matcherIndex >= arr.length()) return "索引越界"
+            val m = arr.optJSONObject(matcherIndex) ?: return "结构异常"
+            val hs = m.optJSONArray("hooks") ?: return "结构异常"
+            if (hookIndex >= hs.length()) return "索引越界"
+            hs.remove(hookIndex)
+            if (hs.length() == 0) arr.remove(matcherIndex)
+            writeConfigAtomic(f, root)
         }
     }
+
+    /** 配置文件的读改写共用一把锁，避免两次编辑各自基于旧快照写回、互相覆盖。 */
+    private val writeLock = Any()
+
+    /**
+     * 原子写配置：同目录临时文件 + 改名，读者要么看到旧内容、要么看到完整新内容。
+     * 失败时返回错误文本，绝不回退成直接覆盖目标文件。
+     */
+    private fun writeConfigAtomic(
+        f: File,
+        root: JSONObject,
+    ): String? =
+        try {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.parentFile, f.name + "." + System.nanoTime() + ".tmp")
+            try {
+                tmp.writeText(root.toString(2))
+                if (!tmp.renameTo(f)) {
+                    java.nio.file.Files.move(
+                        tmp.toPath(),
+                        f.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    )
+                }
+            } finally {
+                if (tmp.exists()) runCatching { tmp.delete() }
+            }
+            null
+        } catch (t: Throwable) {
+            "写入失败: ${t.message ?: t.javaClass.simpleName}"
+        }
 
     // ------------------------------------------------------------ 内部实现
 
@@ -345,6 +395,22 @@ object HooksCore {
         var s = p.trim().replace('\\', '/')
         while (s.length > 1 && s.endsWith('/')) s = s.dropLast(1)
         return s
+    }
+
+    /**
+     * 工作区标识的唯一入口。
+     *
+     * 授予信任时写进 `workspaceKey`、后续查找比较 `workspaceIdentity` 都必须走这里，
+     * 否则尾部斜杠、反斜杠或符号链接的等价写法会让已授予的信任静默失效。
+     */
+    private fun canonicalWorkspace(path: String): String {
+        val trimmed = normalize(path)
+        if (trimmed.isEmpty()) return trimmed
+        return try {
+            File(trimmed).canonicalPath
+        } catch (_: Throwable) {
+            trimmed
+        }
     }
 
     /** 从工作区目录向上直到含 .git 的目录（含）；无 .git 时仅工作区自身。祖先在前。 */

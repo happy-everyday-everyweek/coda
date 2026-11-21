@@ -44,25 +44,60 @@ object SessionCache {
         val text: String,
     )
 
+    /** 一批待写盘的消息，带提交时的代际号。 */
+    private class Pending(
+        val generation: Int,
+        val rows: List<MsgRow>,
+    )
+
     /**
      * 待落盘的会话快照。
      *
      * 流式输出时快照会连续刷新，每轮都全量写一次盘没有意义：同一会话只保留最新一份，
      * 排队的旧快照直接丢弃，最后落盘的仍然是最新内容。
      */
-    private val pendingMessages = java.util.concurrent.ConcurrentHashMap<String, List<MsgRow>>()
+    private val pendingMessages = java.util.concurrent.ConcurrentHashMap<String, Pending>()
     private val pendingFlush = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * 缓存的代际号。
+     *
+     * 登出清理与后台刷盘是并发的：清理只把目录删掉，排队中的写任务随后会把旧会话
+     * 又写回来。清理时递增代际，旧任务发现自己过期就直接丢弃。
+     */
+    @Volatile
+    private var generation = 0
 
     private fun dir(ctx: Context): File = File(ctx.filesDir, DIR).apply { mkdirs() }
 
+    /**
+     * 会话 id 压成文件名。
+     *
+     * 只替换非法字符会让 `a/b` 与 `a_b` 落成同一个文件，离线读到的就是别人的会话；
+     * 末尾追加原串的短摘要，碰撞概率可以忽略。
+     */
     private fun msgFile(
         ctx: Context,
         sessionId: String,
     ): File {
-        // sessionId 可能是任意串，落成文件名前先压成安全字符，避免出现路径分隔符。
-        val safe = sessionId.replace(Regex("[^A-Za-z0-9_-]"), "_").take(80)
-        return File(dir(ctx), "msg_$safe.json")
+        val safe = sessionId.replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
+        val digest =
+            java.security.MessageDigest
+                .getInstance("SHA-256")
+                .digest(sessionId.toByteArray())
+                .take(6)
+                .joinToString("") { "%02x".format(it) }
+        return File(dir(ctx), "msg_${safe}_$digest.json")
     }
+
+    /** 是否有会话缓存；只看 stat，不读内容，冷启动时可以直接在主线程问。 */
+    fun hasSessions(ctx: Context): Boolean = File(dir(ctx), "sessions.json").let { it.isFile && it.length() > 0 }
+
+    /** 该会话是否有消息缓存；同样只做 stat。 */
+    fun hasMessages(
+        ctx: Context,
+        sessionId: String,
+    ): Boolean = msgFile(ctx, sessionId).let { it.isFile && it.length() > 0 }
 
     /** 写临时文件再改名：写到一半被杀不会留下半个 JSON 把整份缓存废掉。 */
     private fun writeAtomic(
@@ -148,7 +183,7 @@ object SessionCache {
             list.takeLast(MAX_MESSAGES).map {
                 MsgRow(it.id, it.role, it.createdAt, it.text())
             }
-        pendingMessages[sessionId] = rows
+        pendingMessages[sessionId] = Pending(generation, rows)
         scheduleFlush(ctx.applicationContext ?: ctx)
     }
 
@@ -159,8 +194,10 @@ object SessionCache {
             try {
                 while (true) {
                     val id = pendingMessages.keys.firstOrNull() ?: break
-                    val rows = pendingMessages.remove(id) ?: continue
-                    writeMessages(ctx, id, rows)
+                    val item = pendingMessages.remove(id) ?: continue
+                    // 清理之后才轮到写盘的快照已经过期，写回去等于把刚清掉的会话复活。
+                    if (item.generation != generation) continue
+                    writeMessages(ctx, id, item.rows)
                 }
                 prune(ctx)
             } finally {
@@ -217,15 +254,21 @@ object SessionCache {
         }.getOrDefault(emptyList())
     }
 
-    /** 只保留最近几个会话的消息文件，其余删掉。 */
+    /** 只保留最近几个会话的消息文件，其余删掉；写盘残留的临时文件一并清理。 */
     private fun prune(ctx: Context) {
         runCatching {
             val files =
                 dir(ctx)
-                    .listFiles { f -> f.isFile && f.name.startsWith("msg_") && f.name.endsWith(".json") }
+                    .listFiles { f -> f.isFile }
                     ?.sortedByDescending { it.lastModified() }
                     ?: return
-            for (f in files.drop(KEEP_MSG_SESSIONS)) {
+            for (f in files) {
+                if (f.name.endsWith(".tmp")) {
+                    runCatching { f.delete() }
+                }
+            }
+            val msgs = files.filter { it.name.startsWith("msg_") && it.name.endsWith(".json") }
+            for (f in msgs.drop(KEEP_MSG_SESSIONS)) {
                 runCatching { f.delete() }
             }
         }
@@ -233,6 +276,9 @@ object SessionCache {
 
     /** 清空全部缓存（退出登录、切换内核数据目录时用）。 */
     fun clear(ctx: Context) {
+        // 先递增代际并丢掉排队快照，再删文件：否则后台刷盘会把会话又写回来。
+        generation += 1
+        pendingMessages.clear()
         io.execute {
             runCatching {
                 dir(ctx).listFiles()?.forEach { f -> runCatching { f.delete() } }

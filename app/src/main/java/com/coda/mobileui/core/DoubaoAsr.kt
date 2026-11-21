@@ -195,8 +195,9 @@ object DoubaoAsr {
                 .build()
 
         val incoming = LinkedBlockingQueue<Any>()
-        val closed = CountDownLatch(1)
-        val holder = arrayOfNulls<WebSocket>(1)
+        val opened = CountDownLatch(1)
+        // onOpen 之前就失败时，等待方必须立刻知道原因；否则只能干等到超时，报成「连接超时」。
+        val openError = arrayOfNulls<AsrError>(1)
         var taskId = ""
         val finals = mutableListOf<String>()
         var sessionStarted = false
@@ -208,7 +209,7 @@ object DoubaoAsr {
                     webSocket: WebSocket,
                     response: Response,
                 ) {
-                    holder[0] = webSocket
+                    opened.countDown()
                 }
 
                 override fun onMessage(
@@ -230,8 +231,9 @@ object DoubaoAsr {
                     t: Throwable,
                     response: Response?,
                 ) {
-                    incoming.put(AsrError("语音连接失败（${t.javaClass.simpleName}: ${t.message}）"))
-                    closed.countDown()
+                    openError[0] = AsrError("语音连接失败（${t.javaClass.simpleName}: ${t.message}）")
+                    incoming.put(openError[0] as AsrError)
+                    opened.countDown()
                 }
 
                 override fun onClosed(
@@ -239,30 +241,22 @@ object DoubaoAsr {
                     code: Int,
                     reason: String,
                 ) {
-                    incoming.put(AsrError("语音连接在会话结束前关闭（$code $reason）"))
-                    closed.countDown()
+                    openError[0] = AsrError("语音连接在会话结束前关闭（$code $reason）")
+                    incoming.put(openError[0] as AsrError)
+                    opened.countDown()
                 }
             }
 
         val ws = http.newWebSocket(req, listener)
-        val opened = CountDownLatch(1)
-        // 等 onOpen：拿不到就把后续 send 全部当失败，避免静默卡住。
-        val waitOpen =
-            Thread {
-                try {
-                    // 简单轮询，最长等 timeoutSec。
-                    val deadline = System.currentTimeMillis() + timeoutSec * 1000
-                    while (holder[0] == null && System.currentTimeMillis() < deadline) {
-                        Thread.sleep(20)
-                    }
-                    if (holder[0] != null) opened.countDown()
-                } catch (_: InterruptedException) {
-                }
-            }
-        waitOpen.start()
+        // 先把返回的 socket 存下来：连接还没 open 时失败或超时，也要能 cancel 掉，
+        // 否则底层连接会一直挂着，线程和句柄都收不回来。
         if (!opened.await(timeoutSec, TimeUnit.SECONDS)) {
             runCatching { ws.cancel() }
             throw AsrError("语音连接超时")
+        }
+        openError[0]?.let {
+            runCatching { ws.cancel() }
+            throw it
         }
 
         fun send(
@@ -449,6 +443,11 @@ object DoubaoAsr {
         private val timeoutSec: Long = 20,
     ) {
         private var ws: WebSocket? = null
+        /** onOpen 之前的失败原因；等待方据此立即失败，而不是干等到超时。 */
+        @Volatile
+        private var openError: AsrError? = null
+        /** 连接是否已被主动关闭，避免重复 close 与重复发取消帧。 */
+        private var closed = false
         private var taskId = ""
         private val incoming = LinkedBlockingQueue<Any>()
         private val finals = mutableListOf<String>()
@@ -511,7 +510,9 @@ object DoubaoAsr {
                         t: Throwable,
                         response: Response?,
                     ) {
-                        incoming.put(AsrError("语音连接失败（${t.javaClass.simpleName}: ${t.message}）"))
+                        openError = AsrError("语音连接失败（${t.javaClass.simpleName}: ${t.message}）")
+                        incoming.put(openError as AsrError)
+                        opened.countDown()
                     }
 
                     override fun onClosed(
@@ -519,14 +520,23 @@ object DoubaoAsr {
                         code: Int,
                         reason: String,
                     ) {
-                        incoming.put(AsrError("语音连接已关闭（$code $reason）"))
+                        openError = AsrError("语音连接已关闭（$code $reason）")
+                        incoming.put(openError as AsrError)
+                        opened.countDown()
                     }
                 }
-            http.newWebSocket(req, listener)
-            if (!opened.await(timeoutSec, TimeUnit.SECONDS)) {
-                runCatching { ws?.cancel() }
-                throw AsrError("语音连接超时")
-            }
+            val socket = http.newWebSocket(req, listener)
+            // 先存引用再等 open：连不上时也能 cancel，否则底层连接会一直挂着。
+            ws = socket
+            try {
+                if (!opened.await(timeoutSec, TimeUnit.SECONDS)) {
+                    closeSocket("connect-timeout")
+                    throw AsrError("语音连接超时")
+                }
+                openError?.let {
+                    closeSocket("connect-failed")
+                    throw it
+                }
             send("StartTask")
             // 与一次性模式一致：必须等到 TaskStarted，不能只取队列下一条。
             val resp = waitForReturning("TaskStarted")
@@ -555,7 +565,12 @@ object DoubaoAsr {
                         }.toString(),
             )
             waitFor("SessionStarted")
-            sessionStarted = true
+                sessionStarted = true
+            } catch (t: Throwable) {
+                // 启动到一半失败：连接不能留着，否则每次失败都漏一条 WS 和它的读线程。
+                closeSocket("start-failed")
+                throw t
+            }
         }
 
         /**
@@ -579,44 +594,62 @@ object DoubaoAsr {
         }
 
         /** 收尾：发完尾巴、EndASR、等最终结果。返回拼好的全文。 */
-        fun finish(): String {
-            if (pending.isNotEmpty()) {
-                send("TaskRequest", audio = pending, sequence = seq)
-                seq += 1
-                pending = ByteArray(0)
+        fun finish(): String =
+            try {
+                if (pending.isNotEmpty()) {
+                    send("TaskRequest", audio = pending, sequence = seq)
+                    seq += 1
+                    pending = ByteArray(0)
+                }
+                send("EndASR")
+                waitFor("ASREnded")
+                send("FinishSession")
+                waitFor("SessionFinished")
+                sessionFinished = true
+                val text = finals.joinToString("")
+                if (text.isEmpty()) throw AsrError("会话已结束，但没有最终识别结果")
+                AppLog.i(TAG, "实时转写完成：${text.length} 字，耗时 ${System.currentTimeMillis() - startedAt}ms")
+                text
+            } finally {
+                // 成功也要关：不关的话每条会话都留一条连接和 OkHttp 的读线程。
+                closeSocket("finish")
             }
-            send("EndASR")
-            waitFor("ASREnded")
-            send("FinishSession")
-            waitFor("SessionFinished")
-            sessionFinished = true
-            val text = finals.joinToString("")
-            if (text.isEmpty()) throw AsrError("会话已结束，但没有最终识别结果")
-            AppLog.i(TAG, "实时转写完成：${text.length} 字，耗时 ${System.currentTimeMillis() - startedAt}ms")
-            return text
-        }
 
         /** 中途放弃。 */
         fun cancel() {
-            if (sessionStarted && !sessionFinished) {
-                runCatching {
-                    ws?.send(
-                        VoiceGenieProtocol
-                            .encodeRequest(
-                                event = "CancelSession",
-                                appKey = APP_KEY,
-                                taskId = taskId,
-                            ).toByteString(),
-                    )
+            try {
+                if (sessionStarted && !sessionFinished) {
+                    runCatching {
+                        ws?.send(
+                            VoiceGenieProtocol
+                                .encodeRequest(
+                                    event = "CancelSession",
+                                    appKey = APP_KEY,
+                                    taskId = taskId,
+                                ).toByteString(),
+                        )
+                    }
                 }
+            } finally {
+                closeSocket("cancel")
             }
-            runCatching { ws?.close(1000, "cancel") }
+        }
+
+        /** 关闭连接；重复调用安全。 */
+        private fun closeSocket(reason: String) {
+            if (closed) return
+            closed = true
+            val socket = ws
+            ws = null
+            runCatching { socket?.close(1000, reason) }
         }
 
         private fun drain() {
             while (true) {
                 val raw = incoming.poll() ?: return
-                runCatching { process(raw) }
+                // 处理失败要抛给调用方。以前用 runCatching 吞掉，服务端报错时
+                // 会话只会一直空转到超时，失败原因完全看不到。
+                process(raw)
             }
         }
 

@@ -134,7 +134,13 @@ object ZParse {
                     }
                 val duration =
                     st?.optJSONObject("time")?.let {
-                        if (it.has("end") && it.has("start")) it.getLong("end") - it.getLong("start") else null
+                        // 内核会把未完成的工具调用写成 "end": null，getLong 遇到 null 直接抛
+                        // JSONException，整份快照解析就此中断、界面停在上一条消息上。
+                        if (it.has("end") && !it.isNull("end") && it.has("start") && !it.isNull("start")) {
+                            it.optLong("end") - it.optLong("start")
+                        } else {
+                            null
+                        }
                     } ?: run {
                         val s = st?.optLong("startedAt", 0L) ?: 0L
                         val e = st?.optLong("completedAt", 0L) ?: 0L
@@ -224,6 +230,10 @@ object ZParse {
         for (i in 0 until arr.length()) {
             val m = arr.optJSONObject(i) ?: continue
             val ref = m.optJSONObject("ref") ?: continue
+            // ref 缺 providerId/modelId 时选项无法被选中：把它放进列表，用户点了也没反应。
+            val providerId = ref.optString("providerId")
+            val modelId = ref.optString("modelId")
+            if (providerId.isEmpty() || modelId.isEmpty()) continue
             val levels = ArrayList<ZModelLevel>()
             val reasoning = m.optJSONObject("reasoning")
             val larr = reasoning?.optJSONArray("levels")
@@ -235,9 +245,9 @@ object ZParse {
             }
             out +=
                 ZModelOption(
-                    providerId = ref.optString("providerId"),
-                    modelId = ref.optString("modelId"),
-                    label = m.optString("label", ref.optString("modelId")),
+                    providerId = providerId,
+                    modelId = modelId,
+                    label = m.optString("label", modelId),
                     providerLabel = m.optString("providerLabel").takeIf { it.isNotEmpty() },
                     contextWindow = m.optInt("contextWindow", 0),
                     levels = levels,
@@ -301,10 +311,11 @@ object ZParse {
         val priority: String,
     )
 
-    /** 解析快照待办：优先根级 todos；为空时回退到最后一个 todoGroup 的列表。 */
+    /** 解析快照待办：根级出现过 todos 就以它为准；只有完全没有这个键时才回退到 todoGroup。 */
     fun parseTodos(root: JSONObject): List<ZTodo> {
-        val direct = parseTodoArray(root.optJSONArray("todos"))
-        if (direct.isNotEmpty()) return direct
+        // 根级 todos 存在但为空，说明当前确实没有待办；再回退到 todoGroup 会把
+        // 上一轮遗留的旧列表又渲染出来，看起来像「刚清空的待办又回来了」。
+        root.optJSONArray("todos")?.let { return parseTodoArray(it) }
         val groups = root.optJSONArray("todoGroups") ?: return emptyList()
         for (i in groups.length() - 1 downTo 0) {
             val g = groups.optJSONObject(i) ?: continue
