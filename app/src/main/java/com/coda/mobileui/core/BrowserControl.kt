@@ -288,8 +288,9 @@ object BrowserControl {
         cmd: JSONObject,
         params: JSONObject,
         started: Long,
-    ): JSONObject =
-        when (method) {
+    ): JSONObject {
+        // 用块体而不是表达式体：分支里需要在参数不合法时提前返回，表达式体不允许 return。
+        return when (method) {
             // 这三条会阻塞等待页面，统一由 executeBlocking 在后台线程处理，
             // 放到主线程里等 onPageFinished 会让主线程等自己，20 秒后 ANR。
             "navigate", "reload", "waitFor" ->
@@ -481,6 +482,7 @@ object BrowserControl {
                 errorResult(params, "capability_unsupported", "当前内置浏览器不支持该命令：$method", started)
             }
         }
+    }
 
     // ------------------------------------------------------------ 结果构造
 
