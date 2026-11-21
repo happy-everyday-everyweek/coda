@@ -97,6 +97,14 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        unitTests {
+            // 纯逻辑单测跑在 JVM 上，不愿为 android.* 桩方法单独写 mock；
+            // 让未实现的桩返回默认值，测试只触碰真正的纯函数。
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 chaquopy {
@@ -164,4 +172,6 @@ dependencies {
     // 之前每个调用点各写一份 Thread{} 和 postDelayed，生命周期没人管，
     // 页面销毁后回调还可能打到已拆的 View 上。
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // 单元测试：端点归一化、路径/链接越界判定这类纯逻辑不依赖设备，直接在 JVM 上跑。
+    testImplementation("junit:junit:4.13.2")
 }

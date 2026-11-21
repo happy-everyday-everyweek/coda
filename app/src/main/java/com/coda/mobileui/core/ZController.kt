@@ -442,8 +442,14 @@ class ZController private constructor(
             currentSessionId = sid
             // 缺失字段不能当空值：只切换模式或模型的响应不带 title/status，
             // 无条件赋值会把会话标题抹成空串，还会把 running 误判为 false。
-            val title = if (session?.has("title") == true) ZParse.parseTitleFromSnapshot(root) else null
-            val status = if (session?.has("status") == true) ZParse.parseStatusFromSnapshot(root) else ""
+            // 显式 null 与「没有这个键」同样处理：内核序列化时会用 null 表示该字段不参与本次更新。
+            val title =
+                if (session != null && session.has("title") && !session.isNull("title")) {
+                    ZParse.parseTitleFromSnapshot(root)
+                } else {
+                    null
+                }
+            val status = if (session != null && session.has("status") && !session.isNull("status")) ZParse.parseStatusFromSnapshot(root) else ""
             val m = ZParse.parseModeFromSnapshot(root)
             var info = sessions.find { it.id == sid }
             if (info == null) {
@@ -461,7 +467,9 @@ class ZController private constructor(
             }
             if (status.isNotEmpty()) running = (status == "running" || status == "waiting")
         }
-        if (root.has("messages")) messages = ZParse.parseMessages(root).toMutableList()
+        // messages 缺失或为 null 表示这次响应不携带会话记录；只有真拿到数组才替换，
+        // 否则切换模式/模型的增量响应会把界面上的消息清空。
+        if (root.optJSONArray("messages") != null) messages = ZParse.parseMessages(root).toMutableList()
         // 顺手把消息落到本地缓存，内核退出后还能只读回看。
         // 只在拿到真实数据时写，避免把缓存内容又写回缓存。
         // sid 在这里是可空的（拿不到会话 id 就没有归属，不落盘）。

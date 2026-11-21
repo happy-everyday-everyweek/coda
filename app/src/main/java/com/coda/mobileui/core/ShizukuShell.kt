@@ -80,13 +80,16 @@ object ShizukuShell {
     }
 
     /** 当前已启用的无障碍服务列表（过滤掉非法项，避免把设置里的脏数据拼进命令）。 */
-    private fun enabledAccessibility(): List<String> =
-        exec("settings get secure enabled_accessibility_services")
-            .getOrNull()
-            .orEmpty()
-            .split(':')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && it != "null" && COMPONENT.matches(it) }
+    private fun readEnabledAccessibility(): Result<List<String>> {
+        val raw =
+            exec("settings get secure enabled_accessibility_services")
+                .getOrElse { return Result.failure(it) }
+        return Result.success(
+            raw.split(':')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it != "null" && COMPONENT.matches(it) },
+        )
+    }
 
     /** 打开指定无障碍服务，参数形如 `com.coda.mobileui/com.coda.mobileui.XxxService`。 */
     fun enableAccessibility(service: String): Result<String> {
@@ -95,7 +98,11 @@ object ShizukuShell {
         }
         // 直接 put 会覆盖整个列表，把用户在系统设置里开过的其它无障碍服务一起关掉；
         // 这里先读现有列表再追加，本应用已在列表里时不重复添加。
-        val list = enabledAccessibility()
+        // 读失败必须中止：把「读不到」当成「列表为空」会写掉用户已启用的其它服务。
+        val list =
+            readEnabledAccessibility().getOrElse {
+                return Result.failure(IllegalStateException("读取无障碍服务列表失败，已放弃写入", it))
+            }
         val merged = if (list.contains(service)) list else list + service
         return exec(
             "settings put secure enabled_accessibility_services '${merged.joinToString(":")}'; " +
@@ -113,7 +120,11 @@ object ShizukuShell {
         if (!COMPONENT.matches(service)) {
             return Result.failure(IllegalArgumentException("非法的服务组件名：$service"))
         }
-        val rest = enabledAccessibility().filter { it != service }
+        val current =
+            readEnabledAccessibility().getOrElse {
+                return Result.failure(IllegalStateException("读取无障碍服务列表失败，已放弃写入", it))
+            }
+        val rest = current.filter { it != service }
         val command =
             if (rest.isEmpty()) {
                 "settings put secure enabled_accessibility_services null; " +

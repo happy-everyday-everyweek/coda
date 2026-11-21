@@ -105,6 +105,26 @@ class LinuxEnv(
         private const val MODE_EXEC = 493 // 0755
         private const val MODE_FILE = 420 // 0644
         private const val MODE_PRIVATE = 384 // 0600
+
+        /**
+         * 符号链接是否仍落在解包目录内。
+         *
+         * 只做词法归一：绝对路径直接拒绝，`..` 逐段消解后比较前缀。
+         * 归档里的链接不需要先存在，所以不能靠 canonicalPath（它会跟随已存在的链接）。
+         *
+         * 放在 companion 里是为了能直接被单元测试覆盖，不需要构造带 Context 的实例。
+         */
+        internal fun symlinkStaysInside(
+            dest: File,
+            relative: String,
+            linkName: String,
+        ): Boolean {
+            if (linkName.isEmpty() || linkName.startsWith("/")) return false
+            val base = dest.absolutePath.trimEnd('/')
+            val parent = File(dest, relative).parentFile?.absolutePath ?: base
+            val resolved = java.nio.file.Paths.get(parent, linkName).normalize().toString()
+            return resolved == base || resolved.startsWith("$base/")
+        }
     }
 
     val home: File = File(ctx.filesDir, "linux")
@@ -608,24 +628,6 @@ class LinuxEnv(
             val padding = (512L - (payload % 512L)) % 512L
             if (padding > 0) skipExactly(input, padding, buffer)
         }
-    }
-
-    /**
-     * 符号链接是否仍落在解包目录内。
-     *
-     * 只做词法归一：绝对路径直接拒绝，`..` 逐段消解后比较前缀。
-     * 归档里的链接不需要先存在，所以不能靠 canonicalPath（它会跟随已存在的链接）。
-     */
-    private fun symlinkStaysInside(
-        dest: File,
-        relative: String,
-        linkName: String,
-    ): Boolean {
-        if (linkName.isEmpty() || linkName.startsWith("/")) return false
-        val base = dest.absolutePath.trimEnd('/')
-        val parent = File(dest, relative).parentFile?.absolutePath ?: base
-        val resolved = java.nio.file.Paths.get(parent, linkName).normalize().toString()
-        return resolved == base || resolved.startsWith("$base/")
     }
 
     private fun readBlock(
