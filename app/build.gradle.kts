@@ -85,6 +85,10 @@ android {
     lint {
         // targetSdk 固定 28 是本项目的有意选择，按项关掉这条政策告警，其余致命检查保留。
         disable += "ExpiredTargetSdkVersion"
+        // 文本报告落到稳定路径：AGP 内部的 lint_intermediate_text_report 目录结构
+        // 随版本变化，tools/lint.sh 按那个路径找报告会失效。
+        textReport = true
+        textOutput = rootProject.file("build/lint-reports/android-lint.txt")
     }
     androidResources {
         // 网关程序与插件是不压缩的二进制：被 AAPT 再压一遍只会带来两个坏处——
