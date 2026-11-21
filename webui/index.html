@@ -43,11 +43,12 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const list = $('list'), input = $('input');
-let lastCount = -1, running = false;
+let lastCount = -1, lastSig = '', running = false;
 
 function render(state) {
   running = !!state.running;
-  $('dot').classList.toggle('on', true);
+  // 指示灯跟着真实状态走：之前恒为 on，断线时仍是绿的，等于没有指示。
+  $('dot').classList.toggle('on', state.kernelReady !== false);
   // 内核没起来时动作会被延后，必须显式告知，否则点了发送没反应像坏了。
   if (state.kernelReady === false) {
     $('state').textContent = '内核启动中…';
@@ -57,44 +58,76 @@ function render(state) {
   $('btnSend').style.display = running ? 'none' : '';
   $('btnStop').style.display = running ? '' : 'none';
   const msgs = state.messages || [];
-  if (msgs.length === lastCount && !running) return; // 无新消息且不运行时跳过重绘
+  const lastText = msgs.length ? (msgs[msgs.length - 1].text || '') : '';
+  // 流式输出时条数不变、最后一条文本在变：只看条数会把回答的结尾整段吞掉。
+  const sig = msgs.length + ':' + lastText.length + ':' + lastText.slice(-32);
+  if (sig === lastSig && !running) return; // 内容没变且不运行时跳过重绘
+  const grew = msgs.length !== lastCount;
+  lastSig = sig;
   lastCount = msgs.length;
-  list.innerHTML = '';
+
+  // 只有用户原本就在底部附近时才跟随；正在往上翻历史时不要把他拉回来。
+  const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
   if (msgs.length === 0) {
     list.innerHTML = '<div class="empty">暂无消息，发送第一条开始对话</div>';
     return;
   }
-  for (const m of msgs) {
-    const div = document.createElement('div');
-    div.className = 'msg ' + (m.role === 'user' ? 'user' : 'assistant');
-    div.textContent = m.text || '';
-    list.appendChild(div);
+  if (!grew && list.lastElementChild) {
+    // 条数没变：只改最后一条的文本，避免整表重建把选中的文字和滚动位置一起冲掉。
+    list.lastElementChild.textContent = lastText;
+  } else {
+    list.innerHTML = '';
+    for (const m of msgs) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + (m.role === 'user' ? 'user' : 'assistant');
+      div.textContent = m.text || '';
+      list.appendChild(div);
+    }
   }
-  list.scrollTop = list.scrollHeight;
+  if (atBottom) list.scrollTop = list.scrollHeight;
 }
 
 async function poll() {
   try {
     const r = await fetch('/api/state', { cache: 'no-store' });
     if (r.ok) render(await r.json());
-  } catch { $('state').textContent = '连接断开，重试中…'; }
+  } catch {
+    $('dot').classList.remove('on');
+    $('state').textContent = '连接断开，重试中…';
+  }
+}
+
+/** 失败时把内容放回输入框；用户已经重新输入时不要覆盖。 */
+function restore(text) {
+  if (!input.value.trim()) input.value = text;
 }
 
 async function send() {
+  // 运行中直接返回：之前按 Enter 能绕过隐藏的发送按钮，服务端拒绝时内容已经被清空。
+  if (running) return;
   const text = input.value.trim();
   if (!text) return;
-  input.value = '';
   try {
     const r = await fetch('/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
-    const j = await r.json();
-    if (j.error) { alert(j.error); return; }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) {
+      alert(j.error || ('发送失败（HTTP ' + r.status + '）'));
+      restore(text);
+      return;
+    }
+    // 成功后才清空：失败时上面已经把原文放回输入框。
+    input.value = '';
     lastCount = -1; // 立即刷新
+    lastSig = '';
     poll();
-  } catch { alert('发送失败'); }
+  } catch {
+    alert('发送失败');
+    restore(text);
+  }
 }
 
 async function stop() {
@@ -105,7 +138,11 @@ async function stop() {
 $('btnSend').onclick = send;
 $('btnStop').onclick = stop;
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  // 中文输入法里 Enter 是“上屏候选词”，此时不能当成发送。
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    send();
+  }
 });
 // 自适应轮询：运行中 1.5s、空闲 3s。不能写 setInterval(poll, running ? 1500 : 3000)
 // ——那个表达式的 running 在定义时就固定了，永远不会变。
