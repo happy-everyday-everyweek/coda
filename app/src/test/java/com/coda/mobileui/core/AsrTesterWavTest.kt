@@ -81,7 +81,8 @@ class AsrTesterWavTest {
 
     @Test
     fun returnsRawBytesWhenNotRiff() {
-        val raw = byteArrayOf(1, 2, 3, 4, 5)
+        // 至少 12 字节才会走到「不是 RIFF 就当裸 PCM」的分支。
+        val raw = ByteArray(16) { it.toByte() }
         assertArrayEquals(raw, parse(raw))
     }
 
