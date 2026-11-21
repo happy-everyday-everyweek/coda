@@ -212,7 +212,7 @@ object ArchiveKit {
         }.getOrElse { emptyList() }
     }
 
-    private fun readZipText(
+    internal fun readZipText(
         file: File,
         path: String,
         maxBytes: Long,
@@ -221,19 +221,20 @@ object ArchiveKit {
             ZipFile(file).use { zf ->
                 val e = zf.getEntry(path) ?: return null
                 if (e.size > maxBytes) return null
-                zf.getInputStream(e).bufferedReader(Charsets.UTF_8).use { reader ->
-                    // 按字符读上限，避免 e.size 不可靠（流式 zip）时一次性读爆
-                    val sb = StringBuilder()
-                    val buf = CharArray(8192)
+                zf.getInputStream(e).use { input ->
+                    // 按字节计上限：原来数的是字符数，UTF-8 中文一个字符占三字节，
+                    // 实际读进内存的量是上限的三倍。
+                    val out = java.io.ByteArrayOutputStream()
+                    val buf = ByteArray(8192)
                     var total = 0L
                     while (true) {
-                        val n = reader.read(buf)
+                        val n = input.read(buf)
                         if (n <= 0) break
                         total += n
                         if (total > maxBytes) return null
-                        sb.append(buf, 0, n)
+                        out.write(buf, 0, n)
                     }
-                    sb.toString()
+                    out.toByteArray().toString(Charsets.UTF_8)
                 }
             }
         }.getOrNull()
@@ -304,11 +305,24 @@ object ArchiveKit {
         maxBytes: Long,
     ): String? =
         runCatching {
-            val result = env.exec(listOf("tar", "-xOf", file.absolutePath, path))
+            val member = path.takeIf { isSafeMember(it) } ?: return null
+            // 输出上限要在这里就交给 exec：等它把整个成员读成字符串再判断，
+            // 一个几百 MB 的成员已经把内存吃掉了。
+            val limit = (maxBytes + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            val result = env.exec(listOf("tar", "-xOf", file.absolutePath, member), maxOutputBytes = limit)
             if (!result.ok) return null
             if (result.output.length > maxBytes) return null
             result.output
         }.getOrNull()
+
+    /**
+     * 成员名能否直接交给 tar。
+     *
+     * 以 `-` 开头会被 tar 当成选项（例如 `--checkpoint-action=exec=…` 这类可以直接
+     * 执行命令）；换行能让一个名字在输出/日志里伪装成两行。这两种都拒绝。
+     */
+    internal fun isSafeMember(path: String): Boolean =
+        path.isNotEmpty() && !path.startsWith("-") && !path.contains('\n') && !path.contains('\r')
 
     private fun normalizeDir(path: String): String {
         if (path.isEmpty()) return ""

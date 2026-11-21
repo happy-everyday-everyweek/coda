@@ -122,7 +122,11 @@ class LinuxEnv(
             if (linkName.isEmpty() || linkName.startsWith("/")) return false
             val base = dest.absolutePath.trimEnd('/')
             val parent = File(dest, relative).parentFile?.absolutePath ?: base
-            val resolved = java.nio.file.Paths.get(parent, linkName).normalize().toString()
+            val resolved =
+                java.nio.file.Paths
+                    .get(parent, linkName)
+                    .normalize()
+                    .toString()
             return resolved == base || resolved.startsWith("$base/")
         }
     }
@@ -465,6 +469,8 @@ class LinuxEnv(
     fun exec(
         guestArgv: List<String>,
         timeoutMs: Long = 60_000L,
+        // 最多读回多少字节；超出部分被丢弃，命令本身继续跑完。
+        maxOutputBytes: Int = Int.MAX_VALUE,
     ): ShellResult =
         try {
             val process = builder(guestArgv).redirectErrorStream(true).start()
@@ -476,7 +482,27 @@ class LinuxEnv(
                 Thread {
                     outHolder[0] =
                         runCatching {
-                            process.inputStream.use { String(it.readBytes(), Charsets.UTF_8) }
+                            val buf = ByteArray(64 * 1024)
+                            val out = java.io.ByteArrayOutputStream()
+                            var dropped = false
+                            // 超限后仍要把流读空：停在中间会让子进程因管道写满而阻塞，
+                            // 调用方一直等到超时。
+                            process.inputStream.use { input ->
+                                while (true) {
+                                    val n = input.read(buf)
+                                    if (n <= 0) break
+                                    val room = maxOutputBytes - out.size()
+                                    if (room <= 0) {
+                                        dropped = true
+                                        continue
+                                    }
+                                    val take = minOf(n, room)
+                                    out.write(buf, 0, take)
+                                    if (take < n) dropped = true
+                                }
+                            }
+                            if (dropped) out.write("\n[output truncated]".toByteArray())
+                            out.toByteArray().toString(Charsets.UTF_8)
                         }.getOrDefault("")
                 }.apply { isDaemon = true }
             reader.start()

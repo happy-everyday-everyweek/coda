@@ -23,7 +23,9 @@ object AgentPrompt {
     fun read(file: File): String =
         try {
             if (file.isFile) file.readText() else ""
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
+            // 读不出来按「没设置」处理，但不能静默：权限、损坏都要能查。
+            AppLog.w(TAG, "读取提示词失败 ${file.name}：${e.message ?: e.javaClass.simpleName}")
             ""
         }
 
@@ -43,18 +45,36 @@ object AgentPrompt {
                 if (file.exists()) file.delete()
             } else {
                 file.parentFile?.mkdirs()
-                file.writeText(body)
+                // 先写临时文件再改名：直接 writeText 遇到进程中断会留下半截内容，
+                // 上一次的提示词也一起没了。
+                if (!writeAtomic(file, body)) throw java.io.IOException("替换 ${file.name} 失败")
             }
             null
-        } catch (t: Throwable) {
-            t.message ?: "写入失败"
+        } catch (e: Exception) {
+            e.message ?: "写入失败"
         }
+
+    /** 先写同目录临时文件再改名，返回是否成功。 */
+    internal fun writeAtomic(
+        target: File,
+        text: String,
+    ): Boolean {
+        val tmp = File(target.parentFile, target.name + "." + System.nanoTime() + ".tmp")
+        return try {
+            tmp.writeText(text)
+            tmp.renameTo(target)
+        } finally {
+            if (tmp.exists()) runCatching { tmp.delete() }
+        }
+    }
+
+    private const val TAG = "AgentPrompt"
 
     /** 状态摘要：未设置 / 多少字节多少行。 */
     fun summary(file: File): String {
         if (!file.isFile) return "未设置"
         val size = file.length()
         val lines = read(file).count { it == '\n' } + 1
-        return "${size} 字节 · ${lines} 行"
+        return "$size 字节 · $lines 行"
     }
 }
