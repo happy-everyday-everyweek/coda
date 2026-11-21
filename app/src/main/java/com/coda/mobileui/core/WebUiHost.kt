@@ -11,6 +11,9 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.URL
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipInputStream
 
@@ -49,9 +52,23 @@ object WebUiHost {
 
     private var serverSocket: ServerSocket? = null
     private var running = AtomicBoolean(false)
+    @Volatile
     private var boundPort: Int = 0
+    @Volatile
     private var lastError: String? = null
+    @Volatile
     private var lastStatus: String = "未启动"
+
+    /** 连接处理池：固定 worker + 有界队列，拒绝时回 503，避免局域网把线程打爆。 */
+    private var connPool: ThreadPoolExecutor? = null
+
+    private const val MAX_HEADER_LINE = 8 * 1024
+    private const val MAX_HEADER_COUNT = 100
+    private const val MAX_HEADER_BYTES = 32 * 1024
+    private const val MAX_BODY_BYTES = 1 * 1024 * 1024
+    private const val MAX_UNZIP_BYTES = 200L * 1024 * 1024
+    private const val MAX_UNZIP_ENTRIES = 5_000
+    private const val MAX_UNZIP_ENTRY_BYTES = 50L * 1024 * 1024
 
     fun status(): String = lastStatus
 
@@ -89,6 +106,7 @@ object WebUiHost {
         var found = false
         var assetUrl: String? = null
         var assetSize = 0L
+        var assetDigest = ""
         var tag = ""
         for (i in 0 until releases.length()) {
             val rel = releases.optJSONObject(i) ?: continue
@@ -100,6 +118,7 @@ object WebUiHost {
                     tag = rel.optString("tag_name")
                     assetUrl = a.optString("url")
                     assetSize = a.optLong("size")
+                    assetDigest = a.optString("digest")
                     break
                 }
             }
@@ -117,7 +136,19 @@ object WebUiHost {
             runCatching { zip.delete() }
             return dlError
         }
-
+        // 供应链校验：大小与 GitHub 给出的 digest 必须一致，否则不进入解压。
+        if (assetSize > 0 && zip.length() != assetSize) {
+            zip.delete()
+            return "下载不完整：期望 $assetSize 字节，实际 ${zip.length()} 字节"
+        }
+        if (assetDigest.startsWith("sha256:")) {
+            val expected = assetDigest.removePrefix("sha256:")
+            val actual = sha256(zip)
+            if (!actual.equals(expected, ignoreCase = true)) {
+                zip.delete()
+                return "下载文件校验失败（sha256 不匹配）"
+            }
+        }
         onProgress("解压…")
         val staging = File(root(ctx), "dist.staging")
         deleteRecursive(staging)
@@ -135,17 +166,40 @@ object WebUiHost {
         val finalDir = distDir(ctx)
         val backup = File(root(ctx), "dist.bak")
         deleteRecursive(backup)
-        if (finalDir.exists()) finalDir.renameTo(backup)
+        if (finalDir.exists() && !finalDir.renameTo(backup)) {
+            deleteRecursive(staging)
+            return "更新失败：无法备份旧 dist"
+        }
         if (!realRoot.renameTo(finalDir)) {
-            if (backup.exists()) backup.renameTo(finalDir)
-            return "写入 assets 失败（存储空间不足？）"
+            val rolledBack = if (backup.exists()) backup.renameTo(finalDir) else true
+            deleteRecursive(staging)
+            return if (rolledBack) "更新失败：无法写入 dist，已回滚旧版本" else "更新失败：写入与回滚都失败，需重新下载"
         }
         deleteRecursive(backup)
         deleteRecursive(staging)
-        versionFile(ctx).writeText(tag)
+        // 版本戳是“下载完成”的唯一依据：写不进去就不能当成功。
+        val stamped = runCatching { versionFile(ctx).writeText(tag) }.isSuccess
+        if (!stamped) return "更新失败：写入版本号失败"
         onProgress("就绪（$tag）")
         return null
     }
+
+    /** 计算文件 sha256，用于 Release digest 校验。 */
+    private fun sha256(file: File): String =
+        try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        } catch (_: Throwable) {
+            ""
+        }
 
     /** 在解压目录里定位真正包含 index.html 的根（容忍 zip 套一层目录）。 */
     private fun locateIndexRoot(dir: File): File? {
@@ -164,6 +218,7 @@ object WebUiHost {
     /**
      * 启动 HTTP 服务。资产必须已就位（[isDownloaded]），否则返回失败原因。
      */
+    @Synchronized
     fun start(ctx: Context): String? {
         if (isRunning()) return null
         if (!isDownloaded(ctx)) {
@@ -173,11 +228,22 @@ object WebUiHost {
         return try {
             val ss = ServerSocket()
             ss.reuseAddress = true
-            ss.bind(InetSocketAddress(0), 16) // 端口 0 = 系统分配
+            ss.bind(InetSocketAddress(0), 16)
+            val pool =
+                ThreadPoolExecutor(
+                    4,
+                    8,
+                    60L,
+                    TimeUnit.SECONDS,
+                    ArrayBlockingQueue(64),
+                    { runnable -> Thread(runnable, "coda-webui-conn").apply { isDaemon = true } },
+                    ThreadPoolExecutor.AbortPolicy(),
+                )
             serverSocket = ss
+            connPool = pool
             boundPort = ss.localPort
             running.set(true)
-            Thread({ acceptLoop(ss, ctx.applicationContext) }, "coda-webui-http").apply {
+            Thread({ acceptLoop(ss, pool, ctx.applicationContext) }, "coda-webui-http").apply {
                 isDaemon = true
                 start()
             }
@@ -190,14 +256,19 @@ object WebUiHost {
             lastStatus = "启动失败"
             runCatching { serverSocket?.close() }
             serverSocket = null
+            connPool?.shutdownNow()
+            connPool = null
             "端口绑定失败：$lastError"
         }
     }
 
+    @Synchronized
     fun stop() {
         running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
+        connPool?.shutdownNow()
+        connPool = null
         boundPort = 0
         lastStatus = "已停止"
         AppLog.i("WebUi", "HTTP 服务已停止")
@@ -220,6 +291,7 @@ object WebUiHost {
 
     private fun acceptLoop(
         ss: ServerSocket,
+        pool: ThreadPoolExecutor,
         appCtx: Context,
     ) {
         while (running.get()) {
@@ -229,9 +301,17 @@ object WebUiHost {
                 } catch (_: Throwable) {
                     break
                 }
-            Thread({ runCatching { handle(socket, appCtx) } }, "coda-webui-conn").apply {
-                isDaemon = true
-                start()
+            try {
+                pool.execute { runCatching { handle(socket, appCtx) } }
+            } catch (_: java.util.concurrent.RejectedExecutionException) {
+                // 队列满时直接回 503 并关闭，形成背压，而不是无限建线程。
+                runCatching {
+                    socket.getOutputStream().write(
+                        "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                            .toByteArray(),
+                    )
+                }
+                runCatching { socket.close() }
             }
         }
         running.set(false)
@@ -265,20 +345,44 @@ object WebUiHost {
         socket.use { s ->
             val input = BufferedInputStream(s.getInputStream())
             val output = s.getOutputStream()
-            val requestLine = readLine(input) ?: return
+            val requestLine =
+                try {
+                    readLine(input) ?: return
+                } catch (_: HeaderTooLarge) {
+                    respondJson(output, JSONObject().put("error", "请求头过大"), 431)
+                    return
+                }
             val parts = requestLine.trim().split(" ")
             if (parts.size < 2) return
             val method = parts[0].uppercase()
             val rawPath = parts[1]
-            // 读完头部（Content-Length 需要它）
+            // 读完头部（Content-Length 需要它），同时限制行数、总字节与单行长度。
             var contentLength = 0
+            var headerCount = 0
+            var headerBytes = 0
             while (true) {
-                val line = readLine(input) ?: return
+                val line =
+                    try {
+                        readLine(input) ?: return
+                    } catch (_: HeaderTooLarge) {
+                        respondJson(output, JSONObject().put("error", "请求头过大"), 431)
+                        return
+                    }
                 if (line.isEmpty()) break
+                headerCount++
+                headerBytes += line.length
+                if (headerCount > MAX_HEADER_COUNT || headerBytes > MAX_HEADER_BYTES) {
+                    respondJson(output, JSONObject().put("error", "请求头过大"), 431)
+                    return
+                }
                 val idx = line.indexOf(':')
                 if (idx <= 0) continue
                 val name = line.substring(0, idx).trim().lowercase()
                 if (name == "content-length") contentLength = line.substring(idx + 1).trim().toIntOrNull() ?: 0
+            }
+            if (contentLength > MAX_BODY_BYTES) {
+                respondJson(output, JSONObject().put("error", "请求体过大"), 413)
+                return
             }
             val path = rawPath.substringBefore('?')
             val body =
@@ -311,13 +415,30 @@ object WebUiHost {
                         respondJson(output, JSONObject().put("error", "Agent 正在运行中，请先停止"))
                         return
                     }
-                    // 发送结果异步回来：失败的真原因必须落日志，否则网页端只看到"已提交"。
-                    withKernel(appCtx) {
-                        zc.send(msg) { ok, err ->
-                            if (!ok) AppLog.w("WebUi", "Web 发送失败：$err")
-                        }
+                    // 内核未就绪时不要假装成功：调用方拿到 503 才能等待或重试。
+                    if (!zc.runtime.isRunning) {
+                        respondJson(
+                            output,
+                            JSONObject().put("error", "内核未就绪").put("kernelReady", false),
+                            503,
+                        )
+                        return
                     }
-                    respondJson(output, JSONObject().put("ok", true))
+                    val latch = java.util.concurrent.CountDownLatch(1)
+                    var sent = false
+                    var failure = ""
+                    zc.send(msg) { ok, err ->
+                        sent = ok
+                        failure = err
+                        latch.countDown()
+                    }
+                    if (!latch.await(30, TimeUnit.SECONDS)) {
+                        respondJson(output, JSONObject().put("error", "发送超时"), 504)
+                    } else if (sent) {
+                        respondJson(output, JSONObject().put("ok", true))
+                    } else {
+                        respondJson(output, JSONObject().put("error", failure.ifEmpty { "发送失败" }), 502)
+                    }
                 }
 
                 method == "POST" && path == "/api/stop" -> {
@@ -355,9 +476,9 @@ object WebUiHost {
 
                 method == "GET" && path.startsWith("/api/messages") -> {
                     val zc = ZController.get(appCtx)
-                    val sid =
-                        path.removePrefix("/api/messages/").takeIf { it.isNotEmpty() }
-                            ?: zc.currentSessionId
+                    // 无尾斜杠时 removePrefix 不命中，旧写法会把整个路径当 sid，永远查不到消息。
+                    val tail = path.removePrefix("/api/messages").trimStart('/')
+                    val sid = tail.ifEmpty { zc.currentSessionId }
                     val arr = JSONArray()
                     // 非当前会话先回空：客户端用 /api/session/open 切换后由轮询拉到。
                     // 消息列表同样用快照迭代，避免主线程并发写导致 CME。
@@ -486,13 +607,22 @@ object WebUiHost {
         respond(output, json.toString().toByteArray(Charsets.UTF_8), "application/json; charset=utf-8", code)
     }
 
-    private fun readLine(input: InputStream): String? {
+    /** 请求头超限：由 handle 转成 431 并断开，不再继续读。 */
+    private class HeaderTooLarge : Exception()
+
+    private fun readLine(
+        input: InputStream,
+        limit: Int = MAX_HEADER_LINE,
+    ): String? {
         val sb = StringBuilder()
         while (true) {
             val b = input.read()
             if (b < 0) return if (sb.isEmpty()) null else sb.toString()
             if (b == '\n'.code) break
-            if (b != '\r'.code) sb.append(b.toChar())
+            if (b != '\r'.code) {
+                if (sb.length >= limit) throw HeaderTooLarge()
+                sb.append(b.toChar())
+            }
         }
         return sb.toString()
     }
@@ -571,10 +701,14 @@ object WebUiHost {
     ): String? =
         try {
             target.mkdirs()
+            var total = 0L
+            var entries = 0
             ZipInputStream(java.io.FileInputStream(zip).buffered()).use { zis ->
                 val root = target.canonicalFile
                 while (true) {
                     val e = zis.nextEntry ?: break
+                    entries++
+                    if (entries > MAX_UNZIP_ENTRIES) throw IllegalStateException("压缩包条目过多")
                     val out = File(root, e.name).canonicalFile
                     if (!out.path.startsWith(root.path + File.separator)) {
                         zis.closeEntry()
@@ -584,13 +718,27 @@ object WebUiHost {
                         out.mkdirs()
                     } else {
                         out.parentFile?.mkdirs()
-                        FileOutputStream(out).use { zis.copyTo(it) }
+                        var entryBytes = 0L
+                        FileOutputStream(out).use { output ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val read = zis.read(buffer)
+                                if (read < 0) break
+                                entryBytes += read
+                                total += read
+                                if (entryBytes > MAX_UNZIP_ENTRY_BYTES || total > MAX_UNZIP_BYTES) {
+                                    throw IllegalStateException("压缩包解压后过大")
+                                }
+                                output.write(buffer, 0, read)
+                            }
+                        }
                     }
                     zis.closeEntry()
                 }
             }
             null
         } catch (t: Throwable) {
+            runCatching { deleteRecursive(target) }
             t.message ?: "解压失败"
         }
 

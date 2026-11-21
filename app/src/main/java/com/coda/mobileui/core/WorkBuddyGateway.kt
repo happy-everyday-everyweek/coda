@@ -33,6 +33,9 @@ object WorkBuddyGateway {
     private const val PROBE_TIMEOUT_MS = 1_200
     private const val PROBE_INTERVAL_MS = 400L
 
+    /** 网关日志上限：超限后不再追加，避免长期运行把磁盘写满。 */
+    private const val MAX_LOG_BYTES = 2L * 1024 * 1024
+
     /** 网关对下游的密钥；只在本机回环使用。 */
     private const val API_KEY = "coda-workbuddy-key"
 
@@ -52,10 +55,20 @@ object WorkBuddyGateway {
     private const val SIZE = 8_388_760L
 
     private var process: Process? = null
+    @Volatile
     private var booting = false
+    @Volatile
     private var activePort = DEFAULT_PORT
 
+    /** 守护生命周期字段的检查与置位；启动耗时长，不能整段持锁。 */
+    private val stateLock = Any()
+
+    /** 启动期间收到过停止请求：探针返回后必须放弃启动。 */
+    @Volatile
+    private var stopRequested = false
+
     /** 最近一次失败原因，供界面直接显示。 */
+    @Volatile
     var lastError: String? = null
         private set
 
@@ -117,12 +130,14 @@ object WorkBuddyGateway {
                 runCatching { android.system.Os.chmod(target.absolutePath, 493) }
             }
             if (target.canExecute()) return true
-            lastError = "网关程序无法执行：${target.absolutePath}"
-            onProgress(lastError!!)
+            val msg = "网关程序无法执行：${target.absolutePath}"
+            lastError = msg
+            onProgress(msg)
             return false
         }
-        lastError = "无法获取网关程序（安装包内缺失且下载失败）"
-        onProgress(lastError!!)
+        val msg = "无法获取网关程序（安装包内缺失且下载失败）"
+        lastError = msg
+        onProgress(msg)
         return false
     }
 
@@ -142,20 +157,34 @@ object WorkBuddyGateway {
         port: Int,
     ): Boolean {
         val file = configFor(ctx)
-        if (!file.isFile || file.length() == 0L) {
-            // 先让程序生成推荐配置：它会写 api_key 并记录在文件里。
-            val generated = generateDefaultConfig(ctx, port)
-            if (!generated) return false
+        // 文件存在但内容损坏时也必须能自愈：只看长度会让坏配置永久卡住启动。
+        var root: org.json.JSONObject? =
+            runCatching { if (file.isFile && file.length() > 0L) org.json.JSONObject(file.readText()) else null }
+                .getOrNull()
+        if (root == null) {
+            if (!generateDefaultConfig(ctx, port)) return false
+            root =
+                runCatching { org.json.JSONObject(file.readText()) }.getOrNull()
+                    ?: run {
+                        lastError = "写配置失败：默认配置不可解析"
+                        return false
+                    }
         }
         return try {
-            val text = file.readText()
-            val root = org.json.JSONObject(text)
-            root.put("listen", ":$port")
+            root.put("listen", "127.0.0.1:$port")
             root.put("api_key", API_KEY)
             root.put("auth_dir", guestPath(ctx, authDirFor(ctx)))
             root.put("state_file", guestPath(ctx, File(guestRoot(ctx), "data/state.json")))
-            // 面板：本机回环用，留着方便排查；不对外暴露。
-            file.writeText(root.toString(2))
+            // state_file 的父目录必须先存在，否则首次运行写状态会失败。
+            File(guestRoot(ctx), "data").mkdirs()
+            // 原子替换：中断时不会留下半个 JSON，旧配置仍可用。
+            val tmp = File(file.parentFile, "config.json.tmp")
+            tmp.writeText(root.toString(2))
+            if (!tmp.renameTo(file)) {
+                tmp.delete()
+                lastError = "写配置失败：无法替换 config.json"
+                return false
+            }
             true
         } catch (t: Throwable) {
             lastError = "写配置失败：${t.message ?: t.javaClass.simpleName}"
@@ -194,10 +223,7 @@ object WorkBuddyGateway {
                 if (!proc.isAlive) break
                 Thread.sleep(200)
             }
-            runCatching {
-                proc.destroy()
-                if (!proc.waitFor(2, TimeUnit.SECONDS)) proc.destroyForcibly()
-            }
+            runCatching { terminate(proc) }
             if (!tmp.isFile || tmp.length() < 100) {
                 lastError = "网关未能生成默认配置"
                 return false
@@ -224,98 +250,117 @@ object WorkBuddyGateway {
         ctx: Context,
         onProgress: (String) -> Unit = {},
     ): Boolean {
-        lastError = null
-        if (isRunning) return true
-        if (booting) return false
-
-        if (!ensureInstalled(ctx, onProgress)) return false
-
-        val port =
-            pickPort() ?: run {
-                lastError = "端口被占用（$DEFAULT_PORT）"
-                onProgress(lastError!!)
+        // 检查与置位放在同一临界区：否则两个入口都能通过检查，各起一个网关。
+        synchronized(stateLock) {
+            if (isRunning) return true
+            if (booting) {
+                lastError = "网关正在启动，请稍后重试"
                 return false
             }
-        if (!ensureConfig(ctx, port)) {
-            lastError?.let(onProgress)
-            return false
-        }
-        activePort = port
-
-        onProgress("启动 WorkBuddy 网关…")
-        val env = LinuxEnv(ctx)
-        val argv =
-            listOf(
-                guestPath(ctx, binaryFor(ctx)),
-                "-config",
-                guestPath(ctx, configFor(ctx)),
-            )
-        // 启动前的完整现场：路径、端口、配置内容都记下来。之前这条链路几乎
-        // 没有日志，出问题时只能看到界面上「启动网关…」停住，无从判断是
-        // 二进制没落盘、proot 起不来、还是进程起了但没监听。
-        AppLog.i(
-            "WorkBuddyGateway",
-            "启动前 argv=$argv port=$port " +
-                "bin=${binaryFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()},exec=${it.canExecute()})" }} " +
-                "cfg=${configFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()})" }} " +
-                "rootfs=${LinuxEnv(ctx).rootfs.absolutePath}",
-        )
-        configFor(ctx).takeIf { it.isFile }?.let {
-            AppLog.i("WorkBuddyGateway", "config=${runCatching { it.readText() }.getOrDefault("").take(600)}")
-        }
-        return try {
             booting = true
+            stopRequested = false
+            lastError = null
+        }
+        try {
+            if (!ensureInstalled(ctx, onProgress)) return false
+            // 安装/配置期间用户可能已经点了停止：这里必须放弃启动。
+            if (stopRequested) return false
+            val port =
+                pickPort() ?: run {
+                    val msg = "端口被占用（$DEFAULT_PORT）"
+                    lastError = msg
+                    onProgress(msg)
+                    return false
+                }
+            if (!ensureConfig(ctx, port)) {
+                lastError?.let(onProgress)
+                return false
+            }
+            if (stopRequested) return false
+            activePort = port
+            onProgress("启动 WorkBuddy 网关…")
+            val env = LinuxEnv(ctx)
+            val argv =
+                listOf(
+                    guestPath(ctx, binaryFor(ctx)),
+                    "-config",
+                    guestPath(ctx, configFor(ctx)),
+                )
+            AppLog.i(
+                "WorkBuddyGateway",
+                "启动前 argv=$argv port=$port " +
+                    "bin=${binaryFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()},exec=${it.canExecute()})" }} " +
+                    "cfg=${configFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()})" }} " +
+                    "rootfs=${LinuxEnv(ctx).rootfs.absolutePath}",
+            )
+            configFor(ctx).takeIf { it.isFile }?.let {
+                AppLog.i("WorkBuddyGateway", "config=${runCatching { it.readText() }.getOrDefault("").take(600)}")
+            }
             val log = logFor(ctx)
             log.parentFile?.mkdirs()
             log.writeText("")
             val started = System.currentTimeMillis()
             val proc = env.builder(argv, mapOf("HOME" to "/root")).start()
             process = proc
-            // 不记 pid：Process.toHandle() 要 API 26，而本项目的 minSdk 更低，
-            // 直接调会编译不过；为一行日志加版本分支不值得。进程是否活着
-            // 由下面的探活与 isAlive 判断，pid 本身不提供额外信息。
             AppLog.i("WorkBuddyGateway", "进程已拉起")
             pump(proc, log)
-
+            // 拉起后立刻检查停止请求：避免用户已关闭却继续等待 30 秒探针。
+            if (stopRequested) {
+                terminate(proc)
+                process = null
+                return false
+            }
             val ready = awaitReady(port)
             val elapsed = System.currentTimeMillis() - started
             if (!ready) {
                 val tail = logTail(log)
-                val alive = process?.isAlive == true
-                runCatching {
-                    process?.destroy()
-                    process?.waitFor(2, TimeUnit.SECONDS)
-                }
+                val alive = proc.isAlive
+                terminate(proc)
                 process = null
-                lastError = (if (alive) "网关启动超时（30 秒内未应答）" else "网关进程退出") + tail
+                val msg = (if (alive) "网关启动超时（30 秒内未应答）" else "网关进程退出") + tail
+                lastError = msg
                 AppLog.i(
                     "WorkBuddyGateway",
                     "启动失败：alive=$alive elapsed=${elapsed}ms exit=${runCatching { proc.exitValue() }.getOrNull()} " +
-                        "lastError=$lastError",
+                        "lastError=$msg",
                 )
-                onProgress(lastError!!)
+                onProgress(msg)
                 return false
             }
             AppLog.i("WorkBuddyGateway", "就绪：port=$port 耗时 ${elapsed}ms")
-            true
+            return true
         } catch (t: Throwable) {
-            runCatching { process?.destroy() }
+            process?.let { terminate(it) }
             process = null
-            lastError = "网关启动失败：${t.message ?: t.javaClass.simpleName}"
-            AppLog.e("WorkBuddyGateway", "启动抛异常：$lastError", t)
-            onProgress(lastError!!)
-            false
+            val msg = "网关启动失败：${t.message ?: t.javaClass.simpleName}"
+            lastError = msg
+            AppLog.e("WorkBuddyGateway", "启动抛异常：$msg", t)
+            onProgress(msg)
+            return false
         } finally {
-            booting = false
+            synchronized(stateLock) { booting = false }
         }
     }
 
     fun stop() {
-        val proc = process ?: return
-        process = null
+        val proc: Process?
+        synchronized(stateLock) {
+            // 启动中也要记录停止意图：否则探针完成后网关仍会起来并持续运行。
+            stopRequested = true
+            proc = process
+            process = null
+        }
+        if (proc != null) terminate(proc)
+    }
+
+    /** 先礼后兵地结束进程：强杀后也要等到真正退出，避免端口仍被占用。 */
+    private fun terminate(proc: Process) {
         runCatching {
             proc.destroy()
-            if (!proc.waitFor(3, TimeUnit.SECONDS)) proc.destroyForcibly()
+            if (!proc.waitFor(3, TimeUnit.SECONDS)) {
+                proc.destroyForcibly()
+                proc.waitFor(3, TimeUnit.SECONDS)
+            }
         }
     }
 
@@ -400,8 +445,11 @@ object WorkBuddyGateway {
         ) {
             Thread {
                 runCatching {
-                    run().bufferedReader().useLines { lines ->
-                        log.appendText(lines.joinToString("\n", postfix = "\n"))
+                    // 逐行写盘：整段 joinToString 会等到进程结束才落盘，失败时日志永远是空的。
+                    run().bufferedReader().forEachLine { line ->
+                        synchronized(log) {
+                            if (log.length() < MAX_LOG_BYTES) log.appendText(line + "\n")
+                        }
                     }
                 }
             }.apply {
