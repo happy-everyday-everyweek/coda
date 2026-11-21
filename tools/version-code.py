@@ -12,21 +12,21 @@
 
 ## 方案
 
-    versionCode = 距基准日的分钟数 * 2 + 渠道位
+    versionCode = 距基准日的秒数 * 2 + 渠道位
 
-  - `距基准日的分钟数` 单调递增，与真实时间一一对应：
+  - `距基准日的秒数` 单调递增，与真实时间一一对应：
     后发生的构建一定有更大的号，无论渠道。
   - `* 2 + 渠道位` 让渠道位成为最低位，两个渠道相差 1：
       dev  = 偶数（…0）
       正式 = 奇数（…1）
-    于是同一分钟内：正式版 > dev，dev 能升到正式版 ✓
-    而下一分钟：dev 一定大于上一分钟的正式版，dev 能覆盖正式版 ✓
+    于是同一秒内：正式版 > dev，dev 能升到正式版 ✓
+    而下一秒：dev 一定大于上一秒的正式版，dev 能覆盖正式版 ✓
     两个方向都成立，靠的就是「时间在高位、渠道在最低位」。
 
 ## 量级
 
-基准日取 2026-01-01。到 2026-10-25 约 298 天 = 429120 分钟，
-×2 ≈ 86 万，距离 21 亿还有 2400 倍余量，可用到 2029 年以后。
+基准日取 2026-01-01。到 2026-10-25 约 298 天 = 25,747,200 秒，
+×2 ≈ 5150 万，距离 21 亿还有 40 倍余量，可用到 2040 年以后。
 
 若将来余量不够，只需把基准日往后挪（EPOCH 常量），
 两个渠道同时挪，相对顺序不变。
@@ -61,11 +61,14 @@ def compute(channel: str, at: datetime.datetime) -> int:
         at = at.replace(tzinfo=datetime.timezone.utc)
 
     delta = at - EPOCH
-    minutes = int(delta.total_seconds() // 60)
-    if minutes < 0:
+    # 秒粒度：分钟粒度下，同一分钟内的两次构建会算出同一个 versionCode，
+    # 与文件头「后发生的构建一定有更大的号」自相矛盾。秒粒度把量级放大 60 倍，
+    # 到 2029 年仍只有约 1.9 亿，离 21 亿上限还有十倍余量。
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
         raise ValueError(f"时刻早于基准 {EPOCH.isoformat()}：{at.isoformat()}")
 
-    code = minutes * 2 + CHANNEL_BIT[channel]
+    code = seconds * 2 + CHANNEL_BIT[channel]
     if code > MAX_VERSION_CODE:
         raise ValueError(
             f"versionCode 溢出：{code} > {MAX_VERSION_CODE}。"
@@ -84,13 +87,14 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    at = (
-        datetime.datetime.fromisoformat(args.at.replace("Z", "+00:00"))
-        if args.at
-        else datetime.datetime.now(datetime.timezone.utc)
-    )
-
     try:
+        # --at 的解析也必须在 try 里：非法 ISO8601 会抛 ValueError，
+        # 放在外面用户只会看到一段 traceback，而不是一句 error。
+        at = (
+            datetime.datetime.fromisoformat(args.at.replace("Z", "+00:00"))
+            if args.at
+            else datetime.datetime.now(datetime.timezone.utc)
+        )
         print(compute(args.channel, at))
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)

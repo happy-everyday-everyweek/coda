@@ -119,8 +119,8 @@ jobs:
       - name: 重建内核二进制载荷
         run: tools/build-core-payload.sh
 
-      - name: 测试载荷校验脚本
-        run: python3 tools/test_verify_sea_payload.py
+      - name: 测试构建脚本
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
 
       - name: 核对内核载荷结构
         run: python3 tools/verify-sea-payload.py app/src/main/assets/core/zcode
