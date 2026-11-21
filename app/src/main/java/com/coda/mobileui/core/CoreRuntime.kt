@@ -58,7 +58,7 @@ class CoreRuntime(
     private val startSeq = AtomicInteger(0)
 
     private val nextId = AtomicInteger(1)
-    private val pending = ConcurrentHashMap<Int, (Boolean, JSONObject) -> Unit>()
+    private val pending = ConcurrentHashMap<String, (Boolean, JSONObject) -> Unit>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     lateinit var coreDir: File
@@ -88,6 +88,9 @@ class CoreRuntime(
     @Volatile
     private var logFile: File? = null
 
+    /** 日志落盘走后台批量写，不在调用线程（可能是主线程）上同步 IO。 */
+    private var logWriter: LogSink? = null
+
     val isRunning: Boolean
         get() = process?.isAlive == true
 
@@ -116,6 +119,26 @@ class CoreRuntime(
         }
     }
 
+    /**
+     * 复用前的低成本核对：清单里每一项都要在、且大小对得上。
+     *
+     * 只看 `.ready` 与 zcode 的话，用户清掉 `lib/` 或写入中断留下半截文件时，
+     * 内核会被直接启动进损坏状态。这里不做全量 sha256——每次启动都读几十 MB
+     * 代价太大；存在性与大小足以挡住「缺文件 / 半截文件」这两类真实故障。
+     *
+     * @return null 表示可以复用；否则是不能复用的原因。
+     */
+    private fun reuseBlocker(manifest: Map<String, Pair<Long, String>>): String? {
+        for ((name, expected) in manifest) {
+            val file = File(coreDir, name)
+            if (!file.isFile) return "$name 缺失"
+            if (file.length() != expected.first) {
+                return "$name 大小 ${file.length()} 与清单 ${expected.first} 不符"
+            }
+        }
+        return null
+    }
+
     /** 解包内置载荷（幂等）。 */
     fun ensureExtracted(): Boolean {
         if (!::coreDir.isInitialized) initDirs()
@@ -125,10 +148,15 @@ class CoreRuntime(
         val manifest = payloadManifest
         val stamp = payloadStamp(manifest)
         val declared = manifest["zcode"]
+        // 清单里每一项都要核对：只看 .ready 与 zcode 的话，lib/ 被清掉或写半截时
+        // 内核会被启动进损坏状态，而且不会重新解包。
+        val blocker = reuseBlocker(manifest)
         val reuse =
-            runCatching { marker.readText().trim() }.getOrNull() == stamp &&
+            blocker == null &&
+                runCatching { marker.readText().trim() }.getOrNull() == stamp &&
                 bin.isFile && bin.length() > 10_000_000L && builtin.isFile &&
                 (declared == null || declared.first == bin.length())
+        if (blocker != null) log("载荷不完整，重新解包：$blocker")
         if (reuse) {
             log(
                 "载荷解包结果复用：戳记=$stamp，内核二进制=${bin.length()}B" +
@@ -391,6 +419,19 @@ class CoreRuntime(
             } catch (t: Throwable) {
                 log("!! 启动失败: $t")
                 msg = "启动失败: ${t.message}"
+                // pb.start() 之后的任何一步抛异常（writer 创建、线程启动）都会留下一个
+                // 活着的内核进程：isRunning 为 true 但所有 call 都失败，状态与能力不一致。
+                // 这里把已启动的进程收掉并清空引用，让状态回到「没在运行」。
+                runCatching {
+                    val leaked = process
+                    if (leaked != null) {
+                        process = null
+                        writer = null
+                        leaked.destroy()
+                        if (leaked.isAlive) leaked.destroyForcibly()
+                        failAllPending("核心启动失败")
+                    }
+                }
             }
             val rok = ok
             val rmsg = msg
@@ -550,13 +591,15 @@ class CoreRuntime(
             }
 
             hasId -> {
-                val idNum = obj.optInt("id", Int.MIN_VALUE)
-                val cb = if (idNum != Int.MIN_VALUE) pending.remove(idNum) else null
+                // id 不一定是数字：字符串 id 用 optInt 解析会落到兜底值，与 pending 的 key
+                // 对不上，回调永不触发、条目永久泄漏。统一按归一化后的字符串 key 关联。
+                val key = RpcFrame.idKey(obj.opt("id"))
+                val cb = key?.let { pending.remove(it) }
                 if (cb != null) {
-                    val err = obj.optJSONObject("error")
-                    val result = obj.optJSONObject("result") ?: JSONObject()
-                    val ok = err == null
-                    val data = if (ok) result else err
+                    // 按「字段存在且非 null」判成败，不按「能否解析成 JSONObject」：
+                    // 非对象的 error 之前会被当成 null，失败响应被伪装成成功。
+                    val ok = !RpcFrame.isError(obj)
+                    val data = RpcFrame.payload(obj)
                     // 响应回调统一切到主线程：避免跨线程 UI 操作，且保证回调时序与主线程状态一致
                     mainHandler.post {
                         try {
@@ -574,7 +617,10 @@ class CoreRuntime(
         val id: Any = obj.get("id")
         val method = obj.optString("method")
         val params = obj.optJSONObject("params") ?: JSONObject()
-        val delegated = events?.onInteractiveReverse(id, method, params) ?: false
+        // onInteractiveReverse 是弹对话框、请求权限这类 UI 钩子，必须在主线程执行。
+        // 这里跑在 reader 线程（zcore-out），直接调会让宿主在非主线程操作 UI。
+        // 用 latch 等结果：反向请求要拿到决策才能应答，不能异步放行。
+        val delegated = delegateInteractive(id, method, params)
         if (delegated) return
         val def = defaultReverseResult(method)
         if (def != null) {
@@ -584,6 +630,43 @@ class CoreRuntime(
             respond(id, JSONObject())
         }
     }
+
+    /**
+     * 把交互式反向请求交给主线程上的宿主处理，并等它的决策。
+     *
+     * 等待带超时：宿主实现若卡住（比如对话框一直没人点），不能把 reader 线程永久堵住，
+     * 那会让整个内核输出停止读取。超时按「未委托」处理，走默认应答。
+     */
+    private fun delegateInteractive(
+        id: Any,
+        method: String,
+        params: JSONObject,
+    ): Boolean {
+        val handler = events ?: return false
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            return handler.onInteractiveReverse(id, method, params)
+        }
+        val result = java.util.concurrent.atomic.AtomicBoolean(false)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        mainHandler.post {
+            try {
+                result.set(handler.onInteractiveReverse(id, method, params))
+            } catch (t: Throwable) {
+                log("!! 交互式反向回调异常: $t")
+            } finally {
+                latch.countDown()
+            }
+        }
+        val settled =
+            runCatching {
+                latch.await(interactiveDelegateTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }.getOrDefault(false)
+        if (!settled) log("[proto] 交互式反向请求 $method 等待宿主决策超时，按默认应答")
+        return settled && result.get()
+    }
+
+    /** 等宿主处理交互式反向请求的上限：超时后走默认应答，不堵死 reader 线程。 */
+    private val interactiveDelegateTimeoutMs = 120_000L
 
     /** 已知反向请求的默认应答（与桌面端一致）。 */
     fun defaultReverseResult(method: String): JSONObject? =
@@ -651,7 +734,7 @@ class CoreRuntime(
             if (cb != null) mainHandler.post { cb(false, error) }
             return
         }
-        if (cb != null) pending[id] = cb
+        if (cb != null) pending[RpcFrame.idKey(id)!!] = cb
         writeFrame(JSONObject().put("id", id).put("method", method).put("params", params))
     }
 
@@ -686,6 +769,7 @@ class CoreRuntime(
             } ?: File(localLogDir, "core-latest.log")
         f.parentFile?.mkdirs()
         logFile = f
+        logWriter = LogSink(f)
         // 建文件之前写过的行只在内存里，这里先补写进文件。启动来源、解包结论都发生在建文件之前，
         // 只落盘之后的行会让日志正好缺掉最关键的开头一段，事后只能靠猜。
         val backlog = synchronized(logLock) { logBuf.toString() }
@@ -716,20 +800,27 @@ class CoreRuntime(
         }
 
     fun log(line: String) {
-        val ts = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+        // 格式化器复用：SimpleDateFormat 构造要解析 pattern、建 Calendar 与 NumberFormat，
+        // 每行日志新建一个纯属浪费。它本身非线程安全，所以按线程各持一份。
+        val ts = logStamp.get()!!.format(Date(System.currentTimeMillis()))
         val full = "[$ts] $line"
         synchronized(logLock) {
             logBuf.append(full).append('\n')
             if (logBuf.length > 400_000) logBuf.delete(0, 100_000)
-            try {
-                logFile?.appendText(full + "\n")
-            } catch (_: Throwable) {
-            }
         }
+        // 落盘交给后台线程：log() 会从主线程到达（反向请求、各类回调），
+        // 在锁里同步 appendText 会把磁盘 IO 与锁等待压到主线程上，造成可避免的卡顿。
+        logWriter?.offer(full)
         // 同时进统一日志：内核通信是排障时最常要看的一段，只留在自己的文件里
         // 会让"日志面板"缺掉最关键的一半。用 DEBUG，避免高频协议行淹没 INFO。
         AppLog.i("Kernel", line)
     }
+
+    /** 日志时间戳格式化器：按线程各持一份，避免每行新建，也避免共享带来的线程安全问题。 */
+    private val logStamp =
+        object : ThreadLocal<SimpleDateFormat>() {
+            override fun initialValue(): SimpleDateFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+        }
 
     fun logSnapshot(): String = synchronized(logLock) { logBuf.toString() }
 
