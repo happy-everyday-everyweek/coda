@@ -13,8 +13,11 @@ internal object BackupImportFlow {
     /**
      * 导入结束是否需要重启应用。
      *
-     * 成功需要，因为覆盖的是设置、数据库与 Linux 环境；失败也需要，
-     * 因为失败往往发生在已经写入若干条目之后，停在半途的进程里界面还按旧值显示。
+     * 成功要重启：覆盖的是设置、数据库与 Linux 环境，进程内还留着旧的 SharedPreferences
+     * 与已打开的数据库连接。失败同样要重启：失败往往发生在已经写入若干条目之后，
+     * 停在半途的进程里核心是停的、界面还按旧值显示。
+     *
+     * 也就是说只要运行环境已经被停过（预检通过才会停），无论结果如何都得重启。
      */
-    fun mustRelaunch(importedCount: Int?): Boolean = true
+    fun mustRelaunch(runtimeStopped: Boolean): Boolean = runtimeStopped
 }

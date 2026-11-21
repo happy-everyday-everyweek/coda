@@ -1386,7 +1386,8 @@ class SettingsDetailActivity :
                     runOnUiThread {
                         // 成功要重启才能完全生效；失败同样要重启——失败往往发生在已写入若干条目之后，
                         // 停在半途的进程里核心是停的、界面还按旧 SharedPreferences 显示。
-                        val relaunch = com.coda.mobileui.core.BackupImportFlow.mustRelaunch(count)
+                        // 走到这里说明预检已通过、运行环境已经被停过。
+                        val relaunch = com.coda.mobileui.core.BackupImportFlow.mustRelaunch(runtimeStopped = true)
                         val message =
                             if (count != null && count > 0) {
                                 "已导入，应用将重启以完全生效"

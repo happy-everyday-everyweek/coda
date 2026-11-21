@@ -938,10 +938,14 @@ class ZController private constructor(
      * 刻意不改工作区、不发任何请求——内核没起来时任何请求都会失败，
      * 还会在界面上报一串错。这里就是要让用户安静地看一眼上次聊了什么。
      */
-    fun openCachedSession(sessionId: String): Boolean {
+    fun openCachedSession(sessionId: String): Boolean = openCachedSession(sessionId, switchGuard.begin(sessionId))
+
+    /** 用调用方已经领好的代际读缓存，避免同一次打开里重复递增把自己的 token 作废。 */
+    private fun openCachedSession(
+        sessionId: String,
+        token: Long,
+    ): Boolean {
         if (!SessionCache.hasMessages(app, sessionId)) return false
-        // 读缓存也是异步的：期间点了别的会话，这份缓存就不能再落地。
-        val token = switchGuard.begin(sessionId)
         Thread {
             val cached = SessionCache.loadMessages(app, sessionId)
             if (cached.isEmpty()) return@Thread
@@ -1470,7 +1474,7 @@ class ZController private constructor(
         val token = switchGuard.begin(sessionId)
         // 只读态直接读缓存：内核没起来，订阅请求必然失败，
         // 先发一次再回退只会白等一轮超时，还会闪一下错误提示。
-        if (cacheOnly && openCachedSession(sessionId)) {
+        if (cacheOnly && openCachedSession(sessionId, token)) {
             cb?.invoke(true)
             return
         }
@@ -1495,7 +1499,7 @@ class ZController private constructor(
             } else {
                 // 只读态下的会话本来就不能订阅（内核没起来），直接读缓存展示，
                 // 不要在这里弹一个用户无法处理的错误。
-                if (cacheOnly && openCachedSession(sessionId)) {
+                if (cacheOnly && openCachedSession(sessionId, token)) {
                     cb?.invoke(true)
                     return@subscribeSession
                 }

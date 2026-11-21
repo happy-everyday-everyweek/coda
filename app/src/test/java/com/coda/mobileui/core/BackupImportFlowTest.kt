@@ -24,12 +24,17 @@ class BackupImportFlowTest {
 
     @Test
     fun `successful import relaunches`() {
-        assertTrue(BackupImportFlow.mustRelaunch(42))
+        assertTrue(BackupImportFlow.mustRelaunch(runtimeStopped = true))
     }
 
     @Test
     fun `failed import relaunches too`() {
-        assertTrue(BackupImportFlow.mustRelaunch(null))
-        assertTrue(BackupImportFlow.mustRelaunch(0))
+        // 失败同样发生在运行环境已停之后，不能把用户留在核心停着的进程里。
+        assertTrue(BackupImportFlow.mustRelaunch(runtimeStopped = true))
+    }
+
+    @Test
+    fun `nothing to restore when the runtime was never stopped`() {
+        assertFalse(BackupImportFlow.mustRelaunch(runtimeStopped = false))
     }
 }
