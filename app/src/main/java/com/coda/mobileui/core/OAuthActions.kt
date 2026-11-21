@@ -40,8 +40,6 @@ object OAuthActions {
         val scope: Scope,
         val confirm: Boolean = false,
         val danger: Boolean = false,
-        /** 部分动作走 GET 查询，其余都是 POST。 */
-        val method: String = "POST",
     )
 
     enum class Scope {
@@ -206,11 +204,16 @@ object OAuthActions {
         if (caps.routes.contains("/test-active")) all.firstOrNull { it.id == "test-active" }?.let { out += it }
         if (caps.keepalive) all.firstOrNull { it.id == "keepalive" }?.let { out += it }
         if (caps.unfreeze) all.firstOrNull { it.id == "unfreeze" }?.let { out += it }
+        // clear-cooldown 之前声明了却没有分支，只支持这条路由的插件完全拿不到入口。
+        if (caps.clearCooldown) all.firstOrNull { it.id == "clear-cooldown" }?.let { out += it }
         if (caps.enableDisable) {
             all.firstOrNull { it.id == "enable" }?.let { out += it }
             all.firstOrNull { it.id == "disable" }?.let { out += it }
         }
-        if (caps.panel) all.firstOrNull { it.id == "delete" }?.let { out += it }
+        // 删除按探测到的路由判断，与其他动作一致：只看 caps.panel 会让没实现 /delete
+        // 的插件也显示「删除」，用户点了必然 404。前面已对 !caps.panel 提前返回，
+        // 再判一次 panel 恒为真，属于掩盖选错条件的死代码。
+        if (caps.routes.contains("/delete")) all.firstOrNull { it.id == "delete" }?.let { out += it }
         return out
     }
 
@@ -236,37 +239,48 @@ object OAuthActions {
             body.put("auth_index", authIndex)
         }
         val path = "/v0/management/plugins/${provider.pluginId}${action.path}"
+        // 注册表里的动作全是写操作（签到、领取、切换、删除都会改状态），一律 POST。
+        // 之前留了个 action.method == "GET" 的分支，但没有任何动作把 method 设成 GET，
+        // 那段永远进不去、也测不到。将来真需要只读查询时再连同注册项一起加回来。
         val raw =
-            if (action.method == "GET") {
-                ProxyHost.managementJson(
-                    ctx,
-                    buildString {
-                        append(path)
-                        if (body.length() > 0) append("?auth_index=").append(android.net.Uri.encode(authIndex))
-                    },
-                )
-            } else {
-                ProxyHost.managementJson(ctx, path, "POST", body.toString())
-            } ?: return OAuthAccounts.Outcome(false, "无法连接网关")
+            ProxyHost.managementJson(ctx, path, "POST", body.toString())
+                ?: return OAuthAccounts.Outcome(false, "无法连接网关")
 
         val payload = raw.optJSONObject("data") ?: raw
-        payload.optString("error").takeIf { it.isNotEmpty() }?.let {
-            return OAuthAccounts.Outcome(false, describe(it))
+        // org.json 里显式 null 的字段，optString 返回的是字面量 "null" 而不是空串。
+        // 不先判 isNull 的话，{"error": null} 会被当成一次失败，文案还写着 "null"。
+        if (!payload.isNull("error")) {
+            payload.optString("error").takeIf { it.isNotEmpty() }?.let {
+                return OAuthAccounts.Outcome(false, describe(it))
+            }
         }
         // results / summary 是批量签到那套结构，单账号也走这里，统一交给签到的解析器。
         if (action.id == "checkin") return OAuthAccounts.checkinOutcome(raw)
-
-        val message = payload.optString("message")
+        val message = if (payload.isNull("message")) "" else payload.optString("message")
         return OAuthAccounts.Outcome(true, message.ifEmpty { "${action.title}完成" })
     }
 
-    /** 把插件返回的英文说明压成中文；认不出的原样带出，至少不丢信息。 */
-    private fun describe(raw: String): String =
-        when {
-            raw.contains("no matching account") -> "没有找到该账号，可能已失效"
-            raw.contains("already") && raw.contains("check") -> "今天已经签过了"
-            raw.contains("not found") -> "该动作在当前插件版本里不可用"
-            raw.contains("unauthorized") || raw.contains("invalid") -> "凭据已失效，需要重新授权"
+    /**
+     * 把插件返回的英文说明压成中文；认不出的原样带出，至少不丢信息。
+     *
+     * 先归一化再匹配：插件返回的是 "Already checked in"、"Unauthorized" 这类首字母大写的
+     * 文案，大小写敏感匹配一个都命中不了。凭证类判断也要用具体短语——只匹配 "invalid"
+     * 会把 "invalid parameter"（参数错误）误判成凭据过期，把用户引去重新授权。
+     */
+    internal fun describe(raw: String): String {
+        val text = raw.lowercase()
+        return when {
+            text.contains("no matching account") -> "没有找到该账号，可能已失效"
+            text.contains("not found") -> "该动作在当前插件版本里不可用"
+            text.contains("unauthorized") ||
+                text.contains("invalid token") ||
+                text.contains("token expired") ||
+                text.contains("invalid credential") ||
+                text.contains("invalid_grant") -> "凭据已失效，需要重新授权"
+            // 参数类错误单独说明，不要混进「重新授权」那条。
+            text.contains("invalid parameter") || text.contains("invalid request") ->
+                "请求参数不被接受：$raw"
             else -> raw
         }
+    }
 }
