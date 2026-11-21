@@ -87,4 +87,14 @@ class TarListingTest {
         assertEquals(0L, TarListing.parseStamp("not-a-date"))
         assertEquals(0L, TarListing.parseStamp(""))
     }
+
+    @Test
+    fun `member path and directory base use the same form`() {
+        // 列表剥了 ./，导航用的 base 也必须剥，否则进入子目录后永远匹配不上。
+        val m = TarListing.parseLine("-rw-r--r-- 0/0  1 2024-05-06 07:08 ./sub/deep/a.txt")
+        requireNotNull(m)
+        val base = TarListing.normalizePath("sub") + "/"
+        assertTrue(m.path.startsWith(base))
+        assertEquals("deep/a.txt", m.path.removePrefix(base))
+    }
 }

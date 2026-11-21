@@ -388,7 +388,9 @@ object ArchiveKit {
         maxBytes: Long,
     ): String? =
         runCatching {
-            val member = path.takeIf { isSafeMember(it) } ?: return null
+            // 成员名与列表用同一种形式：列表已剥掉 ./，这里也要剥，否则点击后读不出内容。
+            val member =
+                TarListing.normalizePath(path).takeIf { isSafeMember(it) } ?: return null
             // 输出上限要在这里就交给 exec：等它把整个成员读成字符串再判断，
             // 一个几百 MB 的成员已经把内存吃掉了。
             val limit = (maxBytes + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
@@ -410,7 +412,10 @@ object ArchiveKit {
         path.isNotEmpty() && !path.startsWith("-") && !path.contains('\n') && !path.contains('\r')
 
     private fun normalizeDir(path: String): String {
-        if (path.isEmpty()) return ""
-        return if (path.endsWith("/")) path else "$path/"
+        // 与成员路径用同一种形式：TarListing 已剥掉开头的 ./，这里也必须剥，
+        // 否则从带 ./ 前缀的包进入子目录后 base 与成员路径对不上，逐层导航全部失效。
+        val clean = TarListing.normalizePath(path)
+        if (clean.isEmpty()) return ""
+        return if (clean.endsWith("/")) clean else "$clean/"
     }
 }
