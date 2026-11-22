@@ -90,13 +90,17 @@ object HooksCore {
         val wp = normalize(workspacePath)
         val errors = mutableListOf<String>()
         val projectSources = mutableListOf<HookSource>()
-        val refs = mutableListOf<Pair<String, Boolean>>()
+        // 项目来源没有「显式指定」入口（用户来源才是 explicit），
+        // refs 不再携带恒为 false 的 explicit 标志。
+        val refs = mutableListOf<String>()
         for (dir in projectConfigDirs(wp)) {
-            refs += File(dir, "zcode.json").absolutePath to false
-            refs += File(dir, ".zcode/config.json").absolutePath to false
+            refs += File(dir, "zcode.json").absolutePath
+            refs += File(dir, ".zcode/config.json").absolutePath
         }
         val seen = mutableSetOf<String>()
-        for ((path, explicit) in refs) {
+        for (rawPath in refs) {
+            // 身份用 canonical 路径：符号链接与 ./ ../ 等价拼写不再被当成两个文件。
+            val path = canonicalFile(File(rawPath))
             if (!seen.add(path)) continue
             val f = File(path)
             if (!f.exists()) continue
@@ -114,20 +118,15 @@ object HooksCore {
                 continue
             }
             val rel = relativePath(wp, path)
-            val kind =
-                when {
-                    explicit -> "explicit"
-                    File(path).name == "zcode.json" -> "zcode.json"
-                    else -> ".zcode/config.json"
-                }
+            val kind = if (File(path).name == "zcode.json") "zcode.json" else ".zcode/config.json"
             projectSources +=
                 HookSource(
                     canonicalPath = path,
                     relPath = rel.ifEmpty { File(path).name },
                     discoveryOrder = projectSources.size,
                     configFileKind = kind,
-                    explicit = explicit,
-                    editable = File(path).absolutePath == File(File(wp, ".zcode"), "config.json").absolutePath,
+                    explicit = false,
+                    editable = path == canonicalFile(File(File(wp, ".zcode"), "config.json")),
                     hooks = hooks,
                 )
         }
@@ -135,23 +134,30 @@ object HooksCore {
         var userSource: HookSource? = null
         val userFile = File(home, ".zcode/cli/config.json")
         if (userFile.exists()) {
+            // 用户来源与项目来源同一套错误处理：解析失败/结构非法都要进 errors，
+            // 静默吞掉会让用户自定义 hooks 无声消失且无从排查。
             try {
                 val parsed = JSONObject(userFile.readText())
                 val hooksRaw = parsed.opt("hooks")
-                val hooks = if (hooksRaw != null) parseHooksConfig(hooksRaw) else null
-                if (hooks != null) {
-                    userSource =
-                        HookSource(
-                            canonicalPath = userFile.absolutePath,
-                            relPath = userFile.name,
-                            discoveryOrder = 0,
-                            configFileKind = "explicit",
-                            explicit = true,
-                            editable = true,
-                            hooks = hooks,
-                        )
+                if (hooksRaw != null) {
+                    val hooks = parseHooksConfig(hooksRaw)
+                    if (hooks != null) {
+                        userSource =
+                            HookSource(
+                                canonicalPath = canonicalFile(userFile),
+                                relPath = userFile.name,
+                                discoveryOrder = 0,
+                                configFileKind = "explicit",
+                                explicit = true,
+                                editable = true,
+                                hooks = hooks,
+                            )
+                    } else {
+                        errors += "hooks structure invalid: ${userFile.absolutePath}"
+                    }
                 }
-            } catch (_: Throwable) {
+            } catch (e: Exception) {
+                errors += "cannot read ${userFile.absolutePath}: ${e.message}"
             }
         }
 
@@ -403,6 +409,14 @@ object HooksCore {
      * 授予信任时写进 `workspaceKey`、后续查找比较 `workspaceIdentity` 都必须走这里，
      * 否则尾部斜杠、反斜杠或符号链接的等价写法会让已授予的信任静默失效。
      */
+    /** 文件身份：解析符号链接与 ./ ../；失败退回 absolutePath。 */
+    private fun canonicalFile(f: File): String =
+        try {
+            f.canonicalPath
+        } catch (_: Exception) {
+            f.absolutePath
+        }
+
     private fun canonicalWorkspace(path: String): String {
         val trimmed = normalize(path)
         if (trimmed.isEmpty()) return trimmed
@@ -650,10 +664,37 @@ object HooksCore {
             is Boolean -> if (v) "true" else "false"
             is Int -> v.toString()
             is Long -> v.toString()
-            is Double -> if (v == Math.floor(v) && !v.isInfinite()) v.toLong().toString() else v.toString()
+            is Double -> jsNumber(v)
             is List<*> -> v.joinToString(",", "[", "]") { jsStringify(it) }
             else -> jsQuote(v.toString())
         }
+
+    /**
+     * 与 JS Number.prototype.toString 对齐的数字格式化：
+     * 安全整数范围内（|v| < 2^53）的整数值输出整数字面量；超出后 JS 走指数形式，
+     * toLong() 会饱和成 Long.MAX_VALUE 丢信息。小数用 BigDecimal 去掉多余零，
+     * 指数阈值（1e-6 / 1e21）与符号（e+21）按 JS 规则改写。
+     */
+    internal fun jsNumber(v: Double): String {
+        if (v.isNaN() || v.isInfinite()) return "null"
+        if (v == Math.floor(v) && kotlin.math.abs(v) < 9.007199254740992E15) {
+            return v.toLong().toString()
+        }
+        val bd = java.math.BigDecimal(v.toString()).stripTrailingZeros()
+        val abs = kotlin.math.abs(v)
+        if (abs != 0.0 && (abs < 1e-6 || abs >= 1e21)) {
+            var mantissa = bd.unscaledValue().toString()
+            val exp = bd.precision() - bd.scale() - 1
+            if (mantissa.length > 1) {
+                mantissa = mantissa[0] + "." + mantissa.substring(1).trimEnd('0')
+                mantissa = mantissa.trimEnd('.')
+            }
+            if (v < 0) mantissa = "-$mantissa"
+            val sign = if (exp >= 0) "+" else ""
+            return mantissa + "e" + sign + exp
+        }
+        return bd.toPlainString()
+    }
 
     private fun jsQuote(s: String): String {
         val sb = StringBuilder("\"")
