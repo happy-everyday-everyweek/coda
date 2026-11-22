@@ -127,10 +127,10 @@ object CrashGuard {
 class CrashActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val path = intent.getStringExtra(EXTRA_PATH) ?: "(未保存)"
+        val path = intent.getStringExtra(EXTRA_PATH) ?: getString(R.string.crash_not_saved)
         // 优先从文件读全文：Intent 只带尾部摘要（Binder 事务上限），
         // 文件读失败（未写入/被清理）才退回摘要。上限防异常大文件撑爆内存。
-        val fallback = intent.getStringExtra(EXTRA_LOG) ?: "(无日志)"
+        val fallback = intent.getStringExtra(EXTRA_LOG) ?: getString(R.string.crash_no_log)
         val log =
             runCatching {
                 val f = File(path)
@@ -145,12 +145,12 @@ class CrashActivity : Activity() {
             }
         val title =
             TextView(this).apply {
-                text = "应用发生崩溃"
+                text = getString(R.string.crash_title)
                 textSize = 20f
             }
         val pathView =
             TextView(this).apply {
-                text = "崩溃日志: $path"
+                text = getString(R.string.crash_log_path, path)
                 textSize = 12f
                 setPadding(0, pad / 2, 0, pad / 2)
             }
@@ -168,7 +168,7 @@ class CrashActivity : Activity() {
         )
         val btn =
             Button(this).apply {
-                text = "关闭"
+                text = getString(R.string.crash_close)
                 setOnClickListener { finish() }
             }
         root.addView(title)

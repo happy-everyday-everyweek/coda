@@ -41,24 +41,26 @@ fun AppCompatActivity.setupEdgeToEdge() {
 
 /** 顶部组件内边距：系统栏与刘海/挖孔区域取并集（保证组件可达）。 */
 fun View.applyTopSystemBarInset() {
+    val base = basePad()
     ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
         val bars =
             insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
             )
-        view.setPadding(view.paddingLeft, bars.top, view.paddingRight, view.paddingBottom)
+        view.padRelative(base, bars.top, 0)
         insets
     }
 }
 
 /** 顶部 + 底部组件内边距：系统栏与刘海/挖孔区域取并集。 */
 fun View.applySystemBarsInset() {
+    val base = basePad()
     ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
         val bars =
             insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
             )
-        view.setPadding(view.paddingLeft, bars.top, view.paddingRight, bars.bottom)
+        view.padRelative(base, bars.top, bars.bottom)
         insets
     }
 }
@@ -117,7 +119,7 @@ fun View.padForTopSafeInset() {
     val applied = topPads[this] ?: 0
     val top = EdgeToEdge.toppedPadding(paddingTop, applied, extra)
     topPads[this] = extra
-    setPadding(paddingLeft, top, paddingRight, paddingBottom)
+    setPaddingRelative(paddingStart, top, paddingEnd, paddingBottom)
 }
 
 /** 给一个底部组件加导航栏避让。 */
@@ -126,7 +128,7 @@ fun View.padForBottomSafeInset() {
     val applied = bottomPads[this] ?: 0
     val bottom = paddingBottom - applied + extra
     bottomPads[this] = extra
-    setPadding(paddingLeft, paddingTop, paddingRight, bottom)
+    setPaddingRelative(paddingStart, paddingTop, paddingEnd, bottom)
 }
 
 /**
@@ -148,21 +150,32 @@ internal object EdgeToEdge {
 private val topPads = WeakHashMap<View, Int>()
 private val bottomPads = WeakHashMap<View, Int>()
 
+/**
+ * 记录 View 的原始（XML 声明的）四向内边距，只在第一次见到该 View 时快照。
+ * inset 监听器每次分发都在基线上叠加安全区，而不是覆盖当前 padding：
+ * 直接 setPadding(bars.top) 会把 XML 的 paddingTop=12dp 静默丢掉，
+ * 后续代码加的 padding 也会被下一次分发清掉。
+ */
+private data class BasePad(val left: Int, val top: Int, val right: Int, val bottom: Int, val start: Int, val end: Int)
+private val basePads = WeakHashMap<View, BasePad>()
+private fun View.basePad(): BasePad =
+    basePads.getOrPut(this) { BasePad(paddingLeft, paddingTop, paddingRight, paddingBottom, paddingStart, paddingEnd) }
+
+/** 在基线 padding 上叠加安全区；用相对方向 API 保住 RTL 解析。 */
+private fun View.padRelative(base: BasePad, top: Int, bottom: Int) {
+    setPaddingRelative(base.start, base.top + top, base.end, base.bottom + bottom)
+}
+
 /** 底部内边距：取系统栏与输入法（键盘）的较大者，并叠加原有底部间距。 */
 fun View.applyBottomInsetWithIme() {
-    val baseBottom = paddingBottom
+    val base = basePad()
     ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
         val bars =
             insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
             )
         val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-        view.setPadding(
-            view.paddingLeft,
-            view.paddingTop,
-            view.paddingRight,
-            baseBottom + maxOf(bars.bottom, ime.bottom),
-        )
+        view.padRelative(base, 0, maxOf(bars.bottom, ime.bottom))
         insets
     }
 }
@@ -170,12 +183,13 @@ fun View.applyBottomInsetWithIme() {
 /** 抽屉内边距：顶部在系统栏/挖孔区域之外再留出 gap，底部跟随系统栏。 */
 fun View.applyDrawerInset(topGapDp: Int) {
     val gap = (topGapDp * resources.displayMetrics.density).roundToInt()
+    val base = basePad()
     ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
         val bars =
             insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
             )
-        view.setPadding(view.paddingLeft, bars.top + gap, view.paddingRight, bars.bottom)
+        view.padRelative(base, bars.top + gap, bars.bottom)
         insets
     }
 }

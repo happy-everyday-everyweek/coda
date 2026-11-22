@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="crash_title">The app crashed</string>
+    <string name="crash_log_path">Crash log: %1$s</string>
+    <string name="crash_close">Close</string>
+    <string name="crash_no_log">(no log)</string>
+    <string name="crash_not_saved">(not saved)</string>
+</resources>

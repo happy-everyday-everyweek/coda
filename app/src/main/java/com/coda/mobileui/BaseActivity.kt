@@ -14,10 +14,13 @@ open class BaseActivity : androidx.appcompat.app.AppCompatActivity() {
     override fun attachBaseContext(newBase: Context) {
         val store = SettingsStore.get(newBase)
         val config = Configuration(newBase.resources.configuration)
+        // 应用档位是相对倍率，乘在系统字号之上：绝对赋值会把无障碍大字号
+        // 还原成应用预设，依赖大字号阅读的用户进应用后字反而变小。
         config.fontScale =
-            SettingsStore.FONT_SCALES[
-                store.fontScaleIndex.coerceIn(SettingsStore.FONT_SCALES.indices),
-            ]
+            newBase.resources.configuration.fontScale *
+                SettingsStore.FONT_SCALES[
+                    store.fontScaleIndex.coerceIn(SettingsStore.FONT_SCALES.indices),
+                ]
         super.attachBaseContext(newBase.createConfigurationContext(config))
     }
 

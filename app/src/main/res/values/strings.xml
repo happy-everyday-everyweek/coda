@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Coda</string>
+    <string name="crash_title">应用发生崩溃</string>
+    <string name="crash_log_path">崩溃日志: %1$s</string>
+    <string name="crash_close">关闭</string>
+    <string name="crash_no_log">(无日志)</string>
+    <string name="crash_not_saved">(未保存)</string>
     <string name="default_model">GLM-4.6</string>
     <string name="composer_hint">输入消息…</string>
     <string name="model_picker_title">选择模型</string>

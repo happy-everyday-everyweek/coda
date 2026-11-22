@@ -77,6 +77,8 @@ class CodaSheet(
     private var panel: LinearLayout? = null
     private var grabberRow: FrameLayout? = null
     private var footerRow: LinearLayout? = null
+    /** 拖拽区（把手 + headerAction 行）；navigate 换页时重建其中的操作行。 */
+    private var dragAreaRow: LinearLayout? = null
     private var backCallback: OnBackPressedCallback? = null
     private var panelAnim: ValueAnimator? = null
     private var fullScreenH = 0
@@ -270,6 +272,7 @@ class CodaSheet(
 
         // 拖拽区：滑动把手行（+ 可选操作行）
         val dragArea = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        dragAreaRow = dragArea
         val grabRow =
             FrameLayout(activity).apply {
                 addView(
@@ -289,36 +292,7 @@ class CodaSheet(
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(20f)),
         )
 
-        if (headerActionText != null) {
-            val header =
-                LinearLayout(activity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(20f), dp(6f), dp(20f), dp(4f))
-                }
-            header.addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
-            header.addView(
-                TextView(activity).apply {
-                    text = headerActionText
-                    textSize = 14f
-                    setTextColor(onSurface)
-                    background =
-                        GradientDrawable().apply {
-                            cornerRadius = dp(18f).toFloat()
-                            setStroke(dp(1f), withAlpha(onSurface, 0.25f))
-                        }
-                    setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
-                    setOnClickListener { headerActionBlock?.invoke(this@CodaSheet) }
-                },
-            )
-            dragArea.addView(
-                header,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-        }
+        rebuildHeaderAction(onSurface)
         panelView.addView(
             dragArea,
             LinearLayout.LayoutParams(
@@ -645,7 +619,8 @@ class CodaSheet(
             }
         }
         grabberRow?.setPadding(0, topPad, 0, 0)
-        footerRow?.setPadding(dp(20f), dp(10f), dp(20f), dp(24f) + (navBarH * p).toInt())
+        // 横向内边距与标题/正文同源（insetH），写死 20dp 会在 show 后立即错位。
+        footerRow?.setPadding(insetH(), dp(10f), insetH(), dp(24f) + (navBarH * p).toInt())
     }
 
     /** 拖拽松手后吸附到卡片（p=0）或全屏（p=1）。 */
@@ -769,6 +744,9 @@ class CodaSheet(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ),
         )
+        // 重建后的 footer 只有基础内边距：把当前停靠进度套回去，
+        // 否则全屏态刷新内容后导航栏避让丢失，底栏被导航栏压住。
+        if (!compactMode) applyDock(dockProgress, panelView.height.takeIf { it > 0 })
         contentCol.requestLayout()
     }
 
@@ -778,11 +756,53 @@ class CodaSheet(
      * navigate() 用它换页；show() 首次构建时逻辑与这里一致，但为了不改动已验证的
      * 首次展开流程，只在这里复刻一份等价实现（标题、内容、按钮的样式与间距完全相同）。
      */
+    /**
+     * 按当前 headerAction 字段重建操作行：新页定义了才显示，没定义就移除。
+     * navigate 换页只重建内容区时，旧操作行会残留（点了触发旧逻辑），
+     * 新页的操作行则永远不出现——这里统一收口。
+     */
+    private fun rebuildHeaderAction(onSurface: Int) {
+        val dragArea = dragAreaRow ?: return
+        // 移除旧操作行（把手行是第 0 个子 View，保留）
+        while (dragArea.childCount > 1) dragArea.removeViewAt(dragArea.childCount - 1)
+        val label = headerActionText ?: return
+        val header =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(insetH(), dp(6f), insetH(), dp(4f))
+            }
+        header.addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
+        header.addView(
+            TextView(activity).apply {
+                text = label
+                textSize = 14f
+                setTextColor(onSurface)
+                background =
+                    GradientDrawable().apply {
+                        cornerRadius = dp(18f).toFloat()
+                        setStroke(dp(1f), withAlpha(onSurface, 0.25f))
+                    }
+                setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
+                setOnClickListener { headerActionBlock?.invoke(this@CodaSheet) }
+            },
+        )
+        dragArea.addView(
+            header,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+    }
+
     private fun rebuildPage() {
         val panelView = livePanel ?: return
         val contentCol = liveContentCol ?: return
         val colors = liveColors ?: return
         val onSurface = colors[0]
+        // 换页时操作行跟着新页定义重建（#649）。
+        rebuildHeaderAction(onSurface)
         val onSurfaceVariant = colors[1]
         val primary = colors[2]
         val onPrimary = colors[3]

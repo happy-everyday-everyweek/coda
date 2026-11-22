@@ -61,10 +61,16 @@ class LatticeLoaderView
         fun stop() {
             if (!animating) return
             animating = false
+            // 冻结当前相位并清零起点：stop 后的绘制回到静止帧而不是随机中间帧。
+            offsetMs = elapsed()
+            startAt = 0L
             Choreographer.getInstance().removeFrameCallback(frameCallback)
         }
 
-        private fun elapsed(): Long = offsetMs + (SystemClock.uptimeMillis() - startAt)
+        // 未 start（或已 stop）时返回已恢复的 offset 相位：startAt=0 时直接相减
+        // 会得到以百万毫秒计的巨大值，把静止视图画成脉冲动画的随机中间帧。
+        private fun elapsed(): Long =
+            if (startAt == 0L) offsetMs else offsetMs + (SystemClock.uptimeMillis() - startAt)
 
         private val frameCallback =
             object : Choreographer.FrameCallback {

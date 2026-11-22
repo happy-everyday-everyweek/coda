@@ -275,6 +275,9 @@ class StrengthSliderView
             if (width == 0) return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                    // 横向拖动期间禁止父容器拦截：滑杆在 BottomSheet/NestedScrollView
+                    // 里时手势会被父容器中途抢走，滑块跳动或卡住。
+                    parent?.requestDisallowInterceptTouchEvent(true)
                     val left = knobRadius
                     val right = width - knobRadius
                     val raw = ((event.x - left) / (right - left)).coerceIn(0f, 1f)
@@ -288,16 +291,22 @@ class StrengthSliderView
                     return true
                 }
 
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                MotionEvent.ACTION_UP -> {
+                    parent?.requestDisallowInterceptTouchEvent(false)
                     setLevel(level, animate = true)
                     performClick()
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    // 取消不是点击：不上报 performClick，只复位与释放拦截。
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                    setLevel(level, animate = true)
                     return true
                 }
             }
             return super.onTouchEvent(event)
         }
 
-        override fun performClick(): Boolean = super.performClick()
 
         /** 切换档位；animate 为 true 时滑块弹到目标刻度。 */
         fun setLevel(
