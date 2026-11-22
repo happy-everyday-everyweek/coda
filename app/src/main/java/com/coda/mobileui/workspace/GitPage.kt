@@ -95,6 +95,12 @@ class GitPage(
      */
     private var generation = 0
 
+    /** 提交图分页步长。 */
+    private val GRAPH_PAGE = 400
+
+    /** 提交图一次取多少条（#89）：点「加载更多」时翻倍。 */
+    private var graphLimit = GRAPH_PAGE
+
     /** 当前是否仍是活动页且未离开；迟到回调据此判断要不要落地。 */
     private fun stale(token: Int): Boolean = token != generation || !detailAttached()
 
@@ -303,7 +309,7 @@ class GitPage(
                             branch = Git.branch(env, root),
                             repoRoot = Git.repoRoot(env, root),
                             changes = Git.changes(env, root),
-                            commits = Git.graph(env, root, 400),
+                            commits = Git.graph(env, root, graphLimit),
                             locals = Git.localBranches(env, root),
                             remotes = Git.remoteBranches(env, root),
                             remoteNames = Git.remotes(env, root),
@@ -473,19 +479,30 @@ class GitPage(
                         if (repoRoot.isNotEmpty() && repoRoot != workspacePath) {
                             append(" · 父仓库的子目录，提交只包含本目录")
                         }
+                        // 截断必须说出来（#89）：否则用户以为图就是全部历史，
+                        // 老分支的尖端不在这几百条里时会看起来像分支丢了。
+                        if (current.commits.size >= graphLimit) {
+                            append(" · 仅显示最近 ${current.commits.size} 条，更早历史未加载")
+                        }
+                    }
+                val baseActions =
+                    if (changes > 0) {
+                        listOf(
+                            "未提交改动" to { showChanges() },
+                            "提交" to { commitDialog() },
+                            "分支" to { showBranches() },
+                        )
+                    } else {
+                        listOf("分支" to { showBranches() }, "刷新" to { refresh() })
                     }
                 Control(
                     title = current.branch.ifEmpty { "游离的 HEAD" },
                     subtitle = summary,
                     actions =
-                        if (changes > 0) {
-                            listOf(
-                                "未提交改动" to { showChanges() },
-                                "提交" to { commitDialog() },
-                                "分支" to { showBranches() },
-                            )
+                        if (current.commits.size >= graphLimit) {
+                            baseActions + ("加载更多历史" to { loadMoreHistory() })
                         } else {
-                            listOf("分支" to { showBranches() }, "刷新" to { refresh() })
+                            baseActions
                         },
                 )
             }
@@ -968,6 +985,18 @@ class GitPage(
         showInput("远端 $name 的地址", currentUrl.ifEmpty { "https://github.com/" }) { url ->
             operate("保存远端") { Git.setRemote(host.env, host.root, name, url) }
         }
+    }
+
+    /**
+     * 加载更多历史（#89）：把上限翻倍后重读。
+     *
+     * 不做真正的增量分页——git log 的拓扑序在追加更早提交后会重排泳道，
+     * 保留旧图再拼接反而会出现错位的连线。这里整张重画，但明确告诉用户在加载。
+     */
+    private fun loadMoreHistory() {
+        graphLimit *= 2
+        toast("正在加载最近 $graphLimit 条…")
+        refresh()
     }
 
     private fun showBranches() {

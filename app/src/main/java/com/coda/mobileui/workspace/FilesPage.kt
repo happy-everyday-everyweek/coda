@@ -48,6 +48,9 @@ open class FilesPage(
 
     /** 目录列举的代际（#64）：切目录后旧结果不再写入列表。 */
     private var listGeneration = 0
+
+    /** 压缩包列举的代际（#91）：包内切目录或退包后旧结果作废。 */
+    private var archiveGeneration = 0
     private lateinit var rightColumn: LinearLayout
     private lateinit var editorBody: View
     private lateinit var markdownPreview: ScrollView
@@ -849,7 +852,34 @@ override fun menuItems(): List<String> =
      */
     private fun renderArchiveList(pack: File) {
         val kind = archiveKind.takeIf { it != ArchiveKit.Kind.UNKNOWN } ?: ArchiveKit.kindOf(pack)
-        val entries = ArchiveKit.list(pack, archivePath, host.env, kind)
+        // 列包放后台（#91）：ZIP 要遍历条目、TAR 要等 `tar -tf` 子进程，
+        // 几万条目的包在主线程足够 ANR，包内按返回也会卡。
+        val pathSnapshot = archivePath
+        val token = ++archiveGeneration
+        val loading = hint("正在读取压缩包…")
+        listColumn.addView(loading)
+        host.background(
+            work = { ArchiveKit.list(pack, pathSnapshot, host.env, kind) },
+            then = then@{ entries ->
+                if (token != archiveGeneration || archivePath != pathSnapshot) return@then
+                listColumn.removeView(loading)
+                renderArchiveEntries(pack, kind, entries)
+            },
+            onError = onError@{
+                if (token != archiveGeneration) return@onError
+                listColumn.removeView(loading)
+                listColumn.addView(hint("读取压缩包失败，可能已损坏或格式不支持"))
+                listColumn.addView(tail())
+            },
+        )
+    }
+
+    /** 压缩包内容渲染：只在主线程调用，条目已由后台列好。 */
+    private fun renderArchiveEntries(
+        pack: File,
+        kind: ArchiveKit.Kind,
+        entries: List<ArchiveKit.Entry>,
+    ) {
         listColumn.addView(
             infoCard(
                 R.drawable.ic_file,
@@ -2541,7 +2571,7 @@ override fun menuItems(): List<String> =
             readInto(
                 file,
                 onFail = { note ->
-                    if (!openWithSystem(file) && !tryArchiveByContent(file)) showInfo(file, note)
+                    if (!openWithSystem(file)) tryArchiveByContent(file) { showInfo(file, note) }
                 },
                 // 正文已经读出来了，交给编辑器标签直接用，避免同一文件读两遍。
                 done = { text, charset ->
@@ -2558,11 +2588,12 @@ override fun menuItems(): List<String> =
         }
         // 二进制，或大到不该塞进编辑器：先问系统
         if (openWithSystem(file)) return
-        if (tryArchiveByContent(file)) return
-        if (textual) {
-            showInfo(file, "文件过大，未打开")
-        } else {
-            showInfo(file, "没有应用能打开这个文件")
+        tryArchiveByContent(file) {
+            if (textual) {
+                showInfo(file, "文件过大，未打开")
+            } else {
+                showInfo(file, "没有应用能打开这个文件")
+            }
         }
     }
 
@@ -2598,16 +2629,33 @@ override fun menuItems(): List<String> =
      * 内容像 ZIP 就按压缩包打开。
      *
      * 只在这里被调用，调用前已经确认过"系统没有应用能接"——所以这个函数不做二次询问，
-     * 命中就直接进包内浏览。不命中返回 false，由调用方给"打不开"的提示。
+     * 命中就直接进包内浏览。
+     *
+     * 列条目放后台（#91）：`ZipFile` 遍历大 pack 会卡主线程。
+     * 不命中或读取失败时走 [onMiss]，由调用方给"打不开"的提示。
      */
-    private fun tryArchiveByContent(file: File): Boolean {
-        if (!ArchiveKit.looksLikeZip(file)) return false
-        // 先确认真的能列出条目：有些文件只是碰巧以 PK 开头，ZipFile 会抛异常。
-        val entries = ArchiveKit.list(file, "", host.env, ArchiveKit.Kind.ZIP)
-        if (entries.isEmpty()) return false
-        toast("按压缩包打开")
-        enterArchive(file, ArchiveKit.Kind.ZIP)
-        return true
+    private fun tryArchiveByContent(
+        file: File,
+        onMiss: () -> Unit,
+    ) {
+        if (!ArchiveKit.looksLikeZip(file)) {
+            onMiss()
+            return
+        }
+        toast("正在识别…")
+        host.background(
+            // 先确认真的能列出条目：有些文件只是碰巧以 PK 开头，ZipFile 会抛异常。
+            work = { runCatching { ArchiveKit.list(file, "", host.env, ArchiveKit.Kind.ZIP) }.getOrDefault(emptyList()) },
+            then = { entries ->
+                if (entries.isEmpty()) {
+                    onMiss()
+                } else {
+                    toast("按压缩包打开")
+                    enterArchive(file, ArchiveKit.Kind.ZIP)
+                }
+            },
+            onError = onMiss,
+        )
     }
 
     /**
