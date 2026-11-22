@@ -45,6 +45,9 @@ open class FilesPage(
     /** 双栏容器：左右两栏各是一套完整目录列表，彼此独立。 */
     private lateinit var split: LinearLayout
     private lateinit var rightScroll: ScrollView
+
+    /** 目录列举的代际（#64）：切目录后旧结果不再写入列表。 */
+    private var listGeneration = 0
     private lateinit var rightColumn: LinearLayout
     private lateinit var editorBody: View
     private lateinit var markdownPreview: ScrollView
@@ -773,10 +776,35 @@ override fun menuItems(): List<String> =
             ),
         )
         listColumn.addView(groupSpacing())
-        val children =
-            runCatching {
-                current.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-            }.getOrNull()
+        // 目录列举放后台（#64）：大目录 listFiles + 排序在主线程会明显卡顿。
+        // 捕获本次目录与代际，回来时目录已换就丢弃，避免旧结果覆盖新目录。
+        val dirSnapshot = current
+        val token = ++listGeneration
+        val loading = hint("正在读取目录…")
+        listColumn.addView(loading)
+        host.background(
+            work = {
+                runCatching {
+                    dirSnapshot.listFiles()?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                }.getOrNull()
+            },
+            then = then@{ children ->
+                if (token != listGeneration || current != dirSnapshot) return@then
+                // 只摘掉占位提示，骨架（路径卡、新建入口）保持不动。
+                listColumn.removeView(loading)
+                renderChildren(children)
+            },
+            onError = onError@{
+                if (token != listGeneration) return@onError
+                listColumn.removeView(loading)
+                listColumn.addView(hint("无法读取此目录"))
+                listColumn.addView(tail())
+            },
+        )
+    }
+
+    /** 目录内容渲染：只在主线程调用，数据已由后台读好。 */
+    private fun renderChildren(children: List<File>?) {
         if (children == null) {
             listColumn.addView(hint("无法读取此目录"))
             listColumn.addView(tail())
@@ -1082,30 +1110,47 @@ override fun menuItems(): List<String> =
                     }
                     if (e.isDirectory) {
                         out.mkdirs()
-                    } else {
-                        out.parentFile?.mkdirs()
+                        continue
+                    }
+                    out.parentFile?.mkdirs()
+                    // 边写边计数（#65）：原来是整条 copyTo 完再看 out.length()，
+                    // 单个超大条目可以一口气写满磁盘，上限形同虚设。
+                    // 而且超限时只 return@use 跳出当前条目、循环继续，最后仍返回 true，
+                    // 界面照样提示「已解压」。现在超限即删半成品、整体判失败。
+                    val ok =
                         zf.getInputStream(e).use { input ->
-                            out.outputStream().use { output -> input.copyTo(output) }
+                            out.outputStream().use { output ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                var over = false
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read <= 0) break
+                                    extracted += read
+                                    if (extracted > MAX_EXTRACT_BYTES) {
+                                        over = true
+                                        break
+                                    }
+                                    output.write(buffer, 0, read)
+                                }
+                                !over
+                            }
                         }
-                        // 解压总量保护：压缩包里一个条目声明的大小可以和实际写出量差很多
-                        // （解压炸弹），磁盘写满后整个工作区都用不了。
-                        extracted += out.length()
-                        if (extracted > MAX_EXTRACT_BYTES) {
-                            AppLog.w(TAG, "解压中断：累计超过上限 $MAX_EXTRACT_BYTES 字节")
-                            return@use
-                        }
+                    if (!ok) {
+                        runCatching { out.delete() }
+                        AppLog.w(TAG, "解压中断：累计超过上限 $MAX_EXTRACT_BYTES 字节")
+                        return@use false
                     }
                 }
+                true
             }
-            true
         }.getOrDefault(false)
 
     private fun pathCard(): View {
-        val count = runCatching { current.list()?.size ?: 0 }.getOrDefault(0)
+        // 不在这里同步 list()：目录项数由后台读完后补（#64）。
         return infoCard(
             R.drawable.ic_folder,
             current.name.ifEmpty { current.absolutePath },
-            listOf("${current.absolutePath} · $count 项"),
+            listOf(current.absolutePath),
             click = { DirectoryPicker.show(host, "跳转到目录", current) { open(it) } },
         )
     }
@@ -1352,14 +1397,20 @@ override fun menuItems(): List<String> =
             )
         }
         sheet.primaryAction("删除") {
-            val ok = runCatching { deleteRecursive(file) }.getOrDefault(false)
             sheet.dismiss()
-            if (ok) {
-                host.onFilesDeleted(file.absolutePath)
-                renderList()
-            } else {
-                toast("删除失败")
-            }
+            toast("正在删除…")
+            // 递归删除可能遍历上万个文件，放主线程会 ANR（#64）。
+            host.background(
+                work = { runCatching { deleteRecursive(file) }.getOrDefault(false) },
+                then = { ok ->
+                    if (ok) {
+                        host.onFilesDeleted(file.absolutePath)
+                        renderList()
+                    } else {
+                        toast("删除失败")
+                    }
+                },
+            )
         }
         sheet.secondaryAction("取消") { sheet.dismiss() }
         sheet.show()
