@@ -122,7 +122,7 @@ object SettingsViewBuilder {
                 container.addView(gap)
             }
             val view =
-                buildRow(inflater, container, row, radioRows, listener, onCategoryClick, insetH, horizontalInsetPx, cardTextInset)
+                buildRow(inflater, container, row, radioRows, listener, onCategoryClick, insetH, horizontalInsetPx, cardTextInset, radioGroup)
                     ?: return@forEachIndexed
             if (!isCustom) applyGroupShape(view, corner, isFirstInGroup, isLastInGroup)
             // 【两层缩进必须分开，这是本文件最容易搞错的地方】
@@ -170,7 +170,7 @@ object SettingsViewBuilder {
         inflater: LayoutInflater,
         container: LinearLayout,
         row: SettingRow,
-        radioRows: MutableList<Pair<View, MaterialRadioButton>>,
+        radioRows: MutableList<Triple<View, MaterialRadioButton, Int>>,
         listener: SettingsActionListener?,
         onCategoryClick: ((String) -> Unit)?,
         // 行内水平内边距与「是否需要清零卡片外距」由 render 算好后传进来。
@@ -180,6 +180,8 @@ object SettingsViewBuilder {
         horizontalInsetPx: Int = -1,
         /** 卡片内文字内距。独立于 horizontalInsetPx，见 render 里的说明。 */
         cardTextInset: Int = 0,
+        /** 当前单选分组号，由 render 维护。 */
+        radioGroup: Int = 0,
     ): View? =
         // Header 在 render 里提前处理，不会进到这里；不再保留不可达的 null 分支。
         when (row) {
