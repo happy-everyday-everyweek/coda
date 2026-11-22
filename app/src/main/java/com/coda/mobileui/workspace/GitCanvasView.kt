@@ -215,6 +215,18 @@ internal class GitCanvasView(
 
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
 
+    /**
+     * 提交时间戳 → 展示串。同一个提交的时间不会变，格式化没必要每帧重做（#529）。
+     * 上限与可见行数同量级，超出就整体清空，避免长仓库下无界增长。
+     */
+    private val timeTextCache = HashMap<Long, String>()
+
+    private fun timeTextOf(epochSeconds: Long): String =
+        timeTextCache.getOrPut(epochSeconds) {
+            if (timeTextCache.size > 512) timeTextCache.clear()
+            timeFormat.format(Date(epochSeconds * 1000L))
+        }
+
     private val surfaceColor: Int get() = colorOf(com.google.android.material.R.attr.colorSurface)
     private val onSurfaceColor: Int get() = colorOf(com.google.android.material.R.attr.colorOnSurface)
     private val variantColor: Int
@@ -285,7 +297,11 @@ internal class GitCanvasView(
             }
             for (i in active.indices) {
                 val expected = active[i] ?: continue
-                if (!rowOf.containsKey(expected)) active[i] = null
+                val target = rowOf[expected]
+                // 只有目标行严格在当前行下方时才继续占泳道。旧写法用 containsKey，
+                // 已绘制过的父提交（合并、重复父）也命中，泳道永不释放，
+                // laneCount 只增不减、worldWidth 被撑大、文字列被挤窄（#527）。
+                if (target == null || target <= index) active[i] = null
             }
         }
         laneOf = result
@@ -330,13 +346,26 @@ internal class GitCanvasView(
     fun focusOn(hash: String?) {
         val row = rowOf[hash] ?: return
         if (height <= 0) {
+            // 未布局时等一帧再试，但必须有终止条件：视图已 detach、永久 GONE、
+            // 或 bottomInset 吃掉全部可视区时 height 永远是 0，
+            // 无条件 post 会变成没有出口的自我重投递（#526）。
+            if (!isAttachedToWindow || visibility != View.VISIBLE || focusRetries >= FOCUS_MAX_RETRIES) {
+                focusRetries = 0
+                return
+            }
+            focusRetries++
             post { focusOn(hash) }
             return
         }
+        focusRetries = 0
         focusRow(row)
         clampOffsets()
         invalidate()
     }
+
+    /** focusOn 等待布局的重试次数上限。 */
+    private var focusRetries = 0
+    private val FOCUS_MAX_RETRIES = 30
 
     private fun focusRow(row: Int) {
         val usableHeight = (height - bottomInset).coerceAtLeast(dp(120f))
@@ -499,7 +528,7 @@ internal class GitCanvasView(
                 refX += refPaint.measureText(refText) + dp(6f)
             }
             smallPaint.color = withAlpha(variantColor, factor)
-            val detail = "${commit.hash.take(7)} · ${timeFormat.format(Date(commit.time * 1000L))}"
+            val detail = "${commit.hash.take(7)} · ${timeTextOf(commit.time)}"
             val remain = (available - (refX - left)).coerceAtLeast(dp(30f))
             canvas.drawText(ellipsize(detail, smallPaint, remain), refX, refY, smallPaint)
         }
@@ -534,7 +563,12 @@ internal class GitCanvasView(
         val dot = miniDotPaint
         dot.color = withAlpha(variantColor, 0.8f * miniAlpha)
         val dotRadius = min(dp(1.1f), 1.6f)
-        for (row in commits.indices) {
+        // 小地图高度只有一百多 dp，逐条画上千个点既看不出来又每帧都跑（#528）。
+        // 按「每个点至少占 1dp」抽样，行数多时跳着画，视觉密度不变。
+        val rowPx = rowHeight * sy
+        val step = if (rowPx > 0f) maxOf(1, (1f / rowPx).toInt()) else 1
+        var row = 0
+        while (row < commits.size) {
             val lane = laneOf.getOrElse(row) { 0 }
             canvas.drawCircle(
                 left + (leftPad + lane * laneWidth + laneWidth / 2f) * sx,
@@ -542,6 +576,7 @@ internal class GitCanvasView(
                 dotRadius,
                 dot,
             )
+            row += step
         }
 
         val selectedRow = selected?.let { rowOf[it] }
@@ -622,6 +657,12 @@ internal class GitCanvasView(
             MotionEvent.ACTION_POINTER_DOWN -> {
                 multiTouch = true
                 pointerSpacing = spacing(event)
+                // 基准必须同步切到两指中点：lastX/lastY 还是单指位置时，
+                // 第一帧双指 MOVE 的 focusX-lastX 会是一次性大位移，画布明显跳一下（#524）。
+                if (event.pointerCount >= 2) {
+                    lastX = (event.getX(0) + event.getX(1)) / 2f
+                    lastY = (event.getY(0) + event.getY(1)) / 2f
+                }
                 velocity?.clear()
                 showMinimap()
                 return true
@@ -753,6 +794,28 @@ internal class GitCanvasView(
         flingAnim = null
     }
 
+    /**
+     * 离开页面时收干净：动画会继续 invalidate 已分离的视图，
+     * 延迟的 hideMiniRunnable 会一直持有视图到触发，VelocityTracker 也需要归还（#525）。
+     */
+    override fun onDetachedFromWindow() {
+        selectedAnim?.cancel()
+        selectedAnim = null
+        pulseAnim?.cancel()
+        pulseAnim = null
+        dimAnim?.cancel()
+        dimAnim = null
+        flingAnim?.cancel()
+        flingAnim = null
+        miniAnim?.cancel()
+        miniAnim = null
+        removeCallbacks(hideMiniRunnable)
+        velocity?.recycle()
+        velocity = null
+        focusRetries = 0
+        super.onDetachedFromWindow()
+    }
+
     private fun fireHideSoon() {
         removeCallbacks(hideMiniRunnable)
         postDelayed(hideMiniRunnable, 900L)
@@ -776,9 +839,18 @@ internal class GitCanvasView(
         maxWidth: Float,
     ): String {
         if (paint.measureText(text) <= maxWidth) return text
-        var end = text.length
-        while (end > 1 && paint.measureText(text.substring(0, end) + "…") > maxWidth) end--
-        return text.substring(0, end) + "…"
+        // 二分找最长可容纳前缀：逐字符递减最坏要 text.length 次 measureText，
+        // 长 subject 在每帧重绘时代价很高（#529）。二分把次数降到 log2(n)。
+        val ellipsis = "…"
+        val budget = maxWidth - paint.measureText(ellipsis)
+        if (budget <= 0f) return ellipsis
+        var lo = 0
+        var hi = text.length
+        while (lo < hi) {
+            val mid = (lo + hi + 1) / 2
+            if (paint.measureText(text, 0, mid) <= budget) lo = mid else hi = mid - 1
+        }
+        return text.substring(0, lo) + ellipsis
     }
 
     private fun withAlpha(
