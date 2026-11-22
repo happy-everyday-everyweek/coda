@@ -1673,8 +1673,9 @@ class MainActivity : BaseActivity() {
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
-        // 停掉宠物的对表拍子与动画，避免页面销毁后还在跑
-        ui.removeCallbacks(petTick)
+        // 清掉 ui Handler 上全部排队任务：petTick、streamFlush、子代理/工作流
+        // 3 秒 ticker、延迟键盘调用都可能比 Activity 活得久，逐个 remove 必漏。
+        ui.removeCallbacksAndMessages(null)
         petBar?.petView()?.animating = false
         super.onDestroy()
     }
@@ -5172,9 +5173,13 @@ class MainActivity : BaseActivity() {
                     },
                 )
             }
-            sheet.primaryAction("知道了") {
+            sheet.primaryAction("去添加模型") {
                 sheet.dismiss()
-                then()
+                // 没有模型时不能 then()：Bot 页首条消息必然失败。送用户去模型设置子页。
+                startActivity(
+                    android.content.Intent(this, SettingsDetailActivity::class.java)
+                        .putExtra(SettingsDetailActivity.EXTRA_PAGE, SettingsDetailActivity.PAGE_PROVIDERS),
+                )
             }
             sheet.show()
             return
