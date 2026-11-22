@@ -129,6 +129,7 @@ internal class GitDetailView(
     }
 
     fun showLoading(text: String) {
+        inputConfirm = null
         container.removeAllViews()
         container.addView(hint(text))
         fadeContentIn()
@@ -136,6 +137,7 @@ internal class GitDetailView(
 
     /** 用 MD3 分组卡片渲染一组行。 */
     fun showRows(rows: List<SettingRow>) {
+        inputConfirm = null
         container.removeAllViews()
         SettingsViewBuilder.render(activity, container, rows, this)
         fadeContentIn()
@@ -147,6 +149,7 @@ internal class GitDetailView(
     }
 
     fun showCode(text: String) {
+        inputConfirm = null
         container.removeAllViews()
         container.addView(codeBlock(text))
         fadeContentIn()
@@ -162,7 +165,10 @@ internal class GitDetailView(
         mode: DiffView.Mode = DiffView.Mode.DIFF,
         clear: Boolean = true,
     ) {
-        if (clear) container.removeAllViews()
+        if (clear) {
+            inputConfirm = null
+            container.removeAllViews()
+        }
         container.addView(
             DiffView(activity).apply {
                 layoutParams =
@@ -177,6 +183,9 @@ internal class GitDetailView(
     private fun fadeContentIn() {
         if (!isAttachedToWindow) return
         container.animate().cancel()
+        // animate().cancel() 会连带取消 playPageEnter 的 translationX 动画，
+        // 它停在中间值上不会自愈，必须显式复位，否则内容永久横向偏移（#544）。
+        container.translationX = 0f
         container.alpha = 0.55f
         container
             .animate()
@@ -202,7 +211,14 @@ internal class GitDetailView(
                 background = null
             }
         container.addView(card(edit))
-        onRowClick = { key -> if (key == "confirm") onConfirm(edit.text.toString().trim()) }
+        // 输入页用局部处理器，不覆盖共享的 onRowClick：
+        // 覆写后 closeDetail/showRows/showCode 都不恢复，宿主设的点击处理会静默失效，
+        // 闭包还会一直持有已脱离视图树的 EditText（#543）。
+        inputConfirm = {
+            val value = edit.text.toString().trim()
+            // 行文案承诺「为空时不会提交」，校验必须在处理器里，不能只靠调用方。
+            if (value.isNotEmpty()) onConfirm(value)
+        }
         container.addView(space())
         SettingsViewBuilder.render(
             activity,
@@ -211,6 +227,9 @@ internal class GitDetailView(
             this,
         )
     }
+
+    /** 输入页专属的确定处理器；离开输入页时清空，避免陈旧闭包持有旧 EditText。 */
+    private var inputConfirm: (() -> Unit)? = null
 
     private fun codeBlock(text: String): View {
         val body =
@@ -259,15 +278,29 @@ internal class GitDetailView(
         }
 
     // ------------------------------------------------------------ 行交互
+    //
+    // SettingsViewBuilder 在传了监听器时不会自行翻转开关/选中态，责任全在监听器这边。
+    // 空实现会让 Toggle 与带 key 的 Radio 变成「看着能点、点了没反应」的死交互（#545）。
+    // 这里统一转发给宿主的行回调，由宿主决定改什么状态并重渲染。
 
-    override fun onRadioSelect(key: String) {}
+    override fun onRadioSelect(key: String) {
+        onRowClick?.invoke(key)
+    }
 
     override fun onToggleChange(
         key: String,
         checked: Boolean,
-    ) {}
+    ) {
+        onRowClick?.invoke(key)
+    }
 
     override fun onValueClick(key: String) {
+        // confirm 优先交给输入页的局部处理器；其余 key 才走宿主的共享回调。
+        val confirm = inputConfirm
+        if (key == "confirm" && confirm != null) {
+            confirm()
+            return
+        }
         onRowClick?.invoke(key)
     }
 
