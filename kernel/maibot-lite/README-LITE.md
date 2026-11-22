@@ -20,7 +20,7 @@
 - A_memorix 长期记忆
 - 外接 Agent / ACP
 
-把这些砍掉之后，核心链路的原生依赖降到 **6 个**，其中 5 个在 Chaquopy 源可得，pydantic-core 由 CI 交叉编译。
+把这些砍掉之后，核心链路的原生依赖是 **8 个**（以 requirements-lite.txt 为准）。它们的 Android wheel 由 **coda 仓库根的 build.yml → tools/build-android-wheels.sh** 统一产出；本文件所在的 lite-core.yml 只下载 manylinux(glibc) 官方轮用于体积评估，不做交叉编译（#25）。
 
 ---
 
@@ -44,7 +44,7 @@
 | zstandard | Chaquopy 源 |
 | cryptography / cffi | Chaquopy 源 |
 | greenlet | Chaquopy 源 |
-| pydantic-core | CI 用 Rust + NDK 交叉编译 |
+| pydantic-core | coda 根 build.yml → tools/build-android-wheels.sh（Rust + NDK） |
 
 已移除的原生包：msgpack 改用 pickle，watchfiles 改用轮询，rpds-py 改用纯 Python 实现，rapidfuzz 改用 difflib，ahocorasick-rs 无调用点。
 
@@ -172,7 +172,7 @@ A_memorix、外接 Agent 或 MCP，聊天与数据库均写入调用方指定的
 - [x] 写最小的 `LiteRuntime`：不启动 WebUI / plugin_runtime / API server，只跑消息处理
 - [ ] 多租户 / 记忆隔离相关代码的进一步裁剪（`session_id` 简化）
 - [x] Chaquopy 侧确认 CPython 3.12 支持情况（17.2，兼容 AGP 8.13）
-- [ ] 为 `pydantic-core` 准备 Android bionic wheel（已加入 Coda 的 personal-agent CI 交叉编译）
+- [x] 为 `pydantic-core` 准备 Android bionic wheel（由 coda 根 build.yml 调 tools/build-android-wheels.sh 完成，不在本 fork 的 lite-core.yml 里）
 - [ ] 实测瘦身后的启动耗时与 RSS
 
 ---
