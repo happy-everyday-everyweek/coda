@@ -1,0 +1,30 @@
+# 供应链加固（#23）：Actions 与 Gradle 依赖的自动更新。
+#
+# actions 目前仍按 tag 引用（如 actions/checkout@v4），上游被劫持时
+# 带 contents:write 的发布流水线会直接暴露。dependabot 会持续提出升级 PR，
+# 但**它不会自动把 tag 换成 commit SHA**——完全 pin SHA 需要人工逐个核对后替换。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+
+  - package-ecosystem: pip
+    directory: /kernel/maibot-lite
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"

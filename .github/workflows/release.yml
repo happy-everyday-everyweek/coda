@@ -30,8 +30,12 @@ jobs:
           fetch-depth: 0
 
       - name: 解析版本号
+        # tag 经 env 传值，不直接内插进 bash（#23）：
+        # 表达式在 shell 解析前展开，输入含 `"; …` 即可注入命令。
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="$INPUT_TAG"
           echo "CODA_TAG=$TAG" >> "$GITHUB_ENV"
           echo "CODA_VERSION_NAME=${TAG#v}" >> "$GITHUB_ENV"
           # 与 dev 同一套算法、同一条时间序列，只把渠道位换成 1：
@@ -105,14 +109,14 @@ jobs:
             exit 1
           fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/coda-release.jks"
-          {
-            echo "CODA_KEYSTORE_PATH=$RUNNER_TEMP/coda-release.jks"
-            echo "CODA_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
-            echo "CODA_KEY_ALIAS=$KEY_ALIAS"
-            echo "CODA_KEY_PASSWORD=$KEY_PASSWORD"
-          } >> "$GITHUB_ENV"
-
+          # 只把路径写进 GITHUB_ENV；口令不写（#23）：
+          # GITHUB_ENV 会暴露给后续所有步骤，口令只在 assembleRelease 那一步的 env 里引用。
+          echo "CODA_KEYSTORE_PATH=$RUNNER_TEMP/coda-release.jks" >> "$GITHUB_ENV"
       - name: 打包 release APK
+        env:
+          CODA_KEYSTORE_PASSWORD: ${{ secrets.CODA_KEYSTORE_PASSWORD }}
+          CODA_KEY_ALIAS: ${{ secrets.CODA_KEY_ALIAS }}
+          CODA_KEY_PASSWORD: ${{ secrets.CODA_KEY_PASSWORD }}
         run: |
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
           [ -x "$AAPT2" ] || AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)"
