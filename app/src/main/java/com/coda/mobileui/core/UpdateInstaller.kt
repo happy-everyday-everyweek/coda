@@ -56,22 +56,14 @@ object UpdateInstaller {
         val dir = File(ctx.filesDir, "updates").apply { mkdirs() }
         // 文件名带版本号，避免上一版的半成品被当成这一版。
         val target = File(dir, "coda-${result.versionCode}.apk")
-        if (target.isFile && target.length() > 0) {
-            // 已下过且校验通过就直接用，省一次几十 MB 的重下。
-            val spec = specFor(result)
-            if (AssetFetcher.verify(target, spec)) {
-                onLog("已有下载好的更新包：${target.name}")
-                return target
-            }
-            onLog("旧的下载包校验不通过，重新下载")
-            runCatching { target.delete() }
-        }
-
+        // 「已就位先校验、坏了删掉重下」是 AssetFetcher.ensure 的第 1 步，
+        // 这里不再重复实现一遍缓存判断（两处各写一份必然漂移），spec 也只构造一次。
+        val spec = specFor(result)
         val ok =
             AssetFetcher.ensure(
                 ctx = ctx,
                 target = target,
-                spec = specFor(result),
+                spec = spec,
                 onProgress = onProgress?.let { AssetFetcher.Progress { d, t -> it.onBytes(d, t) } },
                 onLog = onLog,
             )
@@ -155,7 +147,11 @@ object UpdateInstaller {
                 }
             ctx.startActivity(intent)
             true
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
+            // 不能静默：无安装器（ActivityNotFound）、FileProvider 配置错
+            // （IllegalArgument）、URI 授权失败（Security）都要留下可排查的日志，
+            // 否则用户侧只剩「点了没反应」。Error 不拦，让它照常传播。
+            AppLog.w("Update", "启动安装器失败：${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }
@@ -204,8 +200,9 @@ object UpdateInstaller {
     /**
      * 清理旧的更新包。
      *
-     * 升级完成后旧包就没用了，但它可能占几十 MB。只保留 [keepVersionCode]
-     * 对应的那个，其余删掉。
+     * 升级完成后比 [keepVersionCode] 旧的包没用了，但它可能占几十 MB。
+     * 比当前版本新的包必须保留：那是「已下载、待安装」的更新，
+     * 只保留当前版本会把下载缓存整个清空，复用优化永远不生效。
      */
     fun cleanup(
         ctx: Context,
@@ -213,10 +210,19 @@ object UpdateInstaller {
     ) {
         val dir = File(ctx.filesDir, "updates")
         if (!dir.isDirectory) return
-        val keep = "coda-$keepVersionCode.apk"
         dir.listFiles()?.forEach { f ->
-            if (f.name != keep) runCatching { f.delete() }
+            if (!shouldKeepApk(f.name, keepVersionCode)) runCatching { f.delete() }
         }
+    }
+
+    /** 更新包文件是否该保留：命名合规且版本号 >= 当前已安装版本。 */
+    internal fun shouldKeepApk(
+        name: String,
+        keepVersionCode: Int,
+    ): Boolean {
+        val match = Regex("^coda-(\\d+)\\.apk$").matchEntire(name) ?: return false
+        val version = match.groupValues[1].toIntOrNull() ?: return false
+        return version >= keepVersionCode
     }
 
     /** 当前设备架构是否受支持。目前只出 arm64 包，这条用于给出准确提示。 */

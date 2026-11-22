@@ -118,11 +118,28 @@ object UpdateChecker {
                 "Cache-Control" to "no-cache",
             )
 
+        // 排序只做一次：rank 里的 ping/测速是真实网络探测，两份清单各排一遍
+        // 等于把约 26 个镜像探测两轮。体积与网络环境相同，顺序可共用。
+        val net = ctx?.let { MirrorScoreboard.currentNet(it) } ?: MirrorScoreboard.Net.OTHER
+        val history = ctx?.let { MirrorScoreboard.load(it, net) } ?: emptyMap()
+        val ranked =
+            GhMirrors.rank(
+                probeUrl = DEV_MANIFEST_URL,
+                // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速。
+                // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
+                bytes = 1,
+                history = history,
+                onLog = { msg ->
+                    AppLog.i(TAG, msg)
+                    onLog(msg)
+                },
+            )
+
         // 两个渠道都取。任一拿不到都不影响另一个——单渠道坏掉时仍能更新。
         onLog("查询版本清单（dev 与 release 两个渠道）")
-        val dev = httpGet(ctx, DEV_MANIFEST_URL, headers, onLog)?.let { parseManifest(it, "dev") }
+        val dev = httpGet(ctx, DEV_MANIFEST_URL, headers, ranked, net, onLog)?.let { parseManifest(it, "dev") }
         onLog(if (dev != null) "dev 清单：${dev.versionCode}" else "dev 清单不可用")
-        val rel = httpGet(ctx, RELEASE_MANIFEST_URL, headers, onLog)?.let { parseManifest(it, "release") }
+        val rel = httpGet(ctx, RELEASE_MANIFEST_URL, headers, ranked, net, onLog)?.let { parseManifest(it, "release") }
         onLog(if (rel != null) "release 清单：${rel.versionCode}" else "release 清单不可用")
         val candidates = listOfNotNull(dev, rel)
         if (candidates.isEmpty()) {
@@ -169,6 +186,26 @@ object UpdateChecker {
 
         val tag = json.optString("tag")
 
+        // 字段格式校验：畸形 size/sha256 会一路带进下载与安装校验，
+        // 表现为「永远校验不过」或进度/空间判断异常，必须在解析层拦下。
+        val size = json.optLong("size", 0)
+        if (size < 0) {
+            AppLog.w(TAG, "清单 size 为负（$size），丢弃该清单")
+            return null
+        }
+        val rawSha = json.optString("sha256").trim().lowercase()
+        val sha256: String?
+        if (rawSha.isEmpty()) {
+            // 没给哈希是 API 兜底的合法形态，下游会改用大小+包结构校验。
+            sha256 = null
+        } else {
+            if (rawSha.length != 64 || rawSha.any { it !in '0'..'9' && it !in 'a'..'f' }) {
+                AppLog.w(TAG, "清单 sha256 不是 64 位十六进制，丢弃该清单")
+                return null
+            }
+            sha256 = rawSha
+        }
+
         return Result(
             ok = true,
             hasUpdate = false,
@@ -178,8 +215,8 @@ object UpdateChecker {
             tag = tag,
             notes = json.optString("notes").trim(),
             apkUrl = apkUrl,
-            apkSize = json.optLong("size", 0),
-            sha256 = json.optString("sha256").takeIf { it.isNotEmpty() },
+            apkSize = size,
+            sha256 = sha256,
             publishedAt = json.optString("publishedAt"),
         )
     }
@@ -203,28 +240,18 @@ object UpdateChecker {
         ctx: Context?,
         url: String,
         headers: Map<String, String>,
+        ranked: List<GhMirror>,
+        net: MirrorScoreboard.Net,
         onLog: (String) -> Unit = {},
     ): JSONObject? {
-        // 有了 ctx 就能查账本；没有就退化为纯 ping 排序（历史为空）。
-        val net = ctx?.let { MirrorScoreboard.currentNet(it) } ?: MirrorScoreboard.Net.OTHER
-        val history = ctx?.let { MirrorScoreboard.load(it, net) } ?: emptyMap()
-        val ranked =
-            GhMirrors.rank(
-                probeUrl = url,
-                // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速。
-                // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
-                // 但这种场景恰恰最需要历史成绩：几 KB 的文件卡在慢源上，
-                // 用户要等几分钟，而 ping 只看握手完全反映不出来。
-                bytes = 1,
-                history = history,
-                onLog = { msg ->
-                    // 两处都要：AppLog 供事后排查，onLog 供界面实时显示。
-                    // 用 i() 不用 d()：minLevel 默认 INFO，d() 在正式包里会被丢弃。
-                    AppLog.i(TAG, msg)
-                    onLog(msg)
-                },
-            )
+        // 总截止时间：单连接 8s+12s 超时叠上几十个源，弱网下一次检查可能拖数分钟。
+        // 90 秒后不再试剩余源，快速失败留给下一次检查。
+        val deadline = System.currentTimeMillis() + MANIFEST_TOTAL_BUDGET_MS
         for (mirror in ranked) {
+            if (System.currentTimeMillis() > deadline) {
+                AppLog.w(TAG, "取清单超出总时限 ${MANIFEST_TOTAL_BUDGET_MS / 1000}s，放弃剩余源：$url")
+                break
+            }
             // 清单是信任根：它同时决定 apkUrl 与 sha256，第三方镜像能一起改写，
             // 「校验自洽」照样通过。所以清单只走官方直连，镜像只用于搬 APK 大文件。
             val candidate = GhMirrors.wrap(mirror.prefix, url)
@@ -263,6 +290,31 @@ object UpdateChecker {
         return null
     }
 
+    /** 单个 URL 全部镜像尝试的总时限：超时后放弃剩余源，防止弱网下拖数分钟。 */
+    private const val MANIFEST_TOTAL_BUDGET_MS = 90_000L
+
+    /** 清单响应体的字符上限：正常清单几 KB，64K 字符已极宽裕；超限视为无效响应。 */
+    internal const val MAX_MANIFEST_CHARS = 64 * 1024
+
+    /**
+     * 有上限的读取：最多读 [limit] 个字符，还有剩余就判超限返回 null。
+     * 异常镜像返回超大 HTML/目录页时不至于把整个响应读进内存。
+     */
+    internal fun readBounded(
+        reader: java.io.Reader,
+        limit: Int,
+    ): String? {
+        val buf = CharArray(limit)
+        var total = 0
+        while (total < limit) {
+            val n = reader.read(buf, total, limit - total)
+            if (n < 0) return String(buf, 0, total)
+            total += n
+        }
+        // 读满上限后探一个字符：还有内容说明超限。
+        return if (reader.read() < 0) String(buf, 0, total) else null
+    }
+
     /** 对单个 URL 取 JSON；内容不是合法 JSON 也视为失败（镜像的错误页是 HTML）。 */
     private fun fetchJson(
         fullUrl: String,
@@ -281,14 +333,25 @@ object UpdateChecker {
                     conn.errorStream?.close()
                     null
                 } else {
-                    val text = conn.inputStream.bufferedReader().use { it.readText() }
-                    // 镜像返回的 HTML 错误页同样会走到这里，JSONObject 会抛异常。
-                    runCatching { JSONObject(text) }.getOrNull()
+                    val text =
+                        conn.inputStream.bufferedReader().use { readBounded(it, MAX_MANIFEST_CHARS) }
+                    if (text == null) {
+                        AppLog.w(TAG, "清单响应超过 $MAX_MANIFEST_CHARS 字符上限，判为无效：$fullUrl")
+                        null
+                    } else {
+                        // 镜像返回的 HTML 错误页同样会走到这里，JSONObject 会抛异常。
+                        runCatching { JSONObject(text) }.getOrNull()
+                    }
                 }
             } finally {
                 conn.disconnect()
             }
-        } catch (_: Throwable) {
+        } catch (e: java.util.concurrent.CancellationException) {
+            // 取消必须向上传播：吞掉它会让镜像循环在协程取消后继续跑。
+            throw e
+        } catch (e: Exception) {
+            // 只捕获预期内的失败（IO/解析等）；Error 不再被降级成「无结果」。
+            AppLog.w(TAG, "取清单失败：${e.javaClass.simpleName}: ${e.message}")
             null
         }
 }

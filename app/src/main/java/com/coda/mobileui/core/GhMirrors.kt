@@ -34,8 +34,14 @@ object GhMirrors {
         return mirrors.sortedByDescending { MirrorScoreboard.scoreOf(history[it.id]) }
     }
 
-    /** host 需要以 / 结尾，否则拼出来的 URL 会把主机名和路径粘在一起。 */
-    private fun p(host: String): String = if (host.endsWith("/")) host else "$host/"
+    /**
+     * host 需要以分隔符结尾，否则拼出来的 URL 会把主机名和路径粘在一起。
+     * `?` 与 `=` 是查询串前缀（如 npee 的 `https://down.npee.cn/?`）的合法结尾，
+     * 再补 `/` 会把目标 URL 变成查询串里的路径片段，镜像端解析不到目标地址。
+     */
+    internal fun normalizePrefix(host: String): String =
+        if (host.endsWith("/") || host.endsWith("?") || host.endsWith("=")) host else "$host/"
+    private fun p(host: String): String = normalizePrefix(host)
 
     /**
      * 内置清单。
@@ -85,7 +91,10 @@ object GhMirrors {
         prefix: String,
         rawUrl: String,
     ): String =
-        if (prefix.contains("github.com/") && rawUrl.startsWith("https://github.com/")) {
+        // 「该源本身就指向目标」用 startsWith 判定：contains 会把
+        // `https://p.example/?u=https://github.com/` 这类代理参数、
+        // `https://cdn.github.com.example.net/` 这类主机误判成直连并静默跳过镜像。
+        if (rawUrl.startsWith(prefix)) {
             rawUrl
         } else {
             prefix + rawUrl
@@ -140,8 +149,10 @@ object GhMirrors {
         }
         onLog("探测镜像连通性…")
         val pinged = MirrorSpeedTester.pingAll(mirrors)
-        val latencyOf = pinged.filter { it.ok }.associate { it.mirror.id to it.latencyMs }
-        val alive = pinged.filter { it.ok }.map { it.mirror }
+        // 过滤一次复用：两次 filter 是两份中间集合；latencyOf 只有小文件分支用，
+        // 大文件走测速路径时不为它白建一张 map。
+        val okPings = pinged.filter { it.ok }
+        val alive = okPings.map { it.mirror }
         if (alive.isEmpty()) {
             onLog("没有镜像能 ping 通，按清单顺序盲试")
             return mirrors
@@ -149,6 +160,7 @@ object GhMirrors {
         onLog("${alive.size}/${mirrors.size} 个镜像可连通")
 
         if (bytes in 1 until SPEEDTEST_MIN_BYTES) {
+            val latencyOf = okPings.associate { it.mirror.id to it.latencyMs }
             // 小文件的核心改动：以前这里直接 `return alive`，也就是只按 ping 延迟排。
             // 但 ping 只测 TCP 握手，一个「握手 80ms、传数据 3KB/s」的镜像会排在
             // 前面，几 KB 的清单被它拖上几分钟。现在把历史成绩折算成分数参与排序：

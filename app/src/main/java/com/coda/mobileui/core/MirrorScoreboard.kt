@@ -53,6 +53,9 @@ object MirrorScoreboard {
         /** 成功下载的累计字节与累计毫秒，用来算平均速度。 */
         val okBytes: Long = 0,
         val okMs: Long = 0,
+        /** 最近一次成功/失败的时间戳（epoch ms）。0 表示旧账本没记，评分退化为不衰减。 */
+        val lastOkMs: Long = 0,
+        val lastFailMs: Long = 0,
     ) {
         /** 平均速度（字节/秒）。样本不足或没成功过时为 0。 */
         val avgBps: Double
@@ -74,12 +77,44 @@ object MirrorScoreboard {
         runCatching {
             val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return Net.OTHER
-            when {
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Net.WIFI
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> Net.CELLULAR
-                else -> Net.OTHER
+            // VPN 的底层网络可以解析（API 29+）：VPN-over-Wi-Fi 归 WIFI、
+            // VPN-over-Cellular 归 CELLULAR，解析不到才落 OTHER。
+            // 不解析的话两种 VPN 会话混进同一个 OTHER 桶，分桶就白做了。
+            var underlyingWifi = false
+            var underlyingCellular = false
+            if (android.os.Build.VERSION.SDK_INT >= 29 &&
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            ) {
+                caps.underlyingNetworks?.forEach { under ->
+                    val uc = cm.getNetworkCapabilities(under) ?: return@forEach
+                    if (uc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) underlyingWifi = true
+                    if (uc.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) underlyingCellular = true
+                }
             }
+            netOf(
+                wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                cellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+                vpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+                underlyingWifi = underlyingWifi,
+                underlyingCellular = underlyingCellular,
+            )
         }.getOrDefault(Net.OTHER)
+
+    /** 网络归类的纯逻辑（与 Android API 解耦，便于单测）。直连判定优先于 VPN。 */
+    internal fun netOf(
+        wifi: Boolean,
+        cellular: Boolean,
+        vpn: Boolean,
+        underlyingWifi: Boolean,
+        underlyingCellular: Boolean,
+    ): Net =
+        when {
+            wifi -> Net.WIFI
+            cellular -> Net.CELLULAR
+            vpn && underlyingWifi -> Net.WIFI
+            vpn && underlyingCellular -> Net.CELLULAR
+            else -> Net.OTHER
+        }
 
     // ------------------------------------------------------------ 读写
 
@@ -95,6 +130,9 @@ object MirrorScoreboard {
         net: Net,
     ): Map<String, Stat> =
         runCatching {
+            // 读也要持锁：record 的读-改-写中间态是半截文件，
+            // 不加锁的读取会把它解析失败后退化成空历史，战绩「消失」。
+            synchronized(lock) {
             val f = fileOf(ctx)
             // 注意：这里不能用裸 return（会从 runCatching 的 lambda 非局部返回，
             // 语义上能过编译但可读性差且容易在后续改动里出错），改成 if/else 求值。
@@ -119,10 +157,13 @@ object MirrorScoreboard {
                                 failed = o.optInt("failed", 0),
                                 okBytes = o.optLong("okBytes", 0),
                                 okMs = o.optLong("okMs", 0),
+                                lastOkMs = o.optLong("lastOkMs", 0),
+                                lastFailMs = o.optLong("lastFailMs", 0),
                             )
                     }
                     out
                 }
+            }
             }
         }.getOrElse {
             // 备份原件：损坏的账本至少还能手工恢复，不会被下一次记账直接覆盖成空表。
@@ -161,6 +202,7 @@ object MirrorScoreboard {
                 val key = bucketKey(net)
                 val bucket = root.optJSONObject(key) ?: JSONObject().also { root.put(key, it) }
                 val old = bucket.optJSONObject(id)
+                val now = System.currentTimeMillis()
                 val next =
                     JSONObject().apply {
                         put("verified", old?.optInt("verified", 0) ?: 0)
@@ -168,22 +210,25 @@ object MirrorScoreboard {
                         put("failed", old?.optInt("failed", 0) ?: 0)
                         put("okBytes", old?.optLong("okBytes", 0) ?: 0L)
                         put("okMs", old?.optLong("okMs", 0) ?: 0L)
+                        put("lastOkMs", old?.optLong("lastOkMs", 0) ?: 0L)
+                        put("lastFailMs", old?.optLong("lastFailMs", 0) ?: 0L)
                         when (outcome) {
                             Outcome.VERIFIED -> {
                                 put("verified", (old?.optInt("verified", 0) ?: 0) + 1)
+                                put("lastOkMs", now)
                                 // 只有成功样本才计入速度，失败的耗时不代表带宽。
                                 if (bytes > 0 && elapsedMs > 0) {
                                     put("okBytes", (old?.optLong("okBytes", 0) ?: 0L) + bytes)
                                     put("okMs", (old?.optLong("okMs", 0) ?: 0L) + elapsedMs)
                                 }
                             }
-
                             Outcome.HASH_FAILED -> {
                                 put("hashFailed", (old?.optInt("hashFailed", 0) ?: 0) + 1)
+                                put("lastFailMs", now)
                             }
-
                             Outcome.FAILED -> {
                                 put("failed", (old?.optInt("failed", 0) ?: 0) + 1)
+                                put("lastFailMs", now)
                             }
                         }
                     }
@@ -257,12 +302,18 @@ object MirrorScoreboard {
      *
      * 没样本时返回 0（中性），由调用方用 ping 延迟做次级排序。
      */
-    fun scoreOf(stat: Stat?): Double {
+    fun scoreOf(
+        stat: Stat?,
+        nowMs: Long = System.currentTimeMillis(),
+    ): Double {
         if (stat == null || stat.samples == 0) return 0.0
         var s = 0.0
-        s += stat.verified * 1000.0
-        s -= stat.hashFailed * 1500.0
-        s -= stat.failed * 200.0
+        // 时间衰减（半衰期 7 天）：失败会随时间淡出，坏源有机会恢复；
+        // 成功信用做对数压缩并同样衰减，避免早期镜像靠累计计数永久霸榜。
+        // 旧账本没有时间戳（=0）时不衰减，保持既有行为。
+        s += credit(stat.verified, stat.lastOkMs, nowMs) * 1000.0
+        s -= credit(stat.hashFailed, stat.lastFailMs, nowMs) * 1500.0
+        s -= credit(stat.failed, stat.lastFailMs, nowMs) * 200.0
         val bps = stat.avgBps
         if (bps > 0) {
             // log2 压缩：1MB/s → 0，8MB/s → +180，64KB/s → −240。
@@ -274,5 +325,23 @@ object MirrorScoreboard {
             }
         }
         return s
+    }
+
+    /**
+     * 把累计次数折算成「当前有效信用」：
+     *  · 对数压缩 ln(1+n)：3 次 ≈ 1.39，3000 次 ≈ 8.0，历史不再无限膨胀；
+     *  · 距最近事件的年龄按 7 天半衰期指数衰减；
+     *  · 时间戳缺失（旧账本）时退回线性计数，行为与旧版一致。
+     */
+    private fun credit(
+        count: Int,
+        lastEventMs: Long,
+        nowMs: Long,
+    ): Double {
+        if (count <= 0) return 0.0
+        if (lastEventMs <= 0) return count.toDouble()
+        val ageDays = ((nowMs - lastEventMs).coerceAtLeast(0L)) / (24.0 * 3600 * 1000)
+        val decay = Math.pow(0.5, ageDays / 7.0)
+        return Math.log1p(count.toDouble()) * decay
     }
 }
