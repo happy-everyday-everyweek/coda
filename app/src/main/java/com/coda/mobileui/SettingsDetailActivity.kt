@@ -693,6 +693,10 @@ class SettingsDetailActivity :
                 chatImportLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
             }
 
+            key == "chat_import_sources" -> {
+                showChatImportSources()
+            }
+
             key.startsWith("sysprompt_edit:") -> {
                 openSystemPromptEditor(key.removePrefix("sysprompt_edit:"))
             }
@@ -1538,6 +1542,61 @@ class SettingsDetailActivity :
                     .show()
             }
         }.start()
+    }
+
+    /**
+     * 来源能力矩阵（#734）。
+     *
+     * 明确列出每个源能带过来什么、缺什么。缺失是源固有有损，
+     * 不是导入器缺陷——用户看到「ChatGPT 没有工具结果」才不会以为导入坏了。
+     * 已实现与仅预留分开列，避免用户选了却导不了。
+     */
+    private fun showChatImportSources() {
+        val neutral =
+            MaterialColors.getColor(
+                this,
+                com.google.android.material.R.attr.colorOnSurfaceVariant,
+                android.graphics.Color.GRAY,
+            )
+        CodaSheet(this)
+            .title("支持的导入来源")
+            .content { col ->
+                col.addView(
+                    TextView(this).apply {
+                        text = "当前只有 DeepSeek 接了完整入口，其余来源的解析器已就绪但还没有独立入口。"
+                        textSize = 13f
+                        setTextColor(neutral)
+                        setPadding(0, 0, 0, dp(8))
+                    },
+                )
+                com.coda.mobileui.core.ChatImportRegistry.all().forEach { a ->
+                    col.addView(
+                        TextView(this).apply {
+                            text = a.title
+                            textSize = 14f
+                            setPadding(0, dp(6), 0, 0)
+                        },
+                    )
+                    col.addView(
+                        TextView(this).apply {
+                            text = a.capability
+                            textSize = 13f
+                            setTextColor(neutral)
+                        },
+                    )
+                }
+                col.addView(
+                    TextView(this).apply {
+                        text =
+                            "仅预留未实现：" +
+                                com.coda.mobileui.core.ChatImportRegistry.reserved().joinToString("、")
+                        textSize = 13f
+                        setTextColor(neutral)
+                        setPadding(0, dp(10), 0, 0)
+                    },
+                )
+            }.primaryAction("知道了") { it.dismiss() }
+            .show()
     }
 
     /**

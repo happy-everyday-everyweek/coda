@@ -1380,6 +1380,7 @@ object SettingsData {
         rows += SettingRow.Value("导入数据", "从 Coda 备份恢复", "backup_import")
         rows += SettingRow.Header("从其他应用导入")
         rows += SettingRow.Value("DeepSeek 聊天记录", "官网导出的 deepseek_data-*.zip", "chat_import_deepseek")
+        rows += SettingRow.Value("支持的来源与能力", "各来源能带过来什么、缺什么", "chat_import_sources")
         rows += SettingRow.Header("当前数据")
         rows += SettingRow.Value("可备份内容", DataBackup.describe(ctx))
         rows += SettingRow.Value("不包含", "会话记录、日志与应用本身")
