@@ -961,7 +961,11 @@ class WorkspaceActivity : BaseActivity() {
         for (entry in tabs) entry.data.state = entry.page.saveState()
         val snapshot = tabs.map { it.data }
         val active = activeId
-        workspaceIo.execute { runCatching { WorkspaceTabs.save(root, snapshot, active) } }
+        // root 必须在排队时就取快照：switchRootNow 会先 persist() 再改 root，
+        // 后台任务真正执行时 root 可能已经是新目录，于是「新 root + 旧 tabs」
+        // 把上一个工作区的标签写进新工作区的 .coda/workspace.json（#61）。
+        val rootForSave = root
+        workspaceIo.execute { runCatching { WorkspaceTabs.save(rootForSave, snapshot, active) } }
     }
 
     // ------------------------------------------------------------ 标签总览
