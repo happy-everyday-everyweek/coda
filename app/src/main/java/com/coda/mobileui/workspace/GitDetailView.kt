@@ -57,11 +57,13 @@ internal class GitDetailView(
         bar.addView(
             ImageButton(activity).apply {
                 setImageResource(R.drawable.ic_arrow_back)
+                contentDescription = "返回"
                 background = ContextCompat.getDrawable(activity, R.drawable.bg_circle_button)
                 setColorFilter(colorOf(com.google.android.material.R.attr.colorOnSurface))
-                setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
+                setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
+                // 48dp 触控目标（#87）：原来是 44dp。
                 layoutParams =
-                    FrameLayout.LayoutParams(dp(44f), dp(44f), Gravity.START or Gravity.CENTER_VERTICAL)
+                    FrameLayout.LayoutParams(dp(48f), dp(48f), Gravity.START or Gravity.CENTER_VERTICAL)
                 setOnClickListener { onBack?.invoke() }
             },
         )

@@ -385,12 +385,12 @@ class WorkspaceActivity : BaseActivity() {
                 gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(MATCH, dp(52f))
             }
-        backButton = toolButton(R.drawable.ic_arrow_back) { handleBack() }
-        aheadButton = toolButton(R.drawable.ic_arrow_forward) { if (ahead.isNotEmpty()) stepAhead() }
+        backButton = toolButton(R.drawable.ic_arrow_back, "返回") { handleBack() }
+        aheadButton = toolButton(R.drawable.ic_arrow_forward, "前进") { if (ahead.isNotEmpty()) stepAhead() }
         row.addView(slot(backButton))
         row.addView(slot(aheadButton))
-        val addButton = toolButton(R.drawable.ic_add) { showNewTabSheet() }
-        val moreButton = toolButton(R.drawable.ic_more_vert) { showMenu() }
+        val addButton = toolButton(R.drawable.ic_add, "新建标签页") { showNewTabSheet() }
+        val moreButton = toolButton(R.drawable.ic_more_vert, "更多操作") { showMenu() }
         row.addView(slot(addButton))
         countButton =
             TextView(this).apply {
@@ -440,17 +440,24 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun toolButton(
         iconRes: Int,
+        /** 读屏名称（#87）：纯图标按钮必须有，否则 TalkBack 只报「按钮」。 */
+        label: String,
         click: () -> Unit,
     ): ImageButton =
         ImageButton(this).apply {
             setImageResource(iconRes)
+            contentDescription = label
             // 默认按主题前景着色：底栏会在切页时再覆盖，标签总览头部的图标则用这个默认值。
             setColorFilter(onSurface)
             background = null
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            val size = dp(40f)
+            // 触控区 48dp、图标视觉仍靠 padding 收在中间（#87）：
+            // 扩大可点区域而不是放大图标。
+            val size = dp(48f)
             layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
-            setPadding(dp(9f), dp(9f), dp(9f), dp(9f))
+            minimumWidth = size
+            minimumHeight = size
+            setPadding(dp(13f), dp(13f), dp(13f), dp(13f))
             setOnClickListener { click() }
             // 底栏图标很密，按下只做轻微缩放、不做透明度：缩放在 40dp 的方块里最清楚。
             setOnTouchListener { v, ev ->
@@ -1016,7 +1023,7 @@ class WorkspaceActivity : BaseActivity() {
                 layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             },
         )
-        header.addView(toolButton(R.drawable.ic_close_lucide) { hideOverview() })
+        header.addView(toolButton(R.drawable.ic_close_lucide, "关闭标签总览") { hideOverview() })
         panel.addView(header)
 
         val scroll =
@@ -1180,10 +1187,14 @@ class WorkspaceActivity : BaseActivity() {
         head.addView(
             ImageView(this).apply {
                 setImageResource(R.drawable.ic_close_lucide)
+                contentDescription = "关闭标签"
                 setColorFilter(onSurfaceVariant)
-                val size = dp(30f)
+                // 48dp 触控区（#87）：30dp 的关闭图标很容易误触相邻卡片。
+                val size = dp(48f)
                 layoutParams = LinearLayout.LayoutParams(size, size)
-                setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
+                minimumWidth = size
+                minimumHeight = size
+                setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
                 setOnClickListener {
                     // 先让这张卡缩一下再真正关掉，避免网格里"凭空少一格"
                     card

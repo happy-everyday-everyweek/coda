@@ -41,6 +41,16 @@ internal class GitCanvasView(
         set(value) {
             field = value
             rebuildLanes()
+            // 自绘画布对读屏默认是一个无名 View（#87）。
+            // 这里先给一份整体摘要，让 TalkBack 至少能报出「有多少提交、最新一条是什么」；
+            // 逐节点的虚拟视图（ExploreByTouchHelper）尚未实现。
+            contentDescription =
+                if (value.isEmpty()) {
+                    "提交图：暂无提交"
+                } else {
+                    val head = value.first()
+                    "提交图：共 ${value.size} 条提交，最新一条 ${head.hash.take(7)}，${head.subject}"
+                }
             invalidate()
         }
 

@@ -2230,6 +2230,11 @@ class MainActivity : BaseActivity() {
                             isClickable = true
                             setOnClickListener { v ->
                                 val open = toolHost.visibility == View.VISIBLE
+                                // 展开/收起走过渡而不是硬切（#51）。
+                                androidx.transition.TransitionManager.beginDelayedTransition(
+                                    host,
+                                    androidx.transition.AutoTransition().setDuration(Motion.STANDARD),
+                                )
                                 toolHost.visibility = if (open) View.GONE else View.VISIBLE
                                 if (open) {
                                     expandedToolGroups.remove(message.id)
