@@ -45,7 +45,14 @@ object OAuthProviders {
         val size: Long,
         val flow: Flow,
         val note: String,
+        /** 承载网关：默认 CLIProxyAPI + 插件，WorkBuddy 系走独立网关（#345）。 */
+        val gateway: Gateway = Gateway.CLIPROXY,
+        /** 是否走「浏览器授权 + 粘贴回调地址」的自有链路（#345）。 */
+        val browserLoginSubmit: Boolean = false,
     )
+
+    /** 供应商由哪个网关承载。能力判定查表，不再散落硬编码 id 比较（#345）。 */
+    enum class Gateway { CLIPROXY, WORKBUDDY }
 
     /**
      * 全部供应商。顺序即界面顺序，把用户最可能用到的放前面。
@@ -64,6 +71,7 @@ object OAuthProviders {
                 size = 2_952_859L,
                 flow = Flow.QRCODE,
                 note = "国内版与国际版统一入口，签到、积分与故障转移由插件负责",
+                gateway = Gateway.WORKBUDDY,
             ),
             Provider(
                 id = "workbuddy-ai",
@@ -75,6 +83,7 @@ object OAuthProviders {
                 size = 2_938_717L,
                 flow = Flow.QRCODE,
                 note = "独立国际站点，扫码登录",
+                gateway = Gateway.WORKBUDDY,
             ),
             Provider(
                 id = "copilot",
@@ -130,6 +139,7 @@ object OAuthProviders {
                 size = 2_961_476L,
                 flow = Flow.LINK,
                 note = "浏览器授权，无需安装桌面端",
+                browserLoginSubmit = true,
             ),
             Provider(
                 id = "cursor",
@@ -144,7 +154,44 @@ object OAuthProviders {
             ),
         )
 
-    fun byId(id: String): Provider? = all.firstOrNull { it.id == id }
+    /**
+     * 按 id 查表。用预先建好的索引而不是 firstOrNull 线性扫描：
+     * 重复 id 会在 [registryIssues] 里被显式报出，而不是静默取第一条（#346）。
+     */
+    fun byId(id: String): Provider? = index[id]
+
+    private val index: Map<String, Provider> = all.associateBy { it.id }
+
+    /**
+     * 注册表自检：id/pluginId 唯一、asset 与 pluginId+version 对得上、modelPrefix 可区分。
+     *
+     * 这些约束原先没有任何校验，写错一条表项只会表现为「某家供应商莫名不工作」。
+     * 返回人类可读的问题列表，空列表表示自检通过（#346）。
+     */
+    fun registryIssues(): List<String> {
+        val issues = mutableListOf<String>()
+        all.groupBy { it.id }.filterValues { it.size > 1 }.keys.forEach {
+            issues += "id 重复：$it"
+        }
+        all.groupBy { it.pluginId }.filterValues { it.size > 1 }.keys.forEach {
+            issues += "pluginId 重复：$it"
+        }
+        all.forEach { p ->
+            // asset 命名约定：<pluginId>_<version>_linux_arm64.zip
+            if (!p.asset.startsWith(p.pluginId + "_")) {
+                issues += "asset 与 pluginId 不匹配：${p.id} → ${p.asset}"
+            }
+            if (!p.asset.endsWith("_linux_arm64.zip")) {
+                issues += "asset 架构后缀异常：${p.id} → ${p.asset}"
+            }
+        }
+        // 前缀两两之间不能相等；包含关系是允许的（ownerOf 按最长匹配处理）。
+        val prefixes = all.map { modelPrefix(it) }
+        prefixes.groupBy { it }.filterValues { it.size > 1 }.keys.forEach {
+            issues += "modelPrefix 重复，无法区分归属：$it"
+        }
+        return issues
+    }
 
     /**
      * 这个供应商是否走独立的 WorkBuddy 网关（[WorkBuddyGateway]）。
@@ -153,7 +200,7 @@ object OAuthProviders {
      * 它自带账号池调度（权重选号、熔断、冷却、积分保底），而插件版是「粘性单账号」，
      * 池子再完善也只有一个号可轮换。其余六家仍走 CLIProxyAPI + 插件，不受影响。
      */
-    fun usesWorkBuddyGateway(id: String): Boolean = id == "workbuddy" || id == "workbuddy-ai"
+    fun usesWorkBuddyGateway(id: String): Boolean = byId(id)?.gateway == Gateway.WORKBUDDY
 
     /**
      * 这个供应商是否走「浏览器授权 + 粘贴回调地址」的自有链路。
@@ -167,7 +214,7 @@ object OAuthProviders {
      * 通用链路（`<pluginId>-auth-url` + get-auth-status 轮询）对它无效，
      * 必须走插件自己的 /browser-login/start 与 bridge 页。
      */
-    fun usesBrowserLoginSubmit(id: String): Boolean = id == "traework"
+    fun usesBrowserLoginSubmit(id: String): Boolean = byId(id)?.browserLoginSubmit == true
 
     /**
      * 模型名归属：命中多个前缀时归最长的那一家。

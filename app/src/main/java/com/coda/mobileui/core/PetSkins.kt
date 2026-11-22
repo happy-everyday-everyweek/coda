@@ -51,12 +51,35 @@ object PetSkins {
         return mergeCustom(ctx, loaded)
     }
 
+    /**
+     * 自定义目录的指纹（文件名 + 长度 + 修改时间）。
+     * 内容没变就不必重新读盘解析——all()/resolve() 会被 UI 反复调用（#338）。
+     */
+    private var customSignature: String? = null
+    private var customCache: List<PetSkin> = emptyList()
+
+    /** 手动导入/删除皮肤后调用，强制下次重新扫描。 */
+    fun invalidateCustom() {
+        customSignature = null
+        customCache = emptyList()
+    }
+
+    private fun signatureOf(dir: File): String {
+        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".json", true) } ?: return ""
+        return files.sortedBy { it.name }.joinToString("|") { "${it.name}:${it.length()}:${it.lastModified()}" }
+    }
+
     private fun mergeCustom(
         ctx: Context,
         base: List<PetSkin>,
     ): List<PetSkin> {
         val dir = File(ctx.filesDir, "pet")
         if (!dir.isDirectory) return base
+        val sig = signatureOf(dir)
+        if (sig == customSignature) {
+            return applyCustom(base, customCache)
+        }
+        customSignature = sig
         val custom = ArrayList<PetSkin>()
         dir
             .listFiles { f -> f.isFile && f.name.endsWith(".json", true) }
@@ -73,6 +96,15 @@ object PetSkins {
                         }
                     }
             }
+        customCache = custom
+        return applyCustom(base, custom)
+    }
+
+    /** 自定义覆盖同 id 的内置项，其余追加在后。 */
+    private fun applyCustom(
+        base: List<PetSkin>,
+        custom: List<PetSkin>,
+    ): List<PetSkin> {
         if (custom.isEmpty()) return base
         val out = ArrayList<PetSkin>(base.size + custom.size)
         for (skin in base) {

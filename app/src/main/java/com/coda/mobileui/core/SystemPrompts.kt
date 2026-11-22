@@ -45,14 +45,60 @@ object SystemPrompts {
 
     fun itemOf(file: String): Item? = all.firstOrNull { it.file == file }
 
+    /**
+     * 配置状态。
+     *
+     * 旧实现用「文件存在且非空白」推导「已修改」，三类误报（#403）：
+     * 内核预置但用户没动过的文件被报成已修改；用户改成纯空白反被报成默认；
+     * 读取失败被 getOrDefault("") 吞成空串，同样显示默认。
+     *
+     * 现在以「首次见到时的内容摘要」为基线：内核释放模板后第一次被读到时记下基线，
+     * 之后内容摘要变了才算已修改。基线存在 SharedPreferences 里，跨进程重启保留。
+     * 读取失败单独成一态，不再与「默认」混同。
+     */
     fun summary(
         ctx: Context,
         item: Item,
     ): String {
         val file = fileOf(ctx, item.file)
         if (!file.isFile) return "默认"
-        val text = runCatching { file.readText() }.getOrDefault("")
-        if (text.isBlank()) return "默认"
-        return "已修改"
+        val text =
+            try {
+                file.readText()
+            } catch (e: Exception) {
+                AppLog.w("SystemPrompts", "读取模板失败 ${item.file}：${e.message ?: e.javaClass.simpleName}")
+                return "读取失败"
+            }
+        val digest = sha256(text)
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val key = "baseline_" + item.file
+        val baseline = prefs.getString(key, null)
+        if (baseline == null) {
+            // 第一次见到：把当前内容当作基线（内核刚释放的默认模板）。
+            prefs.edit().putString(key, digest).apply()
+            return "默认"
+        }
+        if (digest == baseline) return "默认"
+        // 纯空白也算改动：用户主动清空与从未编辑是两回事。
+        return if (text.isBlank()) "已清空" else "已修改"
+    }
+
+    /** 用户点「恢复默认」后调用：把当前内容重新设为基线。 */
+    fun resetBaseline(
+        ctx: Context,
+        item: Item,
+    ) {
+        val file = fileOf(ctx, item.file)
+        val digest = runCatching { sha256(file.readText()) }.getOrNull() ?: return
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("baseline_" + item.file, digest)
+            .apply()
+    }
+
+    private const val PREFS = "system_prompts_state"
+
+    private fun sha256(text: String): String {
+        val bytes = java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 }

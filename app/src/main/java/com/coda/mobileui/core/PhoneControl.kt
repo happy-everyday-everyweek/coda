@@ -231,6 +231,10 @@ class PhoneControlServer(
         } finally {
             // accept 循环意外结束（如 socket 被系统回收）：复位状态，避免界面误报“运行中”。
             isRunning = false
+            // 还必须关掉监听 socket：只复位标志的话端口仍被占着，
+            // 之后即便先 stopServer 再 startServer 也绑不上，服务无法恢复（#363）。
+            runCatching { ss.close() }
+            if (serverSocket === ss) serverSocket = null
         }
     }
 
@@ -283,7 +287,12 @@ class PhoneControlServer(
                 return
             }
             route(output, method, path, auth, body)
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
+            // 空 catch 会把任何异常都变成「连接被静默丢弃」，客户端只看到空响应（#369）。
+            AppLog.w("PhoneControl", "处理请求失败 $method $path：${e.javaClass.simpleName}: ${e.message}")
+            runCatching {
+                writeEmpty(output, 500)
+            }
         } finally {
             try {
                 socket.close()

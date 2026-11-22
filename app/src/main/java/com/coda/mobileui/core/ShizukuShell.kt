@@ -40,19 +40,30 @@ object ShizukuShell {
     /** 合法的组件名：包名/类名，只允许字母数字下划线与点。 */
     private val COMPONENT = Regex("^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$")
 
+    /** Shizuku.newProcess 的反射句柄；解析一次后复用（#384）。 */
+    @Volatile
+    private var newProcessCached: java.lang.reflect.Method? = null
+
+    private fun newProcessMethod(): java.lang.reflect.Method =
+        newProcessCached ?: synchronized(this) {
+            newProcessCached ?: Shizuku::class.java
+                .getMethod(
+                    "newProcess",
+                    Array<String>::class.java,
+                    Array<String>::class.java,
+                    String::class.java,
+                ).also { newProcessCached = it }
+        }
+
     fun exec(command: String): Result<String> {
         if (!isReady()) return Result.failure(IllegalStateException("Shizuku 未授权"))
         return runCatching {
             // 合并 stderr 后再读：避免两个管道各自缓冲导致 waitFor 卡死。
             // Shizuku 13.1.5 把这个静态方法标成库内可见，Kotlin 编译期不让直接调；
             // 它在运行时仍是公开方法，反射调用同一份实现，参数与返回类型不变。
-            val method =
-                Shizuku::class.java.getMethod(
-                    "newProcess",
-                    Array<String>::class.java,
-                    Array<String>::class.java,
-                    String::class.java,
-                )
+            // exec 是 tap/swipe/key 的基础路径，每次都 getMethod 会在高频操作下
+            // 反复做反射查找（#384）。方法对象只解析一次并缓存。
+            val method = newProcessMethod()
             val process =
                 method.invoke(
                     null,
