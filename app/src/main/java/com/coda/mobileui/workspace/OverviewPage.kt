@@ -223,7 +223,7 @@ class OverviewPage(
                 cardRow(icon, todo.content, statusText, null, 56)
             }
         // 仍用 cardGroup 保持与其它区块一致的卡片外观，只是挂到任务容器下。
-        box.addView(cardGroup(rows))
+        box.addViews(cardGroup(rows))
     }
 
     private fun renderCommits() {
