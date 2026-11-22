@@ -100,8 +100,13 @@ class WorkspaceActivity : BaseActivity() {
     lateinit var bottomBar: View
         private set
 
-    /** 底部操作栏的当前高度。 */
-    fun bottomBarHeight(): Int = if (::bottomBar.isInitialized) bottomBar.height else dp(53f)
+    /**
+     * 底栏实测高度；首次布局前 height 还是 0，回退到名义高度（#559）。
+     *
+     * restoreTabs 期间页面在 onShown 里就要拿它算底部留白，
+     * 那时布局还没发生，返回 0 会让最后一行被底栏盖住。
+     */
+    fun bottomBarHeight(): Int = if (::bottomBar.isInitialized) bottomBar.height.takeIf { it > 0 } ?: dp(53f) else dp(53f)
 
     /**
      * 把一次重活推迟到输入停顿后再做，期间重复请求只保留最后一次。
@@ -181,10 +186,12 @@ class WorkspaceActivity : BaseActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        worker.shutdownNow()
-        // 先把排队的写盘做完再停：直接 shutdownNow 会丢掉最后一次状态保存。
+        // shutdown 而不是 shutdownNow：后者会中断在途的 ensureReady/background，
+        // 并与仍在提交的 worker.execute 抢出 RejectedExecutionException（#556）。
+        worker.shutdown()
+        // IO 线程是 daemon，shutdown() 让排队的写盘自然做完；
+        // 之前在这里 awaitTermination(2s) 是主线程同步等待，会卡退出动画甚至 ANR。
         workspaceIo.shutdown()
-        runCatching { workspaceIo.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
     }
 
     // -------------------------------------------------------------- 容器能力
@@ -354,7 +361,8 @@ class WorkspaceActivity : BaseActivity() {
                 layoutParams =
                     FrameLayout
                         .LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-                        .apply { topMargin = dp(16f) }
+                        // container 没有顶部安全区，状态芯片要自己让开状态栏/挖孔（#558）。
+                        .apply { topMargin = dp(16f) + topSafeInsetPx() }
             }
         container.addView(statusView)
         container.applyBottomInsetWithIme()
@@ -1455,12 +1463,18 @@ class WorkspaceActivity : BaseActivity() {
             }
 
             MotionEvent.ACTION_UP -> {
-                if (swipeArmed) {
+                // 先把事件交给子视图，拿到消费结果再判断（#557）。
+                // dispatchTouchEvent 先于子视图分发，之前不看返回值，
+                // 于是列表横向滚动、终端文本选区只要起点靠左就被当成返回手势。
+                val handled = super.dispatchTouchEvent(ev)
+                if (swipeArmed && !handled) {
                     val dx = ev.x - swipeStartX
                     val dy = kotlin.math.abs(ev.y - swipeStartY)
                     if (dx > dp(72f) && dx > dy * 2) slideOut()
                 }
                 swipeArmed = false
+                // 这一支已经分发过了，不能再走末尾的 super，否则 UP 会派发两次。
+                return handled
             }
 
             MotionEvent.ACTION_CANCEL -> {
@@ -1510,13 +1524,38 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun dp(value: Float): Int = (value * resources.displayMetrics.density).toInt()
 
-    private fun color(attr: Int): Int {
-        val value = TypedValue()
-        return if (theme.resolveAttribute(attr, value, true)) {
-            if (value.resourceId != 0) ContextCompat.getColor(this, value.resourceId) else value.data
-        } else {
-            0xFF808080.toInt()
+    /**
+     * 主题属性解析缓存（#563）。
+     *
+     * 之前每次 color(attr) 都新建 TypedValue 并重新解析：applyChromePalette 一次约 9 个，
+     * 而它在每次标签切换/关闭时都跑；tabCard/sheetRow/fillGrid 还逐行解析。
+     * 主题或配置变化时由 [invalidateThemeCache] 清空。
+     */
+    private val colorCache = HashMap<Int, Int>()
+
+    private fun color(attr: Int): Int =
+        colorCache.getOrPut(attr) {
+            val value = TypedValue()
+            if (theme.resolveAttribute(attr, value, true)) {
+                if (value.resourceId != 0) ContextCompat.getColor(this, value.resourceId) else value.data
+            } else {
+                0xFF808080.toInt()
+            }
         }
+
+    /** 主题/配置变了：丢掉解析结果，下次访问重新解析。 */
+    private fun invalidateThemeCache() {
+        colorCache.clear()
+    }
+
+    /**
+     * 深色模式切换、字体缩放等配置变化会换掉主题属性值，
+     * 缓存必须在这里失效，否则界面会留着旧配色（#563）。
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        invalidateThemeCache()
+        applyChromePalette()
     }
 
     private val surface: Int get() = color(com.google.android.material.R.attr.colorSurface)

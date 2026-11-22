@@ -281,8 +281,12 @@ abstract class WorkspacePage(
 
     // ------------------------------------------------------------ 分组卡片
 
-    /** 分组卡片的圆角，与设置页的 settings_card_corner 一致。 */
-    private val groupCorner: Float get() = host.resources.getDimension(R.dimen.settings_card_corner)
+    /**
+     * 分组卡片的圆角，与设置页的 settings_card_corner 一致。
+     *
+     * 尺寸资源在页面存活期内不变，之前每张卡片/每一行都 getDimension 一次（#563）。
+     */
+    private val groupCorner: Float by lazy { host.resources.getDimension(R.dimen.settings_card_corner) }
 
     /** 与设置页同形的卡片：底色、圆角、零描边零阴影由 MaterialCardView 承担。 */
     protected fun groupCard(): MaterialCardView =
