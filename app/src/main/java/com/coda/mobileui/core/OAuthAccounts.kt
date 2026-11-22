@@ -220,15 +220,31 @@ object OAuthAccounts {
 
         val routes = mutableSetOf<String>()
         routes += panelRoutes
+        // 短路分支里若已用 GET 确认过 /accounts，也要计入路由集：
+        // panel 现在由 routes 推导，漏掉它会让「面板不提到 accounts 但接口存在」的平台被判成无面板。
+        if (!panelRoutes.contains("/accounts") && exists("/accounts")) routes += "/accounts"
         // 面板外的关键路由逐个确认，确认到才加入能力集。
         for (path in listOf("/keepalive", "/enable", "/disable", "/claim", "/claim-pro", "/clear-cooldown", "/unfreeze")) {
             if (exists(path)) routes += path
         }
 
-        return Capabilities(
-            panel = true,
+        return capabilitiesFrom(routes).also { if (reachable) capabilityCache[cacheKey] = it }
+    }
+
+    /**
+     * 由确认到的路由推导能力集。
+     *
+     * 与探测过程分开，是为了能在 JVM 上直接断言口径：哪些路由算面板、
+     * 哪些算活动领取、启停为什么必须成对，都不必起网关就能验证。
+     */
+    fun capabilitiesFrom(routes: Set<String>): Capabilities =
+        Capabilities(
+            // 只有确认存在 /accounts 才算有账号面板：硬编码 true 会让只实现 /models 的插件
+            // 也显示账号管理入口，而 list() 会静默回退到宿主凭据列表（#305）。
+            panel = routes.contains("/accounts"),
             checkin = routes.contains("/checkin"),
-            growth = routes.contains("/growth") || routes.contains("/claim"),
+            // claim-pro 也是一种活动领取，漏了它 Qoder 就没有入口（#306）。
+            growth = routes.contains("/growth") || routes.contains("/claim") || routes.contains("/claim-pro"),
             refresh = routes.contains("/refresh"),
             keepalive = routes.contains("/keepalive"),
             claimPro = routes.contains("/claim-pro"),
@@ -241,11 +257,11 @@ object OAuthAccounts {
                 buildSet {
                     if (routes.contains("/growth")) add("growth")
                     if (routes.contains("/claim")) add("claim")
+                    if (routes.contains("/claim-pro")) add("claim-pro")
                 },
             unfreeze = routes.contains("/unfreeze"),
             routes = routes,
-        ).also { if (reachable) capabilityCache[cacheKey] = it }
-    }
+        )
 
     /**
      * 列出该平台上已登录的账号。
@@ -416,9 +432,9 @@ object OAuthAccounts {
                     Outcome(true, "今天已经签过了")
                 }
 
-                // 国际版账号走加油包，没有签到这回事。
+                // 国际版账号走加油包，属于「不适用」而不是失败，与批量 summary 的 skipped_global 保持一致（#307）。
                 "global" -> {
-                    Outcome(false, message.ifEmpty { "国际版账号不支持签到" })
+                    Outcome(true, message.ifEmpty { "国际版账号不支持签到" })
                 }
 
                 else -> {

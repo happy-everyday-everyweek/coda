@@ -208,6 +208,9 @@ object WorkBuddyGateway {
         val tmp = File(guestRoot(ctx), "config.bootstrap.json")
         runCatching { if (tmp.exists()) tmp.delete() }
         val env = LinuxEnv(ctx)
+        // port 必须真的落到 bootstrap 配置上：只传 -config 会让写出的配置带着程序默认端口，
+        // 之后 ensureConfig 之前的任何一次误用都会与真实网关的 DEFAULT_PORT 相撞（#428）。
+        val bootstrapPort = GatewayConfigText.bootstrapPort(port)
         val argv =
             listOf(
                 guestPath(ctx, binaryFor(ctx)),
@@ -228,6 +231,10 @@ object WorkBuddyGateway {
                 lastError = "网关未能生成默认配置"
                 return false
             }
+            // 保留程序生成的全部推荐值，只把 listen 改成错开真实端口的临时端口。
+            // 注意：生成阶段它仍会短暂监听自带默认端口，这一段无法通过配置文件消除。
+            val generated = runCatching { tmp.readText() }.getOrDefault("")
+            tmp.writeText(GatewayConfigText.seedListen(generated, bootstrapPort))
             tmp.copyTo(file, overwrite = true)
             runCatching { tmp.delete() }
             true
@@ -294,8 +301,9 @@ object WorkBuddyGateway {
                     "rootfs=${LinuxEnv(ctx).rootfs.absolutePath}",
             )
             configFor(ctx).takeIf { it.isFile }?.let {
-                AppLog.i("WorkBuddyGateway", "config=${runCatching { it.readText() }.getOrDefault("").take(600)}")
-            }
+            // 配置里有 api_key，直接打印等于把凭证写进 logcat（#436）。先脱敏再截断。
+            AppLog.i("WorkBuddyGateway", "config=${GatewayConfigText.preview(runCatching { it.readText() }.getOrDefault(""), 600)}")
+        }
             val log = logFor(ctx)
             log.parentFile?.mkdirs()
             log.writeText("")
@@ -382,7 +390,10 @@ object WorkBuddyGateway {
     private fun isPortFree(port: Int): Boolean =
         try {
             java.net.ServerSocket().use { s ->
-                s.reuseAddress = true
+                // 不开 SO_REUSEADDR：开了之后某些平台仅凭该选项就能 bind 成功，
+                // 探测会报「空闲」而子进程真正 bind 时失败，端口冲突被掩盖成 30 秒超时（#427）。
+                s.reuseAddress = false
+                // 绑定地址必须与 ensureConfig 写入的 listen（127.0.0.1:$port）一致。
                 s.bind(java.net.InetSocketAddress("127.0.0.1", port))
                 true
             }
@@ -412,9 +423,10 @@ object WorkBuddyGateway {
     }
 
     /** 返回 HTTP 状态码；连不上返回 -1。 */
-    private fun probeCode(port: Int): Int =
-        try {
-            val conn =
+    private fun probeCode(port: Int): Int {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn =
                 (
                     URL("http://127.0.0.1:$port/v1/models")
                         .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
@@ -433,7 +445,12 @@ object WorkBuddyGateway {
             code
         } catch (_: Throwable) {
             -1
+        } finally {
+            // 每次启动最多探 75 次；只关流不能可靠释放 socket，
+            // 且 responseCode 抛异常时关流会被整段跳过，必须无条件 disconnect（#434）。
+            runCatching { conn?.disconnect() }
         }
+    }
 
     private fun pump(
         proc: Process,
