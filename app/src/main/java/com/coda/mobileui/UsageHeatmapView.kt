@@ -74,22 +74,26 @@ class UsageHeatmapView(
     private val bottomPad = dp(14f)
     private val rowGap = dp(2.5f)
 
-    /** 五档颜色由浅到深。用主色的透明度叠加，深浅主题都能看清。 */
-    private fun levelColor(level: Int): Int {
+    // 主题色在 bind/初始化时解析一次：onDraw 里逐格查主题属性是 ~7×N 次/帧的开销。
+    private val levelColors = IntArray(5)
+    private var emptyColorCached = 0
+    private var selectedColorCached = 0
+    private var labelColorCached = 0
+    private val cornerPx = dp(2f).toFloat()
+    private val labelXPx = dp(2f).toFloat()
+
+    private fun cacheDrawColors() {
         val base = themeColor(androidx.appcompat.R.attr.colorPrimary, 0xFF2E7D32.toInt())
-        val alpha =
-            when (level) {
-                0 -> 0x1A
-                1 -> 0x4D
-                2 -> 0x80
-                3 -> 0xB3
-                else -> 0xFF
-            }
-        return (base and 0x00FFFFFF) or (alpha shl 24)
+        val alphas = intArrayOf(0x1A, 0x4D, 0x80, 0xB3, 0xFF)
+        for (i in 0..4) levelColors[i] = (base and 0x00FFFFFF) or (alphas[i] shl 24)
+        emptyColorCached = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY) and 0x1AFFFFFF
+        selectedColorCached = themeColor(com.google.android.material.R.attr.colorOnSurface, Color.BLACK)
+        labelColorCached = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
     }
 
-    private val emptyColor: Int
-        get() = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY) and 0x1AFFFFFF
+    init {
+        cacheDrawColors()
+    }
 
     /**
      * 塞入数据。
@@ -100,7 +104,10 @@ class UsageHeatmapView(
     fun bind(root: JSONObject?) {
         selected = null
         val heat = root?.optJSONObject("heatmap")
-        weeks = if (heat != null) parseHeatmap(heat) else fallbackFromDaily(root)
+        // heatmap 存在但 weeks 缺失/为空时也要回退：有可用的 daily 数据就不该显示「暂无」。
+        val parsed = if (heat != null) parseHeatmap(heat) else emptyList()
+        weeks = parsed.ifEmpty { fallbackFromDaily(root) }
+        cacheDrawColors()
         requestLayout()
         invalidate()
     }
@@ -109,13 +116,20 @@ class UsageHeatmapView(
         val arr = heat.optJSONArray("weeks") ?: return emptyList()
         val out = mutableListOf<List<Cell?>>()
         for (i in 0 until arr.length()) {
-            val week = arr.optJSONObject(i) ?: continue
+            // 坏周不能整列丢弃：后续列会左移一格，格子与星期行、月份标签全部错位。
+            // 用空列占位保持日历几何。
+            val week = arr.optJSONObject(i)
+            if (week == null) {
+                out += List(7) { null }
+                continue
+            }
             val days = week.optJSONArray("days")
             val col = mutableListOf<Cell?>()
             if (days == null) {
                 repeat(7) { col += null }
             } else {
-                for (d in 0 until days.length()) {
+                // 截断到 7：超长的 days 会画出可见但点不中的死格子。
+                for (d in 0 until minOf(days.length(), 7)) {
                     val cell = days.optJSONObject(d)
                     if (cell == null) {
                         col += null
@@ -164,14 +178,7 @@ class UsageHeatmapView(
         val t2 = threshold(0.5)
         val t3 = threshold(0.75)
 
-        fun levelOf(v: Long): Int =
-            when {
-                v <= 0 -> 0
-                v <= t1 -> 1
-                v <= t2 -> 2
-                v <= t3 -> 3
-                else -> 4
-            }
+        val levelOf = quantileLeveler(positive, t1, t2, t3)
 
         // 按日历补齐：从第一天的所在周开始，到最后的日期结束。
         val first = byDate.keys.minOrNull() ?: return emptyList()
@@ -191,7 +198,7 @@ class UsageHeatmapView(
             val v = byDate[key] ?: 0L
             // 首周从周日开始、末周补齐到周六：这两段里有日期根本不在统计范围内。
             // 发 null 而不是 level=0 的格子，否则点上去会显示「无活动」。
-            col += heatCellFor(key, first, last, v, ::levelOf)
+            col += heatCellFor(key, first, last, v, levelOf)
             if (col.size == 7) {
                 out += col
                 col = mutableListOf()
@@ -245,10 +252,10 @@ class UsageHeatmapView(
 
         // 左侧星期标签：只标周一、周三、周五，避免拥挤。
         val weekLabels = mapOf(1 to "一", 3 to "三", 5 to "五")
-        labelPaint.color = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
+        labelPaint.color = labelColorCached
         for ((row, text) in weekLabels) {
             val y = topPad + row * (cellSize + rowGap) + cellSize * 0.85f
-            canvas.drawText(text, dp(2f).toFloat(), y, labelPaint)
+            canvas.drawText(text, labelXPx, y, labelPaint)
         }
 
         val rect = RectF()
@@ -266,18 +273,13 @@ class UsageHeatmapView(
                 )
                 val paint =
                     if (cell == null) {
-                        cellPaint.apply { color = emptyColor }
+                        cellPaint.apply { color = emptyColorCached }
                     } else {
                         cellPaint.apply {
-                            color =
-                                if (cell === selected) {
-                                    themeColor(com.google.android.material.R.attr.colorOnSurface, Color.BLACK)
-                                } else {
-                                    levelColor(cell.level)
-                                }
+                            color = if (cell === selected) selectedColorCached else levelColors[cell.level]
                         }
                     }
-                canvas.drawRoundRect(rect, dp(2f).toFloat(), dp(2f).toFloat(), paint)
+                canvas.drawRoundRect(rect, cornerPx, cornerPx, paint)
 
                 // 列首格的日期用作月份标签，同月只标一次。
                 if (cell != null) {
@@ -304,13 +306,12 @@ class UsageHeatmapView(
         x: Float,
         y: Float,
     ): Cell? {
-        if (weeks.isEmpty()) return null
-        val ci = ((x - leftPad) / (cellSize + gap)).toInt()
-        val ri = ((y - topPad) / (cellSize + rowGap)).toInt()
-        if (ci < 0 || ci >= weeks.size || ri < 0 || ri >= 7) return null
-        val cell = weeks[ci].getOrNull(ri) ?: return null
-        selected = cell
-        invalidate()
+        val cell = hitCell(weeks, x, y, leftPad, topPad, cellSize, gap, rowGap)
+        // miss 也要清选中并重绘：否则旧格子的高亮永远留着，与详情文字互相矛盾。
+        if (selected !== cell) {
+            selected = cell
+            invalidate()
+        }
         return cell
     }
 
@@ -348,3 +349,66 @@ internal fun heatCellFor(
     } else {
         UsageHeatmapView.Cell(levelOf(tokens), tokens, 0, key)
     }
+
+/**
+ * 分位定级器；正样本不同值少于 4 个时三分位会塌缩（t1==t2==t3），
+ * 唯一活跃日只能拿到最浅档。退化时按值排名分档，保证最大值能到 4 档。
+ */
+internal fun quantileLeveler(
+    positive: List<Long>,
+    t1: Long,
+    t2: Long,
+    t3: Long,
+): (Long) -> Int {
+    val distinct = positive.distinct()
+    if (distinct.size < 4) {
+        // 按不同值的排名映射到 1..4：1 个值→4，2 个值→2/4，3 个值→2/3/4。
+        val rank = distinct.withIndex().associate { (i, v) -> v to i }
+        return { v ->
+            when {
+                v <= 0 -> 0
+                distinct.size == 1 -> 4
+                else -> {
+                    val i = rank[v] ?: 0
+                    (2 + i * 2 / (distinct.size - 1)).coerceIn(2, 4)
+                }
+            }
+        }
+    }
+    return { v ->
+        when {
+            v <= 0 -> 0
+            v <= t1 -> 1
+            v <= t2 -> 2
+            v <= t3 -> 3
+            else -> 4
+        }
+    }
+}
+
+/**
+ * 命中判定：floor 取整（toInt 向零截断会把标签区的点击算进第 0 行/列），
+ * 且点必须落在格子本体内——格间隙（gap/rowGap）不算命中。
+ */
+internal fun hitCell(
+    weeks: List<List<UsageHeatmapView.Cell?>>,
+    x: Float,
+    y: Float,
+    leftPad: Int,
+    topPad: Int,
+    cellSize: Int,
+    gap: Int,
+    rowGap: Int,
+): UsageHeatmapView.Cell? {
+    if (weeks.isEmpty()) return null
+    if (x < leftPad || y < topPad) return null
+    val dx = x - leftPad
+    val dy = y - topPad
+    val ci = kotlin.math.floor(dx / (cellSize + gap)).toInt()
+    val ri = kotlin.math.floor(dy / (cellSize + rowGap)).toInt()
+    if (ci < 0 || ci >= weeks.size || ri < 0 || ri >= 7) return null
+    // 落在格间隙里不算命中。
+    if (dx - ci * (cellSize + gap) >= cellSize) return null
+    if (dy - ri * (cellSize + rowGap) >= cellSize) return null
+    return weeks[ci].getOrNull(ri)
+}
