@@ -80,8 +80,7 @@ class CodaBotRuntime(
                     pendingPermissions[requestKey] = PendingPermission(requestId, System.currentTimeMillis())
                 }
                 // 即使之后没有新的审批到达，也到点清理一次。
-                expiryHandler.removeCallbacks(expiryTick)
-                expiryHandler.postDelayed(expiryTick, pendingPermissionTtlMs)
+                scheduleExpiry()
                 val tool = params.optString("toolName").ifBlank { params.optString("tool") }
                 notifyHost(
                     "Coding Agent 请求审批：request_key=$requestKey，session_id=$sessionId，工具「$tool」。" +
@@ -115,33 +114,34 @@ class CodaBotRuntime(
                         onError(message)
                     }
 
-                    override fun controlSession(action: String, text: String, sessionId: String): String {
-                        return runCatching { controlCodingAgent(action, text, sessionId) }
-                            .getOrElse { failure -> result(false, failure.message ?: "控制失败") }
-                    }
+                    override fun controlSession(action: String, text: String, sessionId: String): String =
+                        guard("control_session") { controlCodingAgent(action, text, sessionId) }
 
-                    override fun listSessions(): String = sessionListJson()
+                    override fun listSessions(): String = guard("list_sessions") { sessionListJson() }
 
                     override fun sendToSession(sessionId: String, text: String): String =
-                        sendToSessionBlocking(sessionId, text)
+                        guard("send_to_session") { sendToSessionBlocking(sessionId, text) }
 
                     override fun stopSession(sessionId: String): String =
-                        stopSessionBlocking(sessionId)
+                        guard("stop_session") { stopSessionBlocking(sessionId) }
 
-                    override fun listModels(sessionId: String): String = modelListJson(sessionId)
+                    override fun listModels(sessionId: String): String =
+                        guard("list_models") { modelListJson(sessionId) }
 
                     override fun selectModel(
                         sessionId: String,
                         providerId: String,
                         modelId: String,
                         level: String,
-                    ): String = applySessionModel(sessionId, providerId, modelId, level)
+                    ): String = guard("select_model") { applySessionModel(sessionId, providerId, modelId, level) }
 
-                    override fun approveTool(requestKey: String, decision: String): String = resolvePermission(requestKey, decision)
-                    override fun readFile(path: String): String = readContextFile(path)
+                    override fun approveTool(requestKey: String, decision: String): String =
+                        guard("approve_tool") { resolvePermission(requestKey, decision) }
+
+                    override fun readFile(path: String): String = guard("read_file") { readContextFile(path) }
 
                     override fun runTerminal(command: String, timeoutSeconds: Int): String =
-                        runContextCommand(command, timeoutSeconds)
+                        guard("run_terminal") { runContextCommand(command, timeoutSeconds) }
                 },
                 profile.name,
                 profile.userName,
@@ -160,14 +160,36 @@ class CodaBotRuntime(
         }
     }
 
+    /**
+     * Python 回调的统一兜底（#159）。
+     *
+     * 这些方法直接作为 Chaquopy Listener 暴露给 Python：任何异常越过边界都会
+     * 中断当前规划轮次，而不是返回约定的 `{ok:false}`。canonicalFile、workspacePath、
+     * LinuxEnv 构造、respondPermission 这些前置步骤都可能抛，所以整段包住。
+     */
+    private fun guard(
+        tool: String,
+        block: () -> String,
+    ): String =
+        try {
+            block()
+        } catch (e: Exception) {
+            com.coda.mobileui.core.AppLog.w("CodaBot", "$tool 回调失败：${e.javaClass.simpleName}: ${e.message}")
+            result(false, "$tool 失败：${e.message ?: e.javaClass.simpleName}")
+        }
+
     private fun controlCodingAgent(action: String, text: String, sessionId: String): String {
         val latch = java.util.concurrent.CountDownLatch(1)
+        val gate = CodaBotTiming.Gate()
         var ok = false
         var message = ""
         val callback: (Boolean, String) -> Unit = { success, detail ->
-            ok = success
-            message = detail
-            latch.countDown()
+            // 超时后闸门已关：迟到回调不得再写回被捕获的状态（#157）。
+            if (gate.claim()) {
+                ok = success
+                message = detail
+                latch.countDown()
+            }
         }
         when (action) {
             "create" -> codingAgent.newSession(cb = callback)
@@ -191,11 +213,23 @@ class CodaBotRuntime(
             }
             else -> return result(false, "不支持的动作：$action")
         }
-        if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) {
-            return result(false, "Coding Agent 操作超时")
-        }
-        return result(ok, message)
+        val timedOut = !latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        if (timedOut) gate.close()
+        val outcome = CodaBotTiming.waitOutcome(timedOut, ok, message, action)
+        return pendingResult(outcome)
     }
+
+    /**
+     * 把等待结论转成给 Python 的 JSON。
+     *
+     * 超时额外带 pending 标记：调用方据此知道「已提交、结果待定」，不要重试（#157）。
+     */
+    private fun pendingResult(outcome: CodaBotTiming.WaitOutcome): String =
+        JSONObject()
+            .put("ok", outcome.ok)
+            .put("message", outcome.message)
+            .apply { if (outcome.pending) put("pending", true) }
+            .toString()
 
     private fun sessionListJson(): String {
         val items = org.json.JSONArray()
@@ -220,29 +254,42 @@ class CodaBotRuntime(
         if (sessionId.isBlank()) return result(false, "会话 id 为空")
         if (text.isBlank()) return result(false, "内容为空")
         val latch = java.util.concurrent.CountDownLatch(1)
+        val gate = CodaBotTiming.Gate()
         var ok = false
         var detail = ""
         codingAgent.sendTo(sessionId, text) { success, message ->
-            ok = success
-            detail = message
-            latch.countDown()
+            if (gate.claim()) {
+                ok = success
+                detail = message
+                latch.countDown()
+            }
         }
-        if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) return result(false, "发送超时")
-        return result(ok, if (ok) "已发送" else detail.ifBlank { "发送失败" })
+        val timedOut = !latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        if (timedOut) gate.close()
+        // 超时不能报「发送超时」了事：消息可能已经发出去了，重试会重复发（#157）。
+        val outcome =
+            CodaBotTiming.waitOutcome(timedOut, ok, if (ok) "已发送" else detail.ifBlank { "发送失败" }, "send")
+        return pendingResult(outcome)
     }
 
     private fun stopSessionBlocking(sessionId: String): String {
         if (sessionId.isBlank()) return result(false, "会话 id 为空")
         val latch = java.util.concurrent.CountDownLatch(1)
+        val gate = CodaBotTiming.Gate()
         var ok = false
         var detail = ""
         codingAgent.stopSession(sessionId) { success, message ->
-            ok = success
-            detail = message
-            latch.countDown()
+            if (gate.claim()) {
+                ok = success
+                detail = message
+                latch.countDown()
+            }
         }
-        if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) return result(false, "停止超时")
-        return result(ok, if (ok) "已停止" else detail.ifBlank { "停止失败" })
+        val timedOut = !latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        if (timedOut) gate.close()
+        return pendingResult(
+            CodaBotTiming.waitOutcome(timedOut, ok, if (ok) "已停止" else detail.ifBlank { "停止失败" }, "stop"),
+        )
     }
 
     private fun modelListJson(sessionId: String): String {
@@ -286,15 +333,21 @@ class CodaBotRuntime(
         val target = sessionId.ifBlank { codingAgent.activeSessionId().orEmpty() }
         if (target.isBlank()) return result(false, "当前没有打开的 Coding Agent 会话")
         val latch = java.util.concurrent.CountDownLatch(1)
+        val gate = CodaBotTiming.Gate()
         var ok = false
         var detail = ""
         codingAgent.setModelFor(target, providerId, modelId, level.takeIf { it.isNotBlank() }) { success, message ->
-            ok = success
-            detail = message
-            latch.countDown()
+            if (gate.claim()) {
+                ok = success
+                detail = message
+                latch.countDown()
+            }
         }
-        if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) return result(false, "切换模型超时")
-        return result(ok, detail.ifBlank { if (ok) "已切换" else "切换失败" })
+        val timedOut = !latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        if (timedOut) gate.close()
+        return pendingResult(
+            CodaBotTiming.waitOutcome(timedOut, ok, detail.ifBlank { if (ok) "已切换" else "切换失败" }, "set_model"),
+        )
     }
 
     /** 清掉过期与超量的待审批请求：这些请求不会再有应答，按拒绝放回 Coding Agent。 */
@@ -317,6 +370,27 @@ class CodaBotRuntime(
             }
         }
         dropped.forEach { pending -> runCatching { codingAgent.respondPermission(pending.id, false) } }
+        // 队列里还有剩的：按最早那条的截止时间继续排，不能就此停表。
+        scheduleExpiry()
+    }
+
+    /**
+     * 按**最早**待审批请求的截止时间排下一次扫描（#158）。
+     *
+     * 旧实现每来一条就 removeCallbacks + now+TTL，定时器只对最后一条负责，
+     * 请求密集时最早那条会被无限推迟，Agent 一直卡在等审批。
+     */
+    private fun scheduleExpiry() {
+        val delay =
+            synchronized(pendingPermissions) {
+                CodaBotTiming.nextExpiryDelay(
+                    pendingPermissions.values.map { it.at },
+                    System.currentTimeMillis(),
+                    pendingPermissionTtlMs,
+                )
+            }
+        expiryHandler.removeCallbacks(expiryTick)
+        if (delay != null) expiryHandler.postDelayed(expiryTick, delay)
     }
 
     /** 退出页面时把没人应答的审批全按拒绝放掉，别让 Coding Agent 一直卡在等审批。 */

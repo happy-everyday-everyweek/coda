@@ -70,8 +70,8 @@ object AgentPrompt {
     fun save(
         file: File,
         text: String,
-    ): String? =
-        try {
+    ): String? {
+        return try {
             val body = text.replace("\r\n", "\n")
             if (body.isBlank()) {
                 // delete() 的返回值必须检查：只读、被占用、无权限时它返回 false，
@@ -89,6 +89,7 @@ object AgentPrompt {
         } catch (e: Exception) {
             e.message ?: "写入失败"
         }
+    }
 
     /** 先写同目录临时文件再改名，返回是否成功。 */
     internal fun writeAtomic(
