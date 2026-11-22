@@ -31,13 +31,20 @@ object Git {
     private val RECORD = "\u001e"
 
     /**
-     * 每次调用都显式放开安全目录。
+     * 每次调用都显式放开安全目录，但**只放开当前工作区**。
      *
      * 容器里的进程身份是伪造的 root，而宿主 /sdcard 上的文件属主是应用自身。这种不一致会让
      * git 把工作区判成「属主可疑」：写操作（init、add、commit）照样成功，读操作
      * （rev-parse、status、log）一律 fatal。表现就是初始化完成了，界面却一直说没初始化。
+     *
+     * 不能用 `safe.directory=*`：那等于对所有仓库关掉属主校验。工作区里只要出现一个
+     * 属主异常的 .git（克隆、解压、从远端拉来的都算），它的 hooks、core.fsmonitor、
+     * core.pager、别名就会以 root 身份被执行，等于白送一条提权路径（#518）。
      */
-    private val SAFE_DIRECTORY = listOf("-c", "safe.directory=*")
+    private fun safeDirectory(
+        env: LinuxEnv,
+        root: File,
+    ): List<String> = listOf("-c", "safe.directory=" + env.guestPath(root.absolutePath))
 
     /** 网络操作超时：移动网络下推送/拉取大仓库远超默认的 60 秒。 */
     private const val NETWORK_TIMEOUT_MS = 300_000L
@@ -63,7 +70,7 @@ object Git {
     ): Result {
         val result =
             env.exec(
-                listOf("git") + SAFE_DIRECTORY + listOf("-C", env.guestPath(root.absolutePath)) + args,
+                listOf("git") + safeDirectory(env, root) + listOf("-C", env.guestPath(root.absolutePath)) + args,
                 timeoutMs = timeoutMs,
             )
         // 每次调用都落日志：git 的失败原因（认证、网络、冲突）只存在于输出里，
@@ -454,14 +461,19 @@ object Git {
      */
     private fun repairObjectDirs(root: File) {
         val gitDir = resolveGitDir(root) ?: return
-        val objects = File(gitDir, "objects")
+        // worktree / 子模块的 gitdir 里没有对象库，真正的 objects 在 commondir 指向的
+        // 公共目录（通常是父仓库的 .git）。不读 commondir 就会把分片建到无效路径，
+        // 修复看起来成功、实际没修到，info/exclude 也写错地方（#520）。
+        val commonDir = resolveCommonDir(gitDir)
+        val objects = File(commonDir, "objects")
         File(objects, "info").mkdirs()
         File(objects, "pack").mkdirs()
         for (i in 0..255) {
             File(objects, String.format("%02x", i)).mkdirs()
         }
         runCatching {
-            val exclude = File(gitDir, "info/exclude")
+            // exclude 属于公共目录：写在 worktree 私有目录里不会生效。
+            val exclude = File(commonDir, "info/exclude")
             exclude.parentFile?.mkdirs()
             val text = if (exclude.isFile) exclude.readText() else ""
             if (text.lineSequence().none { it.trim() == ".coda/" }) {
@@ -469,6 +481,29 @@ object Git {
                 exclude.writeText(text + sep + ".coda/\n")
             }
         }
+    }
+
+    /**
+     * gitdir 下的 commondir 指向公共目录；没有该文件就是普通仓库，公共目录即自身。
+     *
+     * 相对路径按 gitdir 解析（git 的约定），并同样限定在合理范围内，
+     * 避免仓库内容指定任意目录后我们往那里写文件。
+     */
+    private fun resolveCommonDir(gitDir: File): File {
+        val marker = File(gitDir, "commondir")
+        if (!marker.isFile) return gitDir
+        val raw = runCatching { marker.readText().trim() }.getOrNull()
+        if (raw.isNullOrEmpty()) return gitDir
+        val candidate = if (File(raw).isAbsolute) File(raw) else File(gitDir, raw)
+        val target = runCatching { candidate.canonicalFile }.getOrNull() ?: return gitDir
+        val base = runCatching { gitDir.canonicalFile }.getOrElse { gitDir.absoluteFile }
+        // 公共目录必须是 gitdir 的祖先、或仍在某个 .git 目录内；否则不认。
+        val acceptable =
+            base.path.startsWith(target.path + File.separator) ||
+                target.path.startsWith(base.path + File.separator) ||
+                target.name == ".git" ||
+                target.path.contains("${File.separator}.git${File.separator}")
+        return if (acceptable) target else gitDir
     }
 
     /** 解析真实的 .git 目录：普通仓库是目录，worktree/子模块是带 gitdir 的文件。 */
