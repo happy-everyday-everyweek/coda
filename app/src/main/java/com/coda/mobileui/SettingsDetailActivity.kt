@@ -277,6 +277,15 @@ class SettingsDetailActivity :
         AppLog.i("AsrUi", "页面销毁，取消全部 ASR 任务")
         asrJob?.cancel()
         asrScope.cancel()
+        // 只取消页面自己的 scope 不够：AsrClient 内部的计时协程挂在它自己的 scope 上，
+        // 录音器与实时会话也要由它显式释放。close() 是终态，本实例随页面一起作废（#181）。
+        // 用 Lazy.isInitialized 判断：没进过 ASR 测试就不必为了关闭而凭空创建一个客户端。
+        if (asrClientLazy.isInitialized()) {
+            val client = asrClientLazy.value
+            Thread {
+                runCatching { kotlinx.coroutines.runBlocking { client.close() } }
+            }.apply { isDaemon = true }.start()
+        }
         stopGitHubPolling()
         super.onDestroy()
     }
@@ -3269,7 +3278,8 @@ class SettingsDetailActivity :
     // ------------------------------------------------------------ ASR 测试
 
     /** 统一入口。录音、转写、流式会话、超时与清理都在它内部。 */
-    private val asrClient: AsrClient by lazy { AsrClient(this) }
+    private val asrClientLazy = lazy { AsrClient(this) }
+    private val asrClient: AsrClient by asrClientLazy
 
     /**
      * 本页的协程作用域。

@@ -55,6 +55,15 @@ class AsrClient(
     /** 本 client 派生的任务都挂在这个 scope 下，close() 一锅端。 */
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * 已关闭标记。
+     *
+     * close() 会取消 scope；虽然随后换了一个新的，但录音器与流会话都已释放，
+     * 复用同一实例的语义并不明确。入口显式拒绝，比「调用不报错但永远不回调」好排查（#181）。
+     */
+    @Volatile
+    private var closed = false
+
     /** 同一时刻只允许一个录音，避免两个测试抢麦克风。 */
     private val busy = AtomicBoolean(false)
 
@@ -110,6 +119,10 @@ class AsrClient(
         stopSignal: kotlinx.coroutines.CompletableDeferred<Unit>,
     ): AsrTester.Result =
         withContext(Dispatchers.IO) {
+            if (closed) {
+                AppLog.w(TAG, "transcribe 被拒：客户端已关闭，请新建实例")
+                return@withContext AsrTester.Result.Fail("语音客户端已关闭，请重新进入页面")
+            }
             if (!acquire()) {
                 AppLog.i(TAG, "transcribe 被拒：已有一次识别在进行")
                 return@withContext AsrTester.Result.Fail("已有一次识别在进行")
@@ -209,6 +222,10 @@ class AsrClient(
         maxMs: Long = AsrTester.MAX_RECORD_MS.toLong(),
     ): Flow<Chunk> =
         callbackFlow {
+            if (closed) {
+                close(IllegalStateException("语音客户端已关闭，请重新进入页面"))
+                return@callbackFlow
+            }
             require(supportsStreaming(provider)) {
                 "供应商 ${provider.name} 不支持流式识别，请用非流式"
             }
@@ -348,9 +365,12 @@ class AsrClient(
     /**
      * 取消一切：停止录音、关会话、取消本 client 派生的全部任务。
      * 页面销毁时必须调用，否则麦克风会被一直占用。
+     *
+     * **终态操作**：调用后本实例不可复用，transcribe / transcribeStream 会明确拒绝（#181）。
      */
     suspend fun close() =
         withContext(Dispatchers.IO) {
+            closed = true
             runCatching { activeRecorder?.cancel() }
             activeRecorder = null
             runCatching { activeLive?.cancel() }
