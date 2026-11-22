@@ -47,11 +47,19 @@ class PromptEditorActivity : BaseActivity() {
             intent.getStringExtra(EXTRA_TITLE)
                 ?: if (scope == SCOPE_WORKSPACE) "工作区提示词" else "用户级提示词"
         hint = intent.getStringExtra(EXTRA_HINT) ?: ""
-        initial = AgentPrompt.read(file)
+        initial = ""
         setContentView(buildUi())
-        input.setText(initial)
-        input.setSelection(input.text.length)
         updateMeta()
+        // 读文件放到 IO 线程：大提示词或慢存储上，主线程 readText 会卡顿甚至 ANR（#173）。
+        AgentPrompt.readAsync(file) { text ->
+            if (isFinishing || isDestroyed) return@readAsync
+            // 加载期间用户已经动过输入框：不能把磁盘内容盖上去，否则刚打的字就没了。
+            if (input.text.isNotEmpty()) return@readAsync
+            initial = text
+            input.setText(text)
+            input.setSelection(input.text.length)
+            updateMeta()
+        }
         onBackPressedDispatcher.addCallback(
             this,
             object : androidx.activity.OnBackPressedCallback(true) {
@@ -182,14 +190,18 @@ class PromptEditorActivity : BaseActivity() {
     }
 
     private fun saveAndFinish() {
-        val err = AgentPrompt.save(file, input.text.toString())
-        if (err != null) {
-            Toast.makeText(this, "保存失败：$err", Toast.LENGTH_LONG).show()
-            return
+        val body = input.text.toString()
+        // 写盘也走 IO 线程（#173）；失败时保持页面打开，让用户能重试。
+        AgentPrompt.saveAsync(file, body) { err ->
+            if (isFinishing || isDestroyed) return@saveAsync
+            if (err != null) {
+                Toast.makeText(this, "保存失败：$err", Toast.LENGTH_LONG).show()
+                return@saveAsync
+            }
+            Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+            setResult(RESULT_OK)
+            finish()
         }
-        Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
-        setResult(RESULT_OK)
-        finish()
     }
 
     private fun confirmClear() {
@@ -200,14 +212,21 @@ class PromptEditorActivity : BaseActivity() {
             .secondaryAction("取消") { it.dismiss() }
             .primaryAction("恢复") { sheet ->
                 sheet.dismiss()
-                AgentPrompt.save(file, "")
-                // 「恢复默认」是清空文件让内核回落内置模板。清完后必须把基线一起重置，
-                // 否则设置页会把它显示成「已清空」而不是「默认」（#403 的配套消费方）。
-                com.coda.mobileui.core.SystemPrompts.itemOf(file.name)?.let {
-                    com.coda.mobileui.core.SystemPrompts.resetBaseline(this, it)
+                // 删除失败必须告知并保持页面：旧提示词还在，报成功会让用户以为已重置（#169）。
+                AgentPrompt.saveAsync(file, "") { err ->
+                    if (isFinishing || isDestroyed) return@saveAsync
+                    if (err != null) {
+                        Toast.makeText(this, "恢复失败：$err", Toast.LENGTH_LONG).show()
+                        return@saveAsync
+                    }
+                    // 「恢复默认」是清空文件让内核回落内置模板。清完后必须把基线一起重置，
+                    // 否则设置页会把它显示成「已清空」而不是「默认」（#403 的配套消费方）。
+                    com.coda.mobileui.core.SystemPrompts.itemOf(file.name)?.let {
+                        com.coda.mobileui.core.SystemPrompts.resetBaseline(this, it)
+                    }
+                    setResult(RESULT_OK)
+                    finish()
                 }
-                setResult(RESULT_OK)
-                finish()
             }
             .show()
     }
