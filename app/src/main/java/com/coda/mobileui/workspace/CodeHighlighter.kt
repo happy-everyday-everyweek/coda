@@ -49,8 +49,6 @@ object CodeHighlighter {
     /** 超过这个长度不再上色，避免大文件拖动时逐帧重扫。 */
     const val MAX_HIGHLIGHT_CHARS = 200_000
 
-    private const val NONE = -1
-
     /** 按文件名推断语言；认不出来返回 null（纯文本编辑）。 */
     fun detect(fileName: String): LanguageRules? {
         val lower = fileName.lowercase()
@@ -87,97 +85,62 @@ object CodeHighlighter {
         rules: LanguageRules,
         palette: CodePalette,
     ) {
-        clear(editable)
         val n = editable.length
-        if (n == 0 || n > MAX_HIGHLIGHT_CHARS) return
-
-        val spans = ArrayList<Span>(64)
-        var i = 0
-        var inBlockComment = false
-
-        while (i < n) {
-            val c = editable[i]
-
-            if (inBlockComment) {
-                val end = indexOf(editable, rules.blockCommentEnd ?: "*/", i)
-                val stop = if (end < 0) n else end + (rules.blockCommentEnd?.length ?: 2)
-                spans.add(Span(i, stop, palette.comment, italic = true))
-                inBlockComment = end < 0
-                i = stop
-                continue
-            }
-
-            val lineComment = rules.lineComment
-            if (lineComment != null && startsWith(editable, lineComment, i)) {
-                val stop = lineEnd(editable, i)
-                spans.add(Span(i, stop, palette.comment, italic = true))
-                i = stop
-                continue
-            }
-
-            val blockStart = rules.blockCommentStart
-            if (blockStart != null && startsWith(editable, blockStart, i)) {
-                inBlockComment = true
-                i += blockStart.length
-                continue
-            }
-
-            if (c == '"' || c == '\'' || c == '`') {
-                val stop = stringEnd(editable, i, c)
-                spans.add(Span(i, stop, palette.string))
-                i = stop
-                continue
-            }
-
-            if (c.isDigit()) {
-                var j = i + 1
-                while (j < n && (editable[j].isLetterOrDigit() || editable[j] == '.' || editable[j] == '_')) j++
-                spans.add(Span(i, j, palette.number))
-                i = j
-                continue
-            }
-
-            if (isIdentStart(c)) {
-                var j = i + 1
-                while (j < n && isIdentPart(editable[j])) j++
-                val word = editable.subSequence(i, j).toString()
-                val lookup = if (rules.caseInsensitive) word.lowercase() else word
-                val isKeyword = rules.keywords.contains(lookup)
-                val color =
-                    when {
-                        isKeyword -> palette.keyword
-                        rules.types.contains(lookup) -> palette.type
-                        nextNonSpace(editable, j) == '(' -> palette.function
-                        else -> NONE
-                    }
-                if (color != NONE) {
-                    spans.add(Span(i, j, color, bold = isKeyword))
-                }
-                i = j
-                continue
-            }
-
-            i++
+        if (n == 0 || n > MAX_HIGHLIGHT_CHARS) {
+            clear(editable)
+            lastTokens = emptyList()
+            lastRules = null
+            return
         }
 
-        for (span in spans) {
-            val start = span.start.coerceIn(0, n)
-            val end = span.end.coerceIn(start, n)
+        // 扫描交给纯逻辑层（有单测覆盖），这里只负责把结果贴成 span。
+        val tokens = CodeLexer.scan(editable, rules)
+        // 语言换了就必须整篇重来：同一个区间的 kind 含义已经不同。
+        val previous = if (lastRules === rules) lastTokens else emptyList()
+        val plan = CodeLexer.diff(previous, tokens)
+
+        // 只移除尾部失效的 span，公共前缀原样保留（#495）。
+        // 原先每次清空全部再重建，接近上限的文件每敲一次键就要新建数千个 span。
+        val existing = editable.getSpans(0, n, TokenMarker::class.java)
+        val firstChanged = if (plan.remove.isEmpty()) n else plan.remove[0].start
+        for (span in existing) {
+            if (editable.getSpanStart(span) >= firstChanged) editable.removeSpan(span)
+        }
+
+        for (token in plan.add) {
+            val start = token.start.coerceIn(0, n)
+            val end = token.end.coerceIn(start, n)
             if (end <= start) continue
-            editable.setSpan(
-                TokenForeground(span.color),
-                start,
-                end,
-                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
-            )
-            if (span.bold) {
+            val color = colorOf(token.kind, palette) ?: continue
+            editable.setSpan(TokenForeground(color), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (token.kind == TokenKind.KEYWORD || token.kind == TokenKind.TYPE) {
                 editable.setSpan(TokenBold(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
-            if (span.italic) {
+            if (token.kind == TokenKind.COMMENT) {
                 editable.setSpan(TokenItalic(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }
+        lastTokens = tokens
+        lastRules = rules
     }
+
+    /** 上一轮的扫描结果，用于增量复用；语言变化时作废。 */
+    private var lastTokens: List<CodeLexer.Token> = emptyList()
+    private var lastRules: LanguageRules? = null
+
+    private fun colorOf(
+        kind: TokenKind,
+        palette: CodePalette,
+    ): Int? =
+        when (kind) {
+            TokenKind.COMMENT -> palette.comment
+            TokenKind.STRING -> palette.string
+            TokenKind.NUMBER -> palette.number
+            TokenKind.KEYWORD -> palette.keyword
+            TokenKind.TYPE -> palette.type
+            TokenKind.FUNCTION -> palette.function
+            TokenKind.IDENT -> null
+        }
 
     /** 清掉本类自己加过的 span。 */
     fun clear(editable: Editable) {
@@ -185,15 +148,9 @@ object CodeHighlighter {
         for (span in editable.getSpans(0, n, TokenMarker::class.java)) {
             editable.removeSpan(span)
         }
+        lastTokens = emptyList()
+        lastRules = null
     }
-
-    private class Span(
-        val start: Int,
-        val end: Int,
-        val color: Int,
-        val bold: Boolean = false,
-        val italic: Boolean = false,
-    )
 
     /** 标记接口：只用来把自己加的 span 与其它样式区分开。 */
     interface TokenMarker
@@ -210,72 +167,6 @@ object CodeHighlighter {
     private class TokenItalic :
         StyleSpan(Typeface.ITALIC),
         TokenMarker
-
-    private fun startsWith(
-        text: CharSequence,
-        prefix: String,
-        at: Int,
-    ): Boolean {
-        if (at + prefix.length > text.length) return false
-        for (k in prefix.indices) if (text[at + k] != prefix[k]) return false
-        return true
-    }
-
-    private fun indexOf(
-        text: CharSequence,
-        needle: String,
-        from: Int,
-    ): Int {
-        if (needle.isEmpty()) return -1
-        var i = from
-        while (i + needle.length <= text.length) {
-            if (startsWith(text, needle, i)) return i
-            i++
-        }
-        return -1
-    }
-
-    private fun lineEnd(
-        text: CharSequence,
-        from: Int,
-    ): Int {
-        var i = from
-        while (i < text.length && text[i] != '\n') i++
-        return i
-    }
-
-    /** 字符串到闭合引号为止；支持反斜杠转义，走到行尾就停下（不跨行）。 */
-    private fun stringEnd(
-        text: CharSequence,
-        from: Int,
-        quote: Char,
-    ): Int {
-        var i = from + 1
-        while (i < text.length) {
-            val c = text[i]
-            if (c == '\\') {
-                i += 2
-                continue
-            }
-            if (c == quote) return i + 1
-            if (c == '\n') return i
-            i++
-        }
-        return text.length
-    }
-
-    private fun nextNonSpace(
-        text: CharSequence,
-        from: Int,
-    ): Char? {
-        var i = from
-        while (i < text.length && (text[i] == ' ' || text[i] == '\t')) i++
-        return if (i < text.length) text[i] else null
-    }
-
-    private fun isIdentStart(c: Char): Boolean = c.isLetter() || c == '_' || c == '$' || c == '@'
-
-    private fun isIdentPart(c: Char): Boolean = c.isLetterOrDigit() || c == '_' || c == '$'
 
     // ------------------------------------------------------------ 语言表
 

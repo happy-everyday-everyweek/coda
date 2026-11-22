@@ -10,6 +10,7 @@ import android.view.ViewGroup
 import android.view.animation.PathInterpolator
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.coda.mobileui.R
 
 /**
  * 工作区统一的动效语言。
@@ -33,8 +34,11 @@ internal object Motion {
     /** 标准缓动，与抽屉展开一致。 */
     val standard: TimeInterpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
 
-    /** 回弹用的缓动，结尾略微放缓，不做真正的弹簧以免抖动。 */
-    val settle: TimeInterpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+    /**
+     * 回弹用的缓动：起步比 standard 更快、收尾更长，视觉上与 standard 可区分。
+     * 原先控制点与 standard 完全一致，传 settle 与传 standard 没有任何差别（#542）。
+     */
+    val settle: TimeInterpolator = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
 }
 
 /**
@@ -47,6 +51,9 @@ internal fun View.pressFeedback(
     pressedScale: Float = 0.97f,
     pressedAlpha: Float = 0.72f,
 ) {
+    // 宿主不可点击时 View.onTouchEvent 对 DOWN 返回 false，父容器就不再派发后续事件，
+    // UP/CANCEL 永远收不到，按压态会粘住（#539）。这里保证宿主能吃到整套手势。
+    isClickable = true
     setOnTouchListener { v, ev ->
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -62,42 +69,70 @@ internal fun View.pressFeedback(
                 fadeContent(v, pressedAlpha, Motion.TAP_MS)
             }
 
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                v.animate().cancel()
-                v
-                    .animate()
-                    .scaleX(1f)
-                    .scaleY(1f)
-                    .setDuration(Motion.SETTLE_MS)
-                    .setInterpolator(Motion.settle)
-                    .start()
-                fadeContent(v, 1f, Motion.SETTLE_MS)
+            MotionEvent.ACTION_MOVE -> {
+                // 手指拖出边界：视觉上应当立刻恢复，而不是等一个可能不会来的 UP。
+                if (!isInsideBounds(v, ev)) releasePress(v)
             }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> releasePress(v)
         }
+        // 返回 false 让点击与长按继续派发；宿主已 isClickable，事件链不会断。
         false
     }
 }
 
+/** 触点是否仍在视图范围内。 */
+private fun isInsideBounds(
+    v: View,
+    ev: MotionEvent,
+): Boolean = ev.x >= 0 && ev.y >= 0 && ev.x < v.width && ev.y < v.height
+
+/** 恢复到未按下的形态；重复调用无副作用。 */
+private fun releasePress(v: View) {
+    v.animate().cancel()
+    v
+        .animate()
+        .scaleX(1f)
+        .scaleY(1f)
+        .setDuration(Motion.SETTLE_MS)
+        .setInterpolator(Motion.settle)
+        .start()
+    fadeContent(v, 1f, Motion.SETTLE_MS)
+}
+
 /**
- * 只调子视图的 alpha，不动容器自身。
+ * 按下反馈的透明度层。
  *
- * 容器的 alpha 会被外部动画（切页淡入、列表重建）占用，改它容易互相打架。
+ * 原先 `v as? ViewGroup ?: return` 让 TextView/ImageView 这类叶子视图完全没有
+ * alpha 反馈；ViewGroup 也只淡直接子视图，嵌套层级会出现「外框淡了内容没淡」（#541）。
+ * 这里对叶子视图直接改自身 alpha，对容器递归到全部后代。
+ * 容器自身的 alpha 仍不动——它可能被切页淡入等外部动画占用。
  */
 private fun fadeContent(
     v: View,
     alpha: Float,
     duration: Long,
 ) {
-    val group = v as? ViewGroup ?: return
-    for (i in 0 until group.childCount) {
-        group
-            .getChildAt(i)
-            .animate()
-            .alpha(alpha)
-            .setDuration(duration)
-            .setInterpolator(Motion.standard)
-            .start()
+    if (v !is ViewGroup) {
+        v.animate().alpha(alpha).setDuration(duration).setInterpolator(Motion.standard).start()
+        return
     }
+    for (i in 0 until v.childCount) {
+        fadeTarget(v.getChildAt(i), alpha, duration)
+    }
+}
+
+/** 递归淡一个目标：容器继续往下走，叶子改自身。 */
+private fun fadeTarget(
+    v: View,
+    alpha: Float,
+    duration: Long,
+) {
+    if (v is ViewGroup && v.childCount > 0) {
+        for (i in 0 until v.childCount) fadeTarget(v.getChildAt(i), alpha, duration)
+        return
+    }
+    v.animate().alpha(alpha).setDuration(duration).setInterpolator(Motion.standard).start()
 }
 
 /**
@@ -217,23 +252,46 @@ internal fun View.animateHeightTo(
     duration: Long = Motion.PANEL_MS,
 ) {
     val params = layoutParams ?: return
+    // 反复点击时上一个动画还在跑：不取消就会有两个 updateListener 同时写 height，
+    // 视图停在中间高度，且后一个动画的 start 取自被打断的瞬时值（#540）。
+    (getTag(R.id.coda_height_animator) as? ValueAnimator)?.cancel()
+
+    // 宽度为 0（还没布局、或处于 GONE）时 EXACTLY(0) 会量出 0 高度，
+    // 展开后内容完全不显示（#537）。退回父容器可用宽度，再不行用 UNSPECIFIED。
+    val parentWidth = (parent as? View)?.width ?: 0
+    val widthSpec =
+        when {
+            width > 0 -> View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+            parentWidth > 0 -> View.MeasureSpec.makeMeasureSpec(parentWidth, View.MeasureSpec.AT_MOST)
+            else -> View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        }
     val target =
         if (show) {
-            measure(
-                View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            )
+            // 量之前先把高度放开，否则 WRAP_CONTENT 之外的固定值会限制测量结果。
+            params.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            layoutParams = params
+            measure(widthSpec, View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
             measuredHeight
         } else {
             0
         }
-    val start = measuredHeight
+    // 起点用当前实际显示高度；未布局时 measuredHeight 为 0，收起动画从当前 layoutParams 取。
+    val start = if (measuredHeight > 0) measuredHeight else (params.height.coerceAtLeast(0))
     if (show) {
-        params.height = 0
+        params.height = start
         layoutParams = params
         visibility = View.VISIBLE
     }
-    ValueAnimator.ofInt(start, target).apply {
+    // 目标与起点相同（例如内容量出 0）时直接落终态，避免一个什么都不做的动画。
+    if (target == start) {
+        params.height = if (show) ViewGroup.LayoutParams.WRAP_CONTENT else 0
+        layoutParams = params
+        visibility = if (show) View.VISIBLE else View.GONE
+        return
+    }
+    val animator = ValueAnimator.ofInt(start, target)
+    setTag(R.id.coda_height_animator, animator)
+    animator.apply {
         this.duration = duration
         interpolator = Motion.standard
         addUpdateListener { a ->
@@ -245,6 +303,9 @@ internal fun View.animateHeightTo(
         addListener(
             object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
+                    // 被新动画取消时不要落终态：否则会用旧目标覆盖新动画的意图（#540）。
+                    if (getTag(R.id.coda_height_animator) !== animation) return
+                    setTag(R.id.coda_height_animator, null)
                     val p = layoutParams ?: return
                     p.height = if (show) ViewGroup.LayoutParams.WRAP_CONTENT else 0
                     layoutParams = p

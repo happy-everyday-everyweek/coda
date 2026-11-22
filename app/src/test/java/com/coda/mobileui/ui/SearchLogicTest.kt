@@ -53,8 +53,9 @@ class SearchLogicTest {
     @Test
     fun pathContextShownWhenQueryMatchesParentDirectory() {
         // 查询命中父目录而非 basename：必须把命中的路径段显示出来，否则结果行看不到匹配理由。
+        // 返回的是完整父路径（basename 之前的整段），不是只到命中那一层。
         val ctx = SearchLogic.pathContext("/home/user/proj-a/app", "user")
-        assertEquals("/home/user", ctx)
+        assertEquals("/home/user/proj-a", ctx)
     }
 
     @Test
@@ -71,6 +72,11 @@ class SearchLogicTest {
     @Test
     fun pathContextIsCaseInsensitive() {
         assertEquals("/home/User", SearchLogic.pathContext("/home/User/app", "user"))
+    }
+
+    @Test
+    fun pathContextReturnsWholeParentNotJustMatchedSegment() {
+        assertEquals("/a/b/c", SearchLogic.pathContext("/a/b/c/d.txt", "b"))
     }
 
     // ---------------------------------------------------------------- #659 命中判定
