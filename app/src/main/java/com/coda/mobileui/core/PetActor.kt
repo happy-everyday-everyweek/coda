@@ -172,7 +172,6 @@ class PetActor(
     }
 
     /**
-    /**
      * 模式循环：优先级高于基础循环、低于一次性片段（如被拎起时的挣扎动画）。
      *
      * 文档一直声明有这一层，但 modeClip/modeName 从未被赋值，判断恒为 null，
@@ -191,6 +190,7 @@ class PetActor(
         if (!onceActive) resumeLoop()
     }
 
+    /**
      * 一次性片段，播完回到循环。
      *
      * 新的 one-shot 必须清掉上一轮排队的进场片段（#327）：否则那次 finishOnce()

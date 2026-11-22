@@ -201,6 +201,11 @@ class PromptEditorActivity : BaseActivity() {
             .primaryAction("恢复") { sheet ->
                 sheet.dismiss()
                 AgentPrompt.save(file, "")
+                // 「恢复默认」是清空文件让内核回落内置模板。清完后必须把基线一起重置，
+                // 否则设置页会把它显示成「已清空」而不是「默认」（#403 的配套消费方）。
+                com.coda.mobileui.core.SystemPrompts.itemOf(file.name)?.let {
+                    com.coda.mobileui.core.SystemPrompts.resetBaseline(this, it)
+                }
                 setResult(RESULT_OK)
                 finish()
             }
