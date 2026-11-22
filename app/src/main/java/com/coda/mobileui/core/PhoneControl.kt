@@ -239,15 +239,20 @@ class PhoneControlServer(
     }
 
     private fun handleConnection(socket: Socket) {
+        // 诊断需要的字段必须在 try 之外声明：catch 里看不到 try 内的局部变量。
+        var errOutput: OutputStream? = null
+        var method = "?"
+        var path = "?"
         try {
             socket.soTimeout = 30_000
             val input = BufferedInputStream(socket.getInputStream())
             val output = BufferedOutputStream(socket.getOutputStream())
+            errOutput = output
             val requestLine = readLine(input) ?: return
             val parts = requestLine.trim().split(" ")
             if (parts.size < 2) return
-            val method = parts[0].uppercase()
-            val path = parts[1].substringBefore('?')
+            method = parts[0].uppercase()
+            path = parts[1].substringBefore('?')
             var contentLength = 0
             var auth: String? = null
             var headerCount = 0
@@ -290,8 +295,8 @@ class PhoneControlServer(
         } catch (e: Exception) {
             // 空 catch 会把任何异常都变成「连接被静默丢弃」，客户端只看到空响应（#369）。
             AppLog.w("PhoneControl", "处理请求失败 $method $path：${e.javaClass.simpleName}: ${e.message}")
-            runCatching {
-                writeEmpty(output, 500)
+            errOutput?.let { out ->
+                runCatching { writeEmpty(out, 500) }
             }
         } finally {
             try {
