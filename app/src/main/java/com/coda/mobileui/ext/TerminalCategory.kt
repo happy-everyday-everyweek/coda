@@ -89,8 +89,10 @@ object TerminalCategory : ExtensionCategory {
      */
     fun isAbsoluteSpec(spec: String): Boolean {
         val s = spec.trim()
-        if (s.startsWith("/") || s.startsWith("\\")) return true
-        return s.length >= 3 && s[0].isLetter() && s[1] == ':' && (s[2] == '\' || s[2] == '/')
+        val backslash = '\\'
+        // UNC 以两个反斜杠开头
+        if (s.startsWith("/") || s.startsWith("$backslash$backslash")) return true
+        return s.length >= 3 && s[0].isLetter() && s[1] == ':' && (s[2] == backslash || s[2] == '/')
     }
 
     private fun readStringList(
