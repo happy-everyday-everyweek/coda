@@ -433,13 +433,17 @@ class CodaBotRuntime(
                 }
             }
         Bg.run {
-            runCatching { bridge?.callAttr("notify_event", body) }
-                .onFailure { error ->
-                    com.coda.mobileui.core.AppLog.w(
-                        "CodaBot",
-                        "宿主事件注入失败：${error.message ?: error.javaClass.simpleName}",
-                    )
-                }
+            runCatching {
+                // 与 send 共用同一把锁（#118）：两者都会触发 Python 侧的 start()，
+                // 并发进去会撞 register_driver（Broker 已启动时直接 raise），
+                // 本次事件或消息就失败了。Bg 是共享线程池，不保证顺序。
+                synchronized(sendLock) { bridge?.callAttr("notify_event", body) }
+            }.onFailure { error ->
+                com.coda.mobileui.core.AppLog.w(
+                    "CodaBot",
+                    "宿主事件注入失败：${error.message ?: error.javaClass.simpleName}",
+                )
+            }
         }
     }
 
@@ -520,7 +524,8 @@ class CodaBotRuntime(
         denyPendingPermissions()
         Bg.run {
             runCatching {
-                synchronized(this@CodaBotRuntime) {
+                // 与 send/notify_event 同一把锁（#118）：否则可能正在发送时把桥关掉。
+                synchronized(sendLock) {
                     bridge?.callAttr("close")
                     bridge = null
                 }

@@ -56,6 +56,15 @@ class AndroidLiteDriver(PlatformIODriver):
         )
 
 
+# start 的串行锁（#118）。模块级：send 与 notify_event 可能落在不同协程，
+# 但注册 driver / 启动 Broker 这些动作对整个进程只能做一次。
+_START_LOCK = asyncio.Lock()
+
+# 当前活动的运行时实例（#119）。旧实例的异步 stop 据此判断自己是否还拥有
+# heartflow / platform io 这些模块级单例，不拥有就只清理自己的资源。
+_ACTIVE_RUNTIME: "LiteRuntime | None" = None
+
+
 class LiteRuntime:
     """MaiBot 的单会话异步入口；所有公开调用必须在同一事件循环执行。"""
 
@@ -116,6 +125,18 @@ class LiteRuntime:
         """初始化聊天、持久化和进程内路由，不启动原项目 MainSystem。"""
         if self._started:
             return
+        # start 必须串行（#118）：_started 要到函数末尾才置 True，
+        # send 与 notify_event 并发进来会两次执行 register_driver，
+        # Broker 已启动时那里直接 raise，本次消息/事件就失败了。
+        async with _START_LOCK:
+            if self._started:
+                return
+            await self._start_locked()
+        # 谁最后 start，谁就是当前活动实例；旧实例的 stop 据此跳过全局关停（#119）。
+        global _ACTIVE_RUNTIME
+        _ACTIVE_RUNTIME = self
+
+    async def _start_locked(self) -> None:
         self._prepare_configuration()
         # 重新进入 Bot 页会重建运行时，但心流管理器是模块级单例：
         # 上次关闭把它置为关停后不会自己恢复，这里显式复位，否则消息会被静默丢弃。
@@ -219,9 +240,17 @@ class LiteRuntime:
 
         if not self._started:
             return
+        global _ACTIVE_RUNTIME
         self._started = False
         from src.chat.heart_flow.heartflow_manager import heartflow_manager
         from src.platform_io import get_platform_io_manager
+
+        # 旧实例的异步 stop 可能晚于新实例的 start（#119）。
+        # heartflow_manager 与 platform io 都是模块级单例，无条件 shutdown
+        # 会把新实例刚建立的会话链路一起关掉，表现为 Bot 又不回话且没有日志。
+        owns_globals = _ACTIVE_RUNTIME is self or _ACTIVE_RUNTIME is None
+        if owns_globals:
+            _ACTIVE_RUNTIME = None
 
         steps = (
             ("heartflow shutdown", heartflow_manager.shutdown),
@@ -231,6 +260,9 @@ class LiteRuntime:
         )
         failures: List[str] = []
         for label, step in steps:
+            # 不是当前活动实例时，只停自己的 hook dispatcher，不动全局单例。
+            if not owns_globals and label != "stop hook dispatcher":
+                continue
             try:
                 await step()
             except Exception as exc:  # noqa: BLE001 - 清理阶段要把异常汇总而不是中断后续清理
