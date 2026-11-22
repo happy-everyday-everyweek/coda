@@ -81,6 +81,23 @@ class GitPage(
     private val writeQueue = ArrayDeque<WriteOp>()
     private var writing = false
 
+    /** 写操作进行期间被挂起的刷新；队列排空后补跑，避免读到写了一半的状态（#533）。 */
+    private var refreshPending = false
+
+    /**
+     * 页面代际：每次隐藏/关闭/切根都自增。
+     *
+     * 异步 Git 回调只在 Activity destroy 时才被丢弃，页面切走后仍会回来写共享的
+     * detail 视图、甚至给用户已经离开的标签弹 sheet（#534）。发起时记下代际，
+     * 回调开头比对，不一致就直接丢弃。
+     */
+    private var generation = 0
+
+    /** 当前是否仍是活动页且未离开；迟到回调据此判断要不要落地。 */
+    private fun stale(token: Int): Boolean = token != generation || !detailAttached()
+
+    private fun detailAttached(): Boolean = ::detail.isInitialized && detail.isAttachedToWindow
+
     /** 合并失败时顺带查到的冲突文件；非空才进冲突流程。 */
     private var pendingConflicts: List<String> = emptyList()
 
@@ -130,6 +147,15 @@ class GitPage(
         stage.setPadding(0, 0, 0, host.bottomBarHeight())
         if (detailOpen) return
         refresh()
+    }
+
+    // 离开页面就让在途回调作废：它们回来时不能再写 detail、也不能弹 sheet（#534）。
+    override fun onHidden() {
+        generation++
+    }
+
+    override fun onClosed() {
+        generation++
     }
 
     /** 返回键先退页内一层，再交回容器处理标签历史。 */
@@ -248,6 +274,12 @@ class GitPage(
     // ---------------------------------------------------------------- 刷新
 
     private fun refresh() {
+        // 写队列还没排空时不能读：会读到写了一半的 index/引用，甚至撞 index.lock。
+        // 记一个待刷新标记，等最后一个写操作结束后补跑，而不是静默丢弃（#533）。
+        if (writing || writeQueue.isNotEmpty()) {
+            refreshPending = true
+            return
+        }
         if (busy) return
         busy = true
         host.ensureEnv { ready ->
@@ -347,7 +379,10 @@ class GitPage(
             .start()
         if (previous != null) {
             // 过渡期间旧卡不能再点，否则会点到已经作废的按钮。
+            // 只置 ViewGroup.isEnabled 不够：它不影响子 View 的点击监听，
+            // 淡出中的 pill 按钮照样能触发过期操作、重复弹对话框（#535）。
             previous.isEnabled = false
+            disableClicks(previous)
             previous
                 .animate()
                 .alpha(0f)
@@ -722,13 +757,17 @@ class GitPage(
     private fun compareWithHead(commit: Git.Commit) {
         val view = openDetail("与 ${snapshot?.branch.orEmpty()} 的差异", commit.hash.take(8))
         view.showLoading("正在计算差异…")
+        val token = generation
         host.background(
             work = { Git.diffRange(host.env, host.root, commit.hash, "HEAD") },
             then = { diff ->
-                val text = if (diff.truncated) diff.text + "\n\n（内容过长，已截断）" else diff.text
-                view.showDiff(text)
+                // 页面已切走/关闭：结果属于上一个页面，丢弃而不是写进共享 detail（#534）。
+                if (!stale(token)) {
+                    val text = if (diff.truncated) diff.text + "\n\n（内容过长，已截断）" else diff.text
+                    view.showDiff(text)
+                }
             },
-            onError = { view.showLoading("计算差异失败，返回重试") },
+            onError = { if (!stale(token)) view.showLoading("计算差异失败，返回重试") },
         )
     }
 
@@ -749,9 +788,11 @@ class GitPage(
 
     private fun renderConflict() {
         detail.showLoading("正在读取冲突…")
+        val token = generation
         host.background(
             work = { Git.conflicts(host.env, host.root) },
-            then = { files ->
+            then = then@{ files ->
+                if (stale(token)) return@then
                 val rows = mutableListOf<SettingRow>()
                 val keys = HashMap<String, () -> Unit>()
                 rows.add(SettingRow.Header("冲突文件"))
@@ -800,9 +841,11 @@ class GitPage(
     private fun renderConflictFile(file: String) {
         detail.showLoading("正在读取冲突内容…")
         val source = mergeSource.orEmpty()
+        val token = generation
         host.background(
             work = { Git.conflictSnippet(host.root, file) },
-            then = { text ->
+            then = then@{ text ->
+                if (stale(token)) return@then
                 val rows =
                     listOf(
                         SettingRow.Value("保留当前分支的版本", "ours", "ours"),
@@ -884,9 +927,11 @@ class GitPage(
         }
         val view = openDetail("分支", "当前 ${current.branch}")
         view.showLoading("正在读取分支…")
+        val token = generation
         host.background(
             work = { Git.localBranches(host.env, host.root) to Git.remoteBranches(host.env, host.root) },
-            then = { pair ->
+            then = then@{ pair ->
+                if (stale(token)) return@then
                 val (locals, remotes) = pair
                 val rows = mutableListOf<SettingRow>()
                 val keys = HashMap<String, () -> Unit>()
@@ -997,9 +1042,11 @@ class GitPage(
     private fun showChanges() {
         val view = openDetail("未提交改动", host.root.absolutePath)
         view.showLoading("正在读取改动…")
+        val token = generation
         host.background(
             work = { Git.changes(host.env, host.root) },
             then = then@{ lines ->
+                if (stale(token)) return@then
                 if (lines.isEmpty()) {
                     view.showLoading("工作区是干净的，没有未提交的改动。")
                     return@then
@@ -1052,9 +1099,11 @@ class GitPage(
     private fun showCommit(commit: Git.Commit) {
         val view = openDetail(commit.hash.take(8), commit.subject)
         view.showLoading("正在读取提交内容…")
+        val token = generation
         host.background(
             work = { Git.show(host.env, host.root, commit.hash).output to Git.headHash(host.env, host.root) },
-            then = { payload ->
+            then = then@{ payload ->
+                if (stale(token)) return@then
                 val output = payload.first
                 val head = payload.second
                 val rows = mutableListOf<SettingRow>()
@@ -1118,11 +1167,31 @@ class GitPage(
         if (!writing) drainWrites()
     }
 
+    /**
+     * 递归禁掉一棵视图里所有可点的东西。
+     *
+     * ViewGroup.isEnabled=false 只影响容器自身，子按钮的 OnClickListener 照常分发，
+     * 淡出动画期间用户仍能点到过期按钮（#535）。
+     */
+    private fun disableClicks(view: View) {
+        view.isEnabled = false
+        view.isClickable = false
+        view.setOnClickListener(null)
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) disableClicks(view.getChildAt(i))
+        }
+    }
+
     private fun drainWrites() {
         val op = writeQueue.removeFirstOrNull()
         if (op == null) {
             writing = false
             busy = false
+            // 写期间被挂起的刷新在这里补跑：此时仓库已静止，读到的才是一致状态（#533）。
+            if (refreshPending) {
+                refreshPending = false
+                refresh()
+            }
             return
         }
         writing = true
@@ -1130,12 +1199,12 @@ class GitPage(
         host.background(
             work = op.action,
             then = { result ->
-                busy = false
+                // busy 交给 drainWrites 统一管理：这里提前置 false 会让 done 里的
+                // refresh 与下一个写操作并发（#533）。
                 op.done(result)
                 drainWrites()
             },
             onError = {
-                busy = false
                 // 失败也必须回调 done：调用方靠它复位 merging/busy 这类状态，
                 // 少一次回调界面就永久停在「正在合并…」上，按钮再也点不动。
                 op.done(Git.Result(false, "执行失败"))
