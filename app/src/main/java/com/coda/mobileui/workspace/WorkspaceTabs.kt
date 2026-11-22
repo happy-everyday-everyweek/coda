@@ -1,5 +1,5 @@
 package com.coda.mobileui.workspace
-
+import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.Workspaces
 import org.json.JSONArray
 import org.json.JSONObject
@@ -61,12 +61,24 @@ object WorkspaceTabs {
             label(tab.kind)
         }
 
-    /** 读回上次的标签页集合与当前标签；没有记录时返回空集合。 */
+    /**
+     * 读回上次的标签页集合与当前标签；没有记录时返回空集合。
+     *
+     * **阻塞 I/O，不要在主线程调用**（#572）：正常路径 readText、异常路径还会 renameTo。
+     * 调用方应与 [save] 一样放到后台线程，冷启动时先渲染空壳再回填。
+     */
     fun load(root: File): Pair<MutableList<WorkspaceTab>, String?> {
         val file = Workspaces.stateFile(root)
         if (!file.isFile) return mutableListOf<WorkspaceTab>() to null
         return try {
             val saved = JSONObject(file.readText())
+            // 磁盘版本比本构建新：按旧语义解析后下一次 save 会用旧格式覆盖新格式，
+            // 造成不可逆丢失。留证后直接返回空集合，不解析也不覆盖（#569）。
+            if (saved.optInt("version", VERSION) > VERSION) {
+                AppLog.w("WorkspaceTabs", "标签状态版本 ${saved.optInt("version")} 高于本构建 $VERSION，已留证并跳过")
+                runCatching { file.renameTo(File(file.parentFile, file.name + ".bad")) }
+                return mutableListOf<WorkspaceTab>() to null
+            }
             val array = saved.optJSONArray("tabs") ?: JSONArray()
             val tabs = mutableListOf<WorkspaceTab>()
             for (i in 0 until array.length()) {
@@ -78,9 +90,10 @@ object WorkspaceTabs {
             }
             val active = saved.optString("active").ifEmpty { null }
             tabs to active
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
             // 解析失败（多半是上次写入被中断，留下半个 JSON）。
             // 把坏文件改名留证，不要让它挡住后续写入，也别悄悄删掉。
+            AppLog.w("WorkspaceTabs", "读取标签状态失败：${e.javaClass.simpleName}: ${e.message}")
             runCatching { file.renameTo(File(file.parentFile, file.name + ".bad")) }
             mutableListOf<WorkspaceTab>() to null
         }
@@ -94,13 +107,21 @@ object WorkspaceTabs {
     ) {
         val array = JSONArray()
         for (tab in tabs) {
-            array.put(
-                JSONObject()
-                    .put("id", tab.id)
-                    .put("kind", tab.kind)
-                    .put("state", tab.state)
-                    .put("preview", tab.preview),
-            )
+            // 逐条兜底：整批一次性序列化时，任意一个 tab 的 state 含不可序列化的值
+            // 就会让其余标签一起写不进去，故障影响被放大（#571）。
+            val entry =
+                runCatching {
+                    JSONObject()
+                        .put("id", tab.id)
+                        .put("kind", tab.kind)
+                        .put("state", tab.state)
+                        .put("preview", tab.preview)
+                }.getOrElse { e ->
+                    AppLog.w("WorkspaceTabs", "标签 ${tab.id} 序列化失败，本次跳过：${e.message}")
+                    // 保留标签本身，只丢掉它的 state，总比整批丢失强。
+                    JSONObject().put("id", tab.id).put("kind", tab.kind).put("preview", tab.preview)
+                }
+            array.put(entry)
         }
         val payload =
             JSONObject()
@@ -123,7 +144,9 @@ object WorkspaceTabs {
                 target.writeText(payload.toString(2))
                 temp.delete()
             }
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            // 空 catch 会让「标签全没了」变成没有任何线索的静默故障（#571）。
+            AppLog.w("WorkspaceTabs", "保存标签状态失败：${e.javaClass.simpleName}: ${e.message}")
         }
     }
 }

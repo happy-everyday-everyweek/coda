@@ -477,14 +477,37 @@ class WorkspaceActivity : BaseActivity() {
     // ---------------------------------------------------------------- 标签
 
     private fun restoreTabs() {
-        val (saved, savedActive) = WorkspaceTabs.load(root)
-        if (saved.none { it.kind == WorkspaceTabs.OVERVIEW }) {
-            saved.add(0, WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.OVERVIEW, JSONObject()))
-        }
-        for (data in saved) tabs += attach(data)
-        val initial = savedActive?.takeIf { id -> tabs.any { it.data.id == id } } ?: tabs.first().data.id
-        setActive(initial)
+        // 先立刻建一个概览页，界面不至于空着等磁盘。
+        val fallback = WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.OVERVIEW, JSONObject())
+        tabs += attach(fallback)
+        setActive(fallback.id)
         updateBar()
+        // 标签状态是阻塞磁盘读，不能压在 Activity 创建的主线程上（#572）。
+        val target = root
+        background(
+            work = { WorkspaceTabs.load(target) },
+            then = then@{ restored ->
+                val saved = restored.first
+                val savedActive = restored.second
+                // 期间用户可能已切换根目录或手动开过标签：那就不再回填，避免覆盖。
+                if (target != root || tabs.size > 1 || tabs.firstOrNull()?.data?.id != fallback.id) return@then
+                if (saved.isEmpty()) return@then
+                if (saved.none { it.kind == WorkspaceTabs.OVERVIEW }) {
+                    saved.add(0, WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.OVERVIEW, JSONObject()))
+                }
+                // 用恢复出来的集合替换占位页。
+                val placeholder = tabs.firstOrNull()
+                tabs.clear()
+                placeholder?.let { pageHost.removeView(it.page.view) }
+                for (data in saved) tabs += attach(data)
+                val initial = savedActive?.takeIf { id -> tabs.any { it.data.id == id } } ?: tabs.first().data.id
+                setActive(initial)
+                updateBar()
+            },
+            onError = {
+                com.coda.mobileui.core.AppLog.w("WorkspaceTabs", "恢复标签失败，保留概览页")
+            },
+        )
     }
 
     private fun attach(data: WorkspaceTab): OpenTab {

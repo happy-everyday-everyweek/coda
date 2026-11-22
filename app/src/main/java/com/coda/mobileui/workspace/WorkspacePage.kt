@@ -114,7 +114,20 @@ abstract class WorkspacePage(
             addView(column(), ViewGroup.LayoutParams(MATCH, WRAP))
         }
 
-    protected fun scrollColumn(scroll: android.widget.ScrollView): LinearLayout = scroll.getChildAt(0) as LinearLayout
+    /**
+     * 取出 [scrolling] 建好的内容列。
+     *
+     * 契约是「ScrollView 由 scrolling() 生成、第 0 个子 View 是 LinearLayout」。
+     * 盲目强转会在违约时抛出 ClassCastException，堆栈落在本方法里、看不到真正的调用方（#577）。
+     */
+    protected fun scrollColumn(scroll: android.widget.ScrollView): LinearLayout {
+        val first = scroll.getChildAt(0)
+        check(first is LinearLayout) {
+            val actual = first?.javaClass?.simpleName ?: "空"
+            "scrollColumn 需要 scrolling() 建出的 ScrollView（首个子 View 必须是 LinearLayout），实际是 $actual"
+        }
+        return first
+    }
 
     protected fun label(
         text: String,
@@ -240,8 +253,11 @@ abstract class WorkspacePage(
             setCardBackgroundColor(surfaceContainerLow)
             cardElevation = 0f
             strokeWidth = 0
-            isClickable = true
-            isFocusable = true
+            // 外壳只是布局容器，点击由内部的行/内容处理。
+            // 给没有 OnClickListener 的容器开 clickable/focusable 会多出空的焦点与
+            // 无障碍节点，读屏念成「可点击」却按不动，DPAD 也要多按一倍次数（#576）。
+            isClickable = false
+            isFocusable = false
         }
 
     /**
@@ -272,8 +288,14 @@ abstract class WorkspacePage(
             val isLast = index == rows.lastIndex
             val card = groupCard()
             if (row is MaterialCardView) {
-                // 整张卡片本身就是一行（例如信息卡）：取走内容，统一挂到本分组的外壳上。
-                card.addView(row, ViewGroup.LayoutParams(MATCH, WRAP))
+                // 整张卡片本身就是一行（例如信息卡）：取走内容挂到本分组的外壳上。
+                // 直接把 MaterialCardView 塞进 groupCard 会形成双层卡片——
+                // 内层保留自己的圆角/背景/内边距，与外层分组形状叠加（#575）。
+                val inner = ArrayList<View>(row.childCount)
+                for (i in 0 until row.childCount) inner.add(row.getChildAt(i))
+                // removeAllViews 会解除父子关系，之后直接挂到外壳即可。
+                row.removeAllViews()
+                inner.forEach { child -> card.addView(child, ViewGroup.LayoutParams(MATCH, WRAP)) }
             } else {
                 card.addView(row, ViewGroup.LayoutParams(MATCH, WRAP))
             }
