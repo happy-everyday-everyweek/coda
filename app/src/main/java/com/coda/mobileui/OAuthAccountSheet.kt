@@ -34,22 +34,30 @@ class OAuthAccountSheet(
     /** 动作完成后通知上一级刷新。 */
     private val onChanged: () -> Unit,
 ) {
-    /** 当前展示的账号。动作完成后会重新拉一次，所以不能是 val。 */
+    /**
+     * 当前展示的账号。动作完成后会重新拉一次，所以不能是 val。
+     *
+     * 主线程写、io 线程读，普通 var 没有可见性保证，后台可能拿到旧快照的 authIndex（#586）。
+     */
+    @Volatile
     private var account: OAuthAccounts.Account = initial
 
-    private val sheet = CodaSheet(host)
+    /** 账号已在插件侧被删除：列表里找不到它，不能再显示旧快照与操作入口（#583）。 */
+    @Volatile
+    private var accountRemoved = false
 
     /**
      * 当前承载本页的卡片。
      *
-     * 平时是 [sheet]（自己新建并 show 的那张）；attachTo 复用列表那张卡时会指过去，
-     * 否则页内 dismiss() 会关错卡片。
+     * show() 时是新建的那张；attachTo 复用列表那张卡时会指过去，否则页内 dismiss() 会关错卡片。
+     * 延迟到真正要用时才创建，避免 attachTo 路径白建一个从不使用的 CodaSheet（#585）。
      */
-    private var hostSheet: CodaSheet = sheet
+    private lateinit var hostSheet: CodaSheet
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private var column: LinearLayout? = null
-    private var caps = OAuthAccounts.Capabilities(false, false, false, false, false)
+    /** null 表示能力尚未加载完成，与「确实不支持」必须分开（#582）。 */
+    private var caps: OAuthAccounts.Capabilities? = null
     private var working = false
 
     private fun dp(v: Float): Int = (v * host.resources.displayMetrics.density + 0.5f).toInt()
@@ -89,18 +97,30 @@ class OAuthAccountSheet(
             OAuthAccounts.Health.UNKNOWN -> "状态未知"
         }
 
+    /**
+     * 本页在卡片上的全部配置，两条入口共用一份（#585）。
+     *
+     * 之前 show() 与 attachTo() 各抄一遍标题、内容、两个按钮和 onDismiss，
+     * 改一处漏一处会让两条入口的行为悄悄分叉。
+     */
+    private fun CodaSheet.bindAccountPage() {
+        title(account.title)
+        subtitle(provider.name)
+        content { col ->
+            column = col
+            renderLoading()
+            reload()
+        }
+        primaryAction("签到") { checkin() }
+        secondaryAction("关闭") { self -> self.dismiss() }
+        onDismiss { io.shutdown() }
+    }
+
     fun show() {
-        sheet
-            .title(account.title)
-            .subtitle(provider.name)
-            .content { col ->
-                column = col
-                renderLoading()
-                reload()
-            }.primaryAction("签到") { checkin() }
-            .secondaryAction("关闭") { self -> self.dismiss() }
-            .onDismiss { io.shutdown() }
-            .show()
+        val own = CodaSheet(host)
+        hostSheet = own
+        own.bindAccountPage()
+        own.show()
     }
 
     /**
@@ -112,21 +132,10 @@ class OAuthAccountSheet(
     fun attachTo(target: CodaSheet) {
         // 复用列表那张卡：本页的关闭动作必须作用在它上面，而不是自己 new 的那张
         hostSheet = target
-        target.navigate {
-            title(account.title)
-            subtitle(provider.name)
-            content { col ->
-                column = col
-                renderLoading()
-                reload()
-            }
-            primaryAction("签到") { checkin() }
-            secondaryAction("关闭") { self -> self.dismiss() }
-            onDismiss { io.shutdown() }
-        }
+        target.navigate { target.bindAccountPage() }
     }
 
-/** 拉一次最新状态：能力与账号数据一起更新，然后重画。 */
+    /** 拉一次最新状态：能力与账号数据一起更新，然后重画。 */
     private fun reload() {
         submit {
             // 读接口在后台线程，异常不接住会直接杀死进程；接住后要在界面上给出结果，
@@ -134,18 +143,20 @@ class OAuthAccountSheet(
             val loaded =
                 runCatching {
                     val c = OAuthAccounts.capabilities(host, provider)
-                    // 账号可能已经被删掉，这时列表里找不到，保留原值让界面不至于空白。
-                    val fresh =
+                    // 列表里找不到它，说明账号已经在插件侧被删掉了。这时不能拿旧快照当最新，
+                    // 否则界面会继续显示健康度、额度并放行签到/删除（#583）。
+                    val found =
                         OAuthAccounts
                             .list(host, provider)
-                            .firstOrNull { it.authIndex == account.authIndex } ?: account
-                    c to fresh
+                            .firstOrNull { it.authIndex == account.authIndex }
+                    Triple(c, found ?: account, found == null)
                 }
             main.post {
                 loaded
-                    .onSuccess { (c, fresh) ->
+                    .onSuccess { (c, fresh, removed) ->
                         caps = c
                         account = fresh
+                        accountRemoved = removed
                         render()
                     }.onFailure { e ->
                         renderLoadFailure(e)
@@ -186,7 +197,14 @@ class OAuthAccountSheet(
     private fun render() {
         val col = column ?: return
         col.removeAllViews()
-
+        if (accountRemoved) {
+            // 账号已不存在：只说明状态，不再渲染健康度、额度与任何动作入口（#583）。
+            // 卡片底部的主按钮是配置在卡片上的，不跟着内容区走，这里一并换成关闭。
+            hostSheet.primaryAction("关闭") { self -> self.dismiss() }
+            col.addView(hint("该账号已不存在，可能已在插件面板中被删除。"))
+            col.addView(hint("关闭这张卡片后重新打开列表即可看到最新账号。"))
+            return
+        }
         col.addView(healthCard())
         col.addView(creditsCard())
         col.addView(checkinCard())
@@ -444,10 +462,16 @@ class OAuthAccountSheet(
         )
         head.addView(text)
 
-        if (!caps.checkin) {
+        // 三态：未加载 / 不支持 / 支持。把未加载当成不支持会在弱网下误报（#582）。
+        val checkinLabel =
+            when (val c = caps) {
+                null -> "正在读取…"
+                else -> if (c.checkin) null else "该平台不支持"
+            }
+        if (checkinLabel != null) {
             head.addView(
                 TextView(host).apply {
-                    this.text = "该平台不支持"
+                    this.text = checkinLabel
                     setTextColor(onSurfaceVariant)
                     textSize = 12f
                 },
@@ -482,14 +506,13 @@ class OAuthAccountSheet(
                     }
             }
         // 签到有专门的卡片，这里跳过，避免同一个动作出现两次。
-        val actions = OAuthActions.available(caps).filter { it.id != "checkin" }
+        // 判空必须用过滤后的集合：否则只有 delete 的平台会渲染出一行空白（#587）。
+        val actions = OAuthActions.available(caps ?: return row).filter { it.id != "checkin" && it.id != "delete" }
         if (actions.isEmpty()) {
             row.addView(hint("该平台插件没有提供额外的账号操作。"))
             return row
         }
         actions.forEach { action ->
-            // 删除放在最底部单独处理，这里不重复。
-            if (action.id == "delete") return@forEach
             row.addView(
                 actionItem(
                     title = action.title,
@@ -503,8 +526,13 @@ class OAuthAccountSheet(
 
     /** 执行表里的动作。需要确认的先弹二次确认，否则直接跑。 */
     private fun perform(action: OAuthActions.Action) {
+        if (accountRemoved) {
+            Toast.makeText(host, "该账号已不存在", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (!action.confirm) {
-            run { OAuthActions.run(host, provider, action, account.authIndex) }
+            val target = account.authIndex
+            runAction { OAuthActions.run(host, provider, action, target) }
             return
         }
         CodaSheet(host)
@@ -521,7 +549,8 @@ class OAuthAccountSheet(
                 )
             }.primaryAction("确认") { self ->
                 self.dismiss()
-                run { OAuthActions.run(host, provider, action, account.authIndex) }
+                val target = account.authIndex
+                runAction { OAuthActions.run(host, provider, action, target) }
             }.secondaryAction("取消") { self -> self.dismiss() }
             .show()
     }
@@ -529,7 +558,7 @@ class OAuthAccountSheet(
     /** 删除单独一节，颜色用错误的红，明确它是不可逆的。 */
     private fun deleteRow(): View {
         val box = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
-        if (caps.panel) {
+        if (caps?.panel == true) {
             box.addView(actionItem("删除账号", "同时删掉本地凭据，需要重新授权", 0xFFC62828.toInt()) { confirmDelete() })
         } else {
             box.addView(hint("该平台的账号需要在插件的管理面板里删除。"))
@@ -609,7 +638,7 @@ class OAuthAccountSheet(
      * [onSuccess] 只在动作真的成功时执行。删除这类不可逆操作要靠它关面板——
      * 之前不看结果就关，失败时用户会以为已经删掉了。
      */
-    private fun run(
+    private fun runAction(
         onSuccess: (() -> Unit)? = null,
         block: () -> OAuthAccounts.Outcome,
     ) {
@@ -638,11 +667,22 @@ class OAuthAccountSheet(
     }
 
     private fun checkin() {
-        if (!caps.checkin) {
+        val c = caps
+        // 尚未加载完成不等于不支持：弱网下首次进页面就点签到会收到错误结论（#582）。
+        if (c == null) {
+            Toast.makeText(host, "正在读取平台能力，请稍候", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!c.checkin) {
             Toast.makeText(host, "该平台不支持签到", Toast.LENGTH_SHORT).show()
             return
         }
-        run { OAuthAccounts.checkin(host, provider, account.authIndex) }
+        if (accountRemoved) {
+            Toast.makeText(host, "该账号已不存在", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val target = account.authIndex
+        runAction { OAuthAccounts.checkin(host, provider, target) }
     }
 
     /** 删除要二次确认：这一步连本地凭据一起删，删完只能重新授权。 */
@@ -668,8 +708,9 @@ class OAuthAccountSheet(
                     return@primaryAction
                 }
                 // 只有真的删成功才关面板：失败时面板要留着，错误提示可见、可以重试
-                run(onSuccess = { hostSheet.dismiss() }) {
-                    OAuthActions.run(host, provider, action, account.authIndex)
+                val target = account.authIndex
+                runAction(onSuccess = { hostSheet.dismiss() }) {
+                    OAuthActions.run(host, provider, action, target)
                 }
             }.secondaryAction("取消") { self -> self.dismiss() }
             .show()
