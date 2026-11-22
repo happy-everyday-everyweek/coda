@@ -31,6 +31,9 @@ class PromptEditorActivity : BaseActivity() {
     /** 进入页面时的内容，用于判断有没有未保存的修改。 */
     private var initial = ""
 
+    /** 正文是否已从磁盘读到：没读到就保存会把还没加载出来的内容覆盖成空。 */
+    private var loaded = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val scope = intent.getStringExtra(EXTRA_SCOPE) ?: SCOPE_GLOBAL
@@ -53,9 +56,12 @@ class PromptEditorActivity : BaseActivity() {
         // 读文件放到 IO 线程：大提示词或慢存储上，主线程 readText 会卡顿甚至 ANR（#173）。
         AgentPrompt.readAsync(file) { text ->
             if (isFinishing || isDestroyed) return@readAsync
+            // 基线无论如何都要记下来：否则「放弃修改」判断会拿空串比对，
+            // 用户加载期间打的字会被当成未修改而静默丢掉。
+            initial = text
+            loaded = true
             // 加载期间用户已经动过输入框：不能把磁盘内容盖上去，否则刚打的字就没了。
             if (input.text.isNotEmpty()) return@readAsync
-            initial = text
             input.setText(text)
             input.setSelection(input.text.length)
             updateMeta()
@@ -190,6 +196,11 @@ class PromptEditorActivity : BaseActivity() {
     }
 
     private fun saveAndFinish() {
+        // 正文还没读进来就保存，会把磁盘上的内容覆盖成空（异步加载引入的新风险）。
+        if (!loaded) {
+            Toast.makeText(this, "正在读取文件，请稍候再保存", Toast.LENGTH_SHORT).show()
+            return
+        }
         val body = input.text.toString()
         // 写盘也走 IO 线程（#173）；失败时保持页面打开，让用户能重试。
         AgentPrompt.saveAsync(file, body) { err ->
