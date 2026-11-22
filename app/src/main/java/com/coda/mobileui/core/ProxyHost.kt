@@ -557,7 +557,15 @@ object ProxyHost {
                 return false
             }
             // FileOutputStream 写出的文件没有执行位，必须显式放开。
-            runCatching { Os.chmod(target.absolutePath, 493) } // 0755
+            // 失败不能静默：loader 是被 env 直接 execve 的，缺执行位就是 Permission denied，
+            // 而 isInstalled() 只看文件存在与 loader.canExecute()，吞掉异常会让状态自相矛盾（#389）。
+            val chmod = runCatching { Os.chmod(target.absolutePath, 493) }
+            if (chmod.isFailure) {
+                lastError = "glibc 库无法设置可执行权限：$name（${chmod.exceptionOrNull()?.message}）"
+                AppLog.e("ProxyHost", lastError ?: "")
+                runCatching { target.delete() }
+                return false
+            }
         }
         AppLog.i("ProxyHost", "glibc 运行时就位：${dir.absolutePath}")
         return true

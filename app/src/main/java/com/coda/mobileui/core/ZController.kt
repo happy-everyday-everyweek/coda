@@ -151,24 +151,49 @@ class ZController private constructor(
         workflowWatchers -= w
     }
 
-    /** 子会话消息缓存（子代理半屏的整页会话视图用）。 */
-    private val childMessages = HashMap<String, List<ZMessage>>()
+    /**
+     * 按会话/调用维度的缓存上限（#468）。
+     *
+     * 这些集合原先只有写入路径，长时间运行后内存随会话数与工具调用数线性上升，
+     * 会话早已关闭也不释放。改成 accessOrder 的 LRU，超限自动淘汰最久未用的条目。
+     */
+    private val CHILD_CACHE_LIMIT = 64
+    private val CALL_CACHE_LIMIT = 512
+
+    private fun <K, V> lru(limit: Int): MutableMap<K, V> =
+        java.util.Collections.synchronizedMap(
+            object : LinkedHashMap<K, V>(16, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > limit
+            },
+        )
+
+    /** 子会话消息缓存（子代理半屏的整页会话视图用）；LRU + 线程安全（#468）。 */
+    private val childMessages = lru<String, List<ZMessage>>(CHILD_CACHE_LIMIT)
 
     /** 子会话消息读取失败过的会话 id（避免把「读失败」当成「确实为空」）。 */
-    private val childMessageFailures = HashSet<String>()
+    private val childMessageFailures =
+        java.util.Collections.newSetFromMap(lru<String, Boolean>(CHILD_CACHE_LIMIT))
 
-    /** 正在读取中的子会话 id（同会话只保留一个在途请求）。 */
-    private val childLoading = HashSet<String>()
+    /** 正在读取中的子会话 id；调用方线程与主线程都会碰，必须线程安全（#468）。 */
+    private val childLoading =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    /** 被合并掉的读取回调：在途请求完成时一并通知，否则调用方永远停在「加载中」（#468）。 */
+    private val childWaiters =
+        java.util.concurrent.ConcurrentHashMap<String, MutableList<(List<ZMessage>?) -> Unit>>()
 
     /** 父 Agent 工具调用 id → 子会话 id（由流式事件的 parentToolUseId 解析而来）。 */
-    private val parentCallToChild = HashMap<String, String>()
+    private val parentCallToChild = lru<String, String>(CALL_CACHE_LIMIT)
 
     /** 子工具调用 id → 父 Agent 工具调用 id。 */
-    private val toolCallToParentCall = HashMap<String, String>()
+    private val toolCallToParentCall = lru<String, String>(CALL_CACHE_LIMIT)
 
     private val listeners = CopyOnWriteArrayList<Listener>()
     /** 待应答的权限请求参数（requestId → requestPermission 的原始 params），只保留最近 10 条。 */
     private val pendingPermissionParams = java.util.Collections.synchronizedMap(linkedMapOf<String, JSONObject>())
+
+    /** 无监听者时确认请求的最长挂起时间；超时按拒绝收尾并落日志（#464）。 */
+    private val DEFERRED_TIMEOUT_MS = 60_000L
     /**
      * 会话 id → 模式。
      *
@@ -209,6 +234,90 @@ class ZController private constructor(
 
     fun addListener(l: Listener) {
         if (!listeners.contains(l)) listeners += l
+        // UI 刚 attach（内核先起、Activity 旋转重建）时到达的请求原本被直接 deny，
+        // 用户根本没看到提示。这里把窗口期暂存的请求回放给新监听者（#464）。
+        replayDeferredInteractions()
+    }
+
+    /**
+     * 无监听者时暂存的确认请求。
+     *
+     * 内核在等应答，不能直接替用户拒绝；也不能无限期挂着，超过 [DEFERRED_TIMEOUT_MS]
+     * 仍无人接管才按拒绝收尾，并落日志说明是超时而非用户选择。
+     */
+    private class DeferredInteraction(
+        val requestId: Any,
+        val method: String,
+        val params: JSONObject,
+        val createdAt: Long = System.currentTimeMillis(),
+    )
+
+    private val deferredInteractions = java.util.Collections.synchronizedList(mutableListOf<DeferredInteraction>())
+
+    private fun deferInteraction(
+        requestId: Any,
+        method: String,
+        params: JSONObject,
+    ) {
+        synchronized(deferredInteractions) {
+            deferredInteractions.add(DeferredInteraction(requestId, method, params))
+            // 上限与权限参数缓存同量级：窗口期通常只有几百毫秒，堆积说明 UI 起不来。
+            while (deferredInteractions.size > 10) {
+                val oldest = deferredInteractions.removeAt(0)
+                declineDeferred(oldest, "等待界面接管超时（队列溢出）")
+            }
+        }
+        runtime.log("[interaction] 暂无监听者，挂起 $method request=$requestId")
+        main.postDelayed({ expireDeferredInteractions() }, DEFERRED_TIMEOUT_MS)
+    }
+
+    private fun expireDeferredInteractions() {
+        val now = System.currentTimeMillis()
+        val expired = mutableListOf<DeferredInteraction>()
+        synchronized(deferredInteractions) {
+            val it = deferredInteractions.iterator()
+            while (it.hasNext()) {
+                val d = it.next()
+                if (now - d.createdAt >= DEFERRED_TIMEOUT_MS) {
+                    expired.add(d)
+                    it.remove()
+                }
+            }
+        }
+        for (d in expired) declineDeferred(d, "等待界面接管超时")
+    }
+
+    private fun declineDeferred(
+        d: DeferredInteraction,
+        reason: String,
+    ) {
+        runtime.log("[interaction] $reason，按拒绝收尾 request=${d.requestId}")
+        val resp =
+            if (d.method == "interaction/requestUserInput") {
+                JSONObject().put("action", "decline")
+            } else {
+                findDenyResponse(d.params) ?: JSONObject().put("decision", "deny")
+            }
+        runCatching { runtime.respond(d.requestId, resp) }
+    }
+
+    private fun replayDeferredInteractions() {
+        val pending = synchronized(deferredInteractions) {
+            val copy = deferredInteractions.toList()
+            deferredInteractions.clear()
+            copy
+        }
+        for (d in pending) {
+            if (d.method == "interaction/requestUserInput") {
+                notif { onUserInputRequest(d.requestId, d.params) }
+            } else {
+                synchronized(pendingPermissionParams) {
+                    pendingPermissionParams[d.requestId.toString()] = d.params
+                }
+                val sid = d.params.optString("sessionId")
+                notif { onSessionPermissionRequest(sid, d.requestId, d.params) }
+            }
+        }
     }
 
     fun removeListener(l: Listener) {
@@ -367,7 +476,9 @@ class ZController private constructor(
                             notif { onSessionPermissionRequest(sessionId, requestId, params) }
                             true
                         } else {
-                            runtime.respond(requestId, findDenyResponse(params) ?: JSONObject().put("decision", "deny"))
+                            // 没有监听者不等于用户拒绝：内核刚起或 Activity 正在重建时
+                            // 请求会落在这个窗口期，直接 deny 会让用户从未看到提示（#464）。
+                            deferInteraction(requestId, "interaction/requestPermission", params)
                             true
                         }
                     }
@@ -377,7 +488,8 @@ class ZController private constructor(
                             notif { onUserInputRequest(requestId, params) }
                             true
                         } else {
-                            runtime.respond(requestId, JSONObject().put("action", "decline"))
+                            // 同上：挂起等 UI 接管，超时才按 decline 收尾（#464）。
+                            deferInteraction(requestId, "interaction/requestUserInput", params)
                             true
                         }
                     }
@@ -537,7 +649,10 @@ class ZController private constructor(
             // 先广播给所有监听者，再决定是否继续处理当前会话的 UI 状态。
             notif { onSessionTurnFinished(sid, type) }
         }
-        if (sid.isNotEmpty() && currentSessionId != null && sid != currentSessionId) return
+        // 没有打开会话时，任何带 sessionId 的事件都属于别的会话：
+        // 旧条件要求 currentSessionId != null 才过滤，于是「未打开会话」这个窗口期里
+        // 后台会话的 turn.started/streaming 会翻转全局 running 并把增量灌进聊天 UI（#461）。
+        if (sid.isNotEmpty() && sid != currentSessionId) return
         when (type) {
             "turn.started" -> {
                 running = true
@@ -820,11 +935,23 @@ class ZController private constructor(
             return
         }
         // 同一子会话只允许一个在途读取：冷恢复可能耗时数秒，3 秒跟随刷新会重复触发同一会话。
-        if (!childLoading.add(childSessionId)) return
+        // 被合并的调用方必须登记回调，否则它永远收不到结果、UI 停在「加载中」（#468）。
+        if (!childLoading.add(childSessionId)) {
+            if (cb != null) {
+                childWaiters
+                    .getOrPut(childSessionId) { java.util.Collections.synchronizedList(mutableListOf()) }
+                    .add(cb)
+            }
+            return
+        }
 
         fun settle(msgs: List<ZMessage>?) {
             post {
                 childLoading.remove(childSessionId)
+                childWaiters.remove(childSessionId)?.let { waiters ->
+                    val copy = synchronized(waiters) { waiters.toList() }
+                    for (w in copy) runCatching { w(msgs) }
+                }
                 if (msgs != null) {
                     childMessages[childSessionId] = msgs
                     childMessageFailures.remove(childSessionId)
@@ -1775,6 +1902,14 @@ class ZController private constructor(
                         .put("payload", JSONObject())
                         .put("issuedAt", System.currentTimeMillis())
                 runtime.call("v4/command", cmd) { ok2, body2 ->
+                    // 降级路径成功后也必须落状态：只回传 cb 会让界面停在「生成中」，
+                    // 与主路径的副作用不一致（#467）。
+                    if (ok2) {
+                        post {
+                            if (currentSessionId == sid) running = false
+                            notif { onStateChanged() }
+                        }
+                    }
                     cb?.invoke(ok2, if (ok2) "ok" else errMsg(body2))
                 }
             }
