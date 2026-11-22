@@ -30,6 +30,7 @@ import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
+import com.coda.mobileui.core.BackupCategory
 import com.coda.mobileui.core.DataBackup
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.OAuthProviders
@@ -89,7 +90,7 @@ class SettingsDetailActivity :
     private val backupImportLauncher =
         registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-        ) { uri: Uri? -> if (uri != null) doImportBackup(uri) }
+        ) { uri: Uri? -> if (uri != null) confirmImportCategories(uri) }
 
     /** Coda Bot 本地图片：选图后写入 Bot 配置。 */
     private val codaBotAvatarLauncher =
@@ -670,7 +671,8 @@ class SettingsDetailActivity :
                 handleCodaBotKey(key)
             }
             key == "backup_export" -> {
-                backupExportLauncher.launch(DataBackup.defaultFileName())
+                // 先勾选分类再选文件（#732）：默认全选，与旧版全量行为一致。
+                pickBackupCategories()
             }
 
             key == "backup_import" -> {
@@ -1452,11 +1454,76 @@ class SettingsDetailActivity :
     private fun confirmImportBackup() {
         sheetConfirm(
             "导入数据",
-            "覆盖设置、供应商与提示词，并重启内核。",
+            "只覆盖包内包含的分类，其余数据保持原样；完成后重启内核。",
             "选择文件",
         ) {
             backupImportLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
         }
+    }
+
+    /**
+     * 选完文件后先展示「这个包会覆盖什么」再确认（#732）。
+     *
+     * 部分包只含设置或提示词，用户必须明确知道哪些分类会被覆盖、哪些不动。
+     * 读分类要把包落到临时文件，放后台做。
+     */
+    private fun confirmImportCategories(uri: Uri) {
+        snack("正在读取包内容…")
+        Thread {
+            val present = DataBackup.categoriesIn(this, uri)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (present.isEmpty()) {
+                    snack("读不出包内分类，未改动任何数据")
+                    return@runOnUiThread
+                }
+                val neutral =
+                    MaterialColors.getColor(
+                        this,
+                        com.google.android.material.R.attr.colorOnSurfaceVariant,
+                        android.graphics.Color.GRAY,
+                    )
+                val included = BackupCategory.entries.filter { it in present }
+                val untouched = BackupCategory.entries.filter { it !in present }
+                CodaSheet(this)
+                    .title("确认导入")
+                    .content { col ->
+                        col.addView(
+                            TextView(this).apply {
+                                text =
+                                    if (BackupCategory.isPartial(present)) {
+                                        "这是一个部分备份包，只会覆盖下面列出的分类。"
+                                    } else {
+                                        "这是一个全量备份包，会覆盖全部分类。"
+                                    }
+                                textSize = 14f
+                                setTextColor(neutral)
+                                setPadding(0, 0, 0, dp(8))
+                            },
+                        )
+                        col.addView(
+                            TextView(this).apply {
+                                text = "将被覆盖：" + included.joinToString("、") { it.title }
+                                textSize = 14f
+                                setPadding(0, 0, 0, dp(4))
+                            },
+                        )
+                        if (untouched.isNotEmpty()) {
+                            col.addView(
+                                TextView(this).apply {
+                                    text = "保持原样：" + untouched.joinToString("、") { it.title }
+                                    textSize = 13f
+                                    setTextColor(neutral)
+                                },
+                            )
+                        }
+                    }.primaryAction("确认导入") { sheet ->
+                        sheet.dismiss()
+                        doImportBackup(uri)
+                    }.secondaryAction("取消") { it.dismiss() }
+                    .show()
+            }
+        }.start()
     }
 
     private fun doExportBackup(uri: Uri) {
@@ -1467,12 +1534,13 @@ class SettingsDetailActivity :
         runCatching { com.coda.mobileui.core.ProxyHost.stop() }
         val controller = ZController.get(this)
         runCatching { controller.runtime.stopCore() }
+        val selected = pendingBackupCategories
         Thread {
-            val result = runCatching { DataBackup.export(this, uri) }
+            val result = runCatching { DataBackup.export(this, uri, selected) }
             runOnUiThread {
                 val count = result.getOrNull()
                 if (count != null && count > 0) {
-                    snack("已导出")
+                    snack(if (BackupCategory.isPartial(selected)) "已导出所选分类" else "已导出")
                 } else {
                     snack("导出失败：${result.exceptionOrNull()?.message ?: "空文件"}")
                 }
@@ -1481,6 +1549,71 @@ class SettingsDetailActivity :
                     if (!ok) snack("核心重启失败：$msg")
                 }
                 renderPage()
+            }
+        }.start()
+    }
+
+    /** 本次导出勾选的分类，默认全选（#732）。 */
+    private var pendingBackupCategories: Set<BackupCategory> = BackupCategory.DEFAULT
+
+    /**
+     * 导出前勾选分类（#732）。
+     *
+     * 每项附体积估算与敏感提示：含凭据的分类明确标注，rootfs 这类大项给出耗时预期。
+     * 体积统计要遍历 rootfs，放后台算，算完再弹卡片。
+     */
+    private fun pickBackupCategories() {
+        snack("正在统计各分类体积…")
+        Thread {
+            val sizes = runCatching { DataBackup.categorySizes(this) }.getOrDefault(emptyMap())
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val chosen = pendingBackupCategories.toMutableSet()
+                val neutral =
+                    MaterialColors.getColor(
+                        this,
+                        com.google.android.material.R.attr.colorOnSurfaceVariant,
+                        android.graphics.Color.GRAY,
+                    )
+                CodaSheet(this)
+                    .title("选择要备份的内容")
+                    .content { col ->
+                        col.addView(
+                            TextView(this).apply {
+                                text = "取消勾选可减小包体积；分享给别人前建议剔除含凭据的分类。"
+                                setTextColor(neutral)
+                                textSize = 13f
+                                setPadding(0, 0, 0, dp(8))
+                            },
+                        )
+                        BackupCategory.entries.forEach { cat ->
+                            val size = sizes[cat] ?: 0L
+                            val marks =
+                                buildString {
+                                    if (cat.sensitive) append(" · 含凭据")
+                                    if (cat.bulky) append(" · 体积大耗时较长")
+                                }
+                            col.addView(
+                                android.widget.CheckBox(this).apply {
+                                    text = "${cat.title}（${DataBackup.formatBytes(size)}$marks）"
+                                    isChecked = cat in chosen
+                                    minHeight = dp(48)
+                                    setOnCheckedChangeListener { _, on ->
+                                        if (on) chosen.add(cat) else chosen.remove(cat)
+                                    }
+                                },
+                            )
+                        }
+                    }.primaryAction("开始导出") { sheet ->
+                        if (chosen.isEmpty()) {
+                            snack("至少勾选一项")
+                        } else {
+                            pendingBackupCategories = chosen.toSet()
+                            sheet.dismiss()
+                            backupExportLauncher.launch(DataBackup.defaultFileName())
+                        }
+                    }.secondaryAction("取消") { it.dismiss() }
+                    .show()
             }
         }.start()
     }

@@ -22,8 +22,8 @@ import java.util.zip.ZipOutputStream
  * 用户级与工作区级两份提示词文件。会话记录、日志与应用本身不在备份范围内。
  */
 object DataBackup {
-    /** 备份格式版本。 */
-    private const val SCHEMA = 2
+    /** 备份格式版本。3 起支持选择性导出（categories + partial）。 */
+    private const val SCHEMA = 3
 
     /**
      * files 目录下不备份的顶层项。
@@ -53,21 +53,32 @@ object DataBackup {
     /** 需要备份的 SharedPreferences。 */
     private val PREFS = listOf("zcode_ui_settings", "zcode_bridge")
 
-    /** 导出到给定 Uri，返回写入的条目数；失败抛出异常。 */
+    /**
+     * 导出到给定 Uri，返回写入的条目数；失败抛出异常。
+     *
+     * [selected] 决定打包哪些分类，默认全选（与旧版全量行为一致）。
+     * 只勾选设置或提示词时不会碰 rootfs 与凭据文件，包体积显著小于全量。
+     */
     fun export(
         ctx: Context,
         uri: Uri,
+        selected: Set<BackupCategory> = BackupCategory.DEFAULT,
     ): Int {
         val out = ctx.contentResolver.openOutputStream(uri, "wt") ?: throw IllegalStateException("无法写入目标文件")
         var count = 0
+        // 实际写进包的路径集合：清单只能引用这里面的条目，否则部分包恢复时
+        // 会出现悬空链接或对不存在的文件 chmod。
+        val exportedPaths = mutableSetOf<String>()
         ZipOutputStream(out).use { zip ->
             fun putText(
                 name: String,
                 text: String,
             ) {
+                if (!BackupCategory.shouldExport(name, selected)) return
                 zip.putNextEntry(ZipEntry(name))
                 zip.write(text.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
+                exportedPaths += name
                 count++
             }
 
@@ -77,9 +88,11 @@ object DataBackup {
                 name: String,
                 file: File,
             ) {
+                if (!BackupCategory.shouldExport(name, selected)) return
                 zip.putNextEntry(ZipEntry(name))
                 file.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
+                exportedPaths += name
                 if (file.canExecute()) execEntries += name
                 count++
             }
@@ -144,9 +157,12 @@ object DataBackup {
             }
 
             // 两份清单必须在所有文件条目之后写入：恢复时先落文件，再按清单补执行位与链接。
-            if (execEntries.isNotEmpty()) putText("file-modes.txt", execEntries.joinToString("\n"))
-            if (symlinks.isNotEmpty()) {
-                putText("symlinks.txt", symlinks.joinToString("\n") { "${it.first}\t${it.second}" })
+            // 只收录已导出路径：部分包里留下未导出路径会造成悬空链接与 chmod 失败。
+            val keptExec = BackupCategory.filterManifest(execEntries, exportedPaths)
+            if (keptExec.isNotEmpty()) putText("file-modes.txt", keptExec.joinToString("\n"))
+            val keptLinks = symlinks.filter { BackupCategory.shouldExport(it.first, selected) }
+            if (keptLinks.isNotEmpty()) {
+                putText("symlinks.txt", keptLinks.joinToString("\n") { "${it.first}\t${it.second}" })
             }
 
             val global = AgentPrompt.globalFile(ctx)
@@ -161,6 +177,10 @@ object DataBackup {
                     .put("app", "coda")
                     .put("exportedAt", System.currentTimeMillis())
                     .put("entries", count)
+                    // 分类清单与 partial 标记：导入端据此知道「这个包会覆盖什么」，
+                    // 未包含的分类保持原样不动。
+                    .put("categories", BackupCategory.toJson(selected))
+                    .put("partial", BackupCategory.isPartial(selected))
             putText(ENTRY_MANIFEST, manifest.toString(2))
         }
         return count
@@ -317,11 +337,19 @@ object DataBackup {
     ): Int {
         var count = 0
         var total = 0L
+        // 包内**实际存在**的分类，而不是 manifest 声称的：部分包可能只勾了设置，
+        // 也可能 manifest 与实际条目不一致（手工改包）。以实际条目为准，
+        // 未包含的分类一律不动，绝不因为「读不到」就写空覆盖本机数据。
+        val present = mutableSetOf<BackupCategory>()
         ZipFile(packageFile).use { zip ->
             val entries = zip.entries().asSequence().toList()
+            entries.forEach { e ->
+                if (!e.isDirectory) BackupCategory.of(e.name)?.let { present.add(it) }
+            }
             for (entry in entries) {
                 if (entry.isDirectory) continue
                 val name = entry.name
+                if (!BackupCategory.shouldRestore(name, present)) continue
                 val input = zip.getInputStream(entry)
                 input.use { stream ->
                     when {
@@ -363,9 +391,15 @@ object DataBackup {
                 if (total > MAX_TOTAL_BYTES) throw IllegalStateException("备份解压总量超过上限")
             }
         }
-        runCatching { ProviderStore.load(ctx) }
-        runCatching { File(LinuxEnv(ctx).rootfs, "etc/resolv.conf").delete() }
-        return count
+        // 只有包里真的带了供应商配置才重载：部分包（比如只含提示词）不该触发
+            // 供应商重载，更不该删掉 Linux 环境的 resolv.conf。
+            if (BackupCategory.PROVIDERS in present) {
+                runCatching { ProviderStore.load(ctx) }
+            }
+            if (BackupCategory.ROOTFS in present) {
+                runCatching { File(LinuxEnv(ctx).rootfs, "etc/resolv.conf").delete() }
+            }
+            return count
     }
 
     /** 判断路径本身是不是符号链接；File.isFile 会跟随链接，不能用来判断。 */
@@ -466,6 +500,83 @@ object DataBackup {
                 .count { it.isFile }
         return "设置 $keys 项 · 供应商 $providers 个 · 提示词 $prompts 份"
     }
+
+    /**
+     * 各分类的体积估算（字节），用于勾选界面显示「这一项有多大」。
+     *
+     * 只统计常规文件，符号链接按 0 算（它在包里只是一行清单）。
+     * 遍历在调用线程同步执行，rootfs 大时较慢，调用方必须放后台。
+     */
+    fun categorySizes(ctx: Context): Map<BackupCategory, Long> {
+        val out = mutableMapOf<BackupCategory, Long>()
+        fun add(
+            cat: BackupCategory,
+            bytes: Long,
+        ) {
+            out[cat] = (out[cat] ?: 0L) + bytes
+        }
+
+        fun treeSize(
+            entry: String,
+            file: File,
+        ) {
+            if (isSymlink(file)) return
+            if (file.isFile) {
+                BackupCategory.of(entry)?.let { add(it, file.length()) }
+                return
+            }
+            file.listFiles()?.forEach { child -> treeSize("$entry/${child.name}", child) }
+        }
+
+        // prefs 以 JSON 形式导出，体积与 xml 原文件不同量级但同一数量级，用原文件估算。
+        File(ctx.filesDir.parentFile, "shared_prefs")
+            .listFiles { f -> f.isFile && f.name.endsWith(".xml") }
+            ?.forEach { add(BackupCategory.PREFS, it.length()) }
+        listOf(
+            ProviderStore.fileFor(ctx),
+            ProviderStore.metaFileFor(ctx),
+            ProviderStore.asrFileFor(ctx),
+        ).forEach { if (it.isFile) add(BackupCategory.PROVIDERS, it.length()) }
+        listOf(AgentPrompt.globalFile(ctx), AgentPrompt.workspaceFile(ctx))
+            .forEach { if (it.isFile) add(BackupCategory.PROMPTS, it.length()) }
+        ctx.filesDir.listFiles()?.forEach { top ->
+            if (top.name !in SKIP_FILES_TOP) treeSize("files/${top.name}", top)
+        }
+        File(ctx.filesDir.parentFile, "databases").takeIf { it.exists() }?.let { treeSize("databases", it) }
+        ctx.noBackupFilesDir.takeIf { it.exists() }?.let { treeSize("no-backup", it) }
+        return BackupCategory.entries.associateWith { out[it] ?: 0L }
+    }
+
+    /**
+     * 读一个包实际包含哪些分类，用于导入确认界面展示「会覆盖什么」。
+     *
+     * 以实际条目为准而不是 manifest 声称的：手工改过的包两者可能不一致。
+     * 读不出时返回空集，调用方应据此拒绝导入而不是当成全量包。
+     */
+    fun categoriesIn(
+        ctx: Context,
+        uri: Uri,
+    ): Set<BackupCategory> =
+        runCatching {
+            withPackage(ctx, uri) { file ->
+                val present = mutableSetOf<BackupCategory>()
+                ZipFile(file).use { zip ->
+                    zip.entries().asSequence().forEach { e ->
+                        if (!e.isDirectory) BackupCategory.of(e.name)?.let { present.add(it) }
+                    }
+                }
+                present
+            }
+        }.getOrDefault(emptySet())
+
+    /** 人类可读的字节数，用于勾选界面。 */
+    fun formatBytes(bytes: Long): String =
+        when {
+            bytes >= 1024L * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
+            bytes >= 1024L * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024))
+            bytes >= 1024L -> String.format(java.util.Locale.US, "%.0f KB", bytes / 1024.0)
+            else -> "$bytes B"
+        }
 
     private fun encode(value: Any?): JSONObject =
         when (value) {

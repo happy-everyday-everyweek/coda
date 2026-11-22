@@ -20,8 +20,8 @@ import java.util.concurrent.CancellationException
  *
  * 校验通过才经 [AssetPlacement] 上线，半截文件不会被当成成品。
  *
- * 为后续断点续传（#730）与多线程分块（#731）预留的扩展点：[Request.resume]
- * 与 [Request.concurrency] 已在入参里，本版本只实现单连接全量路径。
+ * 三条路径共用同一套失败分类与校验：单连接全量、断点续传（#730，[Request.resume]）、
+ * 多线程分块（#731，[Request.concurrency]）。小文件与不支持 Range 的源自动退回单连接。
  */
 internal object Downloader {
     /**
@@ -55,8 +55,8 @@ internal object Downloader {
      *
      * @param expectedSize 0 表示不校验长度（同时作为总长未知时的进度兜底）。
      * @param expectedSha256 null/空表示不校验内容（不推荐）。
-     * @param resume 预留：#730 断点续传开关，本版本忽略。
-     * @param concurrency 预留：#731 分块并发数，本版本恒按单连接执行。
+     * @param resume 断点续传开关（#730）：保留已下载字节，下次从断点接着下。
+     * @param concurrency 分块并发数（#731）：1 表示单连接；大于 1 且满足条件时并发分块。
      */
     data class Request(
         val url: String,
@@ -453,7 +453,8 @@ internal object Downloader {
             is AssetPlacement.Result.Failed ->
                 Result(
                     DownloadOutcome.Kind.PLACE_FAILED,
-                    bytes = placed.bytes,
+                    // Failed 只带 reason，没有 bytes：用聚合出的已完成量。
+                    bytes = got,
                     detail = placed.reason,
                     partial = tmp,
                 )
