@@ -240,7 +240,7 @@ internal class GitCanvasView(
     // ---------------------------------------------------------------- 状态
 
     private var laneOf = IntArray(0)
-    private var rowOf = HashMap<String, Int>(0)
+    private var rowOf: Map<String, Int> = emptyMap()
     private var laneCount = 1
 
     private var scale = 1f
@@ -268,44 +268,11 @@ internal class GitCanvasView(
     // ---------------------------------------------------------------- 泳道计算
 
     private fun rebuildLanes() {
-        rowOf = HashMap(commits.size)
-        for ((index, commit) in commits.withIndex()) rowOf[commit.hash] = index
-        val active = ArrayList<String?>()
-        val result = IntArray(commits.size)
-        for ((index, commit) in commits.withIndex()) {
-            var lane = -1
-            for (i in active.indices) {
-                if (active[i] == commit.hash) {
-                    lane = i
-                    break
-                }
-            }
-            if (lane < 0) {
-                lane = active.indexOfFirst { it == null }
-                if (lane < 0) {
-                    active.add(null)
-                    lane = active.size - 1
-                }
-            }
-            result[index] = lane
-            active[lane] = commit.parents.firstOrNull()
-            for (parent in commit.parents.drop(1)) {
-                if (active.none { it == parent }) {
-                    val free = active.indexOfFirst { it == null }
-                    if (free >= 0) active[free] = parent else active.add(parent)
-                }
-            }
-            for (i in active.indices) {
-                val expected = active[i] ?: continue
-                val target = rowOf[expected]
-                // 只有目标行严格在当前行下方时才继续占泳道。旧写法用 containsKey，
-                // 已绘制过的父提交（合并、重复父）也命中，泳道永不释放，
-                // laneCount 只增不减、worldWidth 被撑大、文字列被挤窄（#527）。
-                if (target == null || target <= index) active[i] = null
-            }
-        }
-        laneOf = result
-        laneCount = ((result.maxOrNull() ?: 0) + 1).coerceAtLeast(1)
+        // 算法在 GitLanes 里（有单测覆盖合并/重复父/浅克隆等形状），这里只取结果。
+        val layout = GitLanes.assign(commits.map { it.hash to it.parents })
+        rowOf = layout.rowOf
+        laneOf = layout.laneOf
+        laneCount = layout.laneCount
     }
 
     // ---------------------------------------------------------------- 视口
