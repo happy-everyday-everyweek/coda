@@ -91,6 +91,9 @@ object WebUiHost {
     private const val MAX_BODY_BYTES = 1 * 1024 * 1024
     private const val MAX_UNZIP_BYTES = 200L * 1024 * 1024
     private const val MAX_UNZIP_ENTRIES = 5_000
+
+    /** 需要手动跟随的重定向状态码，含 303 See Other 与 308 Permanent Redirect（#423）。 */
+    private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
     private const val MAX_UNZIP_ENTRY_BYTES = 50L * 1024 * 1024
 
     fun status(): String = lastStatus
@@ -611,14 +614,23 @@ object WebUiHost {
         path: String,
     ) {
         val rel = path.trimStart('/').ifEmpty { "index.html" }
-        val file = File(root, rel).canonicalFile
-        if (!file.path.startsWith(root.canonicalFile.path + File.separator)) {
+        val rootCanonical = root.canonicalFile
+        var file = File(root, rel).canonicalFile
+        if (!file.path.startsWith(rootCanonical.path + File.separator)) {
             respond(output, "forbidden".toByteArray(), "text/plain", 403)
             return
         }
         if (!file.isFile) {
-            respond(output, "not found".toByteArray(), "text/plain", 404)
-            return
+            // SPA fallback：客户端路由（/settings 等）与深层页刷新在磁盘上没有对应文件，
+            // 直接 404 会让页面打不开。带扩展名的请求仍按缺失资源处理，避免把 404 的
+            // js/css 请求回成 HTML 让浏览器报 MIME 错（#419）。
+            val looksLikeAsset = rel.substringAfterLast('/').contains('.')
+            val index = File(rootCanonical, "index.html")
+            if (looksLikeAsset || !index.isFile) {
+                respond(output, "not found".toByteArray(), "text/plain", 404)
+                return
+            }
+            file = index
         }
         val mime =
             when (file.extension.lowercase()) {
@@ -633,7 +645,31 @@ object WebUiHost {
                 "map" -> "application/json"
                 else -> "application/octet-stream"
             }
-        respond(output, file.readBytes(), mime, 200)
+        respondFile(output, file, mime)
+    }
+
+    /**
+     * 流式回文件：Content-Length 用文件长度，正文按 64KB 分块拷贝。
+     * 原先 readBytes() 把整个文件（含数 MB 的 JS bundle）读进内存，
+     * 多客户端轮询时持续产生分配与 GC 压力（#418）。
+     */
+    private fun respondFile(
+        output: java.io.OutputStream,
+        file: File,
+        mime: String,
+    ) {
+        output.write(responseHead(200, mime, file.length()).toByteArray(Charsets.ISO_8859_1))
+        runCatching {
+            java.io.FileInputStream(file).use { input ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    output.write(buf, 0, n)
+                }
+            }
+        }
+        output.flush()
     }
 
     // ---------------------------------------------------------------- HTTP 工具
@@ -644,6 +680,17 @@ object WebUiHost {
         mime: String,
         code: Int,
     ) {
+        output.write(responseHead(code, mime, body.size.toLong()).toByteArray(Charsets.ISO_8859_1))
+        output.write(body)
+        output.flush()
+    }
+
+    /** 响应头构造，字节响应与流式文件响应共用，避免两处漂移。 */
+    private fun responseHead(
+        code: Int,
+        mime: String,
+        length: Long,
+    ): String {
         val reason =
             when (code) {
                 200 -> "OK"
@@ -663,15 +710,11 @@ object WebUiHost {
             } else {
                 ""
             }
-        val head =
-            "HTTP/1.1 $code $reason\r\n" +
-                "Content-Type: $mime\r\n" +
-                "Content-Length: ${body.size}\r\n" +
-                cookie +
-                "Connection: close\r\n\r\n"
-        output.write(head.toByteArray(Charsets.ISO_8859_1))
-        output.write(body)
-        output.flush()
+        return "HTTP/1.1 $code $reason\r\n" +
+            "Content-Type: $mime\r\n" +
+            "Content-Length: $length\r\n" +
+            cookie +
+            "Connection: close\r\n\r\n"
     }
 
     private fun respondJson(
@@ -748,7 +791,9 @@ object WebUiHost {
                 if (k != "Accept") conn.setRequestProperty(k, v)
             }
             val code = conn.responseCode
-            if (code == 302 || code == 301 || code == 307) {
+            // 303/308 同样是重定向：漏判时会落进下面的 code!=200 分支，
+            // 用户只看到误导性的 "HTTP 308"，真实原因是没跟随（#423）。
+            if (code in REDIRECT_CODES) {
                 val loc = conn.getHeaderField("Location")
                 conn.disconnect()
                 if (loc.isNullOrBlank()) return "下载重定向失败（无 Location）"
@@ -757,7 +802,12 @@ object WebUiHost {
                 val nextHeaders = mapOf("User-Agent" to "Coda-Android")
                 return httpDownload(loc, target, nextHeaders, depth + 1)
             }
-            if (code != 200) return "下载失败（HTTP $code）"
+            if (code != 200) {
+                // 非 200 也要消费 errorStream 并断开，否则底层 socket 不回收（#423）。
+                runCatching { conn.errorStream?.use { it.readBytes() } }
+                conn.disconnect()
+                return "下载失败（HTTP $code）"
+            }
             conn.inputStream.use { input ->
                 FileOutputStream(target).use { out -> input.copyTo(out, 64 * 1024) }
             }

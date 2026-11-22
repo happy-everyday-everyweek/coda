@@ -94,6 +94,8 @@ object ProxyHost {
 
     /** 日志标签。 */
     private const val TAG = "ProxyHost"
+    /** 插件 .so 的最小可信大小；配置写入与已安装判定共用同一门槛（#393）。 */
+    private const val PLUGIN_MIN_BYTES = 500_000L
 
     /**
      * 就绪探测的首个失败原因。
@@ -354,7 +356,14 @@ object ProxyHost {
             runCatching { target.delete() }
             return false
         }
-        Os.chmod(target.absolutePath, 493) // 0755
+        // chmod 抛 ErrnoException 时不能穿透 ensureRuntime（它在 start 的 try 之外）：
+        // 既不填 lastError 又会留下 64MB 的"已安装但不可用"文件（#389）。
+        val chmod = runCatching { Os.chmod(target.absolutePath, 493) }
+        if (chmod.isFailure) {
+            lastError = "网关程序无法设置可执行权限：${chmod.exceptionOrNull()?.message}"
+            runCatching { target.delete() }
+            return false
+        }
         return installGlibc(ctx)
     }
 
@@ -496,7 +505,13 @@ object ProxyHost {
             }
             // 长度必须与资产完全一致，差一个字节都算失败。
             if (target.length() == expected) {
-                Os.chmod(target.absolutePath, 493) // 0755
+                // 同上：chmod 失败要落 lastError 并清掉文件，否则 isInstalled() 会误报成功（#389）。
+                val chmod = runCatching { Os.chmod(target.absolutePath, 493) }
+                if (chmod.isFailure) {
+                    lastError = "网关程序无法设置可执行权限：${chmod.exceptionOrNull()?.message}"
+                    runCatching { target.delete() }
+                    continue
+                }
                 // 再确认文件头是 ELF：长度对但内容被替换/写坏时，proot 同样只会报
                 // can't execute（那条错误把"不存在"和"格式不对"混在一起，很难分辨）。
                 if (looksExecutable(target) && installGlibc(ctx)) return true
@@ -559,14 +574,22 @@ object ProxyHost {
             }
         }.getOrDefault(false)
 
+    /**
+     * 压缩资产的长度只能实际读一遍才量得到，结果按资产名缓存（#395）。
+     *
+     * 不缓存时，安装 64MB 二进制要先解压一遍量长度、再解压一遍写盘，每次尝试多花
+     * 一倍 I/O；面板资产每次启动也要多读 3.3MB。资产内容随 APK 固定，缓存是安全的。
+     */
+    private val assetSizeCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     /** 读资产声明的长度；拿不到返回 null。 */
     private fun assetSize(
         ctx: Context,
         name: String,
     ): Long? =
-        runCatching {
+        assetSizeCache[name] ?: runCatching {
             ctx.assets.openFd(name).use { it.length }
-        }.getOrNull() ?: runCatching {
+        }.getOrNull()?.also { assetSizeCache[name] = it } ?: runCatching {
             // 压缩存储的资产没有 openFd，只能实际读一遍统计字节数（首次安装一次性开销）。
             ctx.assets.open(name).use { input ->
                 val buf = ByteArray(256 * 1024)
@@ -578,7 +601,7 @@ object ProxyHost {
                 }
                 total
             }
-        }.getOrNull()
+        }.getOrNull()?.also { assetSizeCache[name] = it }
 
     /**
      * 写配置文件。每次启动前重写，保证端口、插件目录、数据目录与实际路径一致。
@@ -616,10 +639,13 @@ object ProxyHost {
                 appendLine("plugins:")
                 appendLine("  enabled: true")
                 appendLine("  dir: \"$plugins\"")
-                // 只为目录里真实存在的插件写启用项，避免宿主报缺插件。
+                // 只为真正装好的插件写启用项。判据必须与 installedPluginIds() 完全一致：
+                // 这里只看 isFile 而那边还要求 length>500K 时，半截文件会被写进配置却
+                // 不计入已安装集合，installed==loadedPlugins 永不成立，每次 start 都重启（#393）。
                 val present =
                     OAuthProviders.all.filter {
-                        File(pluginsDirFor(ctx), OAuthProviders.pluginFile(it)).isFile
+                        val f = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(it))
+                        f.isFile && f.length() > PLUGIN_MIN_BYTES
                     }
                 if (present.isNotEmpty()) {
                     appendLine("  configs:")
@@ -628,11 +654,11 @@ object ProxyHost {
                         appendLine("      enabled: true")
                     }
                 }
-                // 记下这一份配置实际启用了哪些插件：进程起来后就是它们在生效。
-                // start() 用它判断目录里的插件是否已经超出运行中进程的加载范围。
-                loadedPlugins = present.map { it.pluginId }.toSet()
             }
         configFor(ctx).writeText(text)
+        // 写盘成功之后才记账：拼接阶段就赋值的话，writeText 失败时 loadedPlugins
+        // 会声称磁盘上存在实际并不存在的插件，破坏重启检测（#388）。
+        loadedPlugins = presentPluginIds(ctx)
     }
 
     /**
@@ -640,11 +666,14 @@ object ProxyHost {
      *
      * 判据与 [ensurePlugin] 一致：文件存在且大小过槛，半截文件不算装好。
      */
-    private fun installedPluginIds(ctx: Context): Set<String> =
+    private fun installedPluginIds(ctx: Context): Set<String> = presentPluginIds(ctx)
+
+    /** 插件「已就位」的唯一判据，writeConfig 与重启检测共用，避免两处漂移（#393）。 */
+    private fun presentPluginIds(ctx: Context): Set<String> =
         OAuthProviders.all
             .filter { p ->
                 val f = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(p))
-                f.isFile && f.length() > 500_000L
+                f.isFile && f.length() > PLUGIN_MIN_BYTES
             }.map { it.pluginId }
             .toSet()
 
@@ -710,9 +739,16 @@ object ProxyHost {
 
         val env = LinuxEnv(ctx)
 
-        val port = pickPort() ?: return fail("端口全部被占用（${PORT_CANDIDATES.joinToString("/")}）")
+        // pickPort/writeConfig 原先在 try 之外，IOException 会直接穿透 start()，
+        // lastError 保持为空，调用方拿不到可读原因（#388）。
+        val port =
+            runCatching { pickPort() }.getOrElse { e ->
+                return fail("探测可用端口失败：${e.message ?: e.javaClass.simpleName}")
+            } ?: return fail("端口全部被占用（${PORT_CANDIDATES.joinToString("/")}）")
         activePort = port
-        writeConfig(ctx, port)
+        runCatching { writeConfig(ctx, port) }.onFailure { e ->
+            return fail("写入网关配置失败：${e.message ?: e.javaClass.simpleName}")
+        }
         onProgress("启动网关…")
 
         val binaryPath = guestBinary(ctx)
@@ -795,20 +831,39 @@ object ProxyHost {
         proc: Process,
         log: File,
     ) {
+        // 逐行 appendText 每行都要开文件、定位末尾、写、关，两条 pump 线程还在锁里
+        // 互相等（#396）。改成常驻 writer：锁只覆盖内存写与 flush，不再覆盖 open/close。
+        val writer =
+            runCatching {
+                java.io.BufferedWriter(
+                    java.io.OutputStreamWriter(java.io.FileOutputStream(log, true), Charsets.UTF_8),
+                )
+            }.getOrNull()
         val lock = Any()
+        val remaining = java.util.concurrent.atomic.AtomicInteger(2)
 
         fun drain(stream: java.io.InputStream) {
             Thread {
                 runCatching {
                     stream.bufferedReader().useLines { lines ->
                         for (line in lines) {
+                            val w = writer ?: break
                             synchronized(lock) {
-                                runCatching { log.appendText(line + "\n") }
+                                runCatching {
+                                    w.write(line)
+                                    w.newLine()
+                                    // 排查时要能实时 tail，缓冲不能攒着不放。
+                                    w.flush()
+                                }
                             }
                         }
                     }
                 }.onFailure {
                     // 读不到输出不致命：宿主是否可用由 HTTP 探测判定，不看日志。
+                }
+                // 两条流都结束后才关 writer，避免一条先关导致另一条写失败。
+                if (remaining.decrementAndGet() == 0) {
+                    synchronized(lock) { runCatching { writer?.close() } }
                 }
             }.apply { isDaemon = true }.start()
         }
@@ -968,7 +1023,9 @@ object ProxyHost {
     ): String? =
         try {
             val conn =
-                (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+                // 环回请求必须显式直连：部分代理/VPN 应用接管全部流量，
+                // 不写 NO_PROXY 时能力探测会被静默劫持成失败（#391）。
+                (URL(baseUrl() + path).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = 8_000
                     readTimeout = timeoutMs
@@ -997,12 +1054,14 @@ object ProxyHost {
     fun managementStatus(
         ctx: Context,
         path: String,
-        method: String = "POST",
+        // 默认必须是只读的 GET：空 body 的 POST 在不少插件里等于「对全部账号执行」，
+        // 探测型 helper 把它设成默认值会真的触发签到或停用（#392）。
+        method: String = "GET",
         body: String? = null,
     ): Int? =
         try {
             val conn =
-                (URL(baseUrl() + path).openConnection() as HttpURLConnection).apply {
+                (URL(baseUrl() + path).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
                     requestMethod = method
                     connectTimeout = 8_000
                     readTimeout = 15_000

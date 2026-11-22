@@ -40,9 +40,12 @@ class SessionSearchPage(
         val section: String,
         val title: String,
         val subtitle: String,
-        val run: () -> Unit,
-        /** 真正命中的原文；provider 按全文匹配时填这里，避免页面二次过滤误删（#659）。 */
+        /**
+         * 真正命中的原文；provider 按全文匹配时填这里，避免页面二次过滤误删（#659）。
+         * 必须排在 run 之前：run 是最后一个参数，调用方普遍用 trailing lambda 传它。
+         */
         val matched: String? = null,
+        val run: () -> Unit,
     )
 
     private val dp: (Float) -> Int = { (it * host.resources.displayMetrics.density).toInt() }
