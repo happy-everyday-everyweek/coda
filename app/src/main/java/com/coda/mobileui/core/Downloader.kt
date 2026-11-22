@@ -252,6 +252,10 @@ internal object Downloader {
      *
      * 抽成独立函数是为了能在 JVM 单测里用内存流直接跑：EOF 判定、空读上限、
      * 进度节流与取消这几条以前只能靠真机联网触发。
+     *
+     * 取消在**循环边界**生效：read 期间置位的话，这一次已读到的字节仍会完整写盘，
+     * 下一轮开头才抛 CancellationException。写半个 buffer 才会损坏文件，
+     * 而完整落盘对 #730 保留断点是有利的。
      */
     internal fun pump(
         input: InputStream,

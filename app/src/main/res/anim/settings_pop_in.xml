@@ -9,7 +9,7 @@
 <set xmlns:android="http://schemas.android.com/apk/res/android"
     android:interpolator="@android:interpolator/linear_out_slow_in">
     <scale
-        android:duration="180"
+        android:duration="@integer/motion_standard"
         android:fromXScale="1.06"
         android:fromYScale="1.06"
         android:toXScale="1.0"
@@ -17,7 +17,7 @@
         android:pivotX="50%"
         android:pivotY="50%" />
     <alpha
-        android:duration="180"
+        android:duration="@integer/motion_standard"
         android:fromAlpha="0.85"
         android:toAlpha="1.0" />
 </set>

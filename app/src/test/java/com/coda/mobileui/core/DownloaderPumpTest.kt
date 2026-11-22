@@ -141,7 +141,10 @@ class DownloaderPumpTest {
         } catch (e: CancellationException) {
             assertTrue(e.message!!.contains("取消"))
         }
-        assertEquals(10, out.size())
+        // 取消在循环边界生效：置位发生在第二次 read 期间，那一次已读到的字节
+        // 仍会完整写盘（写半个 buffer 才会损坏文件），下一轮开头才抛。
+        // 所以这里落了 20 字节而不是 10——这条时序对 #730 保留断点是有利的。
+        assertEquals(20, out.size())
     }
 
     @Test

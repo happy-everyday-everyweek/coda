@@ -16,11 +16,11 @@
 <set xmlns:android="http://schemas.android.com/apk/res/android"
     android:interpolator="@android:interpolator/fast_out_slow_in">
     <translate
-        android:duration="220"
+        android:duration="@integer/motion_standard"
         android:fromXDelta="12%"
         android:toXDelta="0" />
     <alpha
-        android:duration="220"
+        android:duration="@integer/motion_standard"
         android:fromAlpha="0.9"
         android:toAlpha="1.0" />
 </set>

@@ -43,13 +43,13 @@ class CodaSheet(
         /** 卡片态四周留距。 */
         private const val CARD_GAP_DP = 16f
 
-        /** 卡片圆角。 */
-        private const val CARD_CORNER_DP = 28f
+        /** 卡片圆角：取 dimen/corner_panel（#53 四档之一），不再写死 28f。 */
+        private val CARD_CORNER_RES = R.dimen.corner_panel
 
         /**
          * 退出动画结束时是否还能去清理引用。
          *
-         * 一次 dismiss 的动画要跑 200ms，这段时间里完全可能再 show 一次：
+         * 一次 dismiss 的动画要跑 Motion.STANDARD（240ms），这段时间里完全可能再 show 一次：
          * 旧回调若无条件把 root/panel 置空，清掉的是新卡片刚建好的引用，
          * 新弹窗从此既关不掉也 navigate 不了。用代际号把两者隔开。
          */
@@ -219,7 +219,7 @@ class CodaSheet(
         rootView.addView(scrimView, matchParams())
 
         // 面板（卡片态：四周留距 + 四角圆角；全屏态：无距、无圆角、贴满屏幕）
-        cornerPx = dp(CARD_CORNER_DP).toFloat()
+        cornerPx = activity.resources.getDimension(CARD_CORNER_RES)
         val panelView =
             LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
@@ -389,14 +389,14 @@ class CodaSheet(
                         setTextColor(onPrimary)
                         background =
                             GradientDrawable().apply {
-                                cornerRadius = dp(26f).toFloat()
+                                cornerRadius = activity.resources.getDimension(R.dimen.corner_panel)
                                 setColor(primary)
                             }
                     } else {
                         setTextColor(onSurface)
                         background =
                             GradientDrawable().apply {
-                                cornerRadius = dp(26f).toFloat()
+                                cornerRadius = activity.resources.getDimension(R.dimen.corner_panel)
                                 setStroke(dp(1f), withAlpha(onSurface, 0.25f))
                             }
                     }
@@ -547,7 +547,7 @@ class CodaSheet(
             panelView
                 .animate()
                 .translationY(0f)
-                .setDuration(280)
+                .setDuration(Motion.EMPHASIZED)
                 .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
                 .start()
         } else {
@@ -557,7 +557,7 @@ class CodaSheet(
                 panelView
                     .animate()
                     .translationY(0f)
-                    .setDuration(260)
+                    .setDuration(Motion.EMPHASIZED)
                     .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
                     .start()
             }
@@ -565,7 +565,7 @@ class CodaSheet(
         scrimView
             .animate()
             .alpha(1f)
-            .setDuration(200)
+            .setDuration(Motion.STANDARD)
             .start()
     }
 
@@ -592,7 +592,7 @@ class CodaSheet(
             lp.bottomMargin = gap
             panelView.layoutParams = lp
         }
-        val radius = dp(CARD_CORNER_DP) * (1f - p)
+        val radius = activity.resources.getDimension(CARD_CORNER_RES) * (1f - p)
         (panelView.background as? GradientDrawable)?.let { bg ->
             bg.cornerRadii =
                 floatArrayOf(
@@ -637,7 +637,7 @@ class CodaSheet(
         val p0 = ((h0 - card).toFloat() / (full - card)).coerceIn(0f, 1f)
         val anim =
             ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 230
+                duration = Motion.STANDARD
                 interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
                 addUpdateListener { a ->
                     val t = a.animatedValue as Float
@@ -655,7 +655,7 @@ class CodaSheet(
         p
             .animate()
             .translationY(0f)
-            .setDuration(220)
+            .setDuration(Motion.STANDARD)
             .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
             .start()
     }
@@ -708,14 +708,14 @@ class CodaSheet(
                     setTextColor(onPrimary)
                     background =
                         GradientDrawable().apply {
-                            cornerRadius = dp(26f).toFloat()
+                            cornerRadius = activity.resources.getDimension(R.dimen.corner_panel)
                             setColor(primary)
                         }
                 } else {
                     setTextColor(onSurface)
                     background =
                         GradientDrawable().apply {
-                            cornerRadius = dp(26f).toFloat()
+                            cornerRadius = activity.resources.getDimension(R.dimen.corner_panel)
                             setStroke(dp(1f), withAlpha(onSurface, 0.25f))
                         }
                 }
@@ -780,7 +780,7 @@ class CodaSheet(
                 setTextColor(onSurface)
                 background =
                     GradientDrawable().apply {
-                        cornerRadius = dp(18f).toFloat()
+                        cornerRadius = activity.resources.getDimension(R.dimen.corner_bubble)
                         setStroke(dp(1f), withAlpha(onSurface, 0.25f))
                     }
                 setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
@@ -859,14 +859,14 @@ class CodaSheet(
                         setTextColor(onPrimary)
                         background =
                             GradientDrawable().apply {
-                                cornerRadius = dp(26f).toFloat()
+                                cornerRadius = activity.resources.getDimension(R.dimen.corner_panel)
                                 setColor(primary)
                             }
                     } else {
                         setTextColor(onSurface)
                         background =
                             GradientDrawable().apply {
-                                cornerRadius = dp(26f).toFloat()
+                                cornerRadius = activity.resources.getDimension(R.dimen.corner_panel)
                                 setStroke(dp(1f), withAlpha(onSurface, 0.25f))
                             }
                     }
@@ -941,7 +941,7 @@ class CodaSheet(
 
         // 关掉旧页：内容区与底部按钮一起淡出并轻微左移。
         // 这里原来漏了 start()，内容区其实从未淡出，只有底栏在动。
-        val fadeOut = 110L
+        val fadeOut = Motion.STANDARD
         col
             .animate()
             .alpha(0f)
@@ -1036,7 +1036,7 @@ class CodaSheet(
             .animate()
             .alpha(1f)
             .translationX(0f)
-            .setDuration(160)
+            .setDuration(Motion.QUICK)
             .start()
         footerRow?.let {
             it.alpha = 0f
@@ -1044,7 +1044,7 @@ class CodaSheet(
                 .animate()
                 .alpha(1f)
                 .translationX(0f)
-                .setDuration(160)
+                .setDuration(Motion.QUICK)
                 .start()
         }
     }
@@ -1075,7 +1075,7 @@ class CodaSheet(
         panelView
             ?.animate()
             ?.translationY(exit)
-            ?.setDuration(200)
+            ?.setDuration(Motion.STANDARD)
             ?.withEndAction {
                 if (!shouldApplyDismiss(myGen, generation)) return@withEndAction
                 (rootView.parent as? ViewGroup)?.removeView(rootView)
@@ -1098,7 +1098,7 @@ class CodaSheet(
         scrimView
             ?.animate()
             ?.alpha(0f)
-            ?.setDuration(160)
+            ?.setDuration(Motion.QUICK)
             ?.start()
     }
 

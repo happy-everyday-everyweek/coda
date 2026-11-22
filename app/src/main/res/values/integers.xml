@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    动效时长档位（#53）。
+
+    与 Motion.QUICK / STANDARD / EMPHASIZED 一一对应，供 res/anim 下的转场文件引用。
+    之前转场各写一份裸字面量（settings_in/out 220ms、settings_pop_* 180ms），
+    与代码里的三档对不上，同一个应用里出现两套速度。
+
+    改这里的同时必须改 Motion.kt 的同名常量：XML 无法引用 Kotlin 常量，
+    两边只能靠这条注释约束，新增档位时不要只改一边。
+-->
+<resources>
+    <!-- 淡入淡出、图标切换。对应 Motion.QUICK。 -->
+    <integer name="motion_quick">160</integer>
+    <!-- 小块展开收起、列表项进出、页面转场。对应 Motion.STANDARD。 -->
+    <integer name="motion_standard">240</integer>
+    <!-- 抽屉落位、胶囊变形。对应 Motion.EMPHASIZED。 -->
+    <integer name="motion_emphasized">340</integer>
+</resources>
