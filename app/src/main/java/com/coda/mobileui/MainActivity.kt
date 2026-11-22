@@ -1665,6 +1665,8 @@ class MainActivity : BaseActivity() {
     override fun onStop() {
         // Bot 页在内容区里，按 Home 或切后台不会走 close()：这里把录音收回。
         botPage?.onHostPause()
+        // 后台时把定时轮询拉长到 5 分钟，别每 30 秒唤醒一次（#222）。
+        com.coda.mobileui.core.AutomationScheduler.setForeground(false)
         super.onStop()
     }
 
@@ -1681,6 +1683,8 @@ class MainActivity : BaseActivity() {
             runCatching { rikka.shizuku.Shizuku.removeRequestPermissionResultListener(l) }
         }
         shizukuPermissionListener = null
+        // 定时调度器不能比 Activity 活得久：它每 30 秒自我重投递（#222）。
+        com.coda.mobileui.core.AutomationScheduler.stop()
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
@@ -4756,6 +4760,8 @@ class MainActivity : BaseActivity() {
             ?.findViewWithTag<View>("drawer_bot")
             ?.findViewById<TextView>(R.id.action_title)
             ?.text = com.coda.mobileui.personal.CodaBotStore.profile(this).name
+        // 回前台恢复定时轮询节奏（#222）。
+        com.coda.mobileui.core.AutomationScheduler.setForeground(true)
         // 浏览器控制引擎需要 Activity 承载隐藏 WebView。
         BrowserControl.attachActivity(this)
         // 从设置页回来时，宠物形象与三项开关可能已经改过，这里重新套一遍。

@@ -738,7 +738,10 @@ class AutomationStore(
                 d.execSQL(
                     "UPDATE automations SET run_count = run_count + 1, scheduled_run_count = scheduled_run_count + 1, " +
                         "last_run_at = ?, running = 0, claimed_at = NULL, retry_at = NULL, dispatch_status = 'idle', " +
-                        "dispatch_attempts = 0, last_error = NULL, next_run_at = ?, lifecycle_status = 'active', " +
+                        "dispatch_attempts = 0, last_error = NULL, next_run_at = ?, " +
+                        // 只有仍处于启用态的行才回到 active：run 期间被用户暂停的行
+                        // 不能一边 enabled=0 一边 lifecycle_status=active（#216）。
+                        "lifecycle_status = CASE WHEN enabled = 1 THEN 'active' ELSE 'paused' END, " +
                         "updated_at = ? WHERE automation_id = ?",
                     arrayOf<Any?>(now, nextRunAt, now, id),
                 )
@@ -914,6 +917,11 @@ object AutomationHost {
             throw AutomationException("relativeDelayMinutes 不能与 intervalUnit 同传")
         }
         if (interval != null && (interval < 1 || interval > 200)) throw AutomationException("interval 必须在 1-200 之间")
+        // 与 interval 同一套口径：0/负数会被 parseRule 的 max(1,…) 静默锚到未来 1 分钟，
+        // 任意大的值也会溢出成过去时间（#219）。上限取一年。
+        if (relativeDelayMinutes != null && (relativeDelayMinutes < 1 || relativeDelayMinutes > 525_600)) {
+            throw AutomationException("relativeDelayMinutes 必须在 1-525600 之间（最多一年）")
+        }
         val mode = params.optString("mode").takeIf { it.isNotEmpty() }
         val targetTaskId = params.optString("targetTaskId").takeIf { it.isNotEmpty() }
         val modelSelectionJson = params.optJSONObject("modelSelection")?.toString()
@@ -1112,6 +1120,16 @@ class AutomationScheduler private constructor(
             }
             instance?.ensureRunning()
         }
+
+        /** 宿主退到后台/回前台：拉长或恢复轮询间隔（#222）。 */
+        fun setForeground(value: Boolean) {
+            instance?.setForeground(value)
+        }
+
+        /** 宿主销毁时停掉轮询，避免进程里留一个永远自我重投递的 Runnable（#222）。 */
+        fun stop() {
+            instance?.stop()
+        }
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -1119,16 +1137,29 @@ class AutomationScheduler private constructor(
     @Volatile
     private var running = false
 
+    /** 前台 30s、后台 5min：退到后台后不必再每半分钟唤醒一次（#222）。 */
+    private val TICK_FOREGROUND_MS = 30_000L
+    private val TICK_BACKGROUND_MS = 300_000L
+
+    @Volatile
+    private var foreground = true
+
     private val tick =
         object : Runnable {
             override fun run() {
+                // 被 stop() 停掉后不再自我重投递：原实现无条件 postDelayed，
+                // 没有任何停止入口，进程只要启动过就永远每 30 秒醒一次（#222）。
+                if (!running) return
                 Bg.run {
                     try {
                         runDue()
-                    } catch (_: Throwable) {
+                    } catch (e: Exception) {
+                        AppLog.w("Automation", "定时轮询失败：${e.message ?: e.javaClass.simpleName}")
                     }
                 }
-                handler.postDelayed(this, 30_000)
+                if (running) {
+                    handler.postDelayed(this, if (foreground) TICK_FOREGROUND_MS else TICK_BACKGROUND_MS)
+                }
             }
         }
 
@@ -1136,6 +1167,22 @@ class AutomationScheduler private constructor(
         if (running) return
         running = true
         handler.postDelayed(tick, 8_000)
+    }
+
+    /** 停止轮询：退出调度或宿主销毁时调用，移除在途回调。 */
+    fun stop() {
+        running = false
+        handler.removeCallbacks(tick)
+    }
+
+    /** 前后台切换：后台时拉长间隔，回前台立即恢复节奏。 */
+    fun setForeground(value: Boolean) {
+        if (foreground == value) return
+        foreground = value
+        if (running) {
+            handler.removeCallbacks(tick)
+            handler.postDelayed(tick, if (value) 1_000L else TICK_BACKGROUND_MS)
+        }
     }
 
     private fun runDue() {
