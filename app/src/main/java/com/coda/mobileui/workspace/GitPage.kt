@@ -49,6 +49,8 @@ class GitPage(
         val commits: List<Git.Commit>,
         val locals: List<String>,
         val remotes: List<String>,
+        /** 已配置的远端名（#96）：remote add 后未 fetch 时 remotes 为空，但它不为空。 */
+        val remoteNames: List<String>,
         val stateIgnored: Boolean,
     )
 
@@ -176,7 +178,8 @@ class GitPage(
             items += "提交变更"
             items += "分支管理"
             // 没有远端就没有可拉取/推送的对象，菜单不该给出空动作。
-            if (current.remotes.isNotEmpty()) {
+            // 按 remote 配置判断而不是 branch -r：刚 remote add 还没 fetch 时后者是空的（#96）。
+            if (current.remoteNames.isNotEmpty()) {
                 items += "拉取"
                 items += "推送"
             }
@@ -293,7 +296,7 @@ class GitPage(
                     val env = host.env
                     val root = host.root
                     if (!Git.isRepo(env, root)) {
-                        Snapshot(false, "", "", emptyList(), emptyList(), emptyList(), emptyList(), true)
+                        Snapshot(false, "", "", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), true)
                     } else {
                         Snapshot(
                             repo = true,
@@ -303,6 +306,7 @@ class GitPage(
                             commits = Git.graph(env, root, 400),
                             locals = Git.localBranches(env, root),
                             remotes = Git.remoteBranches(env, root),
+                            remoteNames = Git.remotes(env, root),
                             stateIgnored = Git.ignoresState(env, root),
                         )
                     }
@@ -919,6 +923,53 @@ class GitPage(
         operate("切换到 $name") { Git.checkout(host.env, host.root, name) }
     }
 
+    /**
+     * 远端管理（#96）：查看已配置的远端与 URL，添加或改写。
+     *
+     * 之前页面完全没有这个入口，新建仓库只能去终端手敲 git remote add。
+     */
+    private fun showRemotes() {
+        val view = openDetail("远端仓库")
+        view.showLoading("正在读取远端…")
+        val token = generation
+        host.background(
+            work = {
+                val names = Git.remotes(host.env, host.root)
+                names.map { it to Git.remoteUrl(host.env, host.root, it) }
+            },
+            then = then@{ list ->
+                if (stale(token)) return@then
+                val rows = mutableListOf<SettingRow>()
+                val keys = HashMap<String, () -> Unit>()
+                if (list.isEmpty()) {
+                    rows.add(SettingRow.Header("尚未配置远端"))
+                    rows.add(SettingRow.Value("没有远端仓库", "添加 origin 后才能拉取与推送"))
+                } else {
+                    rows.add(SettingRow.Header("已配置"))
+                    list.forEach { (name, url) ->
+                        rows.add(SettingRow.Value(name, url.ifEmpty { "读取地址失败" }, "edit:$name"))
+                        keys["edit:$name"] = { editRemote(name, url) }
+                    }
+                }
+                rows.add(SettingRow.Header("操作"))
+                rows.add(SettingRow.Value("添加远端", "通常填 origin", "add"))
+                keys["add"] = { editRemote("origin", "") }
+                bindRows(rows, keys)
+            },
+            onError = { view.showLoading("读取远端失败，返回重试") },
+        )
+    }
+
+    /** 添加或改写一个远端地址。 */
+    private fun editRemote(
+        name: String,
+        currentUrl: String,
+    ) {
+        showInput("远端 $name 的地址", currentUrl.ifEmpty { "https://github.com/" }) { url ->
+            operate("保存远端") { Git.setRemote(host.env, host.root, name, url) }
+        }
+    }
+
     private fun showBranches() {
         val current = snapshot ?: return
         if (!current.repo) {
@@ -949,10 +1000,19 @@ class GitPage(
                     }
                 }
                 rows.add(SettingRow.Header("操作"))
-                rows.add(SettingRow.Value("新建分支", "", "new"))
+                rows.add(SettingRow.Value("远端仓库", "查看 / 添加 / 修改 origin 地址", "remotes"))
+                keys["remotes"] = { showRemotes() }
+                rows.add(SettingRow.Value("新建分支（不切换）", "只创建引用，当前分支不变", "new"))
                 keys["new"] = {
-                    showInput("新建分支", "feature") { name ->
-                        operate("新建分支") { Git.createBranch(host.env, host.root, name, null) }
+                    showInput("新建分支（不切换）", "feature") { name ->
+                        // checkout = false：只建引用，不静默把 HEAD 切走（#88）。
+                        operate("新建分支") { Git.createBranch(host.env, host.root, name, null, checkout = false) }
+                    }
+                }
+                rows.add(SettingRow.Value("新建并切换", "创建后立即切到新分支", "new_switch"))
+                keys["new_switch"] = {
+                    showInput("新建并切换", "feature") { name ->
+                        operate("新建并切换") { Git.createBranch(host.env, host.root, name, null, checkout = true) }
                     }
                 }
                 bindRows(rows, keys)
@@ -1135,8 +1195,9 @@ class GitPage(
     }
 
     private fun branchFrom(start: String) {
-        showInput("从此刻建分支", "branch-" + start.take(6)) { name ->
-            operate("新建分支") { Git.createBranch(host.env, host.root, name, start) }
+        showInput("从此刻建分支（不切换）", "branch-" + start.take(6)) { name ->
+            // 从旧提交建分支时尤其不能静默切换：工作区的未提交改动会被带过去（#88）。
+            operate("新建分支") { Git.createBranch(host.env, host.root, name, start, checkout = false) }
         }
     }
 

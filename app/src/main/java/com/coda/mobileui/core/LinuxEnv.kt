@@ -271,8 +271,15 @@ class LinuxEnv(
                 }
                 append("[init]\n")
                 append("\tdefaultBranch = main\n")
+                // 首次推送自动建立上游（git ≥ 2.37）：init + remote add 之后
+                // 裸 git push 会报 "no upstream branch"（#96）。
+                // 旧版本 git 会忽略这个未知键，Git.push 里还有显式 -u 重试兜底。
+                append("[push]\n")
+                append("\tautoSetupRemote = true\n")
                 // 容器里的进程身份是伪造的 root，宿主 /sdcard 上的文件属主却是应用自身。
                 // 不开这个口子，git 会把工作区判成属主可疑：init 成功，status、rev-parse、log 全挂。
+                // 这里保留全局兜底（终端标签里用户手敲 git 也要能用）；
+                // 应用自己发起的命令另走 Git.safeDirectory 精确豁免当前工作区（#518）。
                 append("[safe]\n")
                 append("\tdirectory = *\n")
                 if (login.isNotEmpty()) {

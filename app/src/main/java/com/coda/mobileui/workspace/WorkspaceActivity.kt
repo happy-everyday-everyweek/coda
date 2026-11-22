@@ -162,21 +162,30 @@ class WorkspaceActivity : BaseActivity() {
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    if (overview != null) {
-                        hideOverview()
-                        return
-                    }
-                    val page = activePage()
-                    if (page != null && page.onBack()) return
-                    if (history.isNotEmpty()) {
-                        stepBack()
-                        return
-                    }
-                    finish()
-                }
+                override fun handleOnBackPressed() = handleBack()
             },
         )
+    }
+
+    /**
+     * 统一的返回语义（#86）：先关总览，再退页内层级，再走标签历史，最后退出。
+     *
+     * 底栏箭头与系统返回都走这里。之前底栏只做 stepBack()，
+     * 在 Git 详情或压缩包子目录里点它会直接跳到别的标签、把页内层级留在后台，
+     * 与手势返回的行为不一致。
+     */
+    private fun handleBack() {
+        if (overview != null) {
+            hideOverview()
+            return
+        }
+        val page = activePage()
+        if (page != null && page.onBack()) return
+        if (history.isNotEmpty()) {
+            stepBack()
+            return
+        }
+        finish()
     }
 
     override fun onPause() {
@@ -376,7 +385,7 @@ class WorkspaceActivity : BaseActivity() {
                 gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(MATCH, dp(52f))
             }
-        backButton = toolButton(R.drawable.ic_arrow_back) { if (history.isNotEmpty()) stepBack() }
+        backButton = toolButton(R.drawable.ic_arrow_back) { handleBack() }
         aheadButton = toolButton(R.drawable.ic_arrow_forward) { if (ahead.isNotEmpty()) stepAhead() }
         row.addView(slot(backButton))
         row.addView(slot(aheadButton))

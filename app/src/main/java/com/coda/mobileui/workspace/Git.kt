@@ -186,6 +186,48 @@ object Git {
         root: File,
     ): List<String> = run(env, root, listOf("branch", "-r", "--format=%(refname:short)")).data().lines().filter { it.isNotBlank() }
 
+    /**
+     * 已配置的远端名（#96）。
+     *
+     * 拉取/推送入口的可见性必须按这个判断，而不是 `branch -r`：
+     * 刚 `remote add`、还没 fetch 过的仓库 branch -r 是空的，
+     * 按它判断会让入口根本不出现，用户无法完成第一次推送。
+     */
+    fun remotes(
+        env: LinuxEnv,
+        root: File,
+    ): List<String> = run(env, root, listOf("remote")).data().lines().filter { it.isNotBlank() }
+
+    /** 某个远端的 fetch URL；不存在时返回空串。 */
+    fun remoteUrl(
+        env: LinuxEnv,
+        root: File,
+        name: String,
+    ): String {
+        if (!isSafeRef(name)) return ""
+        return run(env, root, listOf("remote", "get-url", name)).let { if (it.ok) it.output.trim() else "" }
+    }
+
+    /** 添加或改写远端 URL。已存在同名远端时走 set-url，避免 "remote already exists"。 */
+    fun setRemote(
+        env: LinuxEnv,
+        root: File,
+        name: String,
+        url: String,
+    ): Result {
+        if (!isSafeRef(name)) return Result(false, "远端名不合法：$name")
+        // URL 不做 ref 校验（它不是 ref），但要挡住换行与前置 '-'，避免被当成选项。
+        if (url.isBlank() || url.startsWith("-") || url.any { it == '\n' || it == '\r' }) {
+            return Result(false, "远端地址不合法")
+        }
+        val exists = remotes(env, root).contains(name)
+        return if (exists) {
+            run(env, root, listOf("remote", "set-url", name, url))
+        } else {
+            run(env, root, listOf("remote", "add", name, url))
+        }
+    }
+
     /** 单个提交的完整信息。 */
     fun show(
         env: LinuxEnv,
@@ -270,20 +312,29 @@ object Git {
         return if (result.ok) result.output.trim().lineSequence().firstOrNull().orEmpty() else ""
     }
 
+    /**
+     * 创建分支。[checkout] 决定是否同时切过去（#88）。
+     *
+     * 之前无论哪个入口都是 `checkout -b`，UI 却只说「新建分支」，
+     * 用户以为只是建了个引用，实际 HEAD 已经切走、后续提交落到新分支。
+     * 现在两种语义分开，由调用方明确选择。
+     */
     fun createBranch(
         env: LinuxEnv,
         root: File,
         name: String,
         startPoint: String?,
+        checkout: Boolean = true,
     ): Result {
         if (!isSafeRef(name)) return Result(false, "分支名不合法：$name")
         if (!startPoint.isNullOrEmpty() && !isSafeRef(startPoint)) {
             return Result(false, "起点不合法：$startPoint")
         }
+        val verb = if (checkout) listOf("checkout", "-b") else listOf("branch")
         return if (startPoint.isNullOrEmpty()) {
-            run(env, root, listOf("checkout", "-b", name))
+            run(env, root, verb + name)
         } else {
-            run(env, root, listOf("checkout", "-b", name, startPoint))
+            run(env, root, verb + listOf(name, startPoint))
         }
     }
 
