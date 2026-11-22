@@ -748,9 +748,19 @@ object SettingsData {
         }
         val snap = HooksCore.discover(wp, home)
         val trusted = HooksCore.readTrustedDigests(wp, home)
+        // discover 已经把读取/解析失败收进 errors，但页面此前从不显示：
+        // 「读取失败」与「确实没配钩子」在界面上长得一样（#237）。
+        if (snap.errors.isNotEmpty()) {
+            rows += SettingRow.Header("读取异常")
+            snap.errors.forEach { rows += SettingRow.Value("配置读取失败", it) }
+        }
         rows += SettingRow.Header("工作区钩子")
         if (snap.entries.isEmpty()) {
-            rows += SettingRow.Value("未配置", "点击下方「添加钩子」在工作区配置中新建")
+            rows +=
+                SettingRow.Value(
+                    if (snap.errors.isEmpty()) "未配置" else "未读到可用钩子（见上方读取异常）",
+                    "点击下方「添加钩子」在工作区配置中新建",
+                )
         } else {
             snap.entries.forEach { e ->
                 val trust =
