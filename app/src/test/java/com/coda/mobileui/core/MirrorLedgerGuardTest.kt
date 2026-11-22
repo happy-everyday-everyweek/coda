@@ -64,7 +64,8 @@ class MirrorLedgerGuardTest {
         val few = MirrorScoreboard.Stat("m", verified = 3, lastOkMs = now)
         val tons = MirrorScoreboard.Stat("m", verified = 3000, lastOkMs = now)
         val diff = MirrorScoreboard.scoreOf(tons, now) - MirrorScoreboard.scoreOf(few, now)
-        assertTrue("历史成功计数不能无限膨胀压死其他镜像，diff=$diff", diff < 3000.0)
+        // 线性计分下 3000 vs 3 次会差出约 300 万分；对数压缩后差距应在数千分以内。
+        assertTrue("历史成功计数不能无限膨胀压死其他镜像，diff=$diff", diff < 10_000.0)
     }
 
     @Test

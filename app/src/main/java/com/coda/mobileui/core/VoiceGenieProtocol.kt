@@ -174,7 +174,14 @@ object VoiceGenieProtocol {
                 }
             }
             val name = RESPONSE_NAMES[number] ?: continue
-            val expectedWire = if (number in INTEGER_FIELDS) 0 else 2
+            // data（8）是二进制：length-delimited 与定长块都合法；
+            // 其余已知字段仍按各自的规范 wire type 严格校验。
+            val expectedWire =
+                when {
+                    number in INTEGER_FIELDS -> 0
+                    number == 8 -> if (wire == 1 || wire == 5) wire else 2
+                    else -> 2
+                }
             if (wire != expectedWire) throw ProtocolError("已知响应字段的 wire type 不符")
             if (wire == 0) {
                 result.put(name, intValue)

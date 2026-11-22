@@ -446,12 +446,8 @@ class ZController private constructor(
             // 缺失字段不能当空值：只切换模式或模型的响应不带 title/status，
             // 无条件赋值会把会话标题抹成空串，还会把 running 误判为 false。
             // 显式 null 与「没有这个键」同样处理：内核序列化时会用 null 表示该字段不参与本次更新。
-            val title =
-                if (session != null && session.has("title") && !session.isNull("title")) {
-                    ZParse.parseTitleFromSnapshot(root)
-                } else {
-                    null
-                }
+            // null=本次快照没有标题，跳过更新；判定收口在 ZParse.parseTitleFromSnapshot。
+            val title = ZParse.parseTitleFromSnapshot(root)
             val status = if (session != null && session.has("status") && !session.isNull("status")) ZParse.parseStatusFromSnapshot(root) else ""
             val m = ZParse.parseModeFromSnapshot(root)
             var info = sessions.find { it.id == sid }

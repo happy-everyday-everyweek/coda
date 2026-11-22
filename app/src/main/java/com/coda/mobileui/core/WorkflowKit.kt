@@ -309,6 +309,8 @@ object ZWorkflowKit {
     }
 
     private val COLUMN_SPLIT = Regex("\\s{2,}")
+    /** 一行的前导空白数（tab 记 1，与内核输出的空格缩进一致）。 */
+    private fun indentOf(line: String): Int = line.takeWhile { it.isWhitespace() }.length
     private val ROUNDS = Regex("^(\\d+) rounds?$")
     private val COUNTS_RUNNING = Regex("^(\\d+) settled, (\\d+) (running|unfinished)$")
     private val COUNTS_SETTLED = Regex("^(\\d+) steps? settled$")
@@ -378,6 +380,9 @@ object ZWorkflowKit {
     fun parseActors(output: String?): List<ZWorkflowActor> {
         val body = section(output, "subagents") ?: return emptyList()
         if (body.contains("No subagents created yet")) return emptyList()
+        // 块体的基础缩进 = 第一行非空行的前导空白数；附注行比它更深。
+        val baseIndent =
+            body.split('\n').firstOrNull { it.isNotBlank() }?.let { indentOf(it) } ?: 0
         val out = ArrayList<ZWorkflowActor>()
         // task 行先暂存，构造 actor 时一次性传入：不再对已入列的对象做后置修改。
         // 前置 task（还没有 actor）挂到下一个 actor；夹在其他行后的 task 仍归属
@@ -396,8 +401,9 @@ object ZWorkflowKit {
                 }
                 continue
             }
-            // 缩进行属于上一条 actor 的附注
-            if (raw.firstOrNull()?.isWhitespace() == true) continue
+            // 缩进行属于上一条 actor 的附注。注意 section() 取出的块体每行都带
+            // 基础缩进，「整块统一缩进」不算附注，只有相对更深的缩进才是。
+            if (raw.firstOrNull()?.isWhitespace() == true && indentOf(raw) > baseIndent) continue
             val cells = trimmed.split(COLUMN_SPLIT).map { it.trim() }.filter { it.isNotEmpty() }
             if (cells.isEmpty()) continue
             if (cells.size == 1 && !ACTOR_STATES.contains(cells[0]) && !ADDRESS.matches(cells[0])) {

@@ -94,8 +94,17 @@ object ZParse {
         for (i in 0 until arr.length()) {
             val m = arr.optJSONObject(i) ?: continue
             val info = m.optJSONObject("info") ?: JSONObject()
-            val id = info.optString("id").ifEmpty { info.optString("messageId") }
-            if (id.isEmpty()) continue
+            val rawId = info.optString("id").ifEmpty { info.optString("messageId") }
+            // 缺 id 的消息不再整条丢弃（内容会凭空消失）：用内容派生的稳定合成 id。
+            // 同一份数据重复解析得到同一 id，流式刷新时不会每轮都长出"新消息"。
+            val id =
+                rawId.ifEmpty {
+                    val seed = info.optString("role") + "|" + m.optJSONArray("parts")?.toString().orEmpty()
+                    "synthetic-" + Integer.toHexString(seed.hashCode()) + "-$i"
+                }
+            if (rawId.isEmpty()) {
+                AppLog.w("ZParse", "消息缺少 id/messageId，使用合成 id：$id")
+            }
             val msg = ZMessage(id, info.optString("role"))
             val time = info.optJSONObject("time")
             msg.createdAt = time?.optLong("created", 0L) ?: 0L
@@ -147,10 +156,17 @@ object ZParse {
                         if (s > 0 && e > 0) e - s else null
                     }
                 ZPart.ToolPart(
-                    callId = o.optString("callID").ifEmpty { o.optString("callId") },
+                    // callId 是下游卡片/diff 的唯一键：缺失时不能都落空串（键冲突
+                    // 会把更新归到错误卡片）。用 part 自身的 id 或内容哈希兜底。
+                    callId = o.optString("callID")
+                        .ifEmpty { o.optString("callId") }
+                        .ifEmpty { o.optString("id") }
+                        .ifEmpty { "anon-" + Integer.toHexString(o.toString().hashCode()) },
                     tool = o.optString("tool"),
                     status = status,
-                    input = st?.optJSONObject("input")?.toString(),
+                    // input 可能是对象、JSON 字符串或数组（协议变体）：
+                    // optJSONObject 会把非对象形态静默丢成 null，改用 opt 归一化。
+                    input = st?.opt("input")?.takeIf { it != JSONObject.NULL }?.toString(),
                     output = output,
                     title = st?.optString("title")?.takeIf { it.isNotEmpty() },
                     durationMs = duration,
@@ -164,17 +180,24 @@ object ZParse {
             }
 
             "file" -> {
-                val meta = o.optJSONObject("metadata")
-                val img = meta?.optJSONObject("image")
-                ZPart.FilePart(
-                    filename = o.optString("filename").ifEmpty { "附件" },
-                    mime = o.optString("mime"),
-                    url = o.optString("url"),
-                    sizeBytes = meta?.optLong("sizeBytes", 0L) ?: 0L,
-                    width = img?.optInt("width", 0) ?: 0,
-                    height = img?.optInt("height", 0) ?: 0,
-                    previewReady = meta?.optString("recoverability") == "provider_ready",
-                )
+                val url = o.optString("url")
+                if (url.isBlank()) {
+                    // 空 url 的附件无法渲染或打开，只会留下破损占位：跳过并留痕。
+                    AppLog.w("ZParse", "附件缺少 url，跳过：${o.optString("filename")}")
+                    null
+                } else {
+                    val meta = o.optJSONObject("metadata")
+                    val img = meta?.optJSONObject("image")
+                    ZPart.FilePart(
+                        filename = o.optString("filename").ifEmpty { "附件" },
+                        mime = normalizeMime(o.optString("mime")),
+                        url = url,
+                        sizeBytes = meta?.optLong("sizeBytes", 0L) ?: 0L,
+                        width = img?.optInt("width", 0) ?: 0,
+                        height = img?.optInt("height", 0) ?: 0,
+                        previewReady = meta?.optString("recoverability") == "provider_ready",
+                    )
+                }
             }
 
             else -> {
@@ -216,7 +239,31 @@ object ZParse {
     fun parseSessionIdFromSnapshot(root: JSONObject): String? =
         root.optJSONObject("session")?.optString("sessionId")?.takeIf { it.isNotEmpty() }
 
-    fun parseTitleFromSnapshot(root: JSONObject): String = root.optJSONObject("session")?.optString("title") ?: ""
+    /**
+     * 快照里的标题；null 表示「本次快照没有标题」，调用方必须跳过更新。
+     * 空串是合法值（显式清空标题），与缺失区分开，避免无标题快照擦掉已有标题。
+     */
+    fun parseTitleFromSnapshot(root: JSONObject): String? {
+        val session = root.optJSONObject("session") ?: return null
+        if (!session.has("title") || session.isNull("title")) return null
+        return session.optString("title")
+    }
+
+    /**
+     * 附件 MIME 归一化：渲染层只认 image/ video/ audio/ text/ 与常见文档类型，
+     * 其余（含空值）统一降为 application/octet-stream，走通用文件卡而不是破损预览。
+     */
+    internal fun normalizeMime(raw: String): String {
+        val m = raw.trim().lowercase()
+        if (m.isEmpty()) return "application/octet-stream"
+        if (m.startsWith("image/") || m.startsWith("video/") || m.startsWith("audio/") || m.startsWith("text/")) return m
+        return when (m) {
+            "application/pdf", "application/json", "application/zip",
+            "application/octet-stream",
+            -> m
+            else -> "application/octet-stream"
+        }
+    }
 
     fun parseStatusFromSnapshot(root: JSONObject): String = root.optJSONObject("session")?.optString("status", "") ?: ""
 
