@@ -21,13 +21,23 @@ object GatewayConfigText {
         return n.endsWith("_key") || n.endsWith("_token") || n.endsWith("_secret") || n.endsWith("_password")
     }
 
-    /** JSON 形式：逐 key 判断，命中的值整体替换为 ***，其余原样保留。 */
+    /**
+     * JSON 形式：只把命中字段的值替换掉，其余字节原样保留。
+     *
+     * 刻意不走 JSONObject.toString()：它会重排键顺序、改写空白，
+     * 让「没有凭证的配置」在日志里也变成另一副样子，反而不利于比对。
+     */
     private fun redactJson(text: String): String? {
         val root = runCatching { JSONObject(text) }.getOrNull() ?: return null
-        for (key in root.keys()) {
-            if (isSecretName(key)) root.put(key, "***")
+        val secrets = root.keys().asSequence().filter { isSecretName(it) }.toList()
+        if (secrets.isEmpty()) return text
+        var out = text
+        for (key in secrets) {
+            // 只替换 "key" 后面紧跟的那一个值，避免把文中同名字符串一起打码。
+            val pattern = Regex("(\"" + Regex.escape(key) + "\"\\s*:\\s*)(\"(?:[^\"\\\\]|\\\\.)*\"|[^,}\\s]+)")
+            out = pattern.replace(out) { m -> m.groupValues[1] + "\"***\"" }
         }
-        return root.toString()
+        return out
     }
 
     /**

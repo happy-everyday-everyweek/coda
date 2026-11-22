@@ -132,6 +132,8 @@ object OAuthLogin {
                             .JSONObject()
                             .put("realm", effectiveRealm)
                             .toString(),
+                    // 只有 begin 这条链路才写 lastBeginError：它是给界面看的 begin 诊断。
+                    onError = { lastBeginError = it },
                 ) ?: run {
                     // panelJson 失败时已经把具体原因（HTTP 状态码或异常类型）写进
                     // lastBeginError。这里只有在它没写时才兜底，否则会把真实原因
@@ -421,11 +423,13 @@ object OAuthLogin {
         path: String,
         method: String,
         payload: String? = null,
+        onError: ((String) -> Unit)? = null,
     ): String? {
         val url = WorkBuddyGateway.baseUrl() + path
         AppLog.i("OAuthLogin", "面板请求 $method $url（网关运行中=${WorkBuddyGateway.isRunning}）")
+        var conn: java.net.HttpURLConnection? = null
         return try {
-            val conn =
+            conn =
                 (
                     java.net
                         .URL(url)
@@ -451,28 +455,35 @@ object OAuthLogin {
                 (if (ok) conn.inputStream else conn.errorStream)
                     ?.bufferedReader()
                     ?.use { it.readText() }
-            conn.disconnect()
             if (ok) {
                 text
             } else {
                 // 把状态码与响应体带出去：面板的错误是 {ok:false,error:"..."}，
                 // 只记「失败了」等于什么都没记。
                 AppLog.w("OAuthLogin", "$path → HTTP $code：${text?.take(300)}")
-                lastBeginError = "面板 HTTP $code（$url）：${text?.take(200).orEmpty()}"
+                // 诊断归属调用方：这里被 begin/poll/modelsFor 共用，无条件写 lastBeginError
+                // 会让轮询或取模型的失败覆盖界面上 begin 的原因（#313）。
+                onError?.invoke("面板 HTTP $code（$url）：${text?.take(200).orEmpty()}")
                 null
             }
-        } catch (t: Throwable) {
+        } catch (e: Exception) {
+            // 只收 Exception：Throwable 会把 OutOfMemoryError 一类致命错误也吞成
+            // 「面板请求失败」，真实故障就再也看不到了（#314）。
             // 区分「连不上」与「连上了但没回」：前者是进程/端口问题，
             // 后者是上游卡住。两者的排查方向完全相反，不能混成一句话。
             val kind =
-                when (t) {
+                when (e) {
                     is java.net.ConnectException -> "无法连接（网关未监听该端口）"
                     is java.net.SocketTimeoutException -> "读取超时（面板已连接但 30 秒无响应，多半卡在等上游）"
-                    else -> "${t.javaClass.simpleName}: ${t.message}"
+                    else -> "${e.javaClass.simpleName}: ${e.message}"
                 }
             AppLog.w("OAuthLogin", "$path 请求失败：$kind url=$url")
-            lastBeginError = "面板请求失败：$kind（$url）"
+            onError?.invoke("面板请求失败：$kind（$url）")
             null
+        } finally {
+            // disconnect 必须在 finally：写 body / 读 responseCode / 读流任一抛异常时
+            // 都会跳过原来写在正常路径上的 disconnect，反复失败会耗尽连接池（#314）。
+            runCatching { conn?.disconnect() }
         }
     }
 
@@ -499,31 +510,98 @@ object OAuthLogin {
         val needWb = oauth.any { OAuthProviders.usesWorkBuddyGateway(it.id) }
         val needProxy = oauth.any { !OAuthProviders.usesWorkBuddyGateway(it.id) }
 
+        // 启动失败必须留痕：静默 continue 会让「凭据在、网关不在、端口是旧的」变成
+        // 一个没有任何日志的黑洞，用户只看到请求全失败（#315）。
         if (needWb && !WorkBuddyGateway.isRunning) {
             AppLog.i(TAG, "启动时拉起 WorkBuddy 网关")
-            WorkBuddyGateway.start(ctx, { AppLog.i(TAG, "WorkBuddy：$it") })
+            if (!WorkBuddyGateway.start(ctx, { AppLog.i(TAG, "WorkBuddy：$it") })) {
+                AppLog.w(TAG, "WorkBuddy 网关启动失败：${WorkBuddyGateway.lastError ?: "未知原因"}")
+            }
         }
         if (needProxy && !ProxyHost.isRunning) {
             AppLog.i(TAG, "启动时拉起代理网关")
             if (ProxyHost.ensureRuntime(ctx, { AppLog.i(TAG, "代理网关：$it") })) {
-                ProxyHost.start(ctx, { AppLog.i(TAG, "代理网关：$it") })
+                if (!ProxyHost.start(ctx, { AppLog.i(TAG, "代理网关：$it") })) {
+                    AppLog.w(TAG, "代理网关启动失败：${ProxyHost.lastError ?: "未知原因"}")
+                }
+            } else {
+                AppLog.w(TAG, "代理网关运行时不可用，跳过启动")
             }
         }
 
-        var changed = false
+        // 先在锁外算出目标端点，再进锁做字段级合并：整份快照回写会覆盖并发保存（#318）。
+        val targets = mutableMapOf<String, Pair<String, String>>()
         for (p in oauth) {
             val wb = OAuthProviders.usesWorkBuddyGateway(p.id)
             val ready = if (wb) WorkBuddyGateway.isRunning else ProxyHost.isRunning
-            if (!ready) continue
+            if (!ready) {
+                val why = if (wb) WorkBuddyGateway.lastError else ProxyHost.lastError
+                AppLog.w(TAG, "${p.id} 网关未就绪，保留旧配置 ${p.baseUrl}（${why ?: "未启动"}）")
+                continue
+            }
             val base = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1"
             val key = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey()
+            targets[p.id] = base to key
+        }
+        if (targets.isEmpty()) return false
+        var changed = 0
+        val saved = ProviderStore.update(ctx) { current -> changed = mergeGateway(current, targets) }
+        return saved && changed > 0
+    }
+
+    /**
+     * 只把端点与密钥合并进最新列表，返回改动条数。
+     *
+     * 刻意不整份回写：调用方拿到的是几秒前的快照，期间设置页可能已经改过名字、
+     * 模型或别的供应商，整体 save 会把那些改动静默回滚（#318）。
+     */
+    fun mergeGateway(
+        current: MutableList<ProviderStore.Provider>,
+        targets: Map<String, Pair<String, String>>,
+    ): Int {
+        var changed = 0
+        for (p in current) {
+            val (base, key) = targets[p.id] ?: continue
             if (p.baseUrl != base || p.apiKey != key) {
                 p.baseUrl = base
                 p.apiKey = key
-                changed = true
+                changed++
             }
         }
-        if (changed) ProviderStore.save(ctx, list)
+        return changed
+    }
+
+    /**
+     * 该供应商的模型清单是否需要按网关此刻的真实列表改写。
+     *
+     * 两种要修：空清单；以及历史串号留下的「别家前缀」清单。
+     * 前缀不匹配但内容与网关一致时不修，否则每次冷启动都白写一遍配置。
+     */
+    fun needsModelRefresh(
+        stored: List<String>,
+        live: List<String>,
+        prefix: String,
+    ): Boolean {
+        if (live.isEmpty()) return false
+        if (stored.isEmpty()) return true
+        val mismatched = prefix.isNotEmpty() && stored.any { !it.startsWith(prefix) }
+        return mismatched && stored.toSet() != live.toSet()
+    }
+
+    /** 只把 models 合并进最新列表，返回改动条数（同 #318 的理由）。 */
+    fun mergeModels(
+        current: MutableList<ProviderStore.Provider>,
+        live: Map<String, List<String>>,
+    ): Int {
+        var changed = 0
+        for (p in current) {
+            val models = live[p.id] ?: continue
+            if (models.isEmpty()) continue
+            val next = models.distinct()
+            if (p.models.toList() == next) continue
+            p.models = next.toMutableList()
+            changed++
+        }
         return changed
     }
 
@@ -539,26 +617,26 @@ object OAuthLogin {
      */
     fun refreshStoredModels(ctx: Context): Int {
         val list = ProviderStore.load(ctx)
-        var changed = 0
+        // 锁外只做 HTTP 与判定，收集「该改成什么」；回写在锁内基于最新数据做字段级合并。
+        val live = mutableMapOf<String, List<String>>()
         for (p in list) {
             if (p.kind != ProviderStore.ProviderKind.LLM) continue
             val provider = OAuthProviders.byId(p.id) ?: continue
-            val live = modelsFor(ctx, provider)
-            if (live.isEmpty()) continue
+            val models = modelsFor(ctx, provider)
+            if (models.isEmpty()) continue
             val prefix = OAuthProviders.modelPrefix(provider)
             // 两种要修：空清单；以及历史串号留下的「别家前缀」清单。
             // 后者是真实踩过的坑：两个网关同时在跑时，旧 models() 永远问 CodeBuddy，
             // 于是 Cursor/ZCode 的配置里存了一批 cb- 开头的模型，内核一条也注册不上。
-            val mismatched = prefix.isNotEmpty() && p.models.any { !it.startsWith(prefix) }
-            // 前缀不匹配但内容与网关返回完全一致时不要每次启动都重写：
-            // 有些插件本来就不带前缀，modelsFor 会原样返回；否则每次冷启动都白写一遍配置。
-            if (p.models.isEmpty() || (mismatched && p.models.toSet() != live.toSet())) {
-                p.models = live.distinct().toMutableList()
-                changed++
-                AppLog.i("OAuthLogin", "${p.id} 模型列表${if (mismatched) "纠正" else "回填"} ${p.models.size} 个")
+            if (needsModelRefresh(p.models, models, prefix)) {
+                live[p.id] = models.distinct()
             }
         }
-        if (changed > 0) ProviderStore.save(ctx, list)
+        if (live.isEmpty()) return 0
+        var changed = 0
+        // 整份快照回写会覆盖刷新期间 save()/ensureStoredGateways() 的改动（#318）。
+        ProviderStore.update(ctx) { current -> changed = mergeModels(current, live) }
+        if (changed > 0) AppLog.i("OAuthLogin", "回填/纠正 $changed 家供应商的模型列表")
         return changed
     }
 
