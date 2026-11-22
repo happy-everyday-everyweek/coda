@@ -147,7 +147,9 @@ class StrengthSliderView
             if (starAnimator?.isRunning == true) return
             starAnimator =
                 ValueAnimator.ofFloat(0f, 1f).apply {
-                    duration = 2200
+                    // 循环动画不入 Motion 三档：三档是给一次性过渡用的，
+                    // 星点/粒子这类常驻循环压到 340ms 会快得刺眼。
+                    duration = STAR_LOOP_MS
                     repeatCount = ValueAnimator.INFINITE
                     addUpdateListener {
                         clock += 0.055f
@@ -322,7 +324,7 @@ class StrengthSliderView
             if (animate) {
                 levelAnimator =
                     ValueAnimator.ofFloat(fraction, to).apply {
-                        duration = 320
+                        duration = Motion.EMPHASIZED
                         interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
                         addUpdateListener {
                             fraction = it.animatedValue as Float
@@ -359,7 +361,7 @@ class StrengthSliderView
             starsAnimator?.cancel()
             starsAnimator =
                 ValueAnimator.ofFloat(starsAlpha, target).apply {
-                    duration = 260
+                    duration = Motion.EMPHASIZED
                     addUpdateListener {
                         starsAlpha = it.animatedValue as Float
                         invalidate()
@@ -393,7 +395,9 @@ class StrengthSliderView
             if (particleAnimator?.isRunning != true) {
                 particleAnimator =
                     ValueAnimator.ofFloat(0f, 1f).apply {
-                        duration = 900
+                        // 粒子循环不入 Motion 三档：它按固定 dt 推进位置，
+                        // 改时长等于改粒子速度。
+                        duration = PARTICLE_LOOP_MS
                         addUpdateListener { anim ->
                             val dt = 0.033f
                             particles.forEach { p ->
@@ -424,6 +428,12 @@ class StrengthSliderView
         }
 
         companion object {
+        /** 星点呼吸循环时长：常驻动画，不属于 Motion 的一次性过渡三档。 */
+        private const val STAR_LOOP_MS = 2200L
+
+        /** 粒子推进循环时长：与固定 dt 配套，改动会直接改变粒子速度。 */
+        private const val PARTICLE_LOOP_MS = 900L
+
             /** 五档：轻度 / 中 / 高 / 极高 / Max。 */
             val LEVELS = arrayOf("轻度", "中", "高", "极高", "Max")
         }

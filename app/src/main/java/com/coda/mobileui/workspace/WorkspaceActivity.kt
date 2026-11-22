@@ -1518,7 +1518,7 @@ class WorkspaceActivity : BaseActivity() {
             container
                 .animate()
                 .translationX(container.width.toFloat())
-                .setDuration(180)
+                .setDuration(com.coda.mobileui.Motion.STANDARD)
                 .withEndAction {
                     container.translationX = 0f
                     finish()

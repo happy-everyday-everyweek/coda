@@ -1218,14 +1218,14 @@ class MainActivity : BaseActivity() {
                         .animate()
                         .scaleX(0.6f)
                         .scaleY(0.6f)
-                        .setDuration(90)
+                        .setDuration(Motion.QUICK)
                         .withEndAction {
                             child.setImageResource(R.drawable.ic_close_lucide)
                             child
                                 .animate()
                                 .scaleX(1f)
                                 .scaleY(1f)
-                                .setDuration(120)
+                                .setDuration(Motion.QUICK)
                                 .start()
                         }.start()
                 }
@@ -1256,14 +1256,14 @@ class MainActivity : BaseActivity() {
                 .animate()
                 .scaleX(0.6f)
                 .scaleY(0.6f)
-                .setDuration(90)
+                .setDuration(Motion.QUICK)
                 .withEndAction {
                     view.setImageResource(R.drawable.ic_arrow_up)
                     view
                         .animate()
                         .scaleX(1f)
                         .scaleY(1f)
-                        .setDuration(120)
+                        .setDuration(Motion.QUICK)
                         .start()
                 }.start()
         }
@@ -2458,7 +2458,7 @@ class MainActivity : BaseActivity() {
             body.visibility = if (nowCollapsed) View.VISIBLE else View.GONE
             // 箭头跟着展开同步旋转，而不是硬切（#50）。
             chevron.animate().cancel()
-            chevron.animate().rotation(if (nowCollapsed) 180f else 0f).setDuration(160).start()
+            chevron.animate().rotation(if (nowCollapsed) 180f else 0f).setDuration(Motion.QUICK).start()
         }
         wrap.addView(header)
         wrap.addView(body)
@@ -3039,7 +3039,7 @@ class MainActivity : BaseActivity() {
                                 body
                                     .animate()
                                     .alpha(1f)
-                                    .setDuration(220)
+                                    .setDuration(Motion.STANDARD)
                                     .start()
                             } else {
                                 snack(controlFailText(msg, "停止失败"))
@@ -3127,7 +3127,7 @@ class MainActivity : BaseActivity() {
                         v
                             .animate()
                             .alpha(0.6f)
-                            .setDuration(90)
+                            .setDuration(Motion.QUICK)
                             .start()
                     }
 
@@ -3137,7 +3137,7 @@ class MainActivity : BaseActivity() {
                         v
                             .animate()
                             .alpha(1f)
-                            .setDuration(140)
+                            .setDuration(Motion.QUICK)
                             .start()
                     }
                 }
@@ -3216,7 +3216,7 @@ class MainActivity : BaseActivity() {
                         v
                             .animate()
                             .alpha(0.6f)
-                            .setDuration(90)
+                            .setDuration(Motion.QUICK)
                             .start()
                     }
 
@@ -3226,7 +3226,7 @@ class MainActivity : BaseActivity() {
                         v
                             .animate()
                             .alpha(1f)
-                            .setDuration(140)
+                            .setDuration(Motion.QUICK)
                             .start()
                     }
                 }
@@ -4361,7 +4361,7 @@ class MainActivity : BaseActivity() {
                 .animate()
                 .alpha(1f)
                 .translationY(0f)
-                .setDuration(260)
+                .setDuration(Motion.EMPHASIZED)
                 .start()
         }
         // 新对话与设置从左侧移动到右上角
@@ -4414,7 +4414,7 @@ class MainActivity : BaseActivity() {
         actions.alpha = if (show) 0f else 1f
         val anim =
             ValueAnimator.ofInt(from, to).apply {
-                duration = 200
+                duration = Motion.STANDARD
                 interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
                 addUpdateListener { a ->
                     val h = a.animatedValue as Int
@@ -4431,7 +4431,7 @@ class MainActivity : BaseActivity() {
                         actions
                             .animate()
                             .alpha(1f)
-                            .setDuration(120)
+                            .setDuration(Motion.QUICK)
                             .start()
                     } else {
                         actions.visibility = View.GONE
@@ -4453,7 +4453,7 @@ class MainActivity : BaseActivity() {
         val content = host.findViewById<View>(R.id.drawer_content) ?: return
         val anim =
             ValueAnimator.ofInt(content.paddingBottom, targetBottom).apply {
-                duration = 200
+                duration = Motion.STANDARD
                 interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
                 addUpdateListener { a ->
                     content.setPaddingRelative(content.paddingStart, content.paddingTop, content.paddingEnd, a.animatedValue as Int)
@@ -4478,14 +4478,14 @@ class MainActivity : BaseActivity() {
                     .animate()
                     .translationX(0f)
                     .alpha(1f)
-                    .setDuration(260)
+                    .setDuration(Motion.EMPHASIZED)
                     .start()
             } else {
                 child
                     .animate()
                     .translationX(offset)
                     .alpha(0.4f)
-                    .setDuration(180)
+                    .setDuration(Motion.STANDARD)
                     .start()
             }
         }
@@ -4504,7 +4504,7 @@ class MainActivity : BaseActivity() {
             ?.animate()
             ?.alpha(0f)
             ?.translationY(dp(24).toFloat())
-            ?.setDuration(160)
+            ?.setDuration(Motion.QUICK)
             ?.start()
         // 两个按钮滑回左侧
         shiftHeaderButtons(view, fromLeft = false)
@@ -5805,12 +5805,12 @@ class MainActivity : BaseActivity() {
                 .animate()
                 .translationY(-dp(8).toFloat())
                 .alpha(0.6f)
-                .setDuration(140)
+                .setDuration(Motion.QUICK)
                 .start()
             scrim
                 .animate()
                 .alpha(0f)
-                .setDuration(140)
+                .setDuration(Motion.QUICK)
                 .withEndAction {
                     scrim.visibility = View.GONE
                     scrim.alpha = 1f
@@ -5828,12 +5828,12 @@ class MainActivity : BaseActivity() {
             scrim
                 .animate()
                 .alpha(1f)
-                .setDuration(180)
+                .setDuration(Motion.STANDARD)
                 .start()
             card
                 .animate()
                 .translationY(0f)
-                .setDuration(240)
+                .setDuration(Motion.STANDARD)
                 .setInterpolator(PathInterpolator(0.2f, 0f, 0f, 1f))
                 .start()
         }
@@ -5890,7 +5890,7 @@ class MainActivity : BaseActivity() {
         ) {
             val isMax = index == StrengthSliderView.LEVELS.size - 1
             val hideRow = isMax && showHint
-            TransitionManager.beginDelayedTransition(card as ViewGroup, AutoTransition().setDuration(220))
+            TransitionManager.beginDelayedTransition(card as ViewGroup, AutoTransition().setDuration(Motion.STANDARD))
             rowView.visibility = if (hideRow) View.GONE else View.VISIBLE
             hintView.visibility = if (hideRow) View.VISIBLE else View.GONE
             labelView.text = StrengthSliderView.LEVELS[index]
@@ -5936,7 +5936,7 @@ class MainActivity : BaseActivity() {
         card.findViewById<MaxHeightScrollView>(R.id.model_items_scroll)?.maxHeightPx = dp(320)
 
         fun showModels(show: Boolean) {
-            TransitionManager.beginDelayedTransition(card as ViewGroup, AutoTransition().setDuration(220))
+            TransitionManager.beginDelayedTransition(card as ViewGroup, AutoTransition().setDuration(Motion.STANDARD))
             strengthContent.visibility = if (show) View.GONE else View.VISIBLE
             modelContent.visibility = if (show) View.VISIBLE else View.GONE
         }

@@ -164,7 +164,7 @@ class StatusMarkView
                 val target = if (unit > 0f) Math.floor((travelPx / unit).toDouble()).toFloat() * unit else 0f
                 val stop =
                     ValueAnimator.ofFloat(travelPx, target).apply {
-                        duration = 300L
+                        duration = Motion.EMPHASIZED
                         interpolator = uiEase
                         addUpdateListener {
                             travelPx = it.animatedValue as Float

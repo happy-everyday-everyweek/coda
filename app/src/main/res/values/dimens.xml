@@ -20,6 +20,15 @@
     -->
     <dimen name="touch_min">48dp</dimen>
 
+    <!--
+        消息区左缘（#53）。
+
+        之前 AI 正文 12dp、工具行与气泡 16dp，长对话里正文与紧跟其后的工具行
+        左缘差 4dp，看起来是锯齿。统一取 16dp：AI 文本、工具行、思考块、
+        变更卡全部对齐同一条竖线。
+    -->
+    <dimen name="chat_inset_start">16dp</dimen>
+
     <!-- 设置分组卡片：圆角只出现在分组首行的上边与末行的下边，中间行为直角。 -->
     <dimen name="settings_card_corner">@dimen/corner_card</dimen>
     <!-- 分组内相邻行之间的断开缝（与页面背景同色的细线）。 -->

@@ -157,7 +157,7 @@ class SendModeView
             selectionAnimator?.cancel()
             selectionAnimator =
                 ValueAnimator.ofFloat(animatedIndex, target).apply {
-                    duration = 180
+                    duration = Motion.STANDARD
                     interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
                     addUpdateListener {
                         animatedIndex = it.animatedValue as Float
@@ -212,7 +212,7 @@ class SendModeView
             appearAnimator?.cancel()
             appearAnimator =
                 ValueAnimator.ofFloat(appearProgress, 1f).apply {
-                    duration = 180
+                    duration = Motion.STANDARD
                     interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
                     addUpdateListener {
                         appearProgress = it.animatedValue as Float
@@ -230,7 +230,7 @@ class SendModeView
             appearAnimator?.cancel()
             appearAnimator =
                 ValueAnimator.ofFloat(appearProgress, 0f).apply {
-                    duration = 140
+                    duration = Motion.QUICK
                     addUpdateListener {
                         appearProgress = it.animatedValue as Float
                         alpha = appearProgress

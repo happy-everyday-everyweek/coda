@@ -87,7 +87,7 @@ internal class GitCanvasView(
         pulseAnim?.cancel()
         pulseAnim =
             ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 520L
+                duration = INERTIA_MS
                 interpolator = Motion.standard
                 addUpdateListener { anim ->
                     pulseProgress = anim.animatedValue as Float
@@ -343,6 +343,14 @@ internal class GitCanvasView(
     /** focusOn 等待布局的重试次数上限。 */
     private var focusRetries = 0
     private val FOCUS_MAX_RETRIES = 30
+
+    /**
+     * 脉冲与惯性滑行时长（#53）。
+     *
+     * 这两个动作比普通过渡长：fling 要顺着速度滑一段再停，压到 Motion.EMPHASIZED
+     * 的 340ms 会显得突然停住。所以不入三档，单独具名。
+     */
+    private val INERTIA_MS = 520L
 
     private fun focusRow(row: Int) {
         val usableHeight = (height - bottomInset).coerceAtLeast(dp(120f))
@@ -752,7 +760,7 @@ internal class GitCanvasView(
         val startY = offsetY
         flingAnim =
             ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 520L
+                duration = INERTIA_MS
                 interpolator = DecelerateInterpolator(1.8f)
                 addUpdateListener { anim ->
                     val t = anim.animatedValue as Float

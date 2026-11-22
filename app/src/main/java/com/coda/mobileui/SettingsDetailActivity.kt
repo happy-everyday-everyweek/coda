@@ -248,7 +248,7 @@ class SettingsDetailActivity :
             .animate()
             .alpha(0f)
             .translationX(out)
-            .setDuration(110)
+            .setDuration(Motion.QUICK)
             .withEndAction {
                 block()
                 container.translationX = inFrom
@@ -256,7 +256,7 @@ class SettingsDetailActivity :
                     .animate()
                     .alpha(1f)
                     .translationX(0f)
-                    .setDuration(150)
+                    .setDuration(Motion.QUICK)
                     .start()
             }.start()
     }
