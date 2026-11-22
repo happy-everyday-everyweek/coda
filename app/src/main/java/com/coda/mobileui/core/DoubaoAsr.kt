@@ -78,6 +78,23 @@ object DoubaoAsr {
      * 每次调用都用全新的内存会话，不读也不写任何 Cookie 文件，不借用浏览器资料。
      * 首页返回的 Cookie 与 ttwid 不转发给语音连接（与参考实现一致）。
      */
+    /**
+     * 网关查询串：键排序后逐个 URL 编码。
+     * start() 与 transcribePcm() 原先各写一份，改一处忘另一处就会签名不一致（#263）。
+     */
+    private fun gatewayQuery(context: JSONObject): String =
+        buildString {
+            val names = mutableListOf<String>()
+            val it = context.keys()
+            while (it.hasNext()) names += it.next()
+            names.sorted().forEachIndexed { index, key ->
+                if (index > 0) append('&')
+                append(java.net.URLEncoder.encode(key, "UTF-8"))
+                append('=')
+                append(java.net.URLEncoder.encode(context.optString(key), "UTF-8"))
+            }
+        }
+
     fun bootstrapGuest(timeoutSec: Long = 15): JSONObject {
         val req =
             Request
@@ -96,7 +113,7 @@ object DoubaoAsr {
                 }
             } catch (e: AsrError) {
                 throw e
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 throw AsrError("访问豆包首页失败（${e.javaClass.simpleName}: ${e.message}）")
             }
         if (html.isBlank()) throw AsrError("豆包首页返回空内容")
@@ -110,7 +127,7 @@ object DoubaoAsr {
                 // 不能用 JSONObject 直接吃整段。
                 val start = marker.range.last + 1
                 JSONObject(html.substring(start).trim())
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 throw AsrError("无法解析游客初始化数据（${e.message}）")
             }
         val layout =
@@ -119,13 +136,13 @@ object DoubaoAsr {
                     .getJSONObject("loaderData")
                     .getJSONObject("chat_layout")
                     .getJSONObject("chat_layout")
-            } catch (_: Throwable) {
+            } catch (_: Exception) {
                 throw AsrError("无法解析游客初始化数据，网页结构可能已改变")
             }
         val webId =
             try {
                 layout.getJSONObject("launchCore").get("web_id").toString()
-            } catch (_: Throwable) {
+            } catch (_: Exception) {
                 throw AsrError("首页未返回游客设备标识")
             }
         if (webId.isBlank() || !webId.all { it.isDigit() } || webId.toLongOrNull()?.let { it > 0 } != true) {
@@ -174,18 +191,7 @@ object DoubaoAsr {
         val started = System.currentTimeMillis()
         val context = bootstrapGuest()
 
-        val query =
-            buildString {
-                val it = context.keys()
-                val names = mutableListOf<String>()
-                while (it.hasNext()) names += it.next()
-                names.sorted().forEachIndexed { index, key ->
-                    if (index > 0) append('&')
-                    append(java.net.URLEncoder.encode(key, "UTF-8"))
-                    append('=')
-                    append(java.net.URLEncoder.encode(context.optString(key), "UTF-8"))
-                }
-            }
+        val query = gatewayQuery(context)
         val req =
             Request
                 .Builder()
@@ -303,7 +309,7 @@ object DoubaoAsr {
                             }
                         }
                     }
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                     throw AsrError("语音识别响应格式无效（${e.message}）")
                 }
             }
@@ -416,7 +422,7 @@ object DoubaoAsr {
     ): Any =
         try {
             VoiceGenieProtocol.decodeResponse(bytes, isText)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             AsrError("解析语音响应失败（${e.message}）")
         }
 
@@ -461,18 +467,7 @@ object DoubaoAsr {
         fun start() {
             startedAt = System.currentTimeMillis()
             val context = bootstrapGuest()
-            val query =
-                buildString {
-                    val it = context.keys()
-                    val names = mutableListOf<String>()
-                    while (it.hasNext()) names += it.next()
-                    names.sorted().forEachIndexed { index, key ->
-                        if (index > 0) append('&')
-                        append(java.net.URLEncoder.encode(key, "UTF-8"))
-                        append('=')
-                        append(java.net.URLEncoder.encode(context.optString(key), "UTF-8"))
-                    }
-                }
+            val query = gatewayQuery(context)
             val req =
                 Request
                     .Builder()
@@ -597,7 +592,13 @@ object DoubaoAsr {
         fun finish(): String =
             try {
                 if (pending.isNotEmpty()) {
-                    send("TaskRequest", audio = pending, sequence = seq)
+                    // 协议只吃 16-bit 采样：奇数长度尾帧（含 1 字节）会让服务端按错位采样解析。
+                    // 与 transcribePcm 一致，补齐到偶数再发（#262）。
+                    val tail = if (pending.size % 2 == 0) pending else pending.copyOf(pending.size + 1)
+                    if (tail.size != pending.size) {
+                        AppLog.w(TAG, "实时尾帧字节数为奇数（${pending.size}），已补零对齐到 ${tail.size}")
+                    }
+                    send("TaskRequest", audio = tail, sequence = seq)
                     seq += 1
                     pending = ByteArray(0)
                 }
