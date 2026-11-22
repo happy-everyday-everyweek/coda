@@ -60,13 +60,16 @@ object GitHub {
         login: String?,
     ) {
         val previous = loginName(ctx)
+        // login 为 null 表示「只刷新 token」：保留已保存的登录名，
+        // 写成空串会让重新登录后账号名短暂丢失、容器凭证 login 为空。
+        val effectiveLogin = login ?: previous.orEmpty()
         prefs(ctx)
             .edit()
             .putString("token", token)
-            .putString("login", login ?: "")
+            .putString("login", effectiveLogin)
             .apply()
         // 换了账号就作废旧缓存，避免把上一个账号的 PR 当成当前账号的。
-        if (previous != null && previous != login) invalidatePullCache()
+        if (previous != null && previous != effectiveLogin) invalidatePullCache()
         // 登录/换号成功即把凭据推进容器，不用等下次 App 重启：
         // 此前只有启动时同步一次，登录完成后容器里还是旧凭据（或没有凭据）。
         runCatching { LinuxEnv(ctx).syncGitHubCredentials() }
@@ -196,8 +199,9 @@ object GitHub {
                 val u =
                     GhUser(
                         login = j.optString("login"),
-                        name = j.optString("name").takeIf { it.isNotEmpty() },
-                        avatarUrl = j.optString("avatar_url").takeIf { it.isNotEmpty() },
+                        // JSON null 用 isNull 判定：optString 会把 null 转成 "null" 字面量。
+                        name = j.optString("name").takeIf { it.isNotEmpty() && !j.isNull("name") },
+                        avatarUrl = j.optString("avatar_url").takeIf { it.isNotEmpty() && !j.isNull("avatar_url") },
                     )
                 store(ctx, token, u.login)
                 ui { cb(true, u, null) }
@@ -251,7 +255,7 @@ object GitHub {
                             fullName = r.optString("full_name"),
                             name = r.optString("name"),
                             owner = r.optJSONObject("owner")?.optString("login").orEmpty(),
-                            description = r.optString("description").takeIf { it.isNotEmpty() },
+                            description = r.optString("description").takeIf { it.isNotEmpty() && !r.isNull("description") },
                             privateRepo = r.optBoolean("private", false),
                             defaultBranch = r.optString("default_branch").takeIf { it.isNotEmpty() },
                             pushedAt = r.optString("pushed_at").takeIf { it.isNotEmpty() },
@@ -349,6 +353,9 @@ object GitHub {
         }
         Bg.run {
             var found: Pull? = null
+            // 失败与「确实没有 PR」必须分开：失败不进缓存，否则网络抖动一次
+            // 就被当成「无关联 PR」缓存满 TTL，用户看到的是错误结论。
+            var failed = false
             try {
                 val url =
                     "https://api.github.com/repos/$owner/$repo/pulls" +
@@ -371,9 +378,15 @@ object GitHub {
                         )
                     break
                 }
-            } catch (_: Throwable) {
+            } catch (e: java.util.concurrent.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed = true
+                AppLog.w("GitHub", "查询分支关联 PR 失败（不缓存）：${e.javaClass.simpleName}: ${e.message}")
             }
-            synchronized(pullByBranch) { pullByBranch[key] = System.currentTimeMillis() to found }
+            if (!failed) {
+                synchronized(pullByBranch) { pullByBranch[key] = System.currentTimeMillis() to found }
+            }
             ui { cb(found) }
         }
     }

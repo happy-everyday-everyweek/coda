@@ -73,17 +73,20 @@ object GitWorkspace {
             val dot = File(cur, ".git")
             if (dot.isDirectory) return Repo(dot, cur)
             if (dot.isFile) {
-                val text = runCatching { dot.readText() }.getOrNull() ?: return null
+                // 损坏/无关的 .git 文件只说明这一层不是仓库：继续向上找，
+                // 直接 return null 会把上层真实仓库也判成「无仓库」。
+                val text = runCatching { dot.readText() }.getOrNull()
                 val target =
                     text
-                        .lineSequence()
-                        .firstOrNull { it.trim().startsWith("gitdir:") }
+                        ?.lineSequence()
+                        ?.firstOrNull { it.trim().startsWith("gitdir:") }
                         ?.substringAfter("gitdir:")
                         ?.trim()
-                        ?: return null
-                val resolved = File(target)
-                val gitDir = if (resolved.isAbsolute) resolved else File(cur, target)
-                return Repo(gitDir, cur)
+                if (!target.isNullOrEmpty()) {
+                    val resolved = File(target)
+                    val gitDir = if (resolved.isAbsolute) resolved else File(cur, target)
+                    return Repo(gitDir, cur)
+                }
             }
             cur = cur.parentFile
         }
@@ -114,23 +117,42 @@ object GitWorkspace {
         return readConfig(main)
     }
 
-    /** 读某个 git 目录下 config 里第一个 remote 的 url（通常是 origin）。 */
+    /**
+     * 读 config 里的 remote url：origin 优先，其次第一个非空 url。
+     * 只取「第一个 remote」会在 origin 不排第一时解析到别的仓库；
+     * 空 url 行跳过继续找，而不是终止解析。
+     */
     private fun readConfig(gitDir: File): String? {
         val file = File(gitDir, "config")
         if (!file.isFile) return null
         val text = runCatching { file.readText() }.getOrNull() ?: return null
-        var inRemote = false
+        return parseRemoteUrl(text)
+    }
+
+    /** config 文本 → remote url 的纯解析（可单测）。 */
+    internal fun parseRemoteUrl(text: String): String? {
+        var remoteName: String? = null
+        var originUrl: String? = null
+        var firstUrl: String? = null
         for (raw in text.lineSequence()) {
             val line = raw.trim()
             if (line.startsWith("[")) {
-                inRemote = line.startsWith("[remote ")
+                remoteName =
+                    if (line.startsWith("[remote ")) {
+                        line.removePrefix("[remote ").substringBefore(']').trim().trim('"')
+                    } else {
+                        null
+                    }
                 continue
             }
-            if (inRemote && line.startsWith("url")) {
-                return line.substringAfter('=', "").trim().ifEmpty { null }
+            if (remoteName != null && line.startsWith("url")) {
+                val url = line.substringAfter('=', "").trim()
+                if (url.isEmpty()) continue
+                if (remoteName == "origin" && originUrl == null) originUrl = url
+                if (firstUrl == null) firstUrl = url
             }
         }
-        return null
+        return originUrl ?: firstUrl
     }
 
     /** 支持 https://host/owner/repo(.git)、git@host:owner/repo、ssh://git@host/owner/repo。 */

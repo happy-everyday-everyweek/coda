@@ -73,4 +73,19 @@ class GitWorkspaceTest {
             url = $url
             fetch = +refs/heads/*:refs/remotes/origin/*
         """.trimIndent()
+
+    @Test
+    fun brokenDotGitFileDoesNotStopUpwardSearch() {
+        // 上层是真仓库，下层混入一个损坏的 .git 文件：应继续向上找到真仓库。
+        val repo = File(tmp, "real")
+        File(repo, ".git").mkdirs()
+        File(repo, ".git/HEAD").writeText("ref: refs/heads/main\n")
+        File(repo, ".git/config").writeText(remoteConfig("https://github.com/acme/real.git"))
+        val nested = File(repo, "nested/deep")
+        nested.mkdirs()
+        File(nested, ".git").writeText("this is not a gitdir pointer")
+        val info = GitWorkspace.inspect(nested.path)
+        assertEquals(repo.absolutePath, info?.root)
+        assertEquals("acme", info?.owner)
+    }
 }
