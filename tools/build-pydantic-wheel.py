@@ -1,47 +1,53 @@
-"""把 cargo 编出的 pydantic-core .so 组装成 Chaquopy 可安装的 Android wheel。"""
+"""把 cargo 编出的 pydantic-core .so 组装成 Chaquopy 可安装的 Android wheel。
+
+版本从源目录名派生（pydantic_core-<version>），dist-info、METADATA、RECORD 与
+输出文件名共用同一版本，换源树时不再产出标错版本的轮子。
+"""
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import pathlib
+import re
 import shutil
 import sys
-import zipfile
+import tempfile
 
-src = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/pc/pydantic_core-2.50.2")
-out = pathlib.Path("/tmp/whl")
-shutil.rmtree(out, ignore_errors=True)
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import wheel_helpers
 
-so = next(src.glob("target/aarch64-linux-android/release/*.so"))
-pkg = out / "pydantic_core"
-shutil.copytree(src / "python" / "pydantic_core", pkg)
-shutil.copy(so, pkg / "_pydantic_core.cpython-312-aarch64-linux-android.so")
+root = pathlib.Path(__file__).resolve().parent.parent
+src = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build" / "pydantic-src"
+if not src.is_dir():
+    sys.exit(f"pydantic-core 源目录不存在：{src}")
 
-di = out / "pydantic_core-2.50.2.dist-info"
-di.mkdir()
-(di / "METADATA").write_text(
-    "Metadata-Version: 2.1\nName: pydantic-core\nVersion: 2.50.2\nRequires-Python: >=3.9\n"
-)
-(di / "WHEEL").write_text(
-    "Wheel-Version: 1.0\nGenerator: coda\nRoot-Is-Purelib: false\nTag: cp312-cp312-android_26_arm64_v8a\n"
-)
+match = re.search(r"pydantic_core-(\d+\.\d+\.\d+)", src.name)
+if not match:
+    raise SystemExit(f"无法从目录名解析版本：{src.name}")
+version = match.group(1)
 
-records: list[str] = []
-for path in sorted(out.rglob("*")):
-    if path.is_file():
-        data = path.read_bytes()
-        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
-        records.append(f"{path.relative_to(out)},{digest},{len(data)}")
-records.append("pydantic_core-2.50.2.dist-info/RECORD,,")
-(di / "RECORD").write_text("\n".join(records) + "\n")
+so = wheel_helpers.single_so(src / "target" / "aarch64-linux-android" / "release", "*.so")
 
-target = pathlib.Path(
-    "app/wheels/pydantic_core-2.50.2-cp312-cp312-android_26_arm64_v8a.whl"
-)
-target.parent.mkdir(parents=True, exist_ok=True)
-with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-    for path in out.rglob("*"):
-        if path.is_file():
-            archive.write(path, path.relative_to(out))
-print(target)
+out = pathlib.Path(tempfile.mkdtemp(prefix="pydantic-whl-"))
+try:
+    pkg = out / "pydantic_core"
+    shutil.copytree(src / "python" / "pydantic_core", pkg)
+    shutil.copy(so, pkg / "_pydantic_core.cpython-312-aarch64-linux-android.so")
+
+    dist_info = f"pydantic_core-{version}.dist-info"
+    di = out / dist_info
+    di.mkdir()
+    (di / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: pydantic-core\nVersion: {version}\nRequires-Python: >=3.9\n"
+    )
+    (di / "WHEEL").write_text(
+        "Wheel-Version: 1.0\nGenerator: coda\nRoot-Is-Purelib: false\nTag: cp312-cp312-android_26_arm64_v8a\n"
+    )
+
+    target = (
+        root / "app" / "wheels"
+        / f"pydantic_core-{version}-cp312-cp312-android_26_arm64_v8a.whl"
+    )
+    wheel_helpers.write_record_and_zip(out, dist_info, target)
+    print(target)
+finally:
+    shutil.rmtree(out, ignore_errors=True)

@@ -49,30 +49,33 @@ export CC_aarch64_linux_android="$TC/aarch64-linux-android26-clang"
 export AR_aarch64_linux_android="$TC/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android26-clang"
 
+# 工作目录按本次运行隔离：固定 /tmp 路径会被并发构建（矩阵任务、重试、本地并行）
+# 互相 rm -rf 掉，还会静默复用上次失败留下的旧树。退出时统一清理。
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+
 # pyo3 的交叉编译需要一个 libpython 占位；实际符号在设备上由 Chaquopy 运行时提供。
-mkdir -p /tmp/fakelib
-"$TC/aarch64-linux-android26-clang" -shared -fPIC -o /tmp/fakelib/libpython3.12.so -x c /dev/null
+mkdir -p "$WORK_DIR/fakelib"
+"$TC/aarch64-linux-android26-clang" -shared -fPIC -o "$WORK_DIR/fakelib/libpython3.12.so" -x c /dev/null
 # RUSTFLAGS 只追加：CI 里可能已经设了 -C target-feature 之类的参数，
 # 直接赋值会整条覆盖掉。
-export RUSTFLAGS="${RUSTFLAGS:-} -L native=/tmp/fakelib"
+export RUSTFLAGS="${RUSTFLAGS:-} -L native=$WORK_DIR/fakelib"
 
 echo "==> pydantic-core $PYDANTIC_VERSION"
-rm -rf /tmp/pc
-mkdir -p /tmp/pc
+mkdir -p "$WORK_DIR/pc"
 # sdist 会被编译成 .so 打进 APK：必须按 sha256 固定，否则被污染的镜像就能注入原生代码。
 # 校验值来自 tools/android-wheels.requirements.txt，下载后逐个比对，不符即中止。
-"$PYTHON" tools/fetch-sdist.py pydantic-core "$PYDANTIC_VERSION" /tmp/pc
-tar -xf "/tmp/pc/pydantic_core-$PYDANTIC_VERSION.tar.gz" -C /tmp/pc
-(cd "/tmp/pc/pydantic_core-$PYDANTIC_VERSION" && cargo build --release --target aarch64-linux-android --features pyo3/extension-module)
-"$PYTHON" tools/build-pydantic-wheel.py
+"$PYTHON" tools/fetch-sdist.py pydantic-core "$PYDANTIC_VERSION" "$WORK_DIR/pc"
+tar -xf "$WORK_DIR/pc/pydantic_core-$PYDANTIC_VERSION.tar.gz" -C "$WORK_DIR/pc"
+(cd "$WORK_DIR/pc/pydantic_core-$PYDANTIC_VERSION" && cargo build --release --target aarch64-linux-android --features pyo3/extension-module)
+"$PYTHON" tools/build-pydantic-wheel.py "$WORK_DIR/pc/pydantic_core-$PYDANTIC_VERSION"
 
 echo "==> jiter $JITER_VERSION"
-rm -rf /tmp/jt
-mkdir -p /tmp/jt
-"$PYTHON" tools/fetch-sdist.py jiter "$JITER_VERSION" /tmp/jt
-tar -xf "/tmp/jt/jiter-$JITER_VERSION.tar.gz" -C /tmp/jt
-(cd "/tmp/jt/jiter-$JITER_VERSION" && cargo build --release --target aarch64-linux-android -p jiter-python --features pyo3/extension-module)
-"$PYTHON" tools/build-jiter-wheel.py "/tmp/jt/jiter-$JITER_VERSION"
+mkdir -p "$WORK_DIR/jt"
+"$PYTHON" tools/fetch-sdist.py jiter "$JITER_VERSION" "$WORK_DIR/jt"
+tar -xf "$WORK_DIR/jt/jiter-$JITER_VERSION.tar.gz" -C "$WORK_DIR/jt"
+(cd "$WORK_DIR/jt/jiter-$JITER_VERSION" && cargo build --release --target aarch64-linux-android -p jiter-python --features pyo3/extension-module)
+"$PYTHON" tools/build-jiter-wheel.py "$WORK_DIR/jt/jiter-$JITER_VERSION"
 
 echo "==> rpds-py 垫片"
 "$PYTHON" tools/build-rpds-wheel.py

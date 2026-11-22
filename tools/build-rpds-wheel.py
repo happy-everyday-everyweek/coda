@@ -7,50 +7,45 @@ Android 轮子。这里用 kernel/maibot-lite/rpds 的实现充当该分发，�
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import pathlib
 import shutil
 import sys
-import zipfile
+import tempfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import wheel_helpers
 
 VERSION = "0.25.0"
 
 root = pathlib.Path(__file__).resolve().parent.parent
 src = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "kernel" / "maibot-lite" / "rpds"
-out = pathlib.Path("/tmp/rpds-whl")
-shutil.rmtree(out, ignore_errors=True)
+if not (src / "__init__.py").is_file():
+    sys.exit(f"rpds source package not found: {src}（需要含 __init__.py 的包目录）")
 
-pkg = out / "rpds"
-pkg.mkdir(parents=True)
-for path in src.rglob("*"):
-    if path.is_file() and "__pycache__" not in path.parts:
-        target = pkg / path.relative_to(src)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(path, target)
+# staging 用一次性目录：固定 /tmp 路径会被并发构建互相清掉。
+out = pathlib.Path(tempfile.mkdtemp(prefix="rpds-whl-"))
+try:
+    pkg = out / "rpds"
+    pkg.mkdir(parents=True)
+    for path in sorted(src.rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts:
+            target = pkg / path.relative_to(src)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(path, target)
 
-di = out / f"rpds_py-{VERSION}.dist-info"
-di.mkdir()
-(di / "METADATA").write_text(
-    f"Metadata-Version: 2.1\nName: rpds-py\nVersion: {VERSION}\nRequires-Python: >=3.9\n"
-)
-(di / "WHEEL").write_text(
-    "Wheel-Version: 1.0\nGenerator: coda\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
-)
+    dist_info = f"rpds_py-{VERSION}.dist-info"
+    di = out / dist_info
+    di.mkdir()
+    (di / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: rpds-py\nVersion: {VERSION}\nRequires-Python: >=3.9\n"
+    )
+    (di / "WHEEL").write_text(
+        "Wheel-Version: 1.0\nGenerator: coda\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+    )
 
-records: list[str] = []
-for path in sorted(out.rglob("*")):
-    if path.is_file():
-        data = path.read_bytes()
-        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
-        records.append(f"{path.relative_to(out)},{digest},{len(data)}")
-records.append(f"rpds_py-{VERSION}.dist-info/RECORD,,")
-(di / "RECORD").write_text("\n".join(records) + "\n")
-
-target = pathlib.Path(f"app/wheels/rpds_py-{VERSION}-py3-none-any.whl")
-target.parent.mkdir(parents=True, exist_ok=True)
-with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-    for path in out.rglob("*"):
-        if path.is_file():
-            archive.write(path, path.relative_to(out))
-print(target)
+    # 输出锚定仓库根：从其他 CWD 调用时不能把轮子写进陌生目录。
+    target = root / "app" / "wheels" / f"rpds_py-{VERSION}-py3-none-any.whl"
+    wheel_helpers.write_record_and_zip(out, dist_info, target)
+    print(target)
+finally:
+    shutil.rmtree(out, ignore_errors=True)
