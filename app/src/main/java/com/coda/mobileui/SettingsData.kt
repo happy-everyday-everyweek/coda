@@ -225,9 +225,127 @@ object SettingsData {
             ),
         )
 
+    // ------------------------------------------------------------ 读快照（#615）
+
+    /**
+     * 页面数据的读缓存。
+     *
+     * 之前 providers / providersOfKind / agentAssetsPage / automations / hooks
+     * 都在 currentPage() 里同步读磁盘（JSON、资产目录、tasks-index.sqlite、钩子文件），
+     * 存储慢时直接卡渲染甚至 ANR。现在构建器只读快照，IO 由 [prewarm] 在后台做。
+     */
+    private val snapshots = SettingsSnapshotCache()
+
+    private fun now(): Long = android.os.SystemClock.elapsedRealtime()
+
+    /** 快照未就位时的占位页：不阻塞、不抛异常，给一个可见的加载态。 */
+    private fun loadingPage(
+        title: String,
+        key: String,
+    ): SettingsPage =
+        SettingsPage(
+            title,
+            listOf(
+                SettingRow.Header("正在读取"),
+                SettingRow.Value("正在读取数据…", "首次进入需要读一次本地配置"),
+                SettingRow.Value("重新读取", "如果长时间停在这里可以点这里", "settings_reload:$key"),
+            ),
+        )
+
+    private fun cachedProviders(ctx: Context): List<ProviderStore.Provider>? = snapshots.get("providers", now())
+
+    private fun cachedAssets(
+        ctx: Context,
+        kind: AgentAssets.Kind,
+    ): List<AgentAssets.Item>? = snapshots.get("assets:${kind.name}", now())
+
+    private fun cachedAutomations(
+        ctx: Context,
+        dbFile: File,
+    ): List<CodaExtras.AutomationItem>? = snapshots.get("automations", now())
+
+    private fun cachedHooks(
+        ctx: Context,
+        workspacePath: String,
+        home: File,
+    ): HooksCore.Snapshot? = snapshots.get("hooks:$workspacePath", now())
+
+    /**
+     * 后台预热某个键的数据，完成后回调（调用方负责切回主线程重绘）。
+     *
+     * 读取异常一律收进日志并落一份空结果，避免页面永远停在加载态。
+     */
+    fun prewarm(
+        ctx: Context,
+        key: String,
+        workspacePath: String? = null,
+        onDone: () -> Unit,
+    ) {
+        val app = ctx.applicationContext
+        com.coda.mobileui.core.Bg.run {
+            runCatching {
+                when {
+                    key == "providers" -> snapshots.put("providers", ProviderStore.load(app), now())
+                    key.startsWith("assets:") -> {
+                        val kind = runCatching { AgentAssets.Kind.valueOf(key.removePrefix("assets:")) }.getOrNull()
+                        if (kind != null) snapshots.put(key, AgentAssets.list(app, kind), now())
+                    }
+                    key == "automations" -> {
+                        val db = File(File(app.filesDir, "zcode-data/.zcode/v2"), "tasks-index.sqlite")
+                        snapshots.put("automations", CodaExtras.readAutomations(db), now())
+                    }
+                    key == "hooks" || key.startsWith("hooks:") -> {
+                        val wp = workspacePath ?: ZController.get(app).workspacePath()
+                        if (wp != null) {
+                            snapshots.put("hooks:$wp", HooksCore.discover(wp, File(app.filesDir, "home")), now())
+                        }
+                    }
+                }
+            }.onFailure { com.coda.mobileui.core.AppLog.w("Settings", "预热 $key 失败：${it.message}") }
+            onDone()
+        }
+    }
+
+    /** 当前页面需要哪个快照键；null 表示这一页不读磁盘。 */
+    fun snapshotKeyFor(
+        pageKey: String,
+        providerKind: ProviderStore.ProviderKind? = null,
+    ): String? =
+        when (pageKey) {
+            SettingsDetailActivity.PAGE_PROVIDERS, SettingsDetailActivity.PAGE_PROVIDERS_OF_KIND -> "providers"
+            SettingsDetailActivity.PAGE_SUBAGENTS -> "assets:${AgentAssets.Kind.SUBAGENT.name}"
+            SettingsDetailActivity.PAGE_SKILLS -> "assets:${AgentAssets.Kind.SKILL.name}"
+            SettingsDetailActivity.PAGE_COMMANDS -> "assets:${AgentAssets.Kind.COMMAND.name}"
+            SettingsDetailActivity.PAGE_AUTOMATIONS -> "automations"
+            SettingsDetailActivity.PAGE_HOOKS -> "hooks"
+            else -> null
+        }
+
+    /** 快照是否已就位；未就位时调用方应先 prewarm。 */
+    fun hasSnapshot(
+        ctx: Context,
+        key: String,
+        workspacePath: String? = null,
+    ): Boolean =
+        when {
+            key == "providers" -> cachedProviders(ctx) != null
+            key.startsWith("assets:") -> {
+                val kind = runCatching { AgentAssets.Kind.valueOf(key.removePrefix("assets:")) }.getOrNull()
+                kind != null && cachedAssets(ctx, kind) != null
+            }
+            key == "automations" -> cachedAutomations(ctx, File(ctx.filesDir, "tasks-index.sqlite")) != null
+            key == "hooks" -> workspacePath != null && cachedHooks(ctx, workspacePath, File(ctx.filesDir, "home")) != null
+            else -> true
+        }
+
+    /** 写操作后作废相关快照，下次渲染重新读。 */
+    fun invalidateSnapshots(prefix: String) {
+        snapshots.invalidatePrefix(prefix)
+    }
+
     /** 模型设置页：读取真实的供应商配置（provider_config.json），支持增删改。 */
     fun providers(ctx: Context): SettingsPage {
-        val all = ProviderStore.load(ctx)
+        val all = cachedProviders(ctx) ?: return loadingPage("模型设置", "providers")
         val llm = all.filter { it.kind == ProviderStore.ProviderKind.LLM }
         val asr = all.filter { it.kind == ProviderStore.ProviderKind.ASR }
         val rows = mutableListOf<SettingRow>()
@@ -266,7 +384,7 @@ object SettingsData {
         ctx: Context,
         kind: ProviderStore.ProviderKind,
     ): SettingsPage {
-        val list = ProviderStore.load(ctx).filter { it.kind == kind }
+        val list = (cachedProviders(ctx) ?: return loadingPage("供应商", "providers")).filter { it.kind == kind }
         val rows = mutableListOf<SettingRow>()
         val addKey = if (kind == ProviderStore.ProviderKind.ASR) "providers_add_asr" else "providers_add"
         rows +=
@@ -351,7 +469,7 @@ object SettingsData {
         kind: AgentAssets.Kind,
         title: String,
     ): SettingsPage {
-        val items = AgentAssets.list(ctx, kind)
+        val items = cachedAssets(ctx, kind) ?: return loadingPage(title, "assets:${kind.name}")
         val rows = mutableListOf<SettingRow>()
         rows += SettingRow.Header("已保存")
         if (items.isEmpty()) {
@@ -699,7 +817,7 @@ object SettingsData {
     /** 定时任务页：读取运行时数据库的 automations 表；点击条目进入管理（启停/删除）。 */
     fun automations(ctx: Context): SettingsPage {
         val dbFile = File(File(ctx.filesDir, "zcode-data/.zcode/v2"), "tasks-index.sqlite")
-        val items = CodaExtras.readAutomations(dbFile)
+        val items = cachedAutomations(ctx, dbFile) ?: return loadingPage("定时任务", "automations")
         val rows = mutableListOf<SettingRow>()
         rows += SettingRow.Header("已创建任务")
         if (items.isEmpty()) {
@@ -746,7 +864,7 @@ object SettingsData {
             rows += SettingRow.Value("无法确定工作区路径", "核心尚未启动")
             return SettingsPage("钩子", rows)
         }
-        val snap = HooksCore.discover(wp, home)
+        val snap = cachedHooks(ctx, wp, home) ?: return loadingPage("钩子", "hooks")
         val trusted = HooksCore.readTrustedDigests(wp, home)
         // discover 已经把读取/解析失败收进 errors，但页面此前从不显示：
         // 「读取失败」与「确实没配钩子」在界面上长得一样（#237）。

@@ -762,6 +762,8 @@ class OAuthSheet(
 
     private fun finishCommit(list: List<String>) {
         OAuthLogin.save(host, provider, list)
+        // 供应商落库后作废设置页快照，否则模型设置里看不到刚加的这条（#615）。
+        SettingsData.invalidateSnapshots("providers")
         Toast.makeText(host, "${provider.name} 已添加", Toast.LENGTH_SHORT).show()
         // 列表那层要重新拉一次账号，否则新号不会出现。
         onAdded?.invoke()

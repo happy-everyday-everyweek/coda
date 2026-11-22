@@ -130,6 +130,9 @@ class SettingsDetailActivity :
     /** 拉取失败的原因：有值就渲染错误页并给出重试入口，不把「正在读取…」永久留在界面上。 */
     private val extrasError = HashMap<String, String>()
 
+    /** 正在后台预热的快照键，防止 renderPage 与预热回调互相触发成循环（#615）。 */
+    private val snapshotLoading = HashSet<String>()
+
     /** 当前页面属于哪一个异步数据源。 */
     private fun extrasKind(): String? =
         when (pageKey) {
@@ -467,7 +470,30 @@ class SettingsDetailActivity :
         }
     }
 
+    /**
+     * 确保当前页需要的磁盘快照已就位（#615）。
+     *
+     * 未就位时后台读一次再重绘；同一键同时只跑一次预热，
+     * 否则 renderPage → 加载态 → onDone → renderPage 会自激成循环。
+     */
+    private fun ensureSnapshot() {
+        val key = SettingsData.snapshotKeyFor(pageKey) ?: return
+        val wp = if (key == "hooks") ZController.get(this).workspacePath() else null
+        if (SettingsData.hasSnapshot(this, key, wp)) return
+        if (!snapshotLoading.add(key)) return
+        SettingsData.prewarm(this, key, wp) {
+            runOnUiThread {
+                snapshotLoading.remove(key)
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                renderPage()
+            }
+        }
+    }
+
     private fun renderPage() {
+        // 需要读磁盘的页面：快照没就位就先画加载态并后台预热，
+        // 不在这里同步读 JSON/SQLite/资产目录（#615）。
+        ensureSnapshot()
         val page = currentPage()
         findViewById<TextView>(R.id.detail_title).text = page.title
         val container = findViewById<LinearLayout>(R.id.page_container)
@@ -903,6 +929,13 @@ class SettingsDetailActivity :
 
             key == "cloud_add" -> {
                 showCloudProviderPicker()
+            }
+
+            key.startsWith("settings_reload:") -> {
+                // 加载态里的「重新读取」：作废快照后重画，ensureSnapshot 会再预热一次（#615）。
+                val target = key.removePrefix("settings_reload:")
+                SettingsData.invalidateSnapshots(target)
+                renderPage()
             }
 
             key.startsWith("extras_refresh:") -> {
@@ -2917,6 +2950,8 @@ class SettingsDetailActivity :
                         ),
                     )
                     ProviderStore.save(this@SettingsDetailActivity, list)
+                    // 写盘后作废快照，否则页面会继续显示旧列表（#615）。
+                    SettingsData.invalidateSnapshots("providers")
                     s.dismiss()
                     applyProviderChange()
                 }
@@ -3056,6 +3091,8 @@ class SettingsDetailActivity :
                 provider.supportsPdf = pdfBox.isChecked
                 provider.supportsToolCall = toolBox.isChecked
                 ProviderStore.save(this, list)
+                // 写盘后作废快照，否则页面会继续显示旧列表（#615）。
+                SettingsData.invalidateSnapshots("providers")
                 sheet.dismiss()
                 applyProviderChange()
             }.secondaryAction("取消") { it.dismiss() }
@@ -3228,6 +3265,8 @@ class SettingsDetailActivity :
                         )
                     list.add(record)
                     ProviderStore.save(this, list)
+                    // 写盘后作废快照，否则页面会继续显示旧列表（#615）。
+                    SettingsData.invalidateSnapshots("providers")
                     startAsrTest(record)
                 }
                 col.addView(testBtn)
@@ -3284,6 +3323,8 @@ class SettingsDetailActivity :
                     ),
                 )
                 ProviderStore.save(this, list)
+                // 写盘后作废快照，否则页面会继续显示旧列表（#615）。
+                SettingsData.invalidateSnapshots("providers")
                 s.dismiss()
                 applyProviderChange()
             }
@@ -3671,6 +3712,8 @@ class SettingsDetailActivity :
             val list = ProviderStore.load(this)
             list.removeAll { it.id == p.id }
             ProviderStore.save(this, list)
+            // 写盘后作废快照，否则页面会继续显示旧列表（#615）。
+            SettingsData.invalidateSnapshots("providers")
             applyProviderChange()
         }
     }
@@ -3711,6 +3754,7 @@ class SettingsDetailActivity :
                     ZController.get(this).refreshWorkspacePresentation(null)
                 }
                 snack(if (removed) "已删除" else "删除失败：路径不在资产目录内")
+                SettingsData.invalidateSnapshots("assets:")
                 renderPage()
             }
         }
@@ -3736,6 +3780,8 @@ class SettingsDetailActivity :
                     ZController.get(this).refreshWorkspacePresentation(null)
                 }
                 snack("已保存；新建会话后生效")
+                // 资产写盘后作废对应快照，否则列表还是旧的（#615）。
+                SettingsData.invalidateSnapshots("assets:")
                 s.dismiss()
                 renderPage()
             }
