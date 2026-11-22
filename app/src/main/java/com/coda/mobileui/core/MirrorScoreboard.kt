@@ -141,45 +141,44 @@ object MirrorScoreboard {
         // 读也要持锁：record 的读-改-写中间态是半截文件，
         // 不加锁的读取会把它解析失败后退化成空历史，战绩「消失」。
         synchronized(lock) {
-        runCatching {
-            val f = fileOf(ctx)
-            // 注意：这里不能用裸 return（会从 runCatching 的 lambda 非局部返回，
-            // 语义上能过编译但可读性差且容易在后续改动里出错），改成 if/else 求值。
-            if (!f.isFile) {
-                emptyMap()
-            } else {
-                val root = JSONObject(f.readText())
-                val bucket = root.optJSONObject(bucketKey(net))
-                if (bucket == null) {
+            runCatching {
+                val f = fileOf(ctx)
+                // 注意：这里不能用裸 return（会从 runCatching 的 lambda 非局部返回，
+                // 语义上能过编译但可读性差且容易在后续改动里出错），改成 if/else 求值。
+                if (!f.isFile) {
                     emptyMap()
                 } else {
-                    val out = HashMap<String, Stat>(bucket.length())
-                    val keys = bucket.keys()
-                    while (keys.hasNext()) {
-                        val id = keys.next()
-                        val o = bucket.optJSONObject(id) ?: continue
-                        out[id] =
-                            Stat(
-                                id = id,
-                                verified = o.optInt("verified", 0),
-                                hashFailed = o.optInt("hashFailed", 0),
-                                failed = o.optInt("failed", 0),
-                                okBytes = o.optLong("okBytes", 0),
-                                okMs = o.optLong("okMs", 0),
-                                lastOkMs = o.optLong("lastOkMs", 0),
-                                lastFailMs = o.optLong("lastFailMs", 0),
-                            )
+                    val root = JSONObject(f.readText())
+                    val bucket = root.optJSONObject(bucketKey(net))
+                    if (bucket == null) {
+                        emptyMap()
+                    } else {
+                        val out = HashMap<String, Stat>(bucket.length())
+                        val keys = bucket.keys()
+                        while (keys.hasNext()) {
+                            val id = keys.next()
+                            val o = bucket.optJSONObject(id) ?: continue
+                            out[id] =
+                                Stat(
+                                    id = id,
+                                    verified = o.optInt("verified", 0),
+                                    hashFailed = o.optInt("hashFailed", 0),
+                                    failed = o.optInt("failed", 0),
+                                    okBytes = o.optLong("okBytes", 0),
+                                    okMs = o.optLong("okMs", 0),
+                                    lastOkMs = o.optLong("lastOkMs", 0),
+                                    lastFailMs = o.optLong("lastFailMs", 0),
+                                )
+                        }
+                        out
                     }
-                    out
                 }
+            }.getOrElse {
+                // 备份原件：损坏的账本至少还能手工恢复，不会被下一次记账直接覆盖成空表。
+                backupCorrupt(fileOf(ctx))
+                AppLog.w(TAG, "读取镜像账本失败，按空账本处理：${it.javaClass.simpleName}: ${it.message}")
+                emptyMap()
             }
-            }
-        }.getOrElse {
-            // 备份原件：损坏的账本至少还能手工恢复，不会被下一次记账直接覆盖成空表。
-            backupCorrupt(fileOf(ctx))
-            AppLog.w(TAG, "读取镜像账本失败，按空账本处理：${it.javaClass.simpleName}: ${it.message}")
-            emptyMap()
-        }
         }
 
     /** 把一条结果合并进账本并落盘。写失败只记日志，不影响下载结果。 */
