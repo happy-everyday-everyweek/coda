@@ -4,8 +4,11 @@ import java.util.Random
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-/** 要画的一个字形：x/y 是它在基框坐标里的左上格（y 向下，地面 = 第 rows 行）。 */
-class GlyphDraw(
+/**
+ * 要画的一个字形：x/y 是它在基框坐标里的左上格（y 向下，地面 = 第 rows 行）。
+ * 必须是 data class：ActorSnapshot 的值相等依赖它（#331）。
+ */
+data class GlyphDraw(
     val glyph: String,
     val color: String,
     val x: Int,
@@ -13,8 +16,14 @@ class GlyphDraw(
     val alpha: Double,
 )
 
-/** 一个 tick 的完整绘制指令；相等的快照画出完全一样的画面，可直接跳过重绘。 */
-class ActorSnapshot(
+/**
+ * 一个 tick 的完整绘制指令；相等的快照画出完全一样的画面，可直接跳过重绘。
+ *
+ * 必须是 data class（#331）：原先是普通 class，equals 按引用比较，
+ * PetView 里 `current != lastSnapshot` 恒为 true，注释承诺的跳过重绘从未生效。
+ * List<GlyphDraw> 的相等由元素逐个比较得出，因此 GlyphDraw 也一并改成 data class。
+ */
+data class ActorSnapshot(
     val visible: Boolean,
     val pose: String,
     /** 帧位移 + 摆动，格。 */
@@ -157,13 +166,47 @@ class PetActor(
     private fun setLoop(name: String) {
         baseClip = skin.clip(name)
         baseName = name
+        // 循环基准换了，旧的排队进场已经失去意义（#327）。
+        pendingEnter = null
         if (!onceActive && modeClip == null) start(baseClip, baseName)
     }
 
-    /** 一次性片段，播完回到循环。 */
+    /**
+    /**
+     * 模式循环：优先级高于基础循环、低于一次性片段（如被拎起时的挣扎动画）。
+     *
+     * 文档一直声明有这一层，但 modeClip/modeName 从未被赋值，判断恒为 null，
+     * 等于这层根本不存在（#333）。传 null 或片段不存在时退回基础循环。
+     */
+    fun setMode(name: String?) {
+        val clip = name?.let { skin.clip(it) }.orEmpty()
+        if (name == null || clip.isEmpty()) {
+            modeClip = null
+            modeName = null
+        } else {
+            modeClip = clip
+            modeName = name
+        }
+        // 一次性片段仍在播时不打断它，播完由 resumeLoop 接管。
+        if (!onceActive) resumeLoop()
+    }
+
+     * 一次性片段，播完回到循环。
+     *
+     * 新的 one-shot 必须清掉上一轮排队的进场片段（#327）：否则那次 finishOnce()
+     * 会消费一个与当前状态无关的旧 pendingEnter，覆盖当前循环动画。
+     * 片段不存在时同样要清——旧实现直接 return，把旧值留在队列里。
+     */
     fun play(name: String) {
+        pendingEnter = null
         val clip = skin.clip(name)
-        if (clip.isEmpty()) return
+        if (clip.isEmpty()) {
+            // 没有可播的片段：不能把 onceActive 留在 true，否则 advanceKey 会
+            // 在循环片段播完时误走 finishOnce 分支。
+            onceActive = false
+            resumeLoop()
+            return
+        }
         onceActive = true
         start(clip, name)
     }
@@ -180,6 +223,7 @@ class PetActor(
     }
 
     private fun resumeLoop() {
+        pendingEnter = null
         val m = modeClip
         if (m != null) start(m, modeName) else start(baseClip, baseName)
     }
@@ -281,8 +325,10 @@ class PetActor(
         } else {
             onceActive = false
             // 从"做完了"回到空闲时用 seen 收尾，这是原项目的行为
-            if (next == PetMood.IDLE && skin.state(PetMood.DONE).seen != null) {
-                play(skin.state(PetMood.DONE).seen!!)
+            // 查一次、用局部变量，避免重复查询与 !! 强制解包（#335）。
+            val seen = skin.state(PetMood.DONE).seen
+            if (next == PetMood.IDLE && seen != null) {
+                play(seen)
             }
         }
     }
@@ -341,6 +387,10 @@ class PetActor(
     }
 
     private fun brainStep() {
+        // hidden 的语义是「隐藏即冻结」：不绘制、也不让情绪自行演化。
+        // 旧实现只挡住了小动作，idleTicks/waitTicks 仍在推进，于是后台一段时间后
+        // 宠物自己睡着甚至变得不耐烦，重新显示时用户看到一个情绪变差的家伙（#332）。
+        if (hidden) return
         val st = skin.state(mood)
         if (mood == PetMood.IDLE && !asleep) {
             val sleep = st.sleep
@@ -403,9 +453,10 @@ class PetActor(
         if (reduceMotion) return
         val exit = old?.exit
         val enter = new?.enter
-        if (exit != null) {
+        if (exit != null && skin.clip(exit).isNotEmpty()) {
             play(exit)
-            // 退出播完再接进场；这里不做回调队列，直接在 advanceKey 结束时判断
+            // 只有退出片段真的启动了才排队进场：play() 会先清 pendingEnter，
+            // 所以必须在它之后赋值；exit 片段为空时不能留下悬空的进场（#327）。
             pendingEnter = enter
         } else if (enter != null) {
             play(enter)
