@@ -466,7 +466,9 @@ class MainActivity : BaseActivity() {
         syncHeaderPill()
         applyWideLayout()
         // 有 Shizuku 就顺手把自己这份无障碍服务打开；没有就安静跳过。
-        rikka.shizuku.Shizuku.addRequestPermissionResultListener(
+        // 匿名监听器会一直持有已销毁的 Activity：每次重建都新增一个（#680）。
+        // 持引用并在 onDestroy 摘掉。
+        val listener =
             object : rikka.shizuku.Shizuku.OnRequestPermissionResultListener {
                 override fun onRequestPermissionResult(
                     requestCode: Int,
@@ -476,8 +478,9 @@ class MainActivity : BaseActivity() {
                         enableOwnAccessibilityViaShizuku()
                     }
                 }
-            },
-        )
+            }
+        shizukuPermissionListener = listener
+        runCatching { rikka.shizuku.Shizuku.addRequestPermissionResultListener(listener) }
         ensureShizukuAccessibility()
         // OAuth 供应商落库时若网关还没注册模型，清单会是空的；启动后补一次对账，
         // 顺手纠正历史上被「串网关」写进来的别家模型。
@@ -898,6 +901,7 @@ class MainActivity : BaseActivity() {
     /** 是否停留在会话搜索页：与设置页、Bot 页一样只占用内容区。 */
     private var showingSearch = false
     private var searchPage: SessionSearchPage? = null
+    private var shizukuPermissionListener: rikka.shizuku.Shizuku.OnRequestPermissionResultListener? = null
 
     /** 当前选中的会话 id（同样在配置变更后恢复）。 */
     private var currentConversationId: String? = null
@@ -1670,6 +1674,13 @@ class MainActivity : BaseActivity() {
         clearBlurOverlay()
         botPage?.close()
         botPage = null
+        // 搜索页的后台取数线程与去抖回调同样不能比 Activity 活得久（#658）。
+        searchPage?.release()
+        searchPage = null
+        shizukuPermissionListener?.let { l ->
+            runCatching { rikka.shizuku.Shizuku.removeRequestPermissionResultListener(l) }
+        }
+        shizukuPermissionListener = null
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
@@ -4961,6 +4972,9 @@ class MainActivity : BaseActivity() {
                                 if (line.startsWith("IMG ")) "会话图片" else "会话内容",
                                 session.title.ifEmpty { "未命名会话" },
                                 hit.take(60),
+                                // 摘要截到 60 字符，命中可能在更后面：把整行原文带上，
+                                // 否则搜索页按摘要二次过滤会把这条命中丢掉（#659）。
+                                matched = hit,
                             ) {
                                 openSessionFromSearch(session)
                             }
@@ -4977,6 +4991,8 @@ class MainActivity : BaseActivity() {
                             "Coda Bot",
                             m.text.lineSequence().first().take(40),
                             if (m.fromUser) "你" else com.coda.mobileui.personal.CodaBotStore.profile(this).name,
+                            // 标题只取首行 40 字符，命中常在后面的行：带上整条正文（#659）。
+                            matched = m.text,
                         ) {
                             showBotPage()
                         }

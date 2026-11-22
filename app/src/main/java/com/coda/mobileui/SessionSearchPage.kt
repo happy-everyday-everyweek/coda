@@ -41,9 +41,21 @@ class SessionSearchPage(
         val title: String,
         val subtitle: String,
         val run: () -> Unit,
+        /** 真正命中的原文；provider 按全文匹配时填这里，避免页面二次过滤误删（#659）。 */
+        val matched: String? = null,
     )
 
     private val dp: (Float) -> Int = { (it * host.resources.displayMetrics.density).toInt() }
+    // 每个按键都同步跑 extras() 会在大历史上卡住 UI 线程（#658）：
+    // 去抖 180ms，取数放后台，序号丢弃过期结果。
+    private val searchHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingSearch: Runnable? = null
+    private var lastQuery: String? = null
+    private var searchSeq = 0
+    private var appliedSeq = 0
+    private val searchPool = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "session-search").apply { isDaemon = true }
+    }
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
     private lateinit var input: EditText
@@ -89,7 +101,7 @@ class SessionSearchPage(
                         override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
 
                         override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
-                            render(s?.toString().orEmpty())
+                            scheduleSearch(s?.toString().orEmpty())
                         }
 
                         override fun afterTextChanged(s: Editable?) = Unit
@@ -137,11 +149,54 @@ class SessionSearchPage(
         imm?.hideSoftInputFromWindow(input.windowToken, 0)
     }
 
+    /** 去抖调度：相同查询直接跳过，取数放后台线程（#658）。 */
+    private fun scheduleSearch(raw: String) {
+        if (!::results.isInitialized) return
+        val q = raw.trim()
+        lastQuery?.let { if (com.coda.mobileui.ui.SearchLogic.shouldSkipRender(it, q)) return }
+        lastQuery = q
+        pendingSearch?.let { searchHandler.removeCallbacks(it) }
+        val mine = ++searchSeq
+        val task =
+            Runnable {
+                searchPool.execute {
+                    // provider 可能读全部会话索引文件，绝不能在主线程跑。
+                    val all = runCatching { sessions() }.getOrDefault(emptyList())
+                    val others = if (q.isEmpty()) emptyList() else runCatching { extras(q) }.getOrDefault(emptyList())
+                    searchHandler.post {
+                        // 迟到的旧结果不能覆盖新查询的结果。
+                        if (mine >= appliedSeq) {
+                            appliedSeq = mine
+                            paint(q, all, others)
+                        }
+                    }
+                }
+            }
+        pendingSearch = task
+        searchHandler.postDelayed(task, 180L)
+    }
+
+    /** 页面销毁时停掉在途任务，避免回调持有已销毁的 Activity。 */
+    fun release() {
+        pendingSearch?.let { searchHandler.removeCallbacks(it) }
+        searchHandler.removeCallbacksAndMessages(null)
+        searchPool.shutdownNow()
+    }
+
     private fun render(raw: String) {
         if (!::results.isInitialized) return
         val q = raw.trim()
+        lastQuery = q
+        paint(q, sessions(), if (q.isEmpty()) emptyList() else extras(q))
+    }
+
+    private fun paint(
+        q: String,
+        all: List<ZSessionInfo>,
+        rawExtras: List<Extra>,
+    ) {
+        if (!::results.isInitialized) return
         results.removeAllViews()
-        val all = sessions()
         val matched =
             if (q.isEmpty()) {
                 all.sortedByDescending { it.updatedAt }
@@ -154,28 +209,25 @@ class SessionSearchPage(
         matched.forEach { session ->
             results.addView(row(session, q))
         }
-        // 会话以外的结果：设置分类、Coda Bot、图片，按来源分组。
+        // provider 已按全文匹配，这里只按 matched 原文判定，不再用标题/摘要二次过滤（#659）。
         val others =
-            if (q.isEmpty()) {
-                emptyList()
-            } else {
-                extras(q).filter {
-                    it.title.contains(q, ignoreCase = true) || it.subtitle.contains(q, ignoreCase = true)
-                }
-            }
-        var lastSection = ""
-        others.forEach { extra ->
-            if (extra.section != lastSection) {
-                lastSection = extra.section
-                results.addView(
-                    TextView(host).apply {
-                        text = extra.section
-                        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
-                        setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant))
-                        setPadding(dp(12f), dp(14f), dp(12f), dp(4f))
-                    },
+            rawExtras.filter {
+                com.coda.mobileui.ui.SearchLogic.keeps(
+                    com.coda.mobileui.ui.SearchLogic.ExtraHit(it.section, it.title, it.subtitle, it.matched),
+                    q,
                 )
             }
+        // 按 section 聚拢后再渲染：provider 结果按文件/行交错，逐个比较会让分组头重复（#660）。
+        com.coda.mobileui.ui.SearchLogic.groupBySection(others) { it.section }.forEach { (section, group) ->
+            results.addView(
+                TextView(host).apply {
+                    text = section
+                    setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                    setPadding(dp(12f), dp(14f), dp(12f), dp(4f))
+                },
+            )
+            group.forEach { extra ->
             results.addView(
                 LinearLayout(host).apply {
                     orientation = LinearLayout.VERTICAL
@@ -205,6 +257,7 @@ class SessionSearchPage(
                     }
                 },
             )
+            }
         }
         if (others.isNotEmpty()) hint.visibility = View.GONE
     }
@@ -231,8 +284,12 @@ class SessionSearchPage(
             },
         )
         // 次行对应 Claude 结果里的 matched_snippet：本地没有服务端片段，用工作区与时间代替。
+        // basename 为空（workspacePath="/"）时不能拼出前导 " · "（#661）。
         val where = session.workspacePath?.takeIf { it.isNotEmpty() }?.let { File(it).name }
-        val sub = listOfNotNull(where, timeFormat.format(Date(session.updatedAt))).joinToString(" · ")
+        val time = timeFormat.format(Date(session.updatedAt))
+        // 查询命中父目录时，光显示 basename 看不出匹配理由，补一行命中的路径前缀。
+        val ctx = com.coda.mobileui.ui.SearchLogic.pathContext(session.workspacePath, q)
+        val sub = com.coda.mobileui.ui.SearchLogic.subtitle(where, time)
         row.addView(
             TextView(host).apply {
                 text = sub
@@ -243,6 +300,18 @@ class SessionSearchPage(
                 setPadding(0, dp(3f), 0, 0)
             },
         )
+        if (ctx != null) {
+            row.addView(
+                TextView(host).apply {
+                    text = highlight(ctx, q)
+                    setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.START
+                    setPadding(0, dp(2f), 0, 0)
+                },
+            )
+        }
         return row
     }
 

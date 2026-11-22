@@ -109,7 +109,7 @@ jobs:
           cp "$APK" "coda-dev.apk"
           sha256sum coda-dev.apk | tee sha256.txt
           # 实验性 Web UI 的前端资产：不打进 APK，作为 Release 附件由 App 运行时拉取。
-          cd webui && zip -q ../coda-webui.zip index.html && cd ..
+          cd webui && zip -q ../coda-webui.zip index.html client.mjs && cd ..
 
       # 应用内更新读取的版本清单。App 走 releases/download/<tag>/update-dev.json 静态下载，
       # 不消耗 GitHub API 的 60 次/小时限额，并且带 sha256 供下载后校验。

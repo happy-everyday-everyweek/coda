@@ -50,6 +50,12 @@ jobs:
             -x installDebugPythonRequirements \
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+      - name: 测试 Web 前端逻辑
+        run: node --test tools/test_webui_client.mjs
+
       - name: 运行 Kotlin 单元测试
         run: |
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"

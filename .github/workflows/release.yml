@@ -128,7 +128,7 @@ jobs:
           cp "$APK" "coda-$CODA_VERSION_NAME.apk"
           sha256sum "coda-$CODA_VERSION_NAME.apk" | tee sha256.txt
           # 实验性 Web UI 的前端资产：不打进 APK，作为 Release 附件由 App 运行时拉取。
-          cd webui && zip -q ../coda-webui.zip index.html && cd ..
+          cd webui && zip -q ../coda-webui.zip index.html client.mjs && cd ..
           cat app/build/outputs/apk/release/output-metadata.json
 
       # 正式版必须签名固定：签名一换，老用户就装不上新版本。
