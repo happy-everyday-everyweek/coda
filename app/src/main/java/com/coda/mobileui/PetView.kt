@@ -75,6 +75,41 @@ class PetView(
         isClickable = true
         isFocusable = true
         shadowPaint.color = 0x47000000
+        // 长按＝拎起来：进入 held 模式循环，松手播 drop 回到原状态。
+        // 这是 setMode 这一层的真实触发点（#333）——皮肤本来就带 held/drop 片段，
+        // 但此前没有任何交互调用它，那一层等于不存在。
+        setOnLongClickListener {
+            hold(true)
+            true
+        }
+        setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL,
+                -> if (holding) hold(false)
+            }
+            // 返回 false：点击与长按仍交给控件自己的手势处理，不吞掉事件。
+            false
+        }
+    }
+
+    private var holding = false
+
+    /** 拎起/放下。减少动态效果时不进 held 循环，也不播落地动画。 */
+    private fun hold(up: Boolean) {
+        if (holding == up) return
+        holding = up
+        if (reduceMotion) {
+            actor.setMode(null)
+            return
+        }
+        if (up) {
+            actor.setMode(skin.interactions.held.takeIf { it.isNotEmpty() })
+        } else {
+            actor.setMode(null)
+            skin.interactions.drop.takeIf { it.isNotEmpty() }?.let { actor.play(it) }
+        }
+        pump()
     }
 
     // ------------------------------------------------------------ 对外

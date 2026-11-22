@@ -71,7 +71,7 @@ object SystemPrompts {
             }
         val digest = sha256(text)
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val key = "baseline_" + item.file
+        val key = baselineKey(item)
         val baseline = prefs.getString(key, null)
         if (baseline == null) {
             // 第一次见到：把当前内容当作基线（内核刚释放的默认模板）。
@@ -91,11 +91,14 @@ object SystemPrompts {
         val file = fileOf(ctx, item.file)
         val digest = runCatching { sha256(file.readText()) }.getOrNull() ?: return
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString("baseline_" + item.file, digest)
+            .putString(baselineKey(item), digest)
             .apply()
     }
 
     private const val PREFS = "system_prompts_state"
+
+    /** 基线键名只在这里拼一次：读写两处共用，改规则时不必两处同步。 */
+    private fun baselineKey(item: Item): String = "baseline_" + item.file
 
     private fun sha256(text: String): String {
         val bytes = java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
