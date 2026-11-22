@@ -354,7 +354,8 @@ object OAuthLogin {
                     // 指向本机网关，内核照旧走它原有的 OpenAI 兼容通路。
                     baseUrl = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1",
                     // 网关对下游的密钥；宿主用同一个管理密钥即可，本机回环不外露。
-                    apiKey = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey(),
+                    // 密钥按安装随机生成，取值前确保已就位（#19）。
+                    apiKey = if (wb) WorkBuddyGateway.apiKey() else { ProxyHost.initKeys(host); ProxyHost.clientKey() },
                     models = clean.toMutableList(),
                     // 关键：标成 OAuth 来源。列表页据此把它认作「OAuth 添加的供应商」，
                     // 点进去直接回到对应平台的管理页，而不是甩一堆手填字段给它看。
@@ -540,7 +541,7 @@ object OAuthLogin {
                 continue
             }
             val base = if (wb) WorkBuddyGateway.baseUrl() + "/v1" else ProxyHost.baseUrl() + "/v1"
-            val key = if (wb) WorkBuddyGateway.apiKey() else ProxyHost.clientKey()
+            val key = if (wb) WorkBuddyGateway.apiKey() else { ProxyHost.initKeys(host); ProxyHost.clientKey() }
             targets[p.id] = base to key
         }
         if (targets.isEmpty()) return false

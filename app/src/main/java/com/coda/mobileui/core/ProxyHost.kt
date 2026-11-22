@@ -50,15 +50,48 @@ object ProxyHost {
      * 管理接口密钥。
      *
      * 宿主对管理接口有硬要求：即使是回环地址也必须有密钥，留空则整个管理面返回 404。
-     * 因此这里写一个固定值，仅用于本机回环调用，不对外暴露，也不需要用户配置。
+     *
+     * 原来是两个写死的公开常量（#19）：本机任何有 INTERNET 权限的 App 都能拿它
+     * 调管理 API 读取/篡改 OAuth 账号与 token。现在改成按安装随机生成并落在私有偏好里，
+     * 由 [initKeys] 在启动路径上注入 Context 后就位。
      */
-    private const val MANAGEMENT_KEY = "coda-local-proxy"
+    @Volatile
+    private var managementKeyValue: String = ""
 
-    /** 网关给下游用的调用密钥。 */
-    private const val CLIENT_KEY = "coda-client-key"
+    /** 网关给下游用的调用密钥；同样按安装随机生成。 */
+    @Volatile
+    private var clientKeyValue: String = ""
+
+    private const val KEY_PREFS = "proxy_keys"
+    private const val KEY_MANAGEMENT = "management"
+    private const val KEY_CLIENT = "client"
+
+    /**
+     * 就位本机密钥。幂等：已生成过就复用，不会每次启动换一把
+     * （换掉会让已写进网关配置的旧密钥失效）。
+     */
+    fun initKeys(ctx: android.content.Context) {
+        if (managementKeyValue.isNotEmpty() && clientKeyValue.isNotEmpty()) return
+        val prefs = ctx.applicationContext.getSharedPreferences(KEY_PREFS, android.content.Context.MODE_PRIVATE)
+        var management = prefs.getString(KEY_MANAGEMENT, "").orEmpty()
+        var client = prefs.getString(KEY_CLIENT, "").orEmpty()
+        if (management.isEmpty() || client.isEmpty()) {
+            management = randomKey()
+            client = randomKey()
+            prefs.edit().putString(KEY_MANAGEMENT, management).putString(KEY_CLIENT, client).apply()
+        }
+        managementKeyValue = management
+        clientKeyValue = client
+    }
+
+    private fun randomKey(): String {
+        val bytes = ByteArray(24)
+        java.security.SecureRandom().nextBytes(bytes)
+        return android.util.Base64.encodeToString(bytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)
+    }
 
     /** 管理接口密钥。 */
-    fun managementKey(): String = MANAGEMENT_KEY
+    fun managementKey(): String = managementKeyValue
 
     /**
      * 网关给下游（也就是内核）用的调用密钥。
@@ -66,7 +99,7 @@ object ProxyHost {
      * 与管理密钥分开：管理密钥能改配置、删账号，调用密钥只能发请求。内核只需要后者，
      * 把权限更大的那把交给它没有好处。
      */
-    fun clientKey(): String = CLIENT_KEY
+    fun clientKey(): String = clientKeyValue
 
     private var process: Process? = null
     private var booting = false
@@ -635,7 +668,7 @@ object ProxyHost {
                 appendLine("management:")
                 // 管理接口即使在回环地址上也要密钥，写操作（登录、签到、删账号）全部经过它。
                 appendLine("  allow-remote: false")
-                appendLine("  secret-key: \"$MANAGEMENT_KEY\"")
+                appendLine("  secret-key: \"${managementKey()}\"")
                 // 管理面板资产随包发布并释放到 static/，禁掉启动期与运行期的面板自动更新：
                 // 否则网关会先查 GitHub API 比对哈希，直连挂起时整个启动被网络拖死
                 // （真机实测 45 秒就绪窗口被下载耗尽，健康探测永远等不到应答）。
@@ -643,7 +676,7 @@ object ProxyHost {
                 appendLine("access:")
                 // 下游（内核）用这把密钥调 /v1，权限只到发请求，不能碰管理面。
                 appendLine("  api-keys:")
-                appendLine("    - \"$CLIENT_KEY\"")
+                appendLine("    - \"${clientKey()}\"")
                 appendLine("plugins:")
                 appendLine("  enabled: true")
                 appendLine("  dir: \"$plugins\"")
@@ -722,6 +755,8 @@ object ProxyHost {
         onProgress: (String) -> Unit = {},
     ): Boolean {
         lastError = null
+        // 密钥必须在写配置之前就位（#19）：配置里的 secret-key 与后续请求头都取它。
+        initKeys(ctx)
         // 已经在跑，但插件集合可能已经变了（用户又授权了别的渠道）：网关只在启动时
         // 扫描插件目录，进程活着时新丢进去的 .so 不会被加载，表现为"渠道装好了却不可用"。
         // 这里比对目录里的插件与运行中进程启用的插件，不一致就重启一次。
@@ -978,7 +1013,7 @@ object ProxyHost {
                     connectTimeout = 10_000
                     readTimeout = timeoutMs
                     // 宿主要求所有管理请求都带密钥，回环地址也不例外。
-                    setRequestProperty("Authorization", "Bearer $MANAGEMENT_KEY")
+                    setRequestProperty("Authorization", "Bearer ${managementKey()}")
                     if (body != null) {
                         doOutput = true
                         setRequestProperty("Content-Type", "application/json")
@@ -1073,7 +1108,7 @@ object ProxyHost {
                     requestMethod = method
                     connectTimeout = 8_000
                     readTimeout = 15_000
-                    setRequestProperty("Authorization", "Bearer $MANAGEMENT_KEY")
+                    setRequestProperty("Authorization", "Bearer ${managementKey()}")
                     if (body != null) {
                         doOutput = true
                         setRequestProperty("Content-Type", "application/json")
@@ -1124,7 +1159,7 @@ object ProxyHost {
                     requestMethod = "GET"
                     connectTimeout = 10_000
                     readTimeout = 15_000
-                    setRequestProperty("Authorization", "Bearer $CLIENT_KEY")
+                    setRequestProperty("Authorization", "Bearer ${clientKey()}")
                 }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream

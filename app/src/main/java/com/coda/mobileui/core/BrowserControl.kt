@@ -116,6 +116,10 @@ object BrowserControl {
 
     fun detachActivity() {
         activityRef = null
+        // 引擎挂在旧 Activity 的 android.R.id.content 上，只清引用不销毁
+        // 会把整棵旧视图树泄漏掉（旋转必现），后续命令还会操作死 Activity 上的
+        // WebView（#18）。这里一并销毁，下次 ensureEngineOn 会按新 Activity 重建。
+        destroyEngine()
     }
 
     // ------------------------------------------------------------ 反向请求入口
