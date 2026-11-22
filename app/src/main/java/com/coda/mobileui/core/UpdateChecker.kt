@@ -3,8 +3,6 @@ package com.coda.mobileui.core
 import android.content.Context
 import com.coda.mobileui.BuildConfig
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * 应用内更新的「查」这一半：判定该去哪个渠道取、取到什么、要不要提醒。
@@ -298,60 +296,43 @@ object UpdateChecker {
 
     /**
      * 有上限的读取：最多读 [limit] 个字符，还有剩余就判超限返回 null。
-     * 异常镜像返回超大 HTML/目录页时不至于把整个响应读进内存。
+     *
+     * 实现已收进 [Downloader.readBounded]（#729），这里保留薄委托：
+     * 清单侧的上限语义由既有单测钉着，不该因为搬实现而失去覆盖。
      */
     internal fun readBounded(
         reader: java.io.Reader,
         limit: Int,
-    ): String? {
-        val buf = CharArray(limit)
-        var total = 0
-        while (total < limit) {
-            val n = reader.read(buf, total, limit - total)
-            if (n < 0) return String(buf, 0, total)
-            total += n
-        }
-        // 读满上限后探一个字符：还有内容说明超限。
-        return if (reader.read() < 0) String(buf, 0, total) else null
-    }
+    ): String? = Downloader.readBounded(reader, limit)
 
     /** 对单个 URL 取 JSON；内容不是合法 JSON 也视为失败（镜像的错误页是 HTML）。 */
     private fun fetchJson(
         fullUrl: String,
         headers: Map<String, String>,
-    ): JSONObject? =
-        try {
-            val conn =
-                (URL(fullUrl).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    connectTimeout = 8_000
-                    readTimeout = 12_000
-                    headers.forEach { (k, v) -> setRequestProperty(k, v) }
-                }
-            try {
-                if (conn.responseCode !in 200..299) {
-                    conn.errorStream?.close()
-                    null
-                } else {
-                    val text =
-                        conn.inputStream.bufferedReader().use { readBounded(it, MAX_MANIFEST_CHARS) }
-                    if (text == null) {
-                        AppLog.w(TAG, "清单响应超过 $MAX_MANIFEST_CHARS 字符上限，判为无效：$fullUrl")
-                        null
-                    } else {
-                        // 镜像返回的 HTML 错误页同样会走到这里，JSONObject 会抛异常。
-                        runCatching { JSONObject(text) }.getOrNull()
-                    }
-                }
-            } finally {
-                conn.disconnect()
-            }
-        } catch (e: java.util.concurrent.CancellationException) {
+    ): JSONObject? {
+        // 连接、超时、状态码分类与有上限读取都走统一引擎（#729），
+        // 这里只保留「必须是合法 JSON」这条业务判定与 NO_PROXY、8s/12s 的清单专用参数。
+        val res =
+            Downloader.fetchText(
+                Downloader.Request(
+                    url = fullUrl,
+                    headers = headers,
+                    connectTimeoutMs = 8_000,
+                    readTimeoutMs = 12_000,
+                    proxy = java.net.Proxy.NO_PROXY,
+                ),
+                maxChars = MAX_MANIFEST_CHARS,
+            )
+        if (res.kind == DownloadOutcome.Kind.CANCELLED) {
             // 取消必须向上传播：吞掉它会让镜像循环在协程取消后继续跑。
-            throw e
-        } catch (e: Exception) {
-            // 只捕获预期内的失败（IO/解析等）；Error 不再被降级成「无结果」。
-            AppLog.w(TAG, "取清单失败：${e.javaClass.simpleName}: ${e.message}")
-            null
+            throw java.util.concurrent.CancellationException("取清单已取消")
         }
+        val text = res.text
+        if (!res.ok || text == null) {
+            AppLog.w(TAG, "取清单失败 $fullUrl：${res.kind} ${res.detail}")
+            return null
+        }
+        // 镜像返回的 HTML 错误页同样会走到这里，JSONObject 会抛异常。
+        return runCatching { JSONObject(text) }.getOrNull()
+    }
 }

@@ -3,9 +3,6 @@ package com.coda.mobileui.core
 import android.content.Context
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 
@@ -139,67 +136,87 @@ object AssetFetcher {
             val url = GhMirrors.wrap(m.prefix, spec.remoteUrl)
             onLog("下载 ${m.id}…")
             val t0 = System.currentTimeMillis()
-            val got = download(url, tmp, spec, onProgress)
+            // 连接、写盘、校验、上线全部走统一引擎（#729）。这里只负责挑源与记账。
+            val res =
+                Downloader.fetch(
+                    Downloader.Request(
+                        url = url,
+                        out = target,
+                        expectedSize = spec.size,
+                        expectedSha256 = spec.sha256,
+                    ),
+                    onProgress = onProgress?.let { p -> Downloader.Progress { d, t, _ -> p.onBytes(d, t) } },
+                )
             val cost = System.currentTimeMillis() - t0
-            if (got && verify(tmp, spec)) {
-                when (val placed = AssetPlacement.place(tmp, target)) {
-                    is AssetPlacement.Result.Placed -> {
-                        MirrorScoreboard.record(
-                            ctx,
-                            net,
-                            m.id,
-                            MirrorScoreboard.Outcome.VERIFIED,
-                            // 用就位后的真实字节数：tmp 已被重命名，读它会得到 0，
-                            // 而账本只在 bytes > 0 时累加吞吐，记 0 等于测速样本全作废。
-                            bytes = placed.bytes,
-                            elapsedMs = cost,
-                        )
-                        onLog("完成（${m.id}）：${target.name}")
-                        AppLog.i(TAG, "资产就位 ${target.name} 来源=${m.id} 体积=${placed.bytes}")
-                        return true
-                    }
-
-                    is AssetPlacement.Result.Failed -> {
-                        // 下载与校验都成功了，失败在写入。不能不记分也不能不记错误，
-                        // 否则最后只剩一句「所有源都失败：」而详情是空的。
-                        MirrorScoreboard.record(
-                            ctx,
-                            net,
-                            m.id,
-                            MirrorScoreboard.Outcome.VERIFIED,
-                            bytes = tmp.length(),
-                            elapsedMs = cost,
-                        )
-                        AppLog.w(TAG, "资产未能就位 ${target.name} 来源=${m.id}：${placed.reason}")
-                        onLog("${m.id} 下载成功但写入失败：${placed.reason}")
-                        errors.append(m.id).append(":place ")
-                        // 内容已经校验通过，写入失败与镜像无关：换源重下解决不了问题，
-                        // 保留这份文件，循环结束后再试一次就位，别白白浪费带宽。
-                        verifiedTmp = tmp
-                        break
-                    }
+            when (res.kind) {
+                DownloadOutcome.Kind.OK -> {
+                    MirrorScoreboard.record(
+                        ctx,
+                        net,
+                        m.id,
+                        MirrorScoreboard.Outcome.VERIFIED,
+                        // 用引擎回报的真实字节数：文件已被重命名，读临时文件会得到 0，
+                        // 而账本只在 bytes > 0 时累加吞吐，记 0 等于测速样本全作废。
+                        bytes = res.bytes,
+                        elapsedMs = cost,
+                    )
+                    onLog("完成（${m.id}）：${target.name}")
+                    AppLog.i(TAG, "资产就位 ${target.name} 来源=${m.id} 体积=${res.bytes}")
+                    return true
                 }
-            } else if (got) {
-                // 大小对、内容不对：镜像返回了被改写的内容。换源重试，这是唯一可靠的应对。
-                // 记账要单独记成 HASH_FAILED：它比「连不上」更该被拉黑。
-                MirrorScoreboard.record(
-                    ctx,
-                    net,
-                    m.id,
-                    MirrorScoreboard.Outcome.HASH_FAILED,
-                    elapsedMs = cost,
-                )
-                onLog("${m.id} 内容校验不通过，换源")
-                errors.append(m.id).append(":hash ")
-            } else {
-                MirrorScoreboard.record(
-                    ctx,
-                    net,
-                    m.id,
-                    MirrorScoreboard.Outcome.FAILED,
-                    elapsedMs = cost,
-                )
-                errors.append(m.id).append(":fail ")
+
+                DownloadOutcome.Kind.PLACE_FAILED -> {
+                    // 下载与校验都成功了，失败在写入。不能不记分也不能不记错误，
+                    // 否则最后只剩一句「所有源都失败：」而详情是空的。
+                    MirrorScoreboard.record(
+                        ctx,
+                        net,
+                        m.id,
+                        MirrorScoreboard.Outcome.VERIFIED,
+                        bytes = res.bytes,
+                        elapsedMs = cost,
+                    )
+                    AppLog.w(TAG, "资产未能就位 ${target.name} 来源=${m.id}：${res.detail}")
+                    onLog("${m.id} 下载成功但写入失败：${res.detail}")
+                    errors.append(m.id).append(":place ")
+                    // 内容已经校验通过，写入失败与镜像无关：换源重下解决不了问题，
+                    // 保留这份文件，循环结束后再试一次就位，别白白浪费带宽。
+                    verifiedTmp = res.partial
+                    break
+                }
+
+                DownloadOutcome.Kind.CANCELLED -> {
+                    // 取消不是「这次失败，换下一个源」：吞掉它会让协程取消失效，
+                    // 循环继续跑下去，用户已经退出页面了下载还在继续。
+                    runCatching { tmp.delete() }
+                    throw CancellationException("资产获取已取消：${target.name}")
+                }
+
+                DownloadOutcome.Kind.VERIFY_FAILED -> {
+                    // 大小对、内容不对：镜像返回了被改写的内容。换源重试，这是唯一可靠的应对。
+                    // 记账要单独记成 HASH_FAILED：它比「连不上」更该被拉黑。
+                    MirrorScoreboard.record(
+                        ctx,
+                        net,
+                        m.id,
+                        MirrorScoreboard.Outcome.HASH_FAILED,
+                        elapsedMs = cost,
+                    )
+                    onLog("${m.id} 内容校验不通过，换源")
+                    errors.append(m.id).append(":hash ")
+                }
+
+                else -> {
+                    AppLog.w(TAG, "下载失败 $url → ${res.kind} ${res.detail}")
+                    MirrorScoreboard.record(
+                        ctx,
+                        net,
+                        m.id,
+                        MirrorScoreboard.Outcome.FAILED,
+                        elapsedMs = cost,
+                    )
+                    errors.append(m.id).append(":fail ")
+                }
             }
             runCatching { tmp.delete() }
         }
@@ -278,112 +295,8 @@ object AssetFetcher {
         }.getOrDefault(false)
 
     // ---------- 下载 ----------
-
-    /**
-     * 单源下载到 [out]。
-     *
-     * 只负责「把字节搬下来」，内容是否可信交给 [verify]。HTTP 非 2xx、字节数
-     * 与 spec.size 不符（且 size 已给出）都直接判失败，省掉一次无意义的哈希。
-     */
-    private fun download(
-        url: String,
-        out: File,
-        spec: Spec,
-        onProgress: Progress?,
-    ): Boolean =
-        try {
-            val conn =
-                (URL(url).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    connectTimeout = 20_000
-                    readTimeout = 120_000
-                    setRequestProperty("User-Agent", "Coda-Android")
-                    setRequestProperty("Accept", "*/*")
-                }
-            try {
-                if (conn.responseCode !in 200..299) {
-                    // 状态码一定要留下：401/403 是镜像拒绝，404 是文件不存在，
-                    // 502/503 是镜像自己挂了。三种应对完全不同，只记「失败」等于没记。
-                    AppLog.w(TAG, "下载失败 $url → HTTP ${conn.responseCode}")
-                    conn.errorStream?.close()
-                    false
-                } else {
-                    val total = conn.contentLengthLong.takeIf { it > 0 } ?: spec.size
-                    FileOutputStream(out).use { o ->
-                        conn.inputStream.use { input -> copy(input, o, total, onProgress) }
-                    }
-                    if (spec.size > 0 && out.length() != spec.size) {
-                        AppLog.w(TAG, "下载完成但长度不符 $url 期望=${spec.size} 实际=${out.length()}")
-                        false
-                    } else {
-                        true
-                    }
-                }
-            } finally {
-                conn.disconnect()
-            }
-        } catch (e: CancellationException) {
-            // 取消不是「这次失败，换下一个源」：吞掉它会让协程取消失效，
-            // 循环继续跑下去，用户已经退出页面了下载还在继续。
-            runCatching { out.delete() }
-            throw e
-        } catch (e: Exception) {
-            // 这里以前是 `catch (_: Throwable)`，异常被完全吞掉：
-            // 连接重置、TLS 失败、磁盘写满全都不留痕迹，事后完全查不出为什么失败。
-            AppLog.w(TAG, "下载异常 $url：${e.javaClass.simpleName}: ${e.message}")
-            runCatching { out.delete() }
-            false
-        }
-
-    private fun copy(
-        input: InputStream,
-        out: FileOutputStream,
-        total: Long,
-        p: Progress?,
-    ) {
-        val buf = ByteArray(256 * 1024)
-        var done = 0L
-        var lastReport = 0L
-        var emptyReads = 0
-        while (true) {
-            val n = input.read(buf)
-            // 只有负值才是 EOF。返回 0 表示这次没读到字节，不是流结束——
-            // 当成 EOF 会静默截断下载内容，随后 sha256 必然失败并被误记成镜像的问题。
-            if (n < 0) break
-            if (n == 0) {
-                // 连续空读做上限保护，避免极端情况下空转。
-                emptyReads++
-                if (emptyReads > MAX_EMPTY_READS) {
-                    throw java.io.IOException("输入流连续 $emptyReads 次返回 0 字节")
-                }
-                continue
-            }
-            emptyReads = 0
-            out.write(buf, 0, n)
-            done += n
-            // 每 1MB 报一次，够画进度又不会把主线程刷爆。
-            if (done - lastReport >= 1_048_576L) {
-                lastReport = done
-                reportProgress(p, done, total)
-            }
-        }
-        reportProgress(p, done, total)
-    }
-
-    /**
-     * 进度回调。
-     *
-     * [total] 为 0 表示总长度未知（`spec.size` 的约定就是 0 == 未知）。
-     * 这时不按已知总长回调，否则调用方做 `done * 100 / total` 会除零。
-     */
-    private fun reportProgress(
-        p: Progress?,
-        done: Long,
-        total: Long,
-    ) {
-        if (total > 0) p?.onBytes(done, total)
-    }
-
-    /** 连续空读的上限：超过就认为流异常，而不是无限空转。 */
-    private const val MAX_EMPTY_READS = 64
+    //
+    // 连接、写盘、进度、校验与上线已经收进 core/Downloader.kt（#729）。
+    // 这里不再持有 HttpURLConnection：以前 AssetFetcher 与 UpdateChecker 各写一套，
+    // UA、空读保护、取消传播都出现过一边有一边没有。
 }
