@@ -19,6 +19,25 @@ object VoiceGenieProtocol {
     /** namespace 固定值，两端的请求与期望响应都用它。 */
     const val NAMESPACE = "VoiceGenie"
 
+    /** 响应字段号到键名的映射；编译期常量，不在每次解码时重建。 */
+    private val RESPONSE_NAMES =
+        mapOf(
+            1 to "task_id",
+            2 to "message_id",
+            3 to "namespace",
+            4 to "event",
+            5 to "status_code",
+            6 to "status_text",
+            7 to "payload",
+            8 to "data",
+            9 to "seq_id",
+            10 to "session_id",
+            11 to "log_id",
+        )
+
+    /** varint 编码的整型字段号。 */
+    private val INTEGER_FIELDS = setOf(5, 9)
+
     /** 信封不合法、字段被截断、字符串不是 UTF-8 等都用这个。 */
     class ProtocolError(
         message: String,
@@ -101,21 +120,6 @@ object VoiceGenieProtocol {
                 throw ProtocolError("响应不是有效 JSON：${e.message}")
             }
         }
-        val names =
-            mapOf(
-                1 to "task_id",
-                2 to "message_id",
-                3 to "namespace",
-                4 to "event",
-                5 to "status_code",
-                6 to "status_text",
-                7 to "payload",
-                8 to "data",
-                9 to "seq_id",
-                10 to "session_id",
-                11 to "log_id",
-            )
-        val integerFields = setOf(5, 9)
         val result = JSONObject()
         var offset = 0
 
@@ -169,16 +173,18 @@ object VoiceGenieProtocol {
                     throw ProtocolError("不支持的 protobuf wire type: $wire")
                 }
             }
-            val name = names[number] ?: continue
-            val expectedWire = if (number in integerFields) 0 else 2
+            val name = RESPONSE_NAMES[number] ?: continue
+            val expectedWire = if (number in INTEGER_FIELDS) 0 else 2
             if (wire != expectedWire) throw ProtocolError("已知响应字段的 wire type 不符")
             if (wire == 0) {
                 result.put(name, intValue)
             } else {
                 val bytes = bytesValue ?: ByteArray(0)
                 if (number == 8) {
-                    // data 字段保持字节，不强行当 UTF-8 解。
-                    result.put(name, bytes.size)
+                    // data 是二进制，不强行当 UTF-8 解：Base64 发布内容本身，
+                    // 长度放语义明确的 data_length。只发长度会让消费方拿不到载荷。
+                    result.put(name, java.util.Base64.getEncoder().encodeToString(bytes))
+                    result.put("data_length", bytes.size)
                 } else {
                     result.put(name, bytes.toString(Charsets.UTF_8))
                 }

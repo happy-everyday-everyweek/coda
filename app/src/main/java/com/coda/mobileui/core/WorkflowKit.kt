@@ -54,7 +54,8 @@ data class ZWorkflowActor(
     val phaseName: String?,
     val activity: String,
     val tokens: String,
-    var task: String? = null,
+    // task 是 val：对象进入列表后不再被改，equals/hashCode/copy 始终描述同一个值。
+    val task: String? = null,
 ) {
     val isActive: Boolean
         get() = state == "executing" || state == "waiting" || state == "parked"
@@ -311,6 +312,8 @@ object ZWorkflowKit {
     private val ROUNDS = Regex("^(\\d+) rounds?$")
     private val COUNTS_RUNNING = Regex("^(\\d+) settled, (\\d+) (running|unfinished)$")
     private val COUNTS_SETTLED = Regex("^(\\d+) steps? settled$")
+    /** 时长格式：数字加时间单位的组合（12s / 1m30s / 2h5m / 450ms / 1.5s）。 */
+    private val DURATION = Regex("^\\d+(\\.\\d+)?(ms|h|m|s)(\\d+(\\.\\d+)?(ms|h|m|s))*$")
     private val ADDRESS = Regex("^\\S+@\\d+$")
     private val PHASE_STATES = setOf("done", "current", "ahead", "unfinished")
     private val ACTOR_STATES =
@@ -340,26 +343,28 @@ object ZWorkflowKit {
             var running = 0
             var duration = ""
             for (cell in cells.drop(1)) {
+                // 每条正则只执行一次并直接取 MatchResult：matches()+find()!! 是两次
+                // 独立执行，分支重排后 find 为 null 时 !! 会把可降级场景变成崩溃。
+                val roundsMatch = ROUNDS.matchEntire(cell)
+                val runningMatch = COUNTS_RUNNING.matchEntire(cell)
+                val settledMatch = COUNTS_SETTLED.matchEntire(cell)
                 when {
                     PHASE_STATES.contains(cell) -> {
                         state = cell
                     }
-
-                    ROUNDS.matches(cell) -> {
-                        rounds = ROUNDS.find(cell)!!.groupValues[1].toInt()
+                    roundsMatch != null -> {
+                        rounds = roundsMatch.groupValues[1].toIntOrNull() ?: 0
                     }
-
-                    COUNTS_RUNNING.matches(cell) -> {
-                        val m = COUNTS_RUNNING.find(cell)!!
-                        settled = m.groupValues[1].toInt()
-                        running = m.groupValues[2].toInt()
+                    runningMatch != null -> {
+                        settled = runningMatch.groupValues[1].toIntOrNull() ?: 0
+                        running = runningMatch.groupValues[2].toIntOrNull() ?: 0
                     }
-
-                    COUNTS_SETTLED.matches(cell) -> {
-                        settled = COUNTS_SETTLED.find(cell)!!.groupValues[1].toInt()
+                    settledMatch != null -> {
+                        settled = settledMatch.groupValues[1].toIntOrNull() ?: 0
                     }
-
-                    duration.isEmpty() -> {
+                    // 未知列不再照单全收进 duration：内核格式新增列（token 数、备注）
+                    // 会被当成时长渲染成乱码。只收时长格式的单元格。
+                    duration.isEmpty() && DURATION.matches(cell) -> {
                         duration = cell
                     }
                 }
@@ -374,11 +379,21 @@ object ZWorkflowKit {
         val body = section(output, "subagents") ?: return emptyList()
         if (body.contains("No subagents created yet")) return emptyList()
         val out = ArrayList<ZWorkflowActor>()
+        // task 行先暂存，构造 actor 时一次性传入：不再对已入列的对象做后置修改。
+        // 前置 task（还没有 actor）挂到下一个 actor；夹在其他行后的 task 仍归属
+        // 最近一个 actor，但通过 copy 重建而不是原地改。
+        var pendingTask: String? = null
         for (raw in body.split('\n')) {
             if (raw.isBlank()) continue
             val trimmed = raw.trim()
             if (trimmed.startsWith("task:")) {
-                out.lastOrNull()?.task = trimmed.removePrefix("task:").trim()
+                val task = trimmed.removePrefix("task:").trim()
+                if (out.isEmpty()) {
+                    pendingTask = task
+                } else {
+                    val last = out.removeAt(out.size - 1)
+                    out.add(last.copy(task = task))
+                }
                 continue
             }
             // 缩进行属于上一条 actor 的附注
@@ -427,7 +442,9 @@ object ZWorkflowKit {
                     }
                 }
             }
-            if (state.isEmpty() && address.isEmpty() && name.isEmpty()) continue
+            // 只有状态词的行（name/address 全空）不产出演员：state 已赋值会让
+            // 原来的三重空判断失效，渲染出一个空白演员。
+            if (name.isEmpty() && address.isEmpty()) continue
             out +=
                 ZWorkflowActor(
                     name = name,
@@ -436,7 +453,9 @@ object ZWorkflowKit {
                     phaseName = phase,
                     activity = activity.toString(),
                     tokens = tokens,
+                    task = pendingTask,
                 )
+            pendingTask = null
         }
         return out
     }
