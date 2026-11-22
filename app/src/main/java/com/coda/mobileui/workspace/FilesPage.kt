@@ -2502,7 +2502,17 @@ override fun menuItems(): List<String> =
      * 只统计真正声明支持二进制的应用。
      */
     private fun openWithSystem(file: File): Boolean {
-        val uri = runCatching { WorkspaceFiles.uriFor(host, file) }.getOrNull() ?: return false
+        // 区分两种失败：不在共享范围内可以安静回退到 ZIP 兜底；
+        // Provider 配置错误则所有文件都会失败，必须留下明确线索（#554）。
+        val uri =
+            when (val r = runCatching { WorkspaceFiles.explain(host, file) }.getOrNull()) {
+                is WorkspaceFiles.Result.Ok -> r.uri
+                is WorkspaceFiles.Result.ProviderError -> {
+                    toast("文件共享组件异常：${r.reason}")
+                    return false
+                }
+                else -> return false
+            }
         val mime = mimeOf(file)
         val view =
             android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
