@@ -15,17 +15,42 @@ object Workspaces {
     const val STATE_DIR = ".coda"
 
     private const val STATE_FILE = "workspace.json"
+    private const val BRAND_NAME = "Coda"
+    private const val LEGACY_NAME = "ZCode"
+
+    /** 兼容候选：有些设备没有 /sdcard 这个链接，但它仍是最常见的写法。 */
     private const val BRAND_DIR = "/sdcard/Coda"
     private const val LEGACY_DIR = "/sdcard/ZCode"
+
+    /**
+     * 上一次解析为什么回落到应用私有目录（#93）。
+     *
+     * null 表示没有回落。界面据此给出可见说明，否则用户在文件管理器里
+     * 找不到工作区文件，会以为文件被删了。
+     */
+    @Volatile
+    var fallbackReason: String? = null
+        private set
+
+    /** 旧目录迁移失败时的说明；迁移成功或没有旧目录时为 null。 */
+    @Volatile
+    var migrationWarning: String? = null
+        private set
 
     /** 当前工作区根目录，保证存在且可写。 */
     fun root(ctx: Context): File {
         val chosen = SettingsStore.get(ctx).workspaceRoot
-        if (chosen.isNotEmpty() && usable(File(chosen))) return File(chosen)
+        if (chosen.isNotEmpty() && usable(File(chosen))) {
+            fallbackReason = null
+            return File(chosen)
+        }
         val brand = brandDir()
         if (brand != null) {
             val dir = File(brand, "workspace")
-            if (usable(dir)) return dir
+            if (usable(dir)) {
+                fallbackReason = null
+                return dir
+            }
         }
         val fallback = File(ctx.filesDir, "workspace")
         // 回退目录也要校验：忽略 mkdirs 失败会返回不存在的路径，
@@ -33,6 +58,13 @@ object Workspaces {
         if (!usable(fallback)) {
             error("无法创建工作区目录：$fallback（存储不可写或空间不足）")
         }
+        // 回落必须留原因（#93）：私有目录卸载即清空，用户有权知道。
+        fallbackReason =
+            if (chosen.isNotEmpty()) {
+                "选定的工作区目录不可用（可能已删除或没有写入权限），暂时使用应用私有目录。"
+            } else {
+                "外置存储不可用或未授予存储权限，暂时使用应用私有目录；该目录会随应用卸载一起清空。"
+            }
         return fallback
     }
 
@@ -57,13 +89,40 @@ object Workspaces {
         return dir
     }
 
-    private fun brandDir(): File? {
-        val brand = File(BRAND_DIR)
-        val legacy = File(LEGACY_DIR)
-        if (!brand.exists() && legacy.exists()) {
-            runCatching { legacy.renameTo(brand) }
+    /**
+     * 品牌目录候选（#93）。
+     *
+     * 优先用 Environment.getExternalStorageDirectory() 推导，不再只认硬编码 /sdcard；
+     * 后者在部分设备上不存在。两个候选都试，任一可用即可。
+     */
+    private fun brandCandidates(): List<Pair<File, File>> {
+        val external = runCatching { android.os.Environment.getExternalStorageDirectory() }.getOrNull()
+        val pairs = mutableListOf<Pair<File, File>>()
+        if (external != null) {
+            pairs += File(external, BRAND_NAME) to File(external, LEGACY_NAME)
         }
-        return if (usable(brand)) brand else null
+        pairs += File(BRAND_DIR) to File(LEGACY_DIR)
+        return pairs
+    }
+
+    private fun brandDir(): File? {
+        for ((brand, legacy) in brandCandidates()) {
+            if (!brand.exists() && legacy.exists()) {
+                // 迁移失败不能静默（#93）：老工作区的标签与文件会留在原地不再被读取，
+                // 用户看到的是「文件全没了」。rename 失败先试拷贝，仍失败就留下可读警告。
+                val renamed = runCatching { legacy.renameTo(brand) }.getOrDefault(false)
+                if (!renamed) {
+                    val copied = runCatching { legacy.copyRecursively(brand, overwrite = false) }.getOrDefault(false)
+                    if (!copied) {
+                        migrationWarning =
+                            "旧工作区未能迁移：${legacy.absolutePath} → ${brand.absolutePath}。" +
+                            "旧文件仍在原位置，可在文件页手动移动。"
+                    }
+                }
+            }
+            if (usable(brand)) return brand
+        }
+        return null
     }
 
     /**

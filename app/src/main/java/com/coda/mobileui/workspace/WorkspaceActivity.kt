@@ -494,6 +494,9 @@ class WorkspaceActivity : BaseActivity() {
     // ---------------------------------------------------------------- 标签
 
     private fun restoreTabs() {
+        // 路径回落与迁移失败必须让用户看到（#93）：否则文件「消失」了却没有任何解释。
+        val pathNote = Workspaces.migrationWarning ?: Workspaces.fallbackReason
+        if (pathNote != null) showStatus(pathNote)
         // 先立刻建一个概览页，界面不至于空着等磁盘。
         val fallback = WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.OVERVIEW, JSONObject())
         tabs += attach(fallback)
