@@ -25,7 +25,13 @@ interface ExtensionCategory {
 
     /**
      * 拓展须实现的接口：把清单声明装载成该分类的 provider。
-     * 返回 null 表示清单不满足契约（缺少必需键）。
+     *
+     * 必需键的存在性由**引擎**统一校验（见 ExtensionEngine.loadEntry 对
+     * [requiredManifestKeys] 的预检），分类实现不必也不应重复判定——两处各判一次
+     * 会给出不同的错误文案与判定口径（#475）。
+     *
+     * 返回 null 表示「键都在，但值无法构成可用 provider」，例如 shell 规格非法、
+     * 二进制路径解析不出来这类语义问题。
      */
     fun load(context: ExtensionLoadContext): ExtensionProvider?
 
@@ -55,11 +61,31 @@ interface ExtensionProvider {
     /** 清单里声明的二进制是否已经释放到运行目录且可用。 */
     val available: Boolean
 
-    /** 装载阶段准备（释放二进制、建立运行目录）。失败时拓展标记为不可用。 */
-    fun prepare(): Boolean
+    /**
+     * 装载阶段的最后一步：校验并解析运行期需要的路径，成功后置 [available]。
+     *
+     * 注意分工（#477）：二进制释放与运行目录创建由**引擎**在此之前完成
+     * （releaseBinaries / runtimeDir.mkdirs），本方法不做这两件事。
+     *
+     * 返回 [PrepareResult] 而不是 Boolean（#476）：失败时带上可展示的原因，
+     * 调用方才能区分路径不存在、权限不足、格式错误，而不是笼统的「装载失败」。
+     */
+    fun prepare(): PrepareResult
 
     /** 停用或卸载前的清理。 */
     fun release() {}
+}
+
+/** prepare 的结果：成功，或带可展示原因的失败。 */
+sealed class PrepareResult {
+    object Ok : PrepareResult()
+
+    data class Failed(val reason: String) : PrepareResult()
+
+    val isOk: Boolean get() = this is Ok
+
+    /** 失败原因；成功时为空串。 */
+    val reasonOrNull: String? get() = (this as? Failed)?.reason
 }
 
 /** 分类对外能力的公共标记。 */

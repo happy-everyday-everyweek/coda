@@ -233,15 +233,16 @@ class ExtensionEngine private constructor(
             entry.error = "二进制释放失败"
             return
         }
+        // prepare 现在带回具体原因，直接展示给用户，不再笼统报「装载失败」（#476）。
         val prepared =
             try {
                 provider.prepare()
-            } catch (e: Throwable) {
-                false
+            } catch (e: Exception) {
+                PrepareResult.Failed("${e.javaClass.simpleName}: ${e.message}")
             }
-        if (!prepared) {
+        if (!prepared.isOk) {
             provider.release()
-            entry.error = "拓展装载失败"
+            entry.error = prepared.reasonOrNull ?: "拓展装载失败"
             return
         }
         entry.provider = provider

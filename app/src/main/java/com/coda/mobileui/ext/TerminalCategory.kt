@@ -49,7 +49,7 @@ object TerminalCategory : ExtensionCategory {
             extensionId = context.manifest.id,
             runtimeDir = context.runtimeDir,
             shellSpec = shell,
-            dialect = section.optString("dialect", "").trim().ifEmpty { "posix" },
+            dialect = normalizeDialect(section.optString("dialect", "")),
             pathEntrySpecs = readStringList(section, "pathEntries"),
             loginShell = section.optBoolean("loginShell", true),
         )
@@ -67,6 +67,30 @@ object TerminalCategory : ExtensionCategory {
             pathEntries = primary.pathEntries,
             loginShell = primary.loginShell,
         )
+    }
+
+    /** 内核认识的方言取值；其余一律回退默认，避免把非法值原样注入（#483）。 */
+    val DIALECTS = setOf("posix", "git-bash", "cmd")
+    const val DEFAULT_DIALECT = "posix"
+
+    /** 统一小写并做白名单校验；不认识的值回退 posix 并落日志。 */
+    fun normalizeDialect(raw: String): String {
+        val value = raw.trim().lowercase()
+        if (value.isEmpty()) return DEFAULT_DIALECT
+        if (value in DIALECTS) return value
+        com.coda.mobileui.core.AppLog.w("TerminalCategory", "未知方言 '$raw'，已回退 $DEFAULT_DIALECT")
+        return DEFAULT_DIALECT
+    }
+
+    /**
+     * 规格是否为绝对路径（#480）。
+     * 除 POSIX 的 / 之外，还要认 Windows 盘符（C:\、C:/）与 UNC（\\server\share）：
+     * git-bash / cmd 方言的清单会写这类路径，当成相对路径拼到 runtimeDir 下必然找不到。
+     */
+    fun isAbsoluteSpec(spec: String): Boolean {
+        val s = spec.trim()
+        if (s.startsWith("/") || s.startsWith("\\")) return true
+        return s.length >= 3 && s[0].isLetter() && s[1] == ':' && (s[2] == '\' || s[2] == '/')
     }
 
     private fun readStringList(
@@ -150,31 +174,39 @@ private class TerminalProviderImpl(
 
     override val pathEntries: List<String> get() = resolvedEntries
 
-    override fun prepare(): Boolean {
-        val shell = resolveFile(shellSpec, requireExecutable = true) ?: return false
-        resolvedShell = shell.absolutePath
-        resolvedEntries = pathEntrySpecs.mapNotNull { resolveDir(it)?.absolutePath }
+    override fun prepare(): PrepareResult {
+        val shellFile = File(if (TerminalCategory.isAbsoluteSpec(shellSpec)) shellSpec else File(runtimeDir, shellSpec).path)
+        if (!shellFile.isFile) {
+            return PrepareResult.Failed("shell 不存在：${shellFile.absolutePath}")
+        }
+        if (!shellFile.canExecute()) {
+            return PrepareResult.Failed("shell 无执行权限：${shellFile.absolutePath}")
+        }
+        resolvedShell = shellFile.absolutePath
+        // 解析不出来的 PATH 条目不能静默丢弃：shell 会拿到不完整的 PATH（#482）。
+        val resolved = mutableListOf<String>()
+        val missing = mutableListOf<String>()
+        for (spec in pathEntrySpecs) {
+            val dir = resolveDir(spec)
+            if (dir != null) resolved += dir.absolutePath else missing += spec
+        }
+        if (missing.isNotEmpty()) {
+            com.coda.mobileui.core.AppLog.w(
+                "TerminalCategory",
+                "PATH 条目无法解析，已跳过：${missing.joinToString("、")}（运行目录 ${runtimeDir.absolutePath}）",
+            )
+        }
+        resolvedEntries = resolved
         available = true
-        return true
+        return PrepareResult.Ok
     }
 
     override fun release() {
         available = false
     }
 
-    /** 绝对路径直接用（系统 shell、系统工具目录），相对路径一律按运行目录解析。 */
-    private fun resolveFile(
-        spec: String,
-        requireExecutable: Boolean,
-    ): File? {
-        val file = if (spec.startsWith("/")) File(spec) else File(runtimeDir, spec)
-        if (!file.isFile) return null
-        if (requireExecutable && !file.canExecute()) return null
-        return file
-    }
-
     private fun resolveDir(spec: String): File? {
-        val dir = if (spec.startsWith("/")) File(spec) else File(runtimeDir, spec)
+        val dir = if (TerminalCategory.isAbsoluteSpec(spec)) File(spec) else File(runtimeDir, spec)
         return if (dir.isDirectory) dir else null
     }
 }
