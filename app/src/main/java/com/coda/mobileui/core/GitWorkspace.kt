@@ -43,6 +43,18 @@ object GitWorkspace {
         synchronized(cache) { cache.clear() }
     }
 
+    /**
+     * 只取已有缓存，绝不读盘（#678）。
+     *
+     * 主线程重建会话行时用它先画一版，缓存没命中再交给后台 [inspect] 补齐，
+     * 避免每次 controller 状态变化都在主线程为每个可见会话做磁盘/进程工作。
+     * 过期条目也返回：陈旧的分支名比空白更有用，后台很快会刷新它。
+     */
+    fun cached(path: String?): Info? {
+        if (path.isNullOrEmpty()) return null
+        synchronized(cache) { return cache[path]?.second }
+    }
+
     private fun read(start: File): Info? {
         val repo = findRepo(start) ?: return null
         val pair = parseOwnerRepo(readRemoteUrl(repo.gitDir))

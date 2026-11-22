@@ -1567,7 +1567,9 @@ class MainActivity : BaseActivity() {
             }
             val bmp =
                 try {
-                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    // 按屏幕尺寸采样：整幅解码大照片会直接 OOM（#676）。
+                    val target = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+                    decodeSampledBytes(bytes, target)
                 } catch (_: Throwable) {
                     null
                 }
@@ -1616,7 +1618,8 @@ class MainActivity : BaseActivity() {
                     .apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeFile(path, bounds)
             var sample = 1
-            while (bounds.outWidth / sample > targetPx * 2 && bounds.outHeight / sample > targetPx * 2) {
+            // 任一边超阈值就继续降采样：用 && 要求两边都超，超宽/超高图会近乎全尺寸解码（#676）。
+            while (bounds.outWidth / sample > targetPx * 2 || bounds.outHeight / sample > targetPx * 2) {
                 sample *= 2
             }
             android.graphics.BitmapFactory.decodeFile(
@@ -1641,7 +1644,8 @@ class MainActivity : BaseActivity() {
                     .apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             var sample = 1
-            while (bounds.outWidth / sample > targetPx * 2 && bounds.outHeight / sample > targetPx * 2) {
+            // 任一边超阈值就继续降采样：用 && 要求两边都超，超宽/超高图会近乎全尺寸解码（#676）。
+            while (bounds.outWidth / sample > targetPx * 2 || bounds.outHeight / sample > targetPx * 2) {
                 sample *= 2
             }
             android.graphics.BitmapFactory.decodeByteArray(
@@ -1671,6 +1675,10 @@ class MainActivity : BaseActivity() {
     }
 
     override fun onDestroy() {
+        // 暂缓的审批/输入请求只活在本实例里：销毁前必须给内核一个结论，
+        // 否则它会一直等下去（#673）。
+        denyDeferredRequests()
+        indexHandler.removeCallbacks(indexFlush)
         // 模糊覆盖层持有的位图要显式释放，否则 Activity 销毁后仍占着整屏像素。
         blurRequested = false
         clearBlurOverlay()
@@ -2111,8 +2119,12 @@ class MainActivity : BaseActivity() {
         host: LinearLayout,
         messages: List<com.coda.mobileui.core.ZMessage>,
         trackViews: Boolean = true,
+        ownerSessionId: String? = zc.currentSessionId,
     ) {
-        indexSessionContent(zc.currentSessionId, messages)
+        // 索引必须归到真正拥有这批消息的会话：子代理/工作流渲染复用本函数，
+        // 一律写 currentSessionId 会把子会话正文塞进父会话的搜索索引（#670）。
+        // trackViews=false 即子会话渲染，直接不索引。
+        if (trackViews) indexSessionContent(ownerSessionId, messages)
         val inflater = LayoutInflater.from(this)
         val neutral =
             com.google.android.material.color.MaterialColors.getColor(
@@ -3547,10 +3559,25 @@ class MainActivity : BaseActivity() {
             }
         }
         row.findViewById<TextView>(R.id.conv_title).text = session.title.ifEmpty { "未命名会话" }
-        val git = GitWorkspace.inspect(session.workspacePath)
-        row.findViewById<TextView>(R.id.conv_summary).text =
-            git?.branch ?: session.workspacePath ?: session.mode
-        bindSessionPull(row, git)
+        // 先用缓存/占位把行画出来，git 与 PR 都放后台补齐：
+        // renderDrawerSessions 每次 controller 状态变化都重建，
+        // 同步 inspect 会在主线程为每个可见会话做磁盘/进程工作（#678）。
+        val summaryView = row.findViewById<TextView>(R.id.conv_summary)
+        val cachedGit = GitWorkspace.cached(session.workspacePath)
+        summaryView.text = cachedGit?.branch ?: session.workspacePath ?: session.mode
+        bindSessionPull(row, cachedGit)
+        val path = session.workspacePath
+        if (path != null && cachedGit == null) {
+            val sessionId = session.id
+            com.coda.mobileui.core.Bg.run {
+                val info = GitWorkspace.inspect(path)
+                runOnUiThread {
+                    if (isFinishing || isDestroyed || row.tag != sessionId) return@runOnUiThread
+                    info?.branch?.let { summaryView.text = it }
+                    bindSessionPull(row, info)
+                }
+            }
+        }
         row.setOnClickListener {
             SettingsStore.get(this).markSessionSeen(session.id, liveSessionIds = zc.sessions.map { it.id })
             pendingNewSession = false
@@ -3741,6 +3768,26 @@ class MainActivity : BaseActivity() {
     /** 用户选择「稍后处理」的请求：按顺序排队，不自动拒绝。 */
     private val deferredRequests = ArrayDeque<DeferredRequest>()
 
+    /**
+     * Activity 销毁时把仍在排队的请求全部拒绝。
+     *
+     * 队列只活在 Activity 实例里，旋转或进程死亡后就没了，而内核还在等应答；
+     * 不显式拒绝就会让它无限期阻塞（#673）。拒绝比静默丢弃安全：调用方能立刻拿到结论。
+     */
+    private fun denyDeferredRequests() {
+        if (deferredRequests.isEmpty()) return
+        val pending = deferredRequests.toList()
+        deferredRequests.clear()
+        pending.forEach { req ->
+            runCatching {
+                zc.runtime.respond(req.id, org.json.JSONObject().put("action", "decline"))
+            }.onFailure {
+                com.coda.mobileui.core.AppLog.w("Chat", "销毁时拒绝暂缓请求失败：${it.message}")
+            }
+        }
+        com.coda.mobileui.core.AppLog.i("Chat", "页面销毁，已拒绝 ${pending.size} 个未应答请求")
+    }
+
     /** 暂缓提示：一次只显示队首，处理完自动弹出下一个。 */
     private fun showDeferredSnackbar() {
         if (deferredRequests.isEmpty()) return
@@ -3792,7 +3839,11 @@ class MainActivity : BaseActivity() {
         requestId: Any,
         params: org.json.JSONObject,
     ) {
-        if (isFinishing || isDestroyed) return
+        // 页面正在销毁：不能静默 return 把内核晾着，先给一个拒绝（#673）。
+        if (isFinishing || isDestroyed) {
+            runCatching { zc.respondPermission(requestId, false) }
+            return
+        }
         val toolName = params.optString("toolName")
         val reason = params.optString("reason")
         val options = params.optJSONArray("options")
@@ -3851,7 +3902,11 @@ class MainActivity : BaseActivity() {
         requestId: Any,
         params: org.json.JSONObject,
     ) {
-        if (isFinishing || isDestroyed) return
+        // 同 showPermissionDialog：销毁中也要给内核一个 decline，不能静默丢弃（#673）。
+        if (isFinishing || isDestroyed) {
+            runCatching { zc.runtime.respond(requestId, org.json.JSONObject().put("action", "decline")) }
+            return
+        }
         val prompt = params.optString("prompt")
         val questions = params.optJSONArray("questions")
         val q = if (questions != null && questions.length() > 0) questions.optJSONObject(0) else null
@@ -4456,8 +4511,10 @@ class MainActivity : BaseActivity() {
             FrameLayout(this).apply {
                 tag = "drawer_full"
                 visibility = View.GONE
-                // 只覆盖按钮与搜索框，中间保持透明：会话列表沿用抽屉里那一份，展开时直接移动
-                isClickable = true
+                // 只覆盖按钮与搜索框，中间保持透明：会话列表沿用抽屉里那一份，展开时直接移动。
+                // 不能设 isClickable：可点击的 ViewGroup 会吃掉子 View 没处理的触摸，
+                // 中间透明区域的点击与滚动就传不到下面的会话列表（#675）。
+                isClickable = false
                 layoutParams =
                     FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -4936,26 +4993,51 @@ class MainActivity : BaseActivity() {
      * 只在充电时纳入（对齐“只在部分情况下索引”的要求），避免常态耗电。
      */
     /** 会话正文与聊天里发过的图片落一份可检索的文本索引；只在会话渲染时增量写，不额外跑后台任务。 */
+    /** 索引写盘的去抖窗口：流式期间合并成一次写入。 */
+    private val INDEX_DEBOUNCE_MS = 800L
+    private val pendingIndex = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val indexHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val indexFlush =
+        Runnable {
+            val snapshot = HashMap(pendingIndex)
+            pendingIndex.clear()
+            if (snapshot.isEmpty()) return@Runnable
+            com.coda.mobileui.core.Bg.run {
+                val dir = java.io.File(filesDir, "search/sessions")
+                runCatching {
+                    dir.mkdirs()
+                    snapshot.forEach { (id, body) -> java.io.File(dir, "$id.txt").writeText(body) }
+                }.onFailure {
+                    com.coda.mobileui.core.AppLog.w("Search", "写会话索引失败：${it.message}")
+                }
+            }
+        }
+
     private fun indexSessionContent(
         sessionId: String?,
         messages: List<com.coda.mobileui.core.ZMessage>,
     ) {
         if (sessionId == null || messages.isEmpty()) return
-        runCatching {
-            val dir = java.io.File(filesDir, "search/sessions").apply { mkdirs() }
-            val sb = StringBuilder()
-            messages.takeLast(80).forEach { m ->
-                val t = m.text().trim()
-                if (t.isNotEmpty()) sb.append("TXT ").append(t.replace('\n', ' ').take(400)).append('\n')
-                m.parts.filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>().forEach { f ->
-                    if (f.mime.startsWith("image/")) {
-                        sb.append("IMG ").append(f.filename).append(' ').append(f.url)
-                            .append(' ').append(f.width).append('x').append(f.height).append('\n')
+        // 拼文本仍在调用线程（很快），写盘挪到后台并按会话去抖：
+        // 流式渲染每来一段就调一次，原来每次都在主线程 writeText（#670）。
+        val text =
+            runCatching {
+                val sb = StringBuilder()
+                messages.takeLast(80).forEach { m ->
+                    val t = m.text().trim()
+                    if (t.isNotEmpty()) sb.append("TXT ").append(t.replace('\n', ' ').take(400)).append('\n')
+                    m.parts.filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>().forEach { f ->
+                        if (f.mime.startsWith("image/")) {
+                            sb.append("IMG ").append(f.filename).append(' ').append(f.url)
+                                .append(' ').append(f.width).append('x').append(f.height).append('\n')
+                        }
                     }
                 }
-            }
-            java.io.File(dir, "$sessionId.txt").writeText(sb.toString().take(200_000))
-        }
+                sb.toString().take(200_000)
+            }.getOrNull() ?: return
+        pendingIndex[sessionId] = text
+        indexHandler.removeCallbacks(indexFlush)
+        indexHandler.postDelayed(indexFlush, INDEX_DEBOUNCE_MS)
     }
 
     private fun searchExtras(q: String): List<SessionSearchPage.Extra> {
@@ -5994,8 +6076,10 @@ class MainActivity : BaseActivity() {
                             }
                     },
                 )
-                message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
             }
+            // 变更摘要属于整条消息，不是每个工具一份：放在工具循环里会让
+            // 无工具的消息永远不显示它，有 N 个工具的消息重复显示 N 次（#679）。
+            message.changes?.let { changes -> renderChangeCard(host, inflater, changes) }
         }
     }
 
