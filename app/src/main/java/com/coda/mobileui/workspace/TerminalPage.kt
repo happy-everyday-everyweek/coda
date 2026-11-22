@@ -81,7 +81,8 @@ class TerminalPage(
         object : Runnable {
             override fun run() {
                 cursorOn = !cursorOn
-                render()
+                // 闪烁只改尾行，不重建 120k 字符的正文（#565）。
+                renderTail()
                 main.postDelayed(this, BLINK_MS)
             }
         }
@@ -339,9 +340,16 @@ class TerminalPage(
         // 输入法就会跟着走，键盘看起来像被莫名收起。
         refocusInput()
         var out = bytes
+        val plain = !ctrlArmed && !altArmed
         if (ctrlArmed && out.length == 1) out = controlCode(out[0]).toString()
         if (altArmed) out = "\u001b$out"
-        writeRaw(out)
+        // 无修饰键的可打印字符要走 typeText：直接 writeRaw 时字符进了 shell 却不进本地
+        // echo，随后退格因为 echo 为空而不发 DEL，那个字符就删不掉了（#566）。
+        if (plain && out.length == 1 && out[0] >= ' ' && out[0] != '') {
+            typeText(out)
+        } else {
+            writeRaw(out)
+        }
         if (ctrlArmed || altArmed) setModifiers(false, false)
     }
 
@@ -448,7 +456,13 @@ class TerminalPage(
                             if (code != 0) {
                                 val char = code.toChar()
                                 val ctrl = event.isCtrlPressed || ctrlArmed
-                                typeText(if (ctrl) controlCode(char).toString() else char.toString())
+                                val alt = event.isAltPressed || altArmed
+                                var out = if (ctrl) controlCode(char).toString() else char.toString()
+                                // ALT 语义是 ESC 前缀，软键盘路径原先完全不看 altArmed（#564）。
+                                if (alt) out = "\u001b$out"
+                                typeText(out)
+                                // 点亮一次只作用一次：不复位的话后续每次按键都还是组合键（#564）。
+                                if (ctrlArmed || altArmed) setModifiers(false, false)
                             }
                         }
                     }
@@ -485,6 +499,7 @@ class TerminalPage(
 
     private fun submitLine() {
         lines.append(PROMPT).append(echo).append('\n')
+        bodyDirty = true
         echo.setLength(0)
         writeRaw("\n")
         cursorOn = true
@@ -615,13 +630,19 @@ class TerminalPage(
 
     private fun clear() {
         lines.setLength(0)
+        bodyDirty = true
         pending.setLength(0)
         echo.setLength(0)
         render()
     }
 
     private fun writeRaw(text: String) {
-        val stream = writer ?: return
+        val stream = writer
+        if (stream == null) {
+            // 会话没起来或已结束时，输入仍会回显但根本没人收，用户以为命令发出去了（#568）。
+            appendNote("会话尚未就绪或已结束，这次输入没有发送。")
+            return
+        }
         try {
             stream.write(text.toByteArray(Charsets.UTF_8))
             stream.flush()
@@ -638,12 +659,16 @@ class TerminalPage(
         if (pending.length > MAX_PENDING) {
             pending.delete(0, pending.length - MAX_PENDING)
             lines.append("…（输出过多，已丢弃较早内容）\n")
+            bodyDirty = true
         }
         var index = pending.indexOf("\n")
         while (index >= 0) {
             val lineText = pending.substring(0, index)
             pending.delete(0, index + 1)
-            if (!noise(lineText)) lines.append(lineText).append('\n')
+            if (!noise(lineText)) {
+                lines.append(lineText).append('\n')
+                bodyDirty = true
+            }
             index = pending.indexOf("\n")
         }
         schedule()
@@ -651,6 +676,7 @@ class TerminalPage(
 
     private fun appendNote(text: String) {
         lines.append(text).append('\n')
+        bodyDirty = true
         schedule()
     }
 
@@ -678,21 +704,43 @@ class TerminalPage(
         return scroll.scrollY + scroll.height >= child.height - dp(8f)
     }
 
+    /**
+     * 已定稿正文的缓存串。
+     *
+     * render() 原先每次都 lines.toString() 重建最多 120k 字符再 setText，
+     * 而 blink 每 530ms 就调一次 render——光标闪烁根本不改正文（#565）。
+     * 现在正文只在 lines 真的变化时重建，blink 走 renderTail 只拼尾部。
+     */
+    private var bodyCache: String = ""
+    private var bodyDirty = true
+
     private fun render() {
         if (!::transcript.isInitialized) return
         if (lines.length > MAX_CHARS) {
             lines.delete(0, lines.length - MAX_CHARS)
             lines.insert(0, "…\n")
+            bodyDirty = true
         }
-        val tail =
-            buildString {
-                append(pending)
-                append(PROMPT).append(echo)
-                append(if (cursorOn) CURSOR else ' ')
-            }
-        transcript.text = lines.toString() + tail
+        if (bodyDirty) {
+            bodyCache = lines.toString()
+            bodyDirty = false
+        }
+        transcript.text = bodyCache + tailText()
         if (follow) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
+
+    /** 只重拼提示行与光标；blink 用这条路径，不触碰正文。 */
+    private fun renderTail() {
+        if (!::transcript.isInitialized) return
+        transcript.text = bodyCache + tailText()
+    }
+
+    private fun tailText(): String =
+        buildString {
+            append(pending)
+            append(PROMPT).append(echo)
+            append(if (cursorOn) CURSOR else ' ')
+        }
 
     private fun pill(fill: Int): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
