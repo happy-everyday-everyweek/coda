@@ -58,6 +58,17 @@ class CodaBotPage(
     /** 当前运行时对应的配置指纹；人设、提示词、模型一变就需要重建。 */
     private var runtimeSignature = ""
 
+    /**
+     * 运行时/页面代际（#150）。
+     *
+     * 回调创建时捕获当前值，回主线程后先比对；close() 与每次重建都自增，
+     * 旧运行时的迟到回复据此丢弃，不会被持久化或渲染进新会话。
+     */
+    private var runtimeGeneration = 0
+
+    /** 语音转写任务的代际（#151）：页面关闭或新录音开始时作废在途结果。 */
+    private var asrGeneration = 0
+
     /** 首屏只渲染最近这么多条，更早的点按钮再加，避免长会话一次建上千个 View。 */
     private var olderRemaining: List<CodaBotMessage> = emptyList()
     private lateinit var olderHost: LinearLayout
@@ -70,6 +81,10 @@ class CodaBotPage(
 
     /** 打开 Bot 页：每次进入都按最新配置重建界面与运行时。 */
     fun open() {
+        // 重建即换代：上一轮页面在途的回复/转写/附件结果都不该落到这一轮（#150 #151 #152）。
+        runtimeGeneration++
+        asrGeneration++
+        pendingReply = null
         removeAllViews()
         profile = CodaBotStore.profile(host)
         buildChat()
@@ -85,9 +100,17 @@ class CodaBotPage(
             runCatching { recorder?.cancel() }
             recorder = null
         }
+        // 在途的转写结果也要作废，否则它会写进下次重建的输入框（#151）。
+        asrGeneration++
         runtime?.let { runCatching { it.close() } }
         runtime = null
         runtimeSignature = ""
+        // 代际自增：旧运行时的迟到回调据此丢弃，不再写进新会话（#150）。
+        runtimeGeneration++
+        // 页面级状态一并复位：pendingReply 不清的话，重新进入后
+        // 下一次 sendMessage 还会引用上次会话的那条消息（#156）。
+        clearReply()
+        olderRemaining = emptyList()
         removeAllViews()
     }
     private fun signatureOf(p: CodaBotProfile): String =
@@ -121,8 +144,12 @@ class CodaBotPage(
         if (runtime != null && signatureOf(profile) == runtimeSignature) return
         runtime?.let { runCatching { it.close() } }
         runtimeSignature = signatureOf(profile)
+        // 捕获本次代际：旧运行时在途的回复回来时对不上，直接丢弃（#150）。
+        val generation = ++runtimeGeneration
         runtime = CodaBotRuntime(host, profile) { message ->
             host.runOnUiThread {
+                if (generation != runtimeGeneration) return@runOnUiThread
+                if (!::messages.isInitialized || !isAttachedToWindow) return@runOnUiThread
                 addBubble(message)
                 // 皮肤里没有 done 这个 clip，用 celebrate 播一次庆祝再回 idle。
                 pet?.petView()?.setActivity("celebrate")
@@ -377,24 +404,35 @@ class CodaBotPage(
             return
         }
         toast("正在识别…")
+        // 捕获代际与输入框实例：页面关闭或重建后，这段旧录音的结果必须丢弃（#151）。
+        val generation = ++asrGeneration
+        val targetInput = input
         Thread {
-            val provider =
-                com.coda.mobileui.core.ProviderStore.builtins()
-                    .firstOrNull { it.id == com.coda.mobileui.core.ProviderStore.BUILTIN_DOUBAO_ASR }
+            // 裸线程上的未捕获异常会直接杀进程，必须就地归类成识别失败。
             val result =
-                if (provider != null) {
-                    com.coda.mobileui.core.AsrTester.transcribe(provider, audio, "doubao-voice")
-                } else {
-                    com.coda.mobileui.core.AsrTester.Result.Fail("没有可用的语音识别供应商")
+                runCatching {
+                    val provider =
+                        com.coda.mobileui.core.ProviderStore.builtins()
+                            .firstOrNull { it.id == com.coda.mobileui.core.ProviderStore.BUILTIN_DOUBAO_ASR }
+                    if (provider != null) {
+                        com.coda.mobileui.core.AsrTester.transcribe(provider, audio, "doubao-voice")
+                    } else {
+                        com.coda.mobileui.core.AsrTester.Result.Fail("没有可用的语音识别供应商")
+                    }
+                }.getOrElse {
+                    com.coda.mobileui.core.AsrTester.Result.Fail(it.message ?: it.javaClass.simpleName)
                 }
             host.runOnUiThread {
+                // 代际变了（关页/新录音）或输入框已被换掉：不写、不提示、不退回系统识别器。
+                if (generation != asrGeneration) return@runOnUiThread
+                if (!::input.isInitialized || input !== targetInput) return@runOnUiThread
                 when (result) {
                     is com.coda.mobileui.core.AsrTester.Result.Ok -> {
                         val text = result.text.trim()
                         if (text.isNotEmpty()) {
-                            val current = input.text?.toString().orEmpty()
-                            input.setText(if (current.isBlank()) text else "$current$text")
-                            input.setSelection(input.text?.length ?: 0)
+                            val current = targetInput.text?.toString().orEmpty()
+                            targetInput.setText(if (current.isBlank()) text else "$current$text")
+                            targetInput.setSelection(targetInput.text?.length ?: 0)
                         } else {
                             toast("没听清")
                         }
@@ -446,20 +484,65 @@ class CodaBotPage(
             .onFailure { toast("无法打开文件选择器") }
     }
 
+    /**
+     * 导入附件：拷贝放后台、限制大小、失败删半成品（#152）。
+     *
+     * 之前整个 openInputStream + copyTo 都在主线程，选个大文件就卡住界面；
+     * 失败时只弹一个 Toast，写了一半的临时文件还留在磁盘上。
+     */
     private fun importAttachment(uri: android.net.Uri) {
         val dir = java.io.File(host.filesDir, "coda-bot/attachments").apply { mkdirs() }
         val name = (uri.lastPathSegment ?: "attachment").substringAfterLast('/')
         val target = java.io.File(dir, "${System.currentTimeMillis()}-$name")
-        runCatching {
-            host.contentResolver.openInputStream(uri)?.use { input ->
-                target.outputStream().use(input::copyTo)
-            } ?: error("无法读取文件")
-            val current = input.text?.toString().orEmpty()
-            input.setText(current + (if (current.isBlank()) "" else "\n") + "请读取附件文件：${target.absolutePath}")
-            input.setSelection(input.text?.length ?: 0)
-            toast("已附加：$name")
-        }.onFailure { toast(it.message ?: "附件读取失败") }
+        val generation = runtimeGeneration
+        val targetInput = input
+        toast("正在读取附件…")
+        com.coda.mobileui.core.Bg.run {
+            val outcome =
+                runCatching {
+                    // 先按 provider 报告的尺寸挡一道；拿不到尺寸时在拷贝过程中计数兜底。
+                    val declared = declaredSize(uri)
+                    if (declared > ATTACHMENT_MAX_BYTES) error("附件过大（上限 ${ATTACHMENT_MAX_BYTES / 1024 / 1024}MB）")
+                    val stream = host.contentResolver.openInputStream(uri) ?: error("无法读取文件")
+                    stream.use { source ->
+                        target.outputStream().use { sink ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            var total = 0L
+                            while (true) {
+                                val read = source.read(buffer)
+                                if (read <= 0) break
+                                total += read
+                                if (total > ATTACHMENT_MAX_BYTES) error("附件过大（上限 ${ATTACHMENT_MAX_BYTES / 1024 / 1024}MB）")
+                                sink.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                }.onFailure {
+                    // 半成品必须删掉，否则会被后续逻辑当成有效附件读取。
+                    runCatching { if (target.exists()) target.delete() }
+                }
+            host.runOnUiThread {
+                if (generation != runtimeGeneration) return@runOnUiThread
+                if (!::input.isInitialized || input !== targetInput) return@runOnUiThread
+                outcome
+                    .onSuccess {
+                        val current = targetInput.text?.toString().orEmpty()
+                        targetInput.setText(current + (if (current.isBlank()) "" else "\n") + "请读取附件文件：${target.absolutePath}")
+                        targetInput.setSelection(targetInput.text?.length ?: 0)
+                        toast("已附加：$name")
+                    }.onFailure { toast(it.message ?: "附件读取失败") }
+            }
+        }
     }
+
+    /** 向 provider 问文件尺寸；问不到返回 -1，由拷贝时的计数兜底。 */
+    private fun declaredSize(uri: android.net.Uri): Long =
+        runCatching {
+            host.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (index >= 0 && cursor.moveToFirst() && !cursor.isNull(index)) cursor.getLong(index) else -1L
+            } ?: -1L
+        }.getOrDefault(-1L)
 
     private fun sendMessage() {
         val text = input.text?.toString()?.trim().orEmpty()
@@ -593,18 +676,26 @@ class CodaBotPage(
         setOnClickListener { loadEarlier(this) }
     }
 
-    /** 往顶部再补一批：插在按钮之前，顺序仍是先老后新。 */
+    /** 往顶部再补一批：每批都是剩余里较新的一段，必须插到最上面（#149）。 */
     private fun loadEarlier(anchor: View) {
-        val batch = olderRemaining.takeLast(HISTORY_BATCH)
-        if (batch.isEmpty()) return
-        olderRemaining = olderRemaining.dropLast(batch.size)
+        val plan = CodaBotHistoryBatch.plan(olderRemaining, HISTORY_BATCH)
+        if (plan.batch.isEmpty()) return
+        olderRemaining = plan.remaining
         val chunk = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
-        olderHost.addView(chunk, olderHost.indexOfChild(anchor))
-        batch.forEach { addBubble(it, persist = false, scrollToBottom = false, container = chunk) }
-        if (olderRemaining.isEmpty()) {
+        // 顶部插入会让视口内容整体下移，先记下锚点位置，插完再补回去。
+        val anchorTop = anchor.top
+        val scrollY = scroll.scrollY
+        olderHost.addView(chunk, CodaBotHistoryBatch.INSERT_INDEX)
+        plan.batch.forEach { addBubble(it, persist = false, scrollToBottom = false, container = chunk) }
+        if (plan.exhausted) {
             olderHost.removeView(anchor)
         } else {
             (anchor as? TextView)?.text = "加载更早的 ${olderRemaining.size} 条"
+        }
+        // 保持滚动锚点：新增高度 = 锚点新位置 - 旧位置，补进 scrollY 才不跳。
+        scroll.post {
+            val grown = anchor.top - anchorTop
+            if (grown > 0) scroll.scrollTo(0, scrollY + grown)
         }
     }
 
@@ -651,5 +742,13 @@ class CodaBotPage(
 
         /** 单次录音上限，到点自动结束并转写。 */
         private const val RECORDING_LIMIT_MS = 60_000L
+
+        /**
+         * 附件大小上限（#152）。
+         *
+         * 附件是给模型读的文本/文档，不是媒体库；超过这个尺寸直接拒绝，
+         * 免得把几百 MB 的视频整份拷进应用私有目录。
+         */
+        private const val ATTACHMENT_MAX_BYTES = 20L * 1024 * 1024
     }
 }
