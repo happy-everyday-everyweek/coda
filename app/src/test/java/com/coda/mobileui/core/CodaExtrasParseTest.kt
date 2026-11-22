@@ -27,12 +27,12 @@ class CodaExtrasParseTest {
 
     @Test
     fun hugeValueIsNotSaturatedToLongMax() {
-        // 9.223372036854776E18 的 toLong() 会饱和成 Long.MAX_VALUE，
-        // 旧实现据此判为整数并输出 9223372036854775807（假值）。
+        // 9.223372036854776E18 的精确值是 9223372036854775808（Long.MAX_VALUE + 1）。
+        // 旧实现 toLong() 饱和成 Long.MAX_VALUE 并据此判为整数，输出 ...807（假值）。
         val v = 9.223372036854776E18
         val text = CodaExtras.doubleText(v)
         assertNotEquals("9223372036854775807", text)
-        assertTrue(text.startsWith("9223372036854776"))
+        assertEquals("9223372036854775808", text)
     }
 
     @Test
