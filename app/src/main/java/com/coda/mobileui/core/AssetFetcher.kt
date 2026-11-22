@@ -144,6 +144,8 @@ object AssetFetcher {
                         out = target,
                         expectedSize = spec.size,
                         expectedSha256 = spec.sha256,
+                        // 断点续传（#730）：资产动辄几十 MB，网络抖动一次不该前功尽弃。
+                        resume = true,
                     ),
                     onProgress = onProgress?.let { p -> Downloader.Progress { d, t, _ -> p.onBytes(d, t) } },
                 )

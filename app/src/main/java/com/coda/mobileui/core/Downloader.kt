@@ -69,6 +69,8 @@ internal object Downloader {
         val proxy: Proxy? = null,
         val resume: Boolean = false,
         val concurrency: Int = 1,
+        /** 续传时带上的 If-Range 值（上次的 ETag 或 Last-Modified），让服务端自己判远端是否变过。 */
+        val ifRange: String? = null,
     )
 
     /**
@@ -110,29 +112,132 @@ internal object Downloader {
         val target = req.out ?: return Result(DownloadOutcome.Kind.IO, detail = "未指定目标文件")
         if (cancel?.isCancelled == true) return Result(DownloadOutcome.Kind.CANCELLED)
         target.parentFile?.mkdirs()
-        // 临时名带纳秒后缀：启动补资源与设置页可能同时获取同一资产，
-        // 共用 `<name>.part` 会让一个线程把另一个还没写完的文件上线。
-        val tmp = File(target.parentFile, target.name + "." + System.nanoTime() + ".part")
+        // 续传开启时用确定性临时名（#730）：进程重启后要能定位上次的半成品。
+        // 关闭续传时仍带纳秒后缀——启动补资源与设置页可能同时获取同一资产，
+        // 共用一个 `.part` 会让一个线程把另一个还没写完的文件上线。
+        val tmp =
+            if (req.resume) {
+                File(target.parentFile, ResumeState.partNameFor(target.name))
+            } else {
+                File(target.parentFile, target.name + "." + System.nanoTime() + ".part")
+            }
+        val sidecar = ResumeState.sidecarFor(tmp)
         var conn: HttpURLConnection? = null
         try {
-            conn = open(req)
-            val code = conn.responseCode
-            val httpKind = DownloadOutcome.ofHttp(code)
-            if (httpKind != DownloadOutcome.Kind.OK) {
-                // 状态码一定要留下：401/403 是镜像拒绝，404 是文件不存在，
-                // 502/503 是镜像自己挂了。三种应对完全不同，只记「失败」等于没记。
-                runCatching { conn.errorStream?.close() }
-                runCatching { tmp.delete() }
-                return Result(httpKind, detail = "HTTP $code")
-            }
-            val total = conn.contentLengthLong.takeIf { it > 0 } ?: req.expectedSize
-            val wantHash = !req.expectedSha256.isNullOrBlank()
-            val pumped =
-                FileOutputStream(tmp).use { o ->
-                    conn.inputStream.use { input ->
-                        pump(input, o, total, onProgress, cancel, wantHash)
+            // 先看有没有可用断点。远端标识从上一次记录里取，本次响应回来后再核对。
+            val saved = if (req.resume) ResumeState.load(sidecar) else null
+            var resumeFrom = 0L
+            if (saved != null && tmp.isFile) {
+                val verdict =
+                    ResumeState.check(
+                        state = saved,
+                        url = req.url,
+                        fileBytes = tmp.length(),
+                        etag = saved.etag,
+                        lastModified = saved.lastModified,
+                    )
+                when (verdict) {
+                    ResumeState.Verdict.RESUME -> resumeFrom = tmp.length()
+                    ResumeState.Verdict.ALREADY_COMPLETE -> resumeFrom = tmp.length()
+                    else -> {
+                        AppLog.i(TAG, "断点作废（$verdict）：${target.name}")
+                        ResumeState.discard(tmp, sidecar)
                     }
                 }
+            } else if (saved != null) {
+                // 记录还在但数据文件没了：清掉记录，避免下次拿它配一个新文件。
+                runCatching { sidecar.delete() }
+            }
+
+            conn = open(req, resumeFrom, saved?.etag ?: saved?.lastModified)
+            val code = conn.responseCode
+            if (resumeFrom > 0) {
+                val probe =
+                    ResumeProbe.ofResponse(
+                        code = code,
+                        requestedFrom = resumeFrom,
+                        contentRange = conn.getHeaderField("Content-Range"),
+                    )
+                when (probe) {
+                    ResumeProbe.Kind.RESUMED -> Unit
+                    ResumeProbe.Kind.NOT_SUPPORTED, ResumeProbe.Kind.UNTRUSTED, ResumeProbe.Kind.INVALID_RANGE -> {
+                        // 这个源给不出可信的区间：作废断点，改用全量重下同一条连接。
+                        AppLog.i(TAG, "续传不可用（$probe HTTP $code），全量重下：${req.url}")
+                        ResumeState.discard(tmp, sidecar)
+                        resumeFrom = 0
+                        runCatching { conn.disconnect() }
+                        conn = open(req, 0)
+                        val again = DownloadOutcome.ofHttp(conn.responseCode)
+                        if (again != DownloadOutcome.Kind.OK) {
+                            runCatching { conn.errorStream?.close() }
+                            return Result(again, detail = "HTTP ${conn.responseCode}")
+                        }
+                    }
+
+                    ResumeProbe.Kind.HTTP_FAILURE -> {
+                        val kind = DownloadOutcome.ofHttp(code)
+                        runCatching { conn.errorStream?.close() }
+                        // 断点保留：这次是镜像的问题，不是内容坏了，下次还能接着下。
+                        return Result(kind, detail = "HTTP $code")
+                    }
+                }
+            } else {
+                val httpKind = DownloadOutcome.ofHttp(code)
+                if (httpKind != DownloadOutcome.Kind.OK) {
+                    // 状态码一定要留下：401/403 是镜像拒绝，404 是文件不存在，
+                    // 502/503 是镜像自己挂了。三种应对完全不同，只记「失败」等于没记。
+                    runCatching { conn.errorStream?.close() }
+                    if (!req.resume) runCatching { tmp.delete() }
+                    return Result(httpKind, detail = "HTTP $code")
+                }
+            }
+
+            val etag = conn.getHeaderField("ETag")
+            val lastModified = conn.getHeaderField("Last-Modified")
+            // 续传成功后再核对一次远端标识：请求时用的是旧记录里的值，
+            // 服务端此刻给出的才是权威值，不一致说明远端在这期间变过。
+            if (resumeFrom > 0 && saved != null &&
+                ResumeState.check(saved, req.url, tmp.length(), etag, lastModified) ==
+                ResumeState.Verdict.DISCARD_REMOTE_CHANGED
+            ) {
+                AppLog.i(TAG, "远端已变更，作废断点重下：${req.url}")
+                ResumeState.discard(tmp, sidecar)
+                resumeFrom = 0
+                runCatching { conn.disconnect() }
+                conn = open(req, 0)
+                val again = DownloadOutcome.ofHttp(conn.responseCode)
+                if (again != DownloadOutcome.Kind.OK) {
+                    runCatching { conn.errorStream?.close() }
+                    return Result(again, detail = "HTTP ${conn.responseCode}")
+                }
+            }
+
+            // 206 的 Content-Length 只是剩余字节数，总长要加回已有字节。
+            val bodyLen = conn.contentLengthLong.takeIf { it > 0 } ?: 0L
+            val total =
+                when {
+                    resumeFrom > 0 && bodyLen > 0 -> resumeFrom + bodyLen
+                    bodyLen > 0 -> bodyLen
+                    else -> req.expectedSize
+                }
+            val wantHash = !req.expectedSha256.isNullOrBlank()
+            // 续传时 hash 必须覆盖整个文件（已有字节 + 新字节），不能只算这一段。
+            val pumped =
+                if (resumeFrom > 0) {
+                    appendRange(tmp, conn.inputStream, resumeFrom, total, onProgress, cancel, wantHash)
+                } else {
+                    FileOutputStream(tmp).use { o ->
+                        conn.inputStream.use { input ->
+                            pump(input, o, total, onProgress, cancel, wantHash)
+                        }
+                    }
+                }
+            if (req.resume) {
+                ResumeState.save(
+                    sidecar,
+                    ResumeState(req.url, pumped.bytes, total, etag, lastModified),
+                )
+            }
             val verdict =
                 DownloadOutcome.verify(
                     actualSize = pumped.bytes,
@@ -157,11 +262,16 @@ internal object Downloader {
                     TAG,
                     "下载内容校验不通过 ${req.url} 期望长度=${req.expectedSize} 实际=${pumped.bytes}",
                 )
-                runCatching { tmp.delete() }
+                // 校验失败必须作废断点：坏字节留着，下次续传只会把坏文件拼得更长。
+                if (req.resume) ResumeState.discard(tmp, sidecar) else runCatching { tmp.delete() }
                 return Result(effective, bytes = pumped.bytes, detail = "内容校验不通过")
             }
             return when (val placed = AssetPlacement.place(tmp, target)) {
-                is AssetPlacement.Result.Placed -> Result(DownloadOutcome.Kind.OK, bytes = placed.bytes)
+                is AssetPlacement.Result.Placed -> {
+                    // 上线成功才清状态文件，否则下次会把已完成的下载又续一遍。
+                    runCatching { sidecar.delete() }
+                    Result(DownloadOutcome.Kind.OK, bytes = placed.bytes)
+                }
 
                 is AssetPlacement.Result.Failed ->
                     Result(
@@ -172,19 +282,122 @@ internal object Downloader {
                     )
             }
         } catch (e: CancellationException) {
-            // 取消不是「这次失败，换下一个源」。本版本不保留断点（#730 才做），
-            // 但绝不能把它降级成普通 IO 失败让调用方继续换源。
-            runCatching { tmp.delete() }
+            // 取消不是「这次失败，换下一个源」。开启续传时保留已下载字节与记录（#730），
+            // 用户下次触发同一下载可以接着下；未开启时按旧行为清掉半成品。
+            if (req.resume) {
+                runCatching {
+                    if (tmp.isFile) {
+                        val prev = ResumeState.load(sidecar)
+                        ResumeState.save(
+                            sidecar,
+                            ResumeState(
+                                url = req.url,
+                                done = tmp.length(),
+                                total = prev?.total ?: req.expectedSize,
+                                etag = prev?.etag,
+                                lastModified = prev?.lastModified,
+                            ),
+                        )
+                    }
+                }
+            } else {
+                runCatching { tmp.delete() }
+            }
             return Result(DownloadOutcome.Kind.CANCELLED, detail = "已取消")
         } catch (e: Exception) {
             // 只捕获预期内的失败：连接重置、TLS 失败、磁盘写满都要留痕迹，
             // Error 不再被降级成「下载失败」。
             AppLog.w(TAG, "下载异常 ${req.url}：${e.javaClass.simpleName}: ${e.message}")
-            runCatching { tmp.delete() }
+            if (req.resume) {
+                // 网络抖动不该让近百 MB 前功尽弃：保留字节与记录，下次续传。
+                runCatching {
+                    if (tmp.isFile) {
+                        val prev = ResumeState.load(sidecar)
+                        ResumeState.save(
+                            sidecar,
+                            ResumeState(
+                                url = req.url,
+                                done = tmp.length(),
+                                total = prev?.total ?: req.expectedSize,
+                                etag = prev?.etag ?: conn?.getHeaderField("ETag"),
+                                lastModified = prev?.lastModified ?: conn?.getHeaderField("Last-Modified"),
+                            ),
+                        )
+                    }
+                }
+            } else {
+                runCatching { tmp.delete() }
+            }
             return Result(DownloadOutcome.Kind.IO, detail = "${e.javaClass.simpleName}: ${e.message}")
         } finally {
             runCatching { conn?.disconnect() }
         }
+    }
+
+    /**
+     * 从 [from] 处追加写入，并对**整个文件**算 hash。
+     *
+     * 用 RandomAccessFile 定位追加而不是重开 FileOutputStream：后者会把已有字节截掉。
+     * hash 要先把已落盘的前缀喂进摘要，否则算出来只是这一段的哈希，必然校验失败。
+     */
+    private fun appendRange(
+        part: File,
+        input: InputStream,
+        from: Long,
+        total: Long,
+        progress: Progress?,
+        cancel: Cancel?,
+        hash: Boolean,
+    ): Pumped {
+        val md = if (hash) MessageDigest.getInstance("SHA-256") else null
+        if (md != null) {
+            java.io.RandomAccessFile(part, "r").use { raf ->
+                val buf = ByteArray(BUF_BYTES)
+                var left = from
+                while (left > 0) {
+                    val n = raf.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                    if (n <= 0) break
+                    md.update(buf, 0, n)
+                    left -= n
+                }
+            }
+        }
+        var done = from
+        java.io.RandomAccessFile(part, "rw").use { raf ->
+            raf.seek(from)
+            input.use {
+                val buf = ByteArray(BUF_BYTES)
+                var lastReportBytes = from
+                var lastReportAt = System.currentTimeMillis()
+                var emptyReads = 0
+                while (true) {
+                    if (cancel?.isCancelled == true) throw CancellationException("下载已取消")
+                    val n = it.read(buf)
+                    if (n < 0) break
+                    if (n == 0) {
+                        emptyReads++
+                        if (emptyReads > MAX_EMPTY_READS) {
+                            throw java.io.IOException("输入流连续 $emptyReads 次返回 0 字节")
+                        }
+                        continue
+                    }
+                    emptyReads = 0
+                    raf.write(buf, 0, n)
+                    md?.update(buf, 0, n)
+                    done += n
+                    val at = System.currentTimeMillis()
+                    if (shouldReport(done, lastReportBytes, at, lastReportAt)) {
+                        val window = at - lastReportAt
+                        val speed = if (window > 0) (done - lastReportBytes) * 1000L / window else 0L
+                        report(progress, done, total, speed)
+                        lastReportBytes = done
+                        lastReportAt = at
+                    }
+                }
+            }
+        }
+        report(progress, done, total, 0L)
+        return Pumped(done, md?.digest()?.joinToString("") { "%02x".format(it) })
     }
 
     /**
@@ -224,7 +437,11 @@ internal object Downloader {
         }
     }
 
-    private fun open(req: Request): HttpURLConnection {
+    private fun open(
+        req: Request,
+        resumeFrom: Long = 0,
+        validator: String? = null,
+    ): HttpURLConnection {
         val c =
             if (req.proxy != null) {
                 URL(req.url).openConnection(req.proxy)
@@ -236,6 +453,14 @@ internal object Downloader {
         c.readTimeout = req.readTimeoutMs
         c.setRequestProperty("User-Agent", "Coda-Android")
         c.setRequestProperty("Accept", "*/*")
+        // 断点续传（#730）：只在真有已落盘字节时才带 Range，
+        // 从 0 开始带 Range 会让不支持的源直接回 416。
+        if (resumeFrom > 0) {
+            c.setRequestProperty("Range", "bytes=$resumeFrom-")
+            // 有 ETag 时用 If-Range 让服务端自己判断：远端变了就回 200 全量，
+            // 比我们事后比对更早发现，省掉一次无用传输。
+            (validator ?: req.ifRange)?.let { c.setRequestProperty("If-Range", it) }
+        }
         // 调用方的 header 后写，允许覆盖 UA 与 Accept。
         req.headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
         return c
