@@ -476,7 +476,8 @@ class CodaBotPage(
             replyToText = quoted?.text.orEmpty(),
             replyToFromUser = quoted?.fromUser ?: false,
         )
-        CodaBotStore.appendMessage(host, message)
+        // 写盘失败要让用户知道：气泡照样显示，但这条不会留在历史里（#142）。
+        if (!CodaBotStore.appendMessage(host, message)) toast("消息未能保存到本地历史")
         addBubble(message)
         runtime?.send(text, message.replyToId, message.id) { error ->
             host.runOnUiThread {
@@ -560,7 +561,7 @@ class CodaBotPage(
         val incoming = !message.fromUser
         if (incoming && persist) {
             pet.showDone(profile.name + "：我在这儿")
-            CodaBotStore.appendMessage(host, message)
+            if (!CodaBotStore.appendMessage(host, message)) toast("回复未能保存到本地历史")
         }
     }
 

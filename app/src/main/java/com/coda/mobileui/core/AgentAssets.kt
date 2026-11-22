@@ -71,7 +71,7 @@ object AgentAssets {
         val kind =
             when {
                 f.name == "SKILL.md" -> Kind.SKILL
-                f.absolutePath.contains("/.zcode/agents/") -> Kind.SUBAGENT
+                AgentAssetText.isUnderSubagentDir(f.absolutePath) -> Kind.SUBAGENT
                 else -> Kind.COMMAND
             }
         return parseFile(kind, f)
@@ -102,40 +102,8 @@ object AgentAssets {
             null
         }
 
-    /** 解析 `---` 前后包裹的 frontmatter；只取简单 `key: value` 行。 */
-    private fun splitFrontmatter(text: String): Pair<Map<String, String>, String> {
-        val lines = text.split("\n")
-        if (lines.isEmpty() || lines[0].trim() != "---") {
-            return emptyMap<String, String>() to text
-        }
-        var end = -1
-        for (i in 1 until lines.size) {
-            if (lines[i].trim() == "---") {
-                end = i
-                break
-            }
-        }
-        if (end == -1) return emptyMap<String, String>() to text
-        val fm = mutableMapOf<String, String>()
-        for (i in 1 until end) {
-            val line = lines[i]
-            if (line.startsWith(" ") || line.startsWith("\t")) continue
-            val idx = line.indexOf(':')
-            if (idx <= 0) continue
-            val k = line.substring(0, idx).trim().lowercase()
-            val raw = line.substring(idx + 1).trim()
-            // 写盘时对引号与反斜杠做了转义，读回必须还原，否则再保存会累积转义、值被截断。
-            val v =
-                if (raw.length >= 2 && raw.startsWith("\"") && raw.endsWith("\"")) {
-                    raw.substring(1, raw.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
-                } else {
-                    raw
-                }
-            fm[k] = v
-        }
-        val body = lines.subList(end + 1, lines.size).joinToString("\n").trimStart('\n')
-        return fm to body
-    }
+    /** 解析委托给纯逻辑层（有单测覆盖 BOM/CRLF/转义还原）。 */
+    private fun splitFrontmatter(text: String): Pair<Map<String, String>, String> = AgentAssetText.split(text)
 
     /**
      * 保存：editingPath 非空时覆盖该文件，否则按 kind 新建。
@@ -149,9 +117,7 @@ object AgentAssets {
         body: String,
         editingPath: String?,
     ): String? {
-        if (!name.matches(Regex("[A-Za-z0-9_-]+"))) {
-            return "名称只能包含字母、数字、连字符与下划线"
-        }
+        AgentAssetText.nameError(name)?.let { return it }
         val root = rootDir(ctx, kind).canonicalFile
         val target: File
         if (editingPath != null) {
@@ -195,7 +161,8 @@ object AgentAssets {
         root: File,
     ): Boolean = target == root || target.path.startsWith(root.path + File.separator)
 
-    private fun escape(value: String): String = value.replace("\\", "\\\\").replace("\"", "\\\"")
+    /** 转义委托给纯逻辑层：原先只处理引号与反斜杠，裸换行会截断 frontmatter（#162）。 */
+    private fun escape(value: String): String = AgentAssetText.escape(value)
 
     fun delete(
         ctx: Context,

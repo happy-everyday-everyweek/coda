@@ -2,6 +2,7 @@ package com.coda.mobileui.personal
 
 import android.content.Context
 import android.net.Uri
+import com.coda.mobileui.core.AppLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -86,16 +87,17 @@ object CodaBotStore {
     }
 
     fun saveProfile(ctx: Context, profile: CodaBotProfile) {
+        // 规范化只在本地做，不回写入参：调用方传进来的对象可能是共享/正在渲染的实例，
+        // 保存动作悄悄改它的字段会让 UI 与调用方状态意外跳变（#146）。
         val name = profile.name.trim().ifEmpty { "麦麦" }
-        profile.name = name
-        profile.userName = profile.userName.trim().ifEmpty { "你" }
+        val userName = profile.userName.trim().ifEmpty { "你" }
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString("name", name)
             .putString("avatar_skin", profile.avatarSkinId)
             .putString("avatar_uri", profile.avatarUri)
             .putString("persona", profile.persona)
             .putString("system_prompt", profile.systemPrompt)
-            .putString("user_name", profile.userName)
+            .putString("user_name", userName)
             .putString("user_about", profile.userAbout)
             .putString("planner_provider", profile.plannerProviderId)
             .putString("planner_model", profile.plannerModel)
@@ -147,59 +149,128 @@ object CodaBotStore {
         }.getOrNull()
     }
 
+    /**
+     * 最近一次读取是否有行解析失败。
+     *
+     * 原先 runCatching 静默吞掉异常，调用方无法区分「历史为空」与「文件部分不可读」（#144）。
+     * 这里把状态暴露出去，页面可以据此提示而不是显示成空历史。
+     */
+    @Volatile
+    var lastReadPartial: Boolean = false
+        private set
+
     @Synchronized
     fun messages(ctx: Context): MutableList<CodaBotMessage> {
         val result = mutableListOf<CodaBotMessage>()
+        lastReadPartial = false
         val file = messageFile(ctx)
         if (file.isFile) {
-            runCatching {
-                file.forEachLine { line ->
-                    if (line.isBlank()) return@forEachLine
-                    decode(runCatching { JSONObject(line) }.getOrNull())?.let { result += it }
+            var bad = 0
+            val read =
+                runCatching {
+                    file.forEachLine { line ->
+                        if (line.isBlank()) return@forEachLine
+                        val msg = decode(runCatching { JSONObject(line) }.getOrNull())
+                        if (msg != null) result += msg else bad++
+                    }
                 }
+            if (read.isFailure || bad > 0) {
+                lastReadPartial = true
+                AppLog.w("CodaBot", "历史读取不完整：坏行 $bad，异常 ${read.exceptionOrNull()?.message}")
             }
             return result
         }
-        // 旧格式迁移：整份数组读一次，转成逐行格式后删掉旧文件。
         val legacy = legacyFile(ctx)
         if (!legacy.isFile) return result
-        val items = runCatching { JSONArray(legacy.readText()) }.getOrNull() ?: return result
+        val items = runCatching { JSONArray(legacy.readText()) }.getOrNull()
+        if (items == null) {
+            lastReadPartial = true
+            AppLog.w("CodaBot", "旧聊天记录无法解析，已保留原文件")
+            return result
+        }
         for (i in 0 until items.length()) {
             decode(items.optJSONObject(i))?.let { result += it }
         }
-        runCatching {
-            saveMessages(ctx, result)
-            legacy.delete()
-        }
+        migrateLegacy(ctx, result)
         return result
     }
 
+    /**
+     * 旧格式迁移：写入成功才删旧文件（#143）。
+     *
+     * 旧实现把 saveMessages 与 legacy.delete() 一起包在 runCatching 里，
+     * 而 saveMessages 内部自己吞异常并「当成功返回」，于是写失败时旧文件照样被删，
+     * 新旧两份记录一起丢。现在 saveMessages 返回布尔，失败就保留旧文件并落日志。
+     */
     @Synchronized
-    fun appendMessage(ctx: Context, message: CodaBotMessage) {
-        runCatching {
+    private fun migrateLegacy(
+        ctx: Context,
+        parsed: List<CodaBotMessage>? = null,
+    ): Boolean {
+        val legacy = legacyFile(ctx)
+        if (!legacy.isFile) return true
+        val list =
+            parsed ?: run {
+                val items = runCatching { JSONArray(legacy.readText()) }.getOrNull() ?: return false
+                val out = mutableListOf<CodaBotMessage>()
+                for (i in 0 until items.length()) decode(items.optJSONObject(i))?.let { out += it }
+                out
+            }
+        if (!saveMessages(ctx, list)) {
+            AppLog.w("CodaBot", "迁移写入失败，保留旧文件 ${legacy.absolutePath}")
+            return false
+        }
+        // 写盘确认成功后再删；删不掉只是留个旧文件，不影响数据完整性。
+        runCatching { legacy.delete() }
+        return true
+    }
+
+    /**
+     * 追加一条消息。返回是否写入成功（#142）。
+     *
+     * 追加前先确保旧格式已迁移：否则 messages.json 还在时直接往 jsonl 追加，
+     * 下一次 messages() 会走迁移分支并用旧数组整体覆盖，刚追加的这条就没了。
+     */
+    @Synchronized
+    fun appendMessage(ctx: Context, message: CodaBotMessage): Boolean {
+        if (!messageFile(ctx).isFile && legacyFile(ctx).isFile) {
+            // 迁移失败时不追加：宁可让调用方知道失败，也不制造两份互相覆盖的历史。
+            if (!migrateLegacy(ctx)) {
+                AppLog.w("CodaBot", "旧聊天记录迁移失败，已拒绝追加以免覆盖")
+                return false
+            }
+        }
+        return runCatching {
             java.io.FileOutputStream(messageFile(ctx), true).use { out ->
                 out.write((encode(message).toString() + "\n").toByteArray())
             }
-        }
+        }.onFailure {
+            AppLog.w("CodaBot", "追加消息失败：${it.message}")
+        }.isSuccess
     }
 
+    /** 全量重写历史。返回是否写入成功——迁移流程据此决定要不要删旧文件（#143）。 */
     @Synchronized
-    fun saveMessages(ctx: Context, messages: List<CodaBotMessage>) {
+    fun saveMessages(ctx: Context, messages: List<CodaBotMessage>): Boolean {
         val file = messageFile(ctx)
         val text = buildString { messages.forEach { append(encode(it).toString()).append('\n') } }
         // 先写临时文件再改名：写到一半被杀掉时，原文件仍然完整。
         val tmp = File(file.parentFile, file.name + ".tmp")
-        runCatching {
-            tmp.writeText(text)
-            if (!tmp.renameTo(file)) {
-                file.writeText(text)
-                tmp.delete()
-            }
-        }.onFailure {
-            // 改名在部分文件系统上不可用，退回直接写，至少保证消息不丢。
-            file.writeText(text)
-            tmp.delete()
-        }
+        val ok =
+            runCatching {
+                tmp.writeText(text)
+                if (!tmp.renameTo(file)) {
+                    file.writeText(text)
+                    tmp.delete()
+                }
+            }.isSuccess ||
+                // 改名在部分文件系统上不可用，退回直接写；这一遍失败才算真失败。
+                runCatching {
+                    file.writeText(text)
+                    tmp.delete()
+                }.isSuccess
+        if (!ok) AppLog.w("CodaBot", "历史写入失败：${file.absolutePath}")
+        return ok
     }
 
     @Synchronized
