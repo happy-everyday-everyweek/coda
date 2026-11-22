@@ -20,12 +20,12 @@ class CodaBotTimingTest {
         // A 在 t=0 到达、B 在 t=9000 到达，TTL=10000。
         // 在 t=9000 时下一次清理应在 1000ms 后（A 到期），而不是 10000ms 后。
         val delay = CodaBotTiming.nextExpiryDelay(listOf(0L, 9_000L), now = 9_000L, ttlMs = 10_000L)
-        assertEquals(1_000L, delay)
+        assertEquals(1_000L, delay ?: -1L)
     }
 
     @Test
     fun nextDelayIsZeroWhenAlreadyExpired() {
-        assertEquals(0L, CodaBotTiming.nextExpiryDelay(listOf(0L), now = 20_000L, ttlMs = 10_000L))
+        assertEquals(0L, CodaBotTiming.nextExpiryDelay(listOf(0L), now = 20_000L, ttlMs = 10_000L) ?: -1L)
     }
 
     @Test
@@ -36,7 +36,7 @@ class CodaBotTimingTest {
     @Test
     fun nextDelayNeverNegative() {
         val delay = CodaBotTiming.nextExpiryDelay(listOf(-50_000L, 0L), now = 100_000L, ttlMs = 10_000L)
-        assertEquals(0L, delay)
+        assertEquals(0L, delay ?: -1L)
     }
 
     @Test
@@ -44,12 +44,13 @@ class CodaBotTimingTest {
         // 每 1 秒来一条，最早那条仍必须在 TTL 到点时被清理。
         val arrivals = (0..9).map { it * 1_000L }
         val delay = CodaBotTiming.nextExpiryDelay(arrivals, now = 9_000L, ttlMs = 10_000L)
-        assertTrue("最早请求不能被无限推迟", delay <= 1_000L)
+        // 最早那条在 t=10000 到期，此刻 t=9000，所以只剩 1000ms。
+        assertEquals(1_000L, delay ?: -1L)
     }
 
     @Test
     fun singleRequestSchedulesFullTtl() {
-        assertEquals(10_000L, CodaBotTiming.nextExpiryDelay(listOf(5_000L), now = 5_000L, ttlMs = 10_000L))
+        assertEquals(10_000L, CodaBotTiming.nextExpiryDelay(listOf(5_000L), now = 5_000L, ttlMs = 10_000L) ?: -1L)
     }
 
     @Test

@@ -35,17 +35,28 @@ class OverviewPage(
 
     override val kind: String = WorkspaceTabs.OVERVIEW
     override val title: String = "概览"
-
     private lateinit var body: LinearLayout
+
+    /** 任务区块单独成容器：controller 状态变化时只重建它，不动位置卡片与提交列表（#548）。 */
+    private var taskBox: LinearLayout? = null
+    private var lastTodos: List<ZParse.ZTodo>? = null
     private var snapshot: Snapshot? = null
     private var loading = false
 
-    private val controller get() = ZController.get(host)
+    /** 加载失败的原因；非空时页面显示错误而不是永远「读取中」（#547）。 */
+    private var loadError: String? = null
 
+    /** 提交时间格式化器复用：只在主线程使用，不必每次重建 30 个实例。 */
+    private val commitTime = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+    private val controller get() = ZController.get(host)
     private val stateListener =
         object : ZController.Listener {
             override fun onStateChanged() {
-                render()
+                // 状态通知非常频繁，整页重建会把滚动位置拉回顶部。
+                // 只有任务清单真的变了才重建那一块。
+                val todos = controller.todos
+                if (todos == lastTodos) return
+                renderTasksOnly(todos)
             }
         }
 
@@ -87,17 +98,21 @@ class OverviewPage(
     private fun refresh() {
         if (loading) return
         loading = true
+        loadError = null
         render()
         host.ensureEnv { ready ->
             if (!ready) {
                 loading = false
+                loadError = "Linux 环境未就绪，无法读取仓库信息"
                 render()
                 return@ensureEnv
             }
+            // 在主线程先钉住本次要读的目录：任务执行期间用户可能切换根目录，
+            // 回调里再取 host.root 会把另一个仓库的结果渲染到当前页（#547）。
+            val env = host.env
+            val root = host.root
             host.background(
                 work = {
-                    val env = host.env
-                    val root = host.root
                     if (!Git.isRepo(env, root)) {
                         Snapshot(false, "", "", emptyList())
                     } else {
@@ -105,8 +120,21 @@ class OverviewPage(
                     }
                 },
                 then = { result ->
+                    // 目录已被切换：这次结果属于另一个仓库，丢弃而不是渲染到当前页。
+                    if (root == host.root) {
+                        loading = false
+                        loadError = null
+                        snapshot = result
+                        render()
+                    } else {
+                        loading = false
+                    }
+                },
+                // 不传 onError 的话，任何 Git 异常都会让 loading 永远为 true，
+                // refresh 的守卫把刷新能力锁死，页面永久停在「读取中」（#547）。
+                onError = {
                     loading = false
-                    snapshot = result
+                    loadError = "读取仓库信息失败，可从右上角菜单重试"
                     render()
                 },
             )
@@ -117,9 +145,14 @@ class OverviewPage(
         if (!::body.isInitialized) return
         body.removeAllViews()
         body.addView(locationCard())
+        loadError?.let { body.addView(hint(it)) }
         body.addView(groupSpacing())
         body.addView(groupHeader("任务"))
-        renderTasks()
+        // 任务区块装进独立容器：controller 状态变化时只替换它的子视图。
+        val box = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
+        taskBox = box
+        body.addView(box)
+        renderTasksOnly(controller.todos)
         body.addView(groupSpacing())
         body.addView(groupHeader("最近提交"))
         renderCommits()
@@ -145,9 +178,11 @@ class OverviewPage(
 
     private fun locationCard(): View {
         val current = snapshot
+        val err = loadError
         val detail =
             when {
-                current == null -> "读取中…"
+                err != null -> err
+                current == null -> if (loading) "读取中…" else "尚未读取"
                 current.repo -> "${current.branch} · ${current.summary}"
                 else -> "当前目录不是 Git 仓库"
             }
@@ -159,10 +194,13 @@ class OverviewPage(
         )
     }
 
-    private fun renderTasks() {
-        val todos: List<ZParse.ZTodo> = controller.todos
+    /** 只重建任务区块；其余部分与 controller 状态无关，保持原样以免滚动位置被重置。 */
+    private fun renderTasksOnly(todos: List<ZParse.ZTodo>) {
+        lastTodos = todos
+        val box = taskBox ?: return
+        box.removeAllViews()
         if (todos.isEmpty()) {
-            body.addView(hint("没有进行中的任务"))
+            box.addView(hint("没有进行中的任务"))
             return
         }
         val rows =
@@ -184,7 +222,8 @@ class OverviewPage(
                 // 任务行只展示状态，不再把「点哪都开终端」当成唯一动作。
                 cardRow(icon, todo.content, statusText, null, 56)
             }
-        body.addViews(cardGroup(rows))
+        // 仍用 cardGroup 保持与其它区块一致的卡片外观，只是挂到任务容器下。
+        box.addView(cardGroup(rows))
     }
 
     private fun renderCommits() {
@@ -193,7 +232,7 @@ class OverviewPage(
             body.addView(hint(if (loading) "读取中…" else "没有可展示的提交"))
             return
         }
-        val formatter = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+        val formatter = commitTime
         val rows =
             list.map { commit ->
                 val detail =
@@ -213,14 +252,26 @@ class OverviewPage(
     }
 
     private fun showCommit(commit: Git.Commit) {
+        // 同样在主线程钉住目录，并给出失败回调：否则 Git.show 抛异常时
+        // 表现为「点了没反应」，既不弹面板也不报错（#547）。
+        val env = host.env
+        val root = host.root
         host.background(
-            work = { Git.show(host.env, host.root, commit.hash).output },
+            work = { Git.show(env, root, commit.hash).output },
             then = { text ->
-                val sheet = sheet().title(commit.hash.take(8)).subtitle(commit.subject)
-                sheet.content { col ->
-                    col.addView(monoLabel(text.ifEmpty { "没有内容" }, 12f, onSurfaceVariant))
+                // 目录已切换：不要把另一个仓库的提交详情弹到当前页。
+                if (root == host.root) {
+                    val sheet = sheet().title(commit.hash.take(8)).subtitle(commit.subject)
+                    sheet.content { col ->
+                        col.addView(monoLabel(text.ifEmpty { "没有内容" }, 12f, onSurfaceVariant))
+                    }
+                    sheet.show()
                 }
-                sheet.show()
+            },
+            onError = {
+                android.widget.Toast
+                    .makeText(host, "读取提交详情失败", android.widget.Toast.LENGTH_SHORT)
+                    .show()
             },
         )
     }
