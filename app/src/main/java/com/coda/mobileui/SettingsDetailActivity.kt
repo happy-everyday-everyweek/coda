@@ -4242,9 +4242,15 @@ class SettingsDetailActivity :
             "coda_bot_export" -> exportCodaBotMessages()
 
             "coda_bot_clear" -> {
-                sheetConfirm("清除聊天记录？", "只清除 Coda Bot 的本地会话，不影响 Coding Agent", "清除") {
+                // 内核侧的会话与记忆库还没有 clear 接口（#29），这里只删本机显示。
+                // 文案必须说清楚，否则用户以为模型也忘了，下一条回复却还在引用旧内容。
+                sheetConfirm(
+                    "清除聊天记录？",
+                    "只清除本机显示的聊天记录，不影响 Coding Agent。\n\n注意：模型侧的上下文与记忆仍保留，之后的回复可能仍会提到之前的内容。",
+                    "清除本机记录",
+                ) {
                     com.coda.mobileui.personal.CodaBotStore.clearMessages(this)
-                    snack("已清除 Coda Bot 聊天记录")
+                    snack("已清除本机记录；模型仍保留上下文")
                     renderPage()
                 }
             }

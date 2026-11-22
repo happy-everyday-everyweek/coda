@@ -85,7 +85,7 @@ jobs:
 
       - name: 测试 Personal Agent 工具契约
         working-directory: kernel/maibot-lite
-        run: python -m pytest tests/test_lite_coding_tool.py -q
+        run: python -m pytest tests/test_lite_coding_tool.py tests/test_lite_provider_mapping.py -q
 
   # 只有手动触发并勾选 build_apk 时才打包：分支构建不产可安装产物，更不会进 Release。
   apk:

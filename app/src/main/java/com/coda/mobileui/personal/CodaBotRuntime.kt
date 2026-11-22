@@ -487,6 +487,13 @@ class CodaBotRuntime(
     private fun result(ok: Boolean, message: String): String =
         JSONObject().put("ok", ok).put("message", message).toString()
 
+    /**
+     * 传给内核的供应商配置（#34）。
+     *
+     * 之前只透传 name/base_url/api_key/model，内核一律按 OpenAI + bearer 写配置，
+     * 于是 anthropic-messages、doubao-web-anonymous 这类协议必然失败，
+     * contextWindow 与 supportsToolCall 也只能吃内核默认值。
+     */
     private fun providerConfig(providerId: String, model: String, task: String): String {
         val provider = ProviderStore.load(context).firstOrNull { it.id == providerId }
             ?: throw IllegalStateException("找不到模型供应商：$providerId")
@@ -496,6 +503,9 @@ class CodaBotRuntime(
             .put("api_key", provider.apiKey)
             .put("model", model)
             .put("task", task)
+            .put("api_type", provider.apiType)
+            .put("context_window", provider.contextWindow)
+            .put("supports_tool_call", provider.supportsToolCall)
             .toString()
     }
 

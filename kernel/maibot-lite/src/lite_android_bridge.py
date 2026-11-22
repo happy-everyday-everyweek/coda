@@ -11,6 +11,56 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _client_type(item: Dict[str, Any]) -> str:
+    """把宿主的 api_type 映射成内核的 client_type（#34）。
+
+    不传该字段时按 openai 处理，兼容旧版宿主。未知协议显式返回 unsupported，
+    让上层给出可读失败，而不是伪装成 openai 再拿一个难以理解的 400。
+    """
+
+    raw = str(item.get("api_type") or "").strip().lower()
+    if not raw:
+        return "openai"
+    if raw.startswith("openai"):
+        return "openai"
+    if raw.startswith("anthropic"):
+        return "anthropic"
+    if raw.startswith("gemini"):
+        return "gemini"
+    return "unsupported"
+
+
+def _auth_fields(item: Dict[str, Any]) -> Dict[str, str]:
+    """鉴权头随协议与凭据来源变化（#34）。
+
+    OAuth 供应商的凭据在本地网关，api_key 为空；这时不能再带
+    `Authorization: Bearer`（空令牌会被上游直接拒绝）。
+    """
+
+    client = _client_type(item)
+    has_key = bool(str(item.get("api_key") or "").strip())
+    if not has_key:
+        return {
+            "auth_type": "none",
+            "auth_header_name": "Authorization",
+            "auth_header_prefix": "",
+            "auth_query_name": "api_key",
+        }
+    if client == "anthropic":
+        return {
+            "auth_type": "header",
+            "auth_header_name": "x-api-key",
+            "auth_header_prefix": "",
+            "auth_query_name": "api_key",
+        }
+    return {
+        "auth_type": "bearer",
+        "auth_header_name": "Authorization",
+        "auth_header_prefix": "Bearer",
+        "auth_query_name": "api_key",
+    }
+
+
 def _write_model_config(root: Path, planner: Dict[str, Any], reply: Dict[str, Any]) -> None:
     """生成只属于 Personal Agent 的模型配置，不读取 Coda 的 Coding Agent 配置。"""
 
@@ -28,17 +78,18 @@ def _write_model_config(root: Path, planner: Dict[str, Any], reply: Dict[str, An
         "",
     ]
     for provider_name, item in ((planner_provider, planner), (reply_provider, reply)):
+        auth = _auth_fields(item)
         lines.extend(
             [
                 "[[api_providers]]",
                 f"name = {_toml_string(provider_name)}",
                 f"base_url = {_toml_string(item['base_url'])}",
                 f"api_key = {_toml_string(item['api_key'])}",
-                'client_type = "openai"',
-                'auth_type = "bearer"',
-                'auth_header_name = "Authorization"',
-                'auth_header_prefix = "Bearer"',
-                'auth_query_name = "api_key"',
+                f"client_type = {_toml_string(_client_type(item))}",
+                f"auth_type = {_toml_string(auth['auth_type'])}",
+                f"auth_header_name = {_toml_string(auth['auth_header_name'])}",
+                f"auth_header_prefix = {_toml_string(auth['auth_header_prefix'])}",
+                f"auth_query_name = {_toml_string(auth['auth_query_name'])}",
                 "default_headers = {}",
                 "default_query = {}",
                 'model_list_endpoint = "/models"',
@@ -61,6 +112,10 @@ def _write_model_config(root: Path, planner: Dict[str, Any], reply: Dict[str, An
                 f"model_identifier = {_toml_string(item['model'])}",
                 f"name = {_toml_string(model_name)}",
                 f"api_provider = {_toml_string(provider_name)}",
+                # 上游真实窗口与工具能力：不传的话内核只能吃默认值，
+                # 长对话可能超窗，不支持工具的模型也会被注入工具定义（#34）。
+                f"max_context_size = {int(item.get('context_window') or 0)}",
+                f"supports_tool_call = {'true' if item.get('supports_tool_call', True) else 'false'}",
                 "price_in = 0.0",
                 "cache = false",
                 "cache_price_in = 0.0",
