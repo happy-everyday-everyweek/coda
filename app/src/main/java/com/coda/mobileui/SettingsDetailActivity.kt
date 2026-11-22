@@ -54,6 +54,12 @@ class SettingsDetailActivity :
     private lateinit var store: SettingsStore
     private var pageKey: String = PAGE_SYSTEM
 
+    /**
+     * 页内层级栈（#612）。栈底是进入时的初始页，pop 到 null 才 finish。
+     * onCreate 里按 intent/savedInstanceState 重建。
+     */
+    private var nav: SettingsNavStack = SettingsNavStack(PAGE_SYSTEM)
+
     /** 当前正在看的供应商类型（两级页面共用一页时靠它区分）。 */
     private var providerKind: ProviderStore.ProviderKind = ProviderStore.ProviderKind.LLM
     private var firstResume = true
@@ -107,6 +113,15 @@ class SettingsDetailActivity :
     /** GitHub 登录轮询。 */
     private val ghHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var ghPollRunnable: Runnable? = null
+
+    /**
+     * 轮询是否仍然有效（#608）。
+     *
+     * 网络回调可能晚于 onDestroy 返回，只靠 removeCallbacks 挡不住已在途的那一次；
+     * 回调入口先看这个标记，避免把 Runnable 重新挂回 Handler 并改已销毁页面的 UI。
+     */
+    @Volatile
+    private var ghPolling = false
 
     // ---- 扩展页异步数据（使用统计 / 插件 / MCP）----
     private val extrasCache = HashMap<String, org.json.JSONObject>()
@@ -173,6 +188,13 @@ class SettingsDetailActivity :
 
         store = SettingsStore.get(this)
         pageKey = savedInstanceState?.getString(KEY_PAGE) ?: intent.getStringExtra(EXTRA_PAGE) ?: PAGE_SYSTEM
+        // 层级栈也要恢复：否则旋转后子页的返回会直接退出设置（#612）。
+        nav =
+            SettingsNavStack.restore(
+                SettingsNavStack.decode(savedInstanceState?.getString(KEY_PAGE_TRAIL)),
+                fallback = pageKey,
+            )
+        pageKey = nav.current
         // 恢复供应商二级页的类别；解析失败时保持默认 LLM。
         savedInstanceState?.getString(KEY_PROVIDER_KIND)?.let { name ->
             runCatching { ProviderStore.ProviderKind.valueOf(name) }.getOrNull()?.let { providerKind = it }
@@ -195,6 +217,7 @@ class SettingsDetailActivity :
     override fun onSaveInstanceState(outState: Bundle) {
         // 记住当前所在的二级页：旋转、分屏尺寸变化后重新创建时回到同一层。
         outState.putString(KEY_PAGE, pageKey)
+        outState.putString(KEY_PAGE_TRAIL, SettingsNavStack.encode(nav.trail()))
         // 供应商二级页的类别也要存：否则 ASR 列表旋转后会退回 LLM。
         outState.putString(KEY_PROVIDER_KIND, providerKind.name)
         super.onSaveInstanceState(outState)
@@ -235,12 +258,13 @@ class SettingsDetailActivity :
             }.start()
     }
 
-    /** 返回：子页先回上一层，根页才退出。 */
+    /** 返回：按真实层级弹栈，栈底才退出（#612）。 */
     private fun goBack() {
-        if (pageKey == PAGE_PROVIDERS_OF_KIND) {
+        val back = nav.pop()
+        if (back != null) {
             // 回到上一级：方向相反（旧页右滑出、新页从左推入）。
             navigatePage(forward = false) {
-                pageKey = PAGE_PROVIDERS
+                pageKey = back
                 renderPage()
             }
             return
@@ -248,6 +272,15 @@ class SettingsDetailActivity :
         finish()
         // 与进入成对：进来是淡入，退回去也要淡出。若这里仍用带位移的
         // settings_pop_*，返回时会跟进入的方向感对不上，看起来又是一次顿挫。
+    }
+
+    /** 页内前进一层：记录来源，返回时才回得到上一级（#612）。 */
+    private fun pushPage(page: String) {
+        navigatePage(forward = true) {
+            nav.push(page)
+            pageKey = page
+            renderPage()
+        }
     }
 
     override fun onResume() {
@@ -444,18 +477,12 @@ class SettingsDetailActivity :
             when (target) {
                 "providers_llm" -> {
                     providerKind = ProviderStore.ProviderKind.LLM
-                    navigatePage(forward = true) {
-                        pageKey = PAGE_PROVIDERS_OF_KIND
-                        renderPage()
-                    }
+                    pushPage(PAGE_PROVIDERS_OF_KIND)
                 }
 
                 "providers_asr" -> {
                     providerKind = ProviderStore.ProviderKind.ASR
-                    navigatePage(forward = true) {
-                        pageKey = PAGE_PROVIDERS_OF_KIND
-                        renderPage()
-                    }
+                    pushPage(PAGE_PROVIDERS_OF_KIND)
                 }
                 else -> {
                     Unit
@@ -1206,22 +1233,24 @@ class SettingsDetailActivity :
 
     /** 在卡片里展示指定级别以上的日志；切换级别时由它自己重进一次。 */
     private fun showLogsSheetAt(minLevel: AppLog.Level) {
-        CodaSheet(this)
-            .title("日志")
-            .subtitle(logSubtitle(minLevel))
-            .content { col -> col.addView(logBodyFor(minLevel)) }
-            .secondaryAction("切换级别") { self ->
-                // 就地换页：卡片不动，只换标题/内容/按钮
-                val next = nextLogLevel(minLevel)
-                self.navigate {
-                    title("日志")
-                    content { col -> col.addView(logBodyFor(next)) }
-                    subtitle(logSubtitle(next))
-                    secondaryAction("切换级别") { again -> switchLogLevelInPlace(again, next) }
-                    primaryAction("导出") { s -> exportLogs(s) }
-                }
-            }.primaryAction("导出") { self -> exportLogs(self) }
-            .show()
+        val sheet =
+            CodaSheet(this)
+                .title("日志")
+                .subtitle("正在读取…")
+                .content { col -> col.addView(sheetBodyText("正在读取日志…")) }
+                .secondaryAction("切换级别") { self ->
+                    switchLogLevelInPlace(self, nextLogLevel(minLevel))
+                }.primaryAction("导出") { self -> exportLogs(self) }
+        sheet.show()
+        // 读取放后台：日志大时全量 readLines 会卡住主线程（#611）。
+        loadLogsThen { snapshot ->
+            sheet.subtitle(logSubtitle(minLevel, snapshot))
+            sheet.refreshContent { col ->
+                // 统计行放正文首行：subtitle() 只改字段，已显示的卡片不会因此重画。
+                col.addView(sheetBodyText(logSubtitle(minLevel, snapshot)))
+                col.addView(logBodyFor(minLevel, snapshot))
+            }
+        }
     }
 
     /** 已打开卡片里的级别切换：只重画内容与副标题。 */
@@ -1231,10 +1260,17 @@ class SettingsDetailActivity :
     ) {
         sheet.navigate {
             title("日志")
-            subtitle(logSubtitle(next))
-            content { col -> col.addView(logBodyFor(next)) }
+            subtitle("正在读取…")
+            content { col -> col.addView(sheetBodyText("正在读取日志…")) }
             secondaryAction("切换级别") { again -> switchLogLevelInPlace(again, nextLogLevel(next)) }
             primaryAction("导出") { s -> exportLogs(s) }
+        }
+        loadLogsThen { snapshot ->
+            sheet.subtitle(logSubtitle(next, snapshot))
+            sheet.refreshContent { col ->
+                col.addView(sheetBodyText(logSubtitle(next, snapshot)))
+                col.addView(logBodyFor(next, snapshot))
+            }
         }
     }
 
@@ -1256,23 +1292,65 @@ class SettingsDetailActivity :
             AppLog.Level.ERROR -> "错误"
         }
 
-    private fun logSubtitle(minLevel: AppLog.Level): String {
-        if (AppLog.dir() == null) return "日志目录不可用"
-        val all = logLines()
+    /**
+     * 一次日志读取的结果（#611）。
+     *
+     * 副标题与正文共用同一份快照：之前两者各调一次 logLines()，
+     * 同一个文件在主线程被 readLines() 全量读两遍。
+     */
+    private class LogSnapshot(
+        val lines: List<String>,
+        val dirAvailable: Boolean,
+    )
+
+    /**
+     * 读日志尾部。只在后台线程调用。
+     *
+     * 用 bufferedReader 逐行滚动保留最后 [LOG_TAIL_LINES] 行，
+     * 不再把整个文件读进内存后才 takeLast。
+     */
+    private fun readLogSnapshot(): LogSnapshot {
+        val dirOk = AppLog.dir() != null
+        val file = AppLog.currentFile() ?: return LogSnapshot(emptyList(), dirOk)
+        if (!file.isFile) return LogSnapshot(emptyList(), dirOk)
+        val tail = ArrayDeque<String>()
+        runCatching {
+            file.bufferedReader().use { reader ->
+                reader.forEachLine { line ->
+                    tail.addLast(line)
+                    if (tail.size > LOG_TAIL_LINES) tail.removeFirst()
+                }
+            }
+        }
+        return LogSnapshot(tail.toList(), dirOk)
+    }
+
+    /** 后台读一次，回主线程渲染；页面已销毁就丢弃结果。 */
+    private fun loadLogsThen(render: (LogSnapshot) -> Unit) {
+        Bg.run {
+            val snapshot = readLogSnapshot()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                render(snapshot)
+            }
+        }
+    }
+
+    private fun logSubtitle(
+        minLevel: AppLog.Level,
+        snapshot: LogSnapshot,
+    ): String {
+        if (!snapshot.dirAvailable) return "日志目录不可用"
+        val all = snapshot.lines
         return "共 ${all.size} 行 · 显示 ${all.count { keepLogLine(it, minLevel) }} · ${logLevelLabel(minLevel)}"
     }
 
-    private fun logLines(): List<String> {
-        val file = AppLog.currentFile() ?: return emptyList()
-        if (!file.isFile) return emptyList()
-        return runCatching { file.readLines() }
-            .getOrDefault(emptyList())
-            .let { if (it.size <= 2000) it else it.takeLast(2000) }
-    }
-
     /** 按级别拼出日志正文。每次新建 TextView，避免复用旧实例导致内容串台。 */
-    private fun logBodyFor(minLevel: AppLog.Level): TextView {
-        val shown = logLines().filter { keepLogLine(it, minLevel) }
+    private fun logBodyFor(
+        minLevel: AppLog.Level,
+        snapshot: LogSnapshot,
+    ): TextView {
+        val shown = snapshot.lines.filter { keepLogLine(it, minLevel) }
         return TextView(this).apply {
             typeface = android.graphics.Typeface.MONOSPACE
             textSize = 11f
@@ -1286,7 +1364,7 @@ class SettingsDetailActivity :
             setTextIsSelectable(true)
             text =
                 if (shown.isEmpty()) {
-                    if (AppLog.dir() == null) "日志目录不可用" else "当前级别下没有日志"
+                    if (!snapshot.dirAvailable) "日志目录不可用" else "当前级别下没有日志"
                 } else {
                     shown.joinToString("\n")
                 }
@@ -1428,7 +1506,7 @@ class SettingsDetailActivity :
         minLevel: AppLog.Level,
     ): Boolean {
         val marker =
-            Regex("""^\S+\s+\S+\s+([VDIWE])/""").find(line)?.groupValues?.get(1)
+            LEVEL_MARKER.find(line)?.groupValues?.get(1)
                 ?: return true
         val level =
             when (marker) {
@@ -1837,45 +1915,44 @@ class SettingsDetailActivity :
         statusView: TextView,
     ) {
         stopGitHubPolling()
+        ghPolling = true
         var delayMs = dc.interval * 1000L
         var attempts = (dc.expiresIn / dc.interval.coerceAtLeast(1)).coerceAtLeast(1)
         val schedule =
             object : Runnable {
                 override fun run() {
                     com.coda.mobileui.core.GitHub.pollAccessToken(this@SettingsDetailActivity, dc.deviceCode) { status, _, msg ->
-                        when (status) {
-                            "ok" -> {
-                                stopGitHubPolling()
-                                com.coda.mobileui.core.GitHub.fetchUser(this@SettingsDetailActivity) { ok2, u, _ ->
-                                    statusView.text = if (ok2 && u != null) "已连接：@${u.login}" else "已连接"
-                                    snack("GitHub 已连接")
-                                    sheet.dismiss()
-                                    renderPage()
-                                }
+                        // 网络回调返回时页面可能已销毁或用户已取消：一律不再动 UI、不再排下一次（#608）。
+                        val alive = ghPolling && ghPollRunnable === this && !isFinishing && !isDestroyed
+                        if (status == "ok") {
+                            if (!alive) return@pollAccessToken
+                            stopGitHubPolling()
+                            com.coda.mobileui.core.GitHub.fetchUser(this@SettingsDetailActivity) { ok2, u, _ ->
+                                if (isFinishing || isDestroyed) return@fetchUser
+                                statusView.text = if (ok2 && u != null) "已连接：@${u.login}" else "已连接"
+                                snack("GitHub 已连接")
+                                sheet.dismiss()
+                                renderPage()
                             }
-
-                            "pending" -> {
-                                attempts -= 1
-                                if (attempts <= 0) {
-                                    statusView.text = "已超时，请重新发起连接"
-                                    stopGitHubPolling()
-                                } else {
-                                    ghPollRunnable = this
-                                    ghHandler.postDelayed(this, delayMs)
-                                }
-                            }
-
-                            "slow_down" -> {
-                                delayMs += 5000
-                                ghPollRunnable = this
-                                ghHandler.postDelayed(this, delayMs)
-                            }
-
-                            else -> {
-                                statusView.text = msg ?: "连接失败"
-                                stopGitHubPolling()
-                            }
+                            return@pollAccessToken
                         }
+                        // slow_down 也要消耗配额，否则「正在等待授权」可以无限转（#608）。
+                        val step = GitHubPollStep.of(status, attempts, delayMs, alive)
+                        attempts = step.attempts
+                        delayMs = step.delayMs
+                        if (!alive) return@pollAccessToken
+                        if (step.schedule) {
+                            ghPollRunnable = this
+                            ghHandler.postDelayed(this, delayMs)
+                            return@pollAccessToken
+                        }
+                        statusView.text =
+                            when {
+                                step.timedOut -> "已超时，请重新发起连接"
+                                status == "pending" || status == "slow_down" -> "连接已结束"
+                                else -> msg ?: "连接失败"
+                            }
+                        stopGitHubPolling()
                     }
                 }
             }
@@ -1884,6 +1961,7 @@ class SettingsDetailActivity :
     }
 
     private fun stopGitHubPolling() {
+        ghPolling = false
         ghPollRunnable?.let { ghHandler.removeCallbacks(it) }
         ghPollRunnable = null
     }
@@ -3353,13 +3431,30 @@ class SettingsDetailActivity :
         sheet.content { col -> col.addView(statusText) }
         // 用信号控制「什么时候停」，而不是让 UI 直接碰录音器。
         val stop = kotlinx.coroutines.CompletableDeferred<Unit>()
+        // 任意关闭路径都要收尾：返回键 / 点卡片外区域不会走这两个按钮回调，
+        // 之前那种情况下 stop 永不 complete，录音会一直跑到 MAX_RECORD_MS（#607）。
+        // 用意图标记区分「停止并识别」与「其它关闭」：前者要留着任务去上传，
+        // 只看 isActive 会把它一起取消掉。
+        var keepIdentifying = false
         sheet.secondaryAction("取消") { s ->
             s.dismiss()
+            stop.complete(Unit)
             asrJob?.cancel()
+            asrJob = null
         }
         sheet.primaryAction("停止并识别") { s ->
+            keepIdentifying = true
             s.dismiss()
+            // 停止录音但不取消任务：让 transcribe 拿着已录到的音频去识别。
             stop.complete(Unit)
+        }
+        sheet.onDismiss {
+            // 幂等：complete 对已完成的 Deferred 返回 false，cancel 对已结束的 Job 是空操作。
+            if (!keepIdentifying && asrJob?.isActive == true) {
+                stop.complete(Unit)
+                asrJob?.cancel()
+                asrJob = null
+            }
         }
         sheet.show()
         asrJob =
@@ -3370,6 +3465,8 @@ class SettingsDetailActivity :
                         model = model,
                         stopSignal = stop,
                     )
+                // 任务结束就清掉引用，否则 isActive 残留会拦住下一次录音（#607）。
+                asrJob = null
                 if (isFinishing || isDestroyed) return@launch
                 showAsrResult(provider, model, result)
             }
@@ -3402,11 +3499,20 @@ class SettingsDetailActivity :
         sheet.secondaryAction("取消") { s ->
             s.dismiss()
             asrJob?.cancel()
+            asrJob = null
         }
         sheet.primaryAction("结束") { s ->
             s.dismiss()
             // 取消 collect 即让 Flow 走 awaitClose，那里会收录音、关会话。
             asrJob?.cancel()
+            asrJob = null
+        }
+        // 返回键 / 点卡片外区域同样要停：否则实时会话与麦克风会一直挂着（#607）。
+        sheet.onDismiss {
+            if (asrJob?.isActive == true) {
+                asrJob?.cancel()
+                asrJob = null
+            }
         }
         sheet.show()
         asrJob =
@@ -4084,10 +4190,7 @@ class SettingsDetailActivity :
             "coda_bot_reply" -> pickCodaBotModel(planner = false)
 
             "coda_bot_open_providers" -> {
-                navigatePage(forward = true) {
-                    pageKey = PAGE_PROVIDERS
-                    renderPage()
-                }
+                pushPage(PAGE_PROVIDERS)
             }
 
             "coda_bot_export" -> exportCodaBotMessages()
@@ -4221,6 +4324,20 @@ class SettingsDetailActivity :
 
         /** 旋转或小窗切换后要回到同一层，不能退回入口页。 */
         const val KEY_PAGE = "settings_page_key"
+
+        /** 页内层级栈的序列化键（#612）。 */
+        const val KEY_PAGE_TRAIL = "settings_page_trail"
+
+        /**
+         * 日志行的级别标记（#609）。
+         *
+         * Regex 不可变且线程安全，之前写在 keepLogLine 函数体里，
+         * 2000 行日志就要编译 2000 次；提到这里全进程复用一份。
+         */
+        private val LEVEL_MARKER = Regex("""^\S+\s+\S+\s+([VDIWE])/""")
+
+        /** 日志卡最多展示的行数（#611）。 */
+        private const val LOG_TAIL_LINES = 2000
         /** 供应商二级页当前类别（LLM/ASR），配置变更后据此恢复。 */
         const val KEY_PROVIDER_KIND = "settings_provider_kind"
 
