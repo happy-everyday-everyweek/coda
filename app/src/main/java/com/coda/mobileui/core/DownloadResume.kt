@@ -250,5 +250,102 @@ internal data class ResumeState(
             runCatching { part.delete() }
             runCatching { sidecar.delete() }
         }
+
+        /**
+         * 分块任务的断点（#731）。
+         *
+         * 与单连接断点分开存：分块的已完成量是「每块各自的进度」，不是一个连续前缀，
+         * 用 [ResumeState.done] 那种单值表达不了。schema 升到 2，多出 chunks 数组。
+         *
+         * @param ranges 每块的闭区间，顺序与 [done] 一一对应。
+         * @param done 每块已落盘字节数。
+         */
+        @JvmStatic
+        fun encodeChunks(
+            url: String,
+            total: Long,
+            etag: String?,
+            lastModified: String?,
+            ranges: List<ChunkPlan.Chunk>,
+            done: List<Long>,
+        ): String {
+            val arr = org.json.JSONArray()
+            ranges.forEach { c ->
+                arr.put(
+                    org.json.JSONObject()
+                        .put("from", c.from)
+                        .put("to", c.to)
+                        .put("done", (done.getOrNull(c.index) ?: 0L).coerceIn(0, c.length)),
+                )
+            }
+            return org.json.JSONObject()
+                .put("v", CHUNK_SCHEMA)
+                .put("url", url)
+                .put("total", total)
+                .put("etag", etag ?: org.json.JSONObject.NULL)
+                .put("lastModified", lastModified ?: org.json.JSONObject.NULL)
+                .put("chunks", arr)
+                .toString()
+        }
+
+        /** 分块 sidecar 的结构版本。与单连接的 [SCHEMA] 互不兼容，读到不匹配就作废。 */
+        const val CHUNK_SCHEMA = 2
+
+        /** 解出来的分块断点。 */
+        data class ChunkState(
+            val url: String,
+            val total: Long,
+            val etag: String?,
+            val lastModified: String?,
+            val ranges: List<ChunkPlan.Chunk>,
+            val done: List<Long>,
+        )
+
+        /**
+         * 解析分块断点。
+         *
+         * 任何一项不合法就整份作废，不做部分采用：半套区间配半套进度会拼出坏文件，
+         * 而重下一份的代价只是流量。
+         */
+        fun decodeChunks(text: String?): ChunkState? {
+            if (text.isNullOrBlank()) return null
+            return runCatching {
+                val o = org.json.JSONObject(text)
+                if (o.optInt("v", 0) != CHUNK_SCHEMA) return null
+                val url = o.optString("url")
+                if (url.isEmpty()) return null
+                val total = o.optLong("total", -1)
+                if (total <= 0) return null
+                val arr = o.optJSONArray("chunks") ?: return null
+                if (arr.length() == 0) return null
+                val ranges = ArrayList<ChunkPlan.Chunk>(arr.length())
+                val done = ArrayList<Long>(arr.length())
+                var cursor = 0L
+                for (i in 0 until arr.length()) {
+                    val c = arr.getJSONObject(i)
+                    val from = c.optLong("from", -1)
+                    val to = c.optLong("to", -1)
+                    val d = c.optLong("done", -1)
+                    if (from < 0 || to < from || d < 0) return null
+                    // 区间必须首尾相接且从 0 开始，否则这份记录描述的字节覆盖不完整。
+                    if (from != cursor) return null
+                    val len = to - from + 1
+                    if (d > len) return null
+                    ranges.add(ChunkPlan.Chunk(index = i, from = from, to = to))
+                    done.add(d)
+                    cursor = to + 1
+                }
+                if (cursor != total) return null
+                ChunkState(
+                    url = url,
+                    total = total,
+                    etag = if (o.isNull("etag")) null else o.optString("etag").takeIf { it.isNotEmpty() },
+                    lastModified =
+                        if (o.isNull("lastModified")) null else o.optString("lastModified").takeIf { it.isNotEmpty() },
+                    ranges = ranges,
+                    done = done,
+                )
+            }.getOrNull()
+        }
     }
 }

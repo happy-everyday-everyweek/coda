@@ -146,6 +146,9 @@ object AssetFetcher {
                         expectedSha256 = spec.sha256,
                         // 断点续传（#730）：资产动辄几十 MB，网络抖动一次不该前功尽弃。
                         resume = true,
+                        // 多线程分块（#731）：默认 4 并发，小文件与不支持 Range 的源
+                        // 由引擎自动退回单连接，这里不需要判断。
+                        concurrency = ChunkPlan.DEFAULT_CONCURRENCY,
                     ),
                     onProgress = onProgress?.let { p -> Downloader.Progress { d, t, _ -> p.onBytes(d, t) } },
                 )

@@ -221,6 +221,19 @@ internal object Downloader {
                     else -> req.expectedSize
                 }
             val wantHash = !req.expectedSha256.isNullOrBlank()
+            // 分块（#731）：大小已知、达到阈值、源支持 Range 且并发数 > 1 才走。
+            // 续传中的单连接任务不中途切成分块——已有字节是连续前缀，
+            // 与分块的「各块独立进度」表达不兼容，混用会拼出坏文件。
+            val canChunk =
+                resumeFrom == 0L &&
+                    ChunkPlan.shouldSplit(
+                        total = total,
+                        concurrency = req.concurrency,
+                        rangesSupported = ResumeProbe.acceptsRanges(conn.getHeaderField("Accept-Ranges")),
+                    )
+            if (canChunk) {
+                return fetchChunked(req, target, tmp, sidecar, total, conn, onProgress, cancel)
+            }
             // 续传时 hash 必须覆盖整个文件（已有字节 + 新字节），不能只算这一段。
             val pumped =
                 if (resumeFrom > 0) {
@@ -331,6 +344,119 @@ internal object Downloader {
             return Result(DownloadOutcome.Kind.IO, detail = "${e.javaClass.simpleName}: ${e.message}")
         } finally {
             runCatching { conn?.disconnect() }
+        }
+    }
+
+    /**
+     * 分块路径（#731）。
+     *
+     * 走到这里时首条连接已经确认了总长与 Accept-Ranges，用它拿到 ETag 后就断开，
+     * 各块自己开连接。所有块共用同一个 URL，不各自挑镜像。
+     */
+    private fun fetchChunked(
+        req: Request,
+        target: File,
+        tmp: File,
+        sidecar: File,
+        total: Long,
+        probeConn: HttpURLConnection,
+        onProgress: Progress?,
+        cancel: Cancel?,
+    ): Result {
+        val etag = probeConn.getHeaderField("ETag")
+        val lastModified = probeConn.getHeaderField("Last-Modified")
+        val chunks = ChunkPlan.split(total, req.concurrency)
+        val done = java.util.concurrent.atomic.AtomicLongArray(chunks.size)
+        // 读分块断点：URL 与远端标识都吻合才采用，否则从 0 开始。
+        val saved = ResumeState.decodeChunks(runCatching { sidecar.readText() }.getOrNull())
+        if (saved != null && saved.url == req.url && saved.total == total &&
+            saved.ranges == chunks &&
+            (saved.etag == etag || saved.etag == null) &&
+            (saved.lastModified == lastModified || saved.lastModified == null) &&
+            (saved.etag != null || saved.lastModified != null)
+        ) {
+            saved.done.forEachIndexed { i, d -> done.set(i, d) }
+            AppLog.i(TAG, "分块续传：${target.name} 已完成 ${ChunkPlan.totalDone(chunks, saved.done)}/$total")
+        } else {
+            runCatching { sidecar.delete() }
+        }
+        runCatching { probeConn.disconnect() }
+
+        val saveState = {
+            // 只写分块记录（schema 2）。不能先写一份单连接记录再覆盖：
+            // 两次写入之间被杀会留下 schema 1 的半套状态，下次读不出分块进度。
+            runCatching {
+                val text =
+                    ResumeState.encodeChunks(
+                        req.url,
+                        total,
+                        etag,
+                        lastModified,
+                        chunks,
+                        (0 until chunks.size).map { done.get(it) },
+                    )
+                val t = File(sidecar.parentFile, sidecar.name + ".tmp")
+                t.writeText(text)
+                if (!t.renameTo(sidecar)) {
+                    sidecar.delete()
+                    t.renameTo(sidecar)
+                }
+            }
+        }
+
+        val out =
+            ChunkedFetch.run(
+                part = tmp,
+                chunks = chunks,
+                done = done,
+                total = total,
+                cancel = cancel,
+                progress = onProgress,
+                open = open@{ from, to ->
+                    val c = open(req, 0)
+                    c.setRequestProperty("Range", "bytes=$from-$to")
+                    (etag ?: lastModified)?.let { c.setRequestProperty("If-Range", it) }
+                    return@open c
+                },
+            )
+        val got = ChunkPlan.totalDone(chunks, (0 until chunks.size).map { done.get(it) })
+        if (out.kind != DownloadOutcome.Kind.OK) {
+            // 失败与取消都保留各块断点：下次只补未完成的块。
+            saveState()
+            if (out.kind == DownloadOutcome.Kind.CANCELLED) {
+                return Result(DownloadOutcome.Kind.CANCELLED, bytes = got, detail = "已取消")
+            }
+            AppLog.w(TAG, "分块下载失败 ${req.url}：${out.kind} ${out.detail}")
+            return Result(out.kind, bytes = got, detail = out.detail)
+        }
+        // 分块写入是乱序的，只能全部落盘后再扫一遍算整文件哈希。
+        val actualSha = if (!req.expectedSha256.isNullOrBlank()) ChunkedFetch.sha256Of(tmp) else null
+        val verdict =
+            DownloadOutcome.verify(
+                actualSize = tmp.length(),
+                expectedSize = req.expectedSize,
+                actualSha256 = actualSha,
+                expectedSha256 = req.expectedSha256,
+            )
+        if (verdict != DownloadOutcome.Kind.OK) {
+            AppLog.w(TAG, "分块内容校验不通过 ${req.url} 长度=${tmp.length()} 期望=${req.expectedSize}")
+            // 校验失败整单作废：坏字节留着，下次续传只会把坏文件拼得更长。
+            ResumeState.discard(tmp, sidecar)
+            return Result(verdict, bytes = got, detail = "内容校验不通过")
+        }
+        return when (val placed = AssetPlacement.place(tmp, target)) {
+            is AssetPlacement.Result.Placed -> {
+                runCatching { sidecar.delete() }
+                Result(DownloadOutcome.Kind.OK, bytes = placed.bytes)
+            }
+
+            is AssetPlacement.Result.Failed ->
+                Result(
+                    DownloadOutcome.Kind.PLACE_FAILED,
+                    bytes = placed.bytes,
+                    detail = placed.reason,
+                    partial = tmp,
+                )
         }
     }
 
