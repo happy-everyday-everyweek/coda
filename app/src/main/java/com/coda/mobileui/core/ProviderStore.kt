@@ -511,7 +511,11 @@ object ProviderStore {
             val api = cfg.optJSONObject("api")
             val models = mutableListOf<String>()
             cfg.optJSONArray("personalModelIds")?.let { a ->
-                for (j in 0 until a.length()) models += a.optString(j)
+                // 过滤空条目（与 readAsr 一致）：空 modelId 会生成不可用的内核规则。
+                for (j in 0 until a.length()) {
+                    val m = a.optString(j)
+                    if (m.isNotEmpty()) models += m
+                }
             }
             out +=
                 Provider(
@@ -539,6 +543,16 @@ object ProviderStore {
                 )
         }
         return out
+    }
+
+    /**
+     * 输出 token 上限：受模型上下文窗口约束。
+     * 小窗口（8k/16k）留一半给输入；大窗口封顶 32768，保持既有行为。
+     * 窗口非法（<=0）时按最小 1 处理，避免生成 max=0 的死规则。
+     */
+    internal fun outputTokenCap(contextWindow: Int): Int {
+        val window = contextWindow.coerceAtLeast(1)
+        return minOf(32768, window / 2).coerceAtLeast(1)
     }
 
     /** 把一条供应商合并进列表：同 id 替换，不同 id 追加。 */
@@ -639,7 +653,9 @@ object ProviderStore {
                 level.put("map", "{}")
                 specs.put("reasoningLevel", level)
                 val limit = JSONObject()
-                limit.put("max", 32768)
+                // 输出上限受上下文窗口约束：小窗口模型（8k/16k）不能声明 32k 输出预算，
+                // 否则请求会超出模型窗口。留一半窗口给输入，32k 作为大窗口的封顶。
+                limit.put("max", outputTokenCap(p.contextWindow))
                 limit.put("map", "{}")
                 specs.put("maxOutputTokens", limit)
                 cfg.put("optionSpecs", specs)

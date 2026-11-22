@@ -19,14 +19,14 @@ import kotlin.math.roundToInt
 //
 
 // 部件：字符网格，左上角在基框坐标 [x, y]，可负。
-class PetPart(
+data class PetPart(
     val x: Int,
     val y: Int,
     val rows: List<String>,
 )
 
 /** 动画的一帧。effect 在这一帧开始时触发一次。 */
-class PetFrame(
+data class PetFrame(
     val pose: String,
     val ticks: Int,
     val dx: Int = 0,
@@ -35,7 +35,7 @@ class PetFrame(
 )
 
 /** 数字或 [min, max] 区间（min < max 时均匀随机）。 */
-class Span(
+data class Span(
     val min: Double,
     val max: Double,
 ) {
@@ -56,7 +56,7 @@ class Span(
 }
 
 /** 一类粒子：count 个实例，位置与速度可在区间内随机。 */
-class ParticleSpec(
+data class ParticleSpec(
     val count: Int,
     val glyph: String,
     val colors: List<String>,
@@ -72,13 +72,13 @@ class ParticleSpec(
 )
 
 /** 特效：每次触发时全部 particles，或按次数轮换 cycle 里的某一组。 */
-class EffectSpec(
+data class EffectSpec(
     val particles: List<ParticleSpec>,
     val cycle: List<List<ParticleSpec>>,
 )
 
 /** 头顶挂件：转圈（frames+periodMs）或静止字形（glyph），可带上下浮动与闪烁。 */
-class AccessorySpec(
+data class AccessorySpec(
     val glyph: String?,
     val frames: List<String>?,
     val color: String,
@@ -91,20 +91,20 @@ class AccessorySpec(
 )
 
 /** 有抽签权重的片段。 */
-class WeightedClip(
+data class WeightedClip(
     val clip: String,
     val weight: Int,
 )
 
 /** 随机小动作：每 every 个 tick 抽一次，权重 pick。 */
-class FidgetSpec(
+data class FidgetSpec(
     val everyMin: Int,
     val everyMax: Int,
     val pick: List<WeightedClip>,
 )
 
 /** 睡着：空闲 after 个 tick 后睡着，doze 过渡，loop 循环，wake 醒来。 */
-class SleepSpec(
+data class SleepSpec(
     val after: Int,
     val doze: String,
     val loop: String,
@@ -113,13 +113,13 @@ class SleepSpec(
 )
 
 /** 等太久不耐烦：after 个 tick 后换成 loop。 */
-class ImpatientSpec(
+data class ImpatientSpec(
     val after: Int,
     val loop: String,
 )
 
 /** 头顶常驻标记（等确认时的 !）。x 是基框列，hopEvery 是跳动周期。 */
-class BadgeSpec(
+data class BadgeSpec(
     val glyph: String,
     val color: String,
     val x: Int,
@@ -128,7 +128,7 @@ class BadgeSpec(
 )
 
 /** running 状态的工作变体：一个变体有自己的循环、进出场片段与道具。 */
-class VariantSpec(
+data class VariantSpec(
     val loop: String,
     val enter: String?,
     val exit: String?,
@@ -136,7 +136,7 @@ class VariantSpec(
 )
 
 /** 某个状态自己的目光姿态（做完了开花时眼睛仍跟着看）。 */
-class GazePoses(
+data class GazePoses(
     val left: String,
     val right: String,
     val up: String,
@@ -149,7 +149,7 @@ class GazePoses(
  *
  * still 在这里是必填的姿态名（不是片段），"减少动态效果"时直接停在它上面。
  */
-class PetStateSpec(
+data class PetStateSpec(
     val enter: String?,
     val loop: String?,
     val tintDim: Boolean,
@@ -167,7 +167,7 @@ class PetStateSpec(
 )
 
 /** 交互用到的片段与姿态名。 */
-class PetInteractions(
+data class PetInteractions(
     val notice: String,
     val pet: String,
     val petEnd: String,
@@ -205,7 +205,7 @@ class PetInteractions(
 }
 
 /** 道具（抛接的球）。 */
-class PropSpec(
+data class PropSpec(
     val glyph: String,
     val colors: List<String>,
 )
@@ -225,7 +225,7 @@ enum class PetMood(
 }
 
 /** 一份完整的皮肤。 */
-class PetSkin(
+data class PetSkin(
     val schema: Int,
     val id: String,
     val title: String,
@@ -242,10 +242,65 @@ class PetSkin(
     val states: Map<String, PetStateSpec>,
     val interactions: PetInteractions,
     val props: Map<String, PropSpec>,
+    /** manifest 里显式声明的 interactions clip 引用（path -> name），默认名不参与校验。 */
+    val declaredInteractionClips: Map<String, String> = emptyMap(),
+    /** manifest 里显式声明的 interactions pose 引用（path -> name）。 */
+    val declaredInteractionPoses: Map<String, String> = emptyMap(),
 ) {
     fun clip(name: String?): List<PetFrame> = if (name == null) emptyList() else clips[name] ?: emptyList()
-
     fun state(mood: PetMood): PetStateSpec = states[mood.key] ?: states.values.firstOrNull() ?: DEFAULT_STATE
+
+    /**
+     * 加载期的引用完整性校验。
+     *
+     * clip()/glyph()/gridOf() 的兜底保留为防御，但不能是唯一的错误处理：
+     * 引用错误的皮肤以前能「解析成功」，渲染出来却是空白宠物且无任何诊断。
+     * 这里让缺失在 load time 带着路径信息暴露。
+     */
+    internal fun validateReferences() {
+        val problems = ArrayList<String>()
+        fun needPose(path: String, name: String?) {
+            if (!name.isNullOrEmpty() && name !in poses) problems.add("$path -> pose '$name'")
+        }
+        fun needClip(path: String, name: String?) {
+            if (!name.isNullOrEmpty() && name !in clips) problems.add("$path -> clip '$name'")
+        }
+        clips.forEach { (cname, frames) ->
+            frames.forEachIndexed { i, fr -> needPose("clips.$cname[$i]", fr.pose) }
+        }
+        states.forEach { (sname, st) ->
+            needClip("states.$sname.enter", st.enter)
+            needClip("states.$sname.loop", st.loop)
+            needClip("states.$sname.seen", st.seen)
+            needPose("states.$sname.still", st.still)
+            st.variants.forEach { (vname, v) ->
+                needClip("states.$sname.variants.$vname.loop", v.loop)
+                needClip("states.$sname.variants.$vname.enter", v.enter)
+                needClip("states.$sname.variants.$vname.exit", v.exit)
+            }
+            st.sleep?.let { s ->
+                needClip("states.$sname.sleep.doze", s.doze)
+                needClip("states.$sname.sleep.loop", s.loop)
+                needClip("states.$sname.sleep.wake", s.wake)
+                needPose("states.$sname.sleep.still", s.still)
+            }
+            st.impatient?.let { needClip("states.$sname.impatient.loop", it.loop) }
+            st.fidget?.pick?.forEachIndexed { i, w -> needClip("states.$sname.fidget.pick[$i]", w.clip) }
+        }
+        // interactions 只校验显式声明的引用：解析器给未声明字段填了通用默认名
+        // （emerge/goodbye/pop_up/burrow 等），部分内置皮肤本就没有这些片段，
+        // 运行期由 clip() 的空列表兜底。把默认名也当硬引用会误杀合法皮肤。
+        declaredInteractionClips.forEach { (path, name) -> needClip(path, name) }
+        declaredInteractionPoses.forEach { (path, name) -> needPose(path, name) }
+        if (problems.isNotEmpty()) {
+            throw IllegalArgumentException("皮肤 '$id' 引用缺失：${problems.joinToString("; ")}")
+        }
+        // error 状态缺失只警告不拒绝：state() 会回退到第一个状态，
+        // 但配置缺口必须可见，不能静默把 error 显示成 idle。
+        if ("error" !in states) {
+            AppLog.w("PetSkin", "皮肤 '$id' 缺少 error 状态，出错时将回退显示其他状态")
+        }
+    }
 
     fun glyph(name: String?): List<String> = if (name == null) emptyList() else glyphs[name] ?: emptyList()
 
@@ -298,9 +353,10 @@ class PetSkin(
         if (!dim) return v
         val s = dimStrength.coerceIn(0.0, 1.0)
         val grey = 0.5 * s
-
         fun mix(c: Int): Int = (c * (1 - grey) + 127.5 * grey).roundToInt().coerceIn(0, 255)
-        val a = (255 * (1 - 0.15 * s)).roundToInt().coerceIn(0, 255)
+        // 以调色板自身的 alpha 为基数，而不是固定 255：#80FFFFFF 这类有意半透明的
+        // 颜色在 dim 后应保持半透明，否则会把宠物背后的内容遮住。
+        val a = (Color.alpha(v) * (1 - 0.15 * s)).roundToInt().coerceIn(0, 255)
         return Color.argb(a, mix(Color.red(v)), mix(Color.green(v)), mix(Color.blue(v)))
     }
 
@@ -332,11 +388,21 @@ class PetSkin(
 
         private fun JSONObject?.span(key: String): Span? {
             val raw = this?.opt(key) ?: return null
+            // optDouble 对缺失/非数值元素返回 NaN，minOf/maxOf 会把 NaN 传播进区间，
+            // 粒子最终在 NaN 坐标渲染。先做 isFinite 校验：单值缺失退化为定值，
+            // 全部非法返回 null 让调用方落到文档默认值。
             if (raw is JSONArray) {
-                return Span.of(raw.optDouble(0), raw.optDouble(1))
+                val a = raw.optDouble(0)
+                val b = raw.optDouble(1)
+                return when {
+                    a.isFinite() && b.isFinite() -> Span.of(a, b)
+                    a.isFinite() -> Span.of(a)
+                    b.isFinite() -> Span.of(b)
+                    else -> null
+                }
             }
             val d = (raw as? Number)?.toDouble() ?: return null
-            return Span.of(d)
+            return if (d.isFinite()) Span.of(d) else null
         }
 
         /** 读一份 manifest。字段缺失时退回原项目验证器允许的安全默认值。 */
@@ -525,6 +591,27 @@ class PetSkin(
                 }
             }
             val ix = root.optJSONObject("interactions")
+            // 只把显式声明的引用交给校验：未声明字段的默认名是解析器的兜底，
+            // 不是皮肤作者的声明，缺了不该在加载期报错。
+            val declaredClips = LinkedHashMap<String, String>()
+            val declaredPoses = LinkedHashMap<String, String>()
+            listOf(
+                "notice", "pet", "petEnd", "press", "boopEnd", "held",
+                "drop", "blink", "join", "leave", "appear", "vanish",
+            ).forEach { k ->
+                ix?.optString(k)?.takeIf { it.isNotEmpty() }?.let { declaredClips["interactions.$k"] = it }
+            }
+            listOf(
+                "heldStill", "hop", "land", "blinkPose",
+                "lookLeft", "lookRight", "lookUp", "lookDown", "lookCenter",
+            ).forEach { k ->
+                ix?.optString(k)?.takeIf { it.isNotEmpty() }?.let { declaredPoses["interactions.$k"] = it }
+            }
+            listOf("walkLeft", "walkRight").forEach { k ->
+                ix?.optJSONArray(k)?.strList()?.forEachIndexed { i, p ->
+                    if (p.isNotEmpty()) declaredPoses["interactions.$k[$i]"] = p
+                }
+            }
             val interactions =
                 PetInteractions(
                     notice = ix?.optString("notice", "notice") ?: "notice",
@@ -554,13 +641,24 @@ class PetSkin(
                 )
             val grid = root.optJSONArray("grid")
             if (poses.isEmpty()) throw IllegalArgumentException("poses 为空")
-            return PetSkin(
-                schema = root.optInt("schema", 2),
+            // schema 与网格在加载期校验：不受支持的版本/非法网格以前被静默接受，
+            // 问题拖到渲染期才以空白宠物或除零的形式暴露。
+            val schema = root.optInt("schema", 2)
+            if (schema !in 2..3) {
+                throw IllegalArgumentException("不受支持的皮肤 schema：$schema（支持 2~3）")
+            }
+            val cols = grid?.optInt(0) ?: 18
+            val rows = grid?.optInt(1) ?: 10
+            if (cols < 1 || rows < 1) {
+                throw IllegalArgumentException("grid 尺寸非法：${cols}x$rows（各维必须 >= 1）")
+            }
+            val skin = PetSkin(
+                schema = schema,
                 id = root.optString("name", "skin"),
                 title = root.optString("title", root.optString("name", "skin")),
                 tickMs = root.optInt("tickMs", 60).coerceIn(16, 1000),
-                cols = grid?.optInt(0) ?: 18,
-                rows = grid?.optInt(1) ?: 10,
+                cols = cols,
+                rows = rows,
                 palette = palette,
                 parts = parts,
                 poses = poses,
@@ -571,7 +669,11 @@ class PetSkin(
                 states = states,
                 interactions = interactions,
                 props = props,
+                declaredInteractionClips = declaredClips,
+                declaredInteractionPoses = declaredPoses,
             )
+            skin.validateReferences()
+            return skin
         }
 
         private fun parseParticles(arr: JSONArray?): List<ParticleSpec> {
@@ -621,7 +723,7 @@ internal fun isPlausiblePartOrigin(
 internal fun isPlausiblePartLine(line: String): Boolean = line.length <= PET_PART_MAX_LINE
 
 /** 一次栅格化后的姿态：包围盒 + 逐行字符。 */
-class PixelGrid(
+data class PixelGrid(
     val minX: Int,
     val minY: Int,
     val width: Int,

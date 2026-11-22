@@ -215,12 +215,15 @@ object UpdateInstaller {
         }
     }
 
+    /** 更新包文件名格式；对象级常量只编译一次。 */
+    private val APK_NAME = Regex("^coda-(\\d+)\\.apk$")
+
     /** 更新包文件是否该保留：命名合规且版本号 >= 当前已安装版本。 */
     internal fun shouldKeepApk(
         name: String,
         keepVersionCode: Int,
     ): Boolean {
-        val match = Regex("^coda-(\\d+)\\.apk$").matchEntire(name) ?: return false
+        val match = APK_NAME.matchEntire(name) ?: return false
         val version = match.groupValues[1].toIntOrNull() ?: return false
         return version >= keepVersionCode
     }

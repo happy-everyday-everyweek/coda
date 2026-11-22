@@ -162,8 +162,11 @@ object SessionCache {
                         status = o.optString("status"),
                         mode = o.optString("mode"),
                         updatedAt = o.optLong("updatedAt", 0L),
-                        workspacePath = o.optString("workspacePath").takeIf { it.isNotEmpty() && it != "null" },
-                        titleSource = o.optString("titleSource").takeIf { it.isNotEmpty() && it != "null" },
+                        // JSON null 用 isNull 判定，不与字面量 "null" 比较：
+                        // optString 对 null 的转换行为依实现而变，字符串比较也会
+                        // 把恰好叫 "null" 的合法值误杀。
+                        workspacePath = o.optString("workspacePath").takeIf { it.isNotEmpty() && !o.isNull("workspacePath") },
+                        titleSource = o.optString("titleSource").takeIf { it.isNotEmpty() && !o.isNull("titleSource") },
                     )
             }
             out
@@ -176,7 +179,9 @@ object SessionCache {
         sessionId: String,
         list: List<ZMessage>,
     ) {
-        if (sessionId.isEmpty() || list.isEmpty()) return
+        // 空列表是有效状态（消息被清空/删除）：必须落盘覆盖旧缓存，
+        // 否则离线视图会一直展示已删除的内容。只有会话 id 缺失才跳过。
+        if (sessionId.isEmpty()) return
         // 主线程只做一次浅拷贝并把文本取出来（纯字符串拼接，不碰磁盘），
         // 序列化与写盘全在缓存线程完成：历史变长后不会再卡住每轮对话。
         val rows =

@@ -85,8 +85,17 @@ object MirrorScoreboard {
             if (android.os.Build.VERSION.SDK_INT >= 29 &&
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
             ) {
-                caps.underlyingNetworks?.forEach { under ->
-                    val uc = cm.getNetworkCapabilities(under) ?: return@forEach
+                // getUnderlyingNetworks 是 @SystemApi，公开 SDK 编译不到；
+                // VPN 场景在运行期反射读取，失败就按底层不可知处理。
+                val underlying =
+                    runCatching {
+                        NetworkCapabilities::class.java
+                            .getMethod("getUnderlyingNetworks")
+                            .invoke(caps) as? Array<*>
+                    }.getOrNull()
+                underlying?.forEach { under ->
+                    val net = under as? android.net.Network ?: return@forEach
+                    val uc = cm.getNetworkCapabilities(net) ?: return@forEach
                     if (uc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) underlyingWifi = true
                     if (uc.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) underlyingCellular = true
                 }
@@ -129,10 +138,10 @@ object MirrorScoreboard {
         ctx: Context,
         net: Net,
     ): Map<String, Stat> =
+        // 读也要持锁：record 的读-改-写中间态是半截文件，
+        // 不加锁的读取会把它解析失败后退化成空历史，战绩「消失」。
+        synchronized(lock) {
         runCatching {
-            // 读也要持锁：record 的读-改-写中间态是半截文件，
-            // 不加锁的读取会把它解析失败后退化成空历史，战绩「消失」。
-            synchronized(lock) {
             val f = fileOf(ctx)
             // 注意：这里不能用裸 return（会从 runCatching 的 lambda 非局部返回，
             // 语义上能过编译但可读性差且容易在后续改动里出错），改成 if/else 求值。
@@ -170,6 +179,7 @@ object MirrorScoreboard {
             backupCorrupt(fileOf(ctx))
             AppLog.w(TAG, "读取镜像账本失败，按空账本处理：${it.javaClass.simpleName}: ${it.message}")
             emptyMap()
+        }
         }
 
     /** 把一条结果合并进账本并落盘。写失败只记日志，不影响下载结果。 */

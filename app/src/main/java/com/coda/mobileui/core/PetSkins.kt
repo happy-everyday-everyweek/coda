@@ -63,7 +63,15 @@ object PetSkins {
             ?.sortedBy { it.name }
             ?.forEach { file ->
                 runCatching { PetSkin.fromJson(file.readText()) }
-                    .onSuccess { parsed -> custom.add(parsed) }
+                    .onSuccess { parsed ->
+                        // 同 id 去重（文件名排序后先到先得）：重复 id 会让皮肤列表
+                        // 出现重复条目，选择状态也会不一致。
+                        if (custom.none { it.id == parsed.id }) {
+                            custom.add(parsed)
+                        } else {
+                            AppLog.w(TAG, "自定义皮肤 id 重复，跳过 ${file.name}：${parsed.id}")
+                        }
+                    }
             }
         if (custom.isEmpty()) return base
         val out = ArrayList<PetSkin>(base.size + custom.size)
@@ -104,25 +112,9 @@ object PetSkins {
         val skin = PetSkin.fromJson(raw)
         val title = TITLE_OVERRIDE[name]
         return if (title != null && skin.title == skin.id) {
-            // 原项目 clawd 只有 name 没有 title，标题会退回 name；这里补成 Clawd
-            PetSkin(
-                schema = skin.schema,
-                id = skin.id,
-                title = title,
-                tickMs = skin.tickMs,
-                cols = skin.cols,
-                rows = skin.rows,
-                palette = skin.palette,
-                parts = skin.parts,
-                poses = skin.poses,
-                glyphs = skin.glyphs,
-                clips = skin.clips,
-                effects = skin.effects,
-                accessories = skin.accessories,
-                states = skin.states,
-                interactions = skin.interactions,
-                props = skin.props,
-            )
+            // 原项目 clawd 只有 name 没有 title，标题会退回 name；这里补成 Clawd。
+            // data class 的 copy 只改 title：逐字段重建会在新增字段时静默丢数据。
+            skin.copy(title = title)
         } else {
             skin
         }

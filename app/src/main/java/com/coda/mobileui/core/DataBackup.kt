@@ -329,10 +329,8 @@ object DataBackup {
                             total += restoreEntry(ctx.filesDir, name.removePrefix("files/"), stream, MAX_FILE_BYTES)
                             count++
                         }
-                        name.startsWith("linux-coda/") -> {
-                            total += restoreEntry(File(LinuxEnv(ctx).rootfs, "root/.coda"), name.removePrefix("linux-coda/"), stream, MAX_FILE_BYTES)
-                            count++
-                        }
+                        // 旧格式残留的 linux-coda/ 分支已删除：导出侧从未产生该前缀
+                        // （linux rootfs 走 files/ 树），且其基准路径 root/.coda 与前缀语义不符。
                         name.startsWith("databases/") -> {
                             total += restoreEntry(File(ctx.filesDir.parentFile, "databases"), name.removePrefix("databases/"), stream, MAX_FILE_BYTES)
                             count++
