@@ -103,9 +103,15 @@ class WorkflowParseGuardTest {
                 VoiceGenieProtocol.varint(((8 shl 3) or 2).toLong()) +
                 VoiceGenieProtocol.varint(payload.size.toLong()) + payload +
                 VoiceGenieProtocol.varint((5 shl 3).toLong()) + VoiceGenieProtocol.varint(0)
-        val decoded = VoiceGenieProtocol.decodeResponse(frame, isText = false)
+        val decoded =
+            try {
+                VoiceGenieProtocol.decodeResponse(frame, isText = false)
+            } catch (e: Exception) {
+                throw AssertionError("解码抛异常：${e.message}，帧=${frame.joinToString(",")}", e)
+            }
         // data 发布的必须是可还原的字节内容（Base64），长度放独立键 data_length。
         val b64 = decoded.optString("data")
+        if (b64.isEmpty()) throw AssertionError("data 为空，实际 keys=${decoded.keys().asSequence().toList()}，值=${decoded}")
         assertTrue("data 应是 Base64 内容而不是长度数字", b64.isNotEmpty())
         val bytes = java.util.Base64.getDecoder().decode(b64)
         assertEquals(payload.size, bytes.size)

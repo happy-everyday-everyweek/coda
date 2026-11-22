@@ -650,7 +650,10 @@ object SettingsData {
                         p.version?.let { append(" · v").append(it) }
                         if (p.installed) append(" · 已安装")
                     }
-                rows += SettingRow.Value(p.name, detail, "market_install:${p.name}|${p.marketplace}")
+                // 插件名来自外部市场索引（不可信），可能含分隔符 |：URL 编码后再拼 key。
+                val enc = java.net.URLEncoder.encode(p.name, "UTF-8")
+                val encMarket = java.net.URLEncoder.encode(p.marketplace, "UTF-8")
+                rows += SettingRow.Value(p.name, detail, "market_install:$enc|$encMarket")
             }
         }
         if (ov.restorable.isNotEmpty()) {
@@ -986,7 +989,11 @@ object SettingsData {
         val skins =
             com.coda.mobileui.core.PetSkins
                 .all(ctx)
-        val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.first()
+        // 全部皮肤加载失败时列表可能为空：first() 会抛 NoSuchElementException 崩掉整页。
+        val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.firstOrNull()
+        if (current == null) {
+            return SettingsPage("宠物形象", listOf(SettingRow.Value("皮肤资源不可用", "内置皮肤加载失败，请重装应用", "")))
+        }
         val rows = mutableListOf<SettingRow>()
         // 顶部留一块给趴着的宠物本体，由设置页自己往里画。
         // key 必须是**页面 key**（这里就是 "pet"），PetStageView 拿它判断
@@ -1027,7 +1034,11 @@ object SettingsData {
         val skins =
             com.coda.mobileui.core.PetSkins
                 .all(ctx)
-        val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.first()
+        // 全部皮肤加载失败时列表可能为空：first() 会抛 NoSuchElementException 崩掉整页。
+        val current = skins.firstOrNull { it.id == store.petSkinId } ?: skins.firstOrNull()
+        if (current == null) {
+            return SettingsPage("宠物形象", listOf(SettingRow.Value("皮肤资源不可用", "内置皮肤加载失败，请重装应用", "")))
+        }
         val rows = mutableListOf<SettingRow>()
         rows.add(SettingRow.Header("形象"))
         rows.add(SettingRow.Value("当前形象", current.title, "pet_skin"))

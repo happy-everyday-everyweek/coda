@@ -821,8 +821,9 @@ class SettingsDetailActivity :
 
             key.startsWith("market_install:") -> {
                 val rest = key.removePrefix("market_install:")
-                val name = rest.substringBefore('|')
-                val market = rest.substringAfter('|', "")
+                // 与 SettingsData 的编码对应：解码后再用，含 | 的插件名不再错位。
+                val name = runCatching { java.net.URLDecoder.decode(rest.substringBefore('|'), "UTF-8") }.getOrDefault("")
+                val market = runCatching { java.net.URLDecoder.decode(rest.substringAfter('|', ""), "UTF-8") }.getOrDefault("")
                 if (name.isNotEmpty()) installFromMarket(name, market) else renderPage()
             }
 

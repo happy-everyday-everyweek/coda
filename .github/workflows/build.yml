@@ -58,6 +58,16 @@ jobs:
             -x installDebugPythonRequirements \
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
+      # 失败时上传测试报告：只有命令行摘要看不到断言消息与堆栈，排查全靠猜。
+      - name: 上传单元测试报告（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports-${{ github.sha }}
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/test-results/testDebugUnitTest
+          retention-days: 7
 
       - name: 安装 Personal Agent 测试依赖
         working-directory: kernel/maibot-lite

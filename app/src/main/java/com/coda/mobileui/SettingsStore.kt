@@ -26,15 +26,14 @@ class SettingsStore private constructor(
         get() = prefs.getBoolean(KEY_AUTO_COLOR, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_COLOR, value).apply()
 
-    /** 自定义主色（对应 ACCENT_THEMES 的下标）。 */
+    /** 自定义主色（对应 ACCENT_THEMES 的下标）。读写都在合法范围内收口。 */
     var accentIndex: Int
-        get() = prefs.getInt(KEY_ACCENT, 0)
-        set(value) = prefs.edit().putInt(KEY_ACCENT, value).apply()
-
+        get() = prefs.getInt(KEY_ACCENT, 0).coerceIn(ACCENT_THEMES.indices)
+        set(value) = prefs.edit().putInt(KEY_ACCENT, value.coerceIn(ACCENT_THEMES.indices)).apply()
     /** 界面字号档位（对应 FONT_SCALES 的下标）。 */
     var fontScaleIndex: Int
-        get() = prefs.getInt(KEY_FONT_SCALE, 1)
-        set(value) = prefs.edit().putInt(KEY_FONT_SCALE, value).apply()
+        get() = prefs.getInt(KEY_FONT_SCALE, 1).coerceIn(FONT_SCALES.indices)
+        set(value) = prefs.edit().putInt(KEY_FONT_SCALE, value.coerceIn(FONT_SCALES.indices)).apply()
 
     /** 代码显示：显示行号。 */
     var showLineNumbers: Boolean
@@ -48,18 +47,16 @@ class SettingsStore private constructor(
 
     /** 代码字号档位（对应 CODE_FONT_SIZES 的下标）。 */
     var codeFontSizeIndex: Int
-        get() = prefs.getInt(KEY_CODE_FONT_SIZE, 1)
-        set(value) = prefs.edit().putInt(KEY_CODE_FONT_SIZE, value).apply()
-
+        get() = prefs.getInt(KEY_CODE_FONT_SIZE, 1).coerceIn(CODE_FONT_SIZES.indices)
+        set(value) = prefs.edit().putInt(KEY_CODE_FONT_SIZE, value.coerceIn(CODE_FONT_SIZES.indices)).apply()
     /** 浅色代码主题（对应 CODE_THEMES 的下标）。 */
     var codeThemeLightIndex: Int
-        get() = prefs.getInt(KEY_CODE_THEME_LIGHT, 0)
-        set(value) = prefs.edit().putInt(KEY_CODE_THEME_LIGHT, value).apply()
-
+        get() = prefs.getInt(KEY_CODE_THEME_LIGHT, 0).coerceIn(CODE_THEMES.indices)
+        set(value) = prefs.edit().putInt(KEY_CODE_THEME_LIGHT, value.coerceIn(CODE_THEMES.indices)).apply()
     /** 深色代码主题（对应 CODE_THEMES 的下标）。 */
     var codeThemeDarkIndex: Int
-        get() = prefs.getInt(KEY_CODE_THEME_DARK, 0)
-        set(value) = prefs.edit().putInt(KEY_CODE_THEME_DARK, value).apply()
+        get() = prefs.getInt(KEY_CODE_THEME_DARK, 0).coerceIn(CODE_THEMES.indices)
+        set(value) = prefs.edit().putInt(KEY_CODE_THEME_DARK, value.coerceIn(CODE_THEMES.indices)).apply()
 
     /** 发送消息后自动滚动到底部。 */
     var chatAutoScroll: Boolean
@@ -76,18 +73,37 @@ class SettingsStore private constructor(
         get() = prefs.getInt(KEY_DEFAULT_SEND_MODE, 1).coerceIn(0, 2)
         set(value) = prefs.edit().putInt(KEY_DEFAULT_SEND_MODE, value.coerceIn(0, 2)).apply()
 
-    /** 斜杠命令最近使用（最多 5 个，逗号分隔存储）。 */
+    /**
+     * 斜杠命令最近使用（最多 5 个，去重）。
+     *
+     * 存储用 JSON 数组：逗号分隔会把含逗号的命令拆成两条，round-trip 不可逆。
+     * 旧格式（无 [ 前缀）按逗号读一次作为迁移，写入起一律 JSON。
+     */
     var slashRecent: List<String>
-        get() =
-            (prefs.getString(KEY_SLASH_RECENT, "") ?: "")
-                .split(',')
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-        set(value) = prefs.edit().putString(KEY_SLASH_RECENT, value.take(5).joinToString(",")).apply()
-
-    /** 记录一次斜杠命令使用。 */
+        get() {
+            val raw = prefs.getString(KEY_SLASH_RECENT, "") ?: ""
+            if (raw.isEmpty()) return emptyList()
+            val items =
+                if (raw.startsWith("[")) {
+                    runCatching {
+                        val arr = org.json.JSONArray(raw)
+                        (0 until arr.length()).map { arr.optString(it) }
+                    }.getOrDefault(emptyList())
+                } else {
+                    raw.split(',')
+                }
+            return items.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(5)
+        }
+        set(value) {
+            val arr = org.json.JSONArray()
+            value.distinct().take(5).forEach { arr.put(it) }
+            prefs.edit().putString(KEY_SLASH_RECENT, arr.toString()).apply()
+        }
+    /** 记录一次斜杠命令使用。读-改-写加锁，并发调用不互相覆盖。 */
     fun addSlashRecent(name: String) {
-        slashRecent = listOf(name) + slashRecent.filter { it != name }
+        synchronized(slashLock) {
+            slashRecent = listOf(name) + slashRecent.filter { it != name }
+        }
     }
 
     /** 工作区根目录；为空表示尚未选定，由默认位置接管。 */
@@ -210,20 +226,47 @@ class SettingsStore private constructor(
 
     /** 会话最近一次被看到的时间（抽屉里的「已完成」标记据此判断未读）。 */
     fun sessionSeenAt(sessionId: String): Long = prefs.getLong(KEY_SESSION_SEEN + sessionId, 0L)
-
-    /** 记录会话已被看到。 */
+    /**
+     * 记录会话已被看到。
+     *
+     * 顺手修剪失效条目：只保留 [liveSessionIds]（当前会话列表）里的标记，
+     * 已删除会话的 key 不再永久累积，偏好文件不会无界增长。
+     * 不传列表时退化为按数量修剪（保留最近 [MAX_SEEN_MARKS] 条）。
+     */
     fun markSessionSeen(
         sessionId: String,
         at: Long = System.currentTimeMillis(),
+        liveSessionIds: Collection<String>? = null,
     ) {
-        prefs.edit().putLong(KEY_SESSION_SEEN + sessionId, at).apply()
+        synchronized(slashLock) {
+            val editor = prefs.edit()
+            editor.putLong(KEY_SESSION_SEEN + sessionId, at)
+            val seenKeys = prefs.all.keys.filter { it.startsWith(KEY_SESSION_SEEN) }
+            if (liveSessionIds != null) {
+                val live = liveSessionIds.toHashSet()
+                seenKeys.forEach { k ->
+                    if (k.removePrefix(KEY_SESSION_SEEN) !in live) editor.remove(k)
+                }
+            } else if (seenKeys.size > MAX_SEEN_MARKS) {
+                seenKeys
+                    .sortedBy { prefs.getLong(it, 0L) }
+                    .take(seenKeys.size - MAX_SEEN_MARKS)
+                    .forEach { editor.remove(it) }
+            }
+            editor.apply()
+        }
     }
 
     /** 当前代码字号名称。 */
     fun codeFontSizeName(): String = CODE_FONT_SIZE_NAMES[codeFontSizeIndex.coerceIn(CODE_FONT_SIZE_NAMES.indices)]
 
+    /** slashRecent 与已读标记的读-改-写互斥锁。 */
+    private val slashLock = Any()
+
     companion object {
         private const val PREFS_NAME = "zcode_ui_settings"
+        /** 已读标记的数量上限：超出时按时间淘汰最旧的。 */
+        private const val MAX_SEEN_MARKS = 500
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_AUTO_COLOR = "auto_color"
         private const val KEY_ACCENT = "accent"

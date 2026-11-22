@@ -3503,7 +3503,7 @@ class MainActivity : BaseActivity() {
         val row = inflater.inflate(R.layout.view_drawer_conversation, container, false)
         row.tag = session.id
         // 正在查看的会话即时算已读；其余按完成时间与上次查看时间判断是否未读。
-        if (session.id == zc.currentSessionId) SettingsStore.get(this).markSessionSeen(session.id)
+        if (session.id == zc.currentSessionId) SettingsStore.get(this).markSessionSeen(session.id, liveSessionIds = zc.sessions.map { it.id })
         val status = sessionConvStatus(session)
         row.findViewById<TextView>(R.id.conv_status).apply {
             val label =
@@ -3536,7 +3536,7 @@ class MainActivity : BaseActivity() {
             git?.branch ?: session.workspacePath ?: session.mode
         bindSessionPull(row, git)
         row.setOnClickListener {
-            SettingsStore.get(this).markSessionSeen(session.id)
+            SettingsStore.get(this).markSessionSeen(session.id, liveSessionIds = zc.sessions.map { it.id })
             pendingNewSession = false
             runSessionOpen {
                 liveText.clear()
@@ -5048,7 +5048,7 @@ class MainActivity : BaseActivity() {
 
     /** 搜索结果点选：收起搜索页并切到那条会话。 */
     private fun openSessionFromSearch(session: com.coda.mobileui.core.ZSessionInfo) {
-        SettingsStore.get(this).markSessionSeen(session.id)
+        SettingsStore.get(this).markSessionSeen(session.id, liveSessionIds = zc.sessions.map { it.id })
         pendingNewSession = false
         hideSearchPage()
         liveText.clear()
