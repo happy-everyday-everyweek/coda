@@ -196,15 +196,21 @@ object BrowserControl {
             return executeBlocking(ctx, method, cmd, params, started)
         }
         var result: JSONObject? = null
-        onMain {
-            result =
-                try {
-                    runCommand(ctx, method, cmd, params, started)
-                } catch (t: Throwable) {
-                    errorResult(params, "execution_error", t.message ?: "浏览器执行失败", started)
-                }
+        // onMain 现在会告知是否真的执行完：超时后任务可能仍在跑，
+        // 文案要区分「阻塞超时」与「已失败」，不能让调用方以为命令已终止（#223）。
+        val completed =
+            onMain {
+                result =
+                    try {
+                        runCommand(ctx, method, cmd, params, started)
+                    } catch (t: Throwable) {
+                        errorResult(params, "execution_error", t.message ?: "浏览器执行失败", started)
+                    }
+            }
+        if (!completed) {
+            return errorResult(params, "timeout", "浏览器主线程阻塞超时，命令可能仍在执行", started)
         }
-        return result ?: errorResult(params, "timeout", "浏览器主线程阻塞超时", started)
+        return result ?: errorResult(params, "execution_error", "浏览器未返回结果", started)
     }
 
     /** navigate / reload / waitFor：只在主线程做视图操作，等待部分留在后台线程。 */
@@ -554,10 +560,24 @@ object BrowserControl {
     private fun isSafeRefValue(ref: String): Boolean =
         ref.isEmpty() || Regex("^[A-Za-z0-9_-]{1,64}$").matches(ref)
 
+    /**
+     * 取可用的引擎；不可用时返回 null，让调用方的「未就绪」分支真正可达（#229）。
+     *
+     * 旧实现是恒真转发 `= web`，两个参数都没用上，于是所有
+     * `engineOrNull(...) ?: return errorResult(...)` 的错误分支永远走不到。
+     * 现在校验 WebView 存在且宿主 Activity 仍在。
+     */
     private fun engineOrNull(
         params: JSONObject,
         started: Long,
-    ): WebView? = web
+    ): WebView? {
+        val view = web ?: return null
+        if (activityRef?.get() == null) {
+            AppLog.w("BrowserControl", "引擎存在但宿主已销毁，视为未就绪（method=${params.optJSONObject("command")?.optString("method")}）")
+            return null
+        }
+        return view
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun ensureEngine(): WebView? {
@@ -591,6 +611,12 @@ object BrowserControl {
             view.isFocusable = false
             view.isLongClickable = false
             view.alpha = 0f
+            // alpha=0 只是看不见，仍参与布局与命中测试，会吞掉用户点击（#227）。
+            // 不能改 visibility：screenshot 与页面渲染都依赖它可见。
+            // 改为把触摸事件全部交还给下层——监听器返回 false 且自身不可点击，
+            // 事件不会被这个透明层消费。
+            view.setOnTouchListener { _, _ -> false }
+            view.isEnabled = false
             view.webViewClient =
                 object : WebViewClient() {
                     override fun onPageFinished(
@@ -787,24 +813,41 @@ object BrowserControl {
         return value
     }
 
-    /** 在主线程执行并等待完成。 */
+    /**
+     * 在主线程执行并等待完成。返回是否真的等到执行结束（#223）。
+     *
+     * 旧实现丢弃 await 的返回值：超时后调用方收到 timeout，但已投递的 block
+     * 仍会继续跑 runCommand，调用方无法区分「仍在运行」与「失败」。
+     * 现在超时返回 false，并尝试把尚未开始的任务从队列里撤掉。
+     */
     private fun onMain(
         timeoutMs: Long = 30000,
         block: () -> Unit,
-    ) {
+    ): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             block()
-            return
+            return true
         }
         val latch = CountDownLatch(1)
-        main.post {
-            try {
-                block()
-            } catch (_: Throwable) {
-            } finally {
-                latch.countDown()
+        val started = java.util.concurrent.atomic.AtomicBoolean(false)
+        val task =
+            Runnable {
+                started.set(true)
+                try {
+                    block()
+                } catch (e: Exception) {
+                    AppLog.w("BrowserControl", "主线程任务失败：${e.message ?: e.javaClass.simpleName}")
+                } finally {
+                    latch.countDown()
+                }
             }
+        main.post(task)
+        val done = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!done) {
+            // 还没开始就撤掉；已经在跑的无法中断，只能如实告知调用方「可能仍在运行」。
+            main.removeCallbacks(task)
+            AppLog.w("BrowserControl", "主线程任务超时（${timeoutMs}ms），已开始=${started.get()}")
         }
-        latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        return done
     }
 }

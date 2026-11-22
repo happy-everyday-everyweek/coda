@@ -271,8 +271,16 @@ object AsrTester {
         language: String = "zh",
     ): Result {
         if (ProviderStore.isBuiltin(provider)) return transcribeBuiltin(audio, model)
-        if (provider.baseUrl.isBlank()) return Result.Fail("供应商未填写转写端点")
-        if (model.isBlank()) return Result.Fail("供应商未填写模型名")
+        // 这两条 return 在 try 之外，不会走到 finally 的 audio.delete()：
+        // 校验失败时录音文件会一直留在缓存里（#195）。
+        if (provider.baseUrl.isBlank()) {
+            runCatching { audio.delete() }
+            return Result.Fail("供应商未填写转写端点")
+        }
+        if (model.isBlank()) {
+            runCatching { audio.delete() }
+            return Result.Fail("供应商未填写模型名")
+        }
         val url = endpoint(provider.baseUrl)
         val started = System.currentTimeMillis()
         return try {
@@ -466,8 +474,16 @@ object AsrTester {
         /** 建连并开会话。失败抛异常，调用方转成提示。 */
         fun start() {
             val s = DoubaoAsr.LiveSession(onText = { text, isFinal -> onText(text, isFinal) })
-            s.start()
+            // 先登记再建连：s.start() 抛异常时调用方的 cancel() 才能拿到这个实例
+            // 去关连接，否则已创建的资源无人清理（#198）。
             session = s
+            try {
+                s.start()
+            } catch (t: Throwable) {
+                runCatching { s.cancel() }
+                session = null
+                throw t
+            }
         }
 
         /** 喂一块 PCM。内部异常只记录，不打断录音线程。 */
@@ -538,6 +554,15 @@ object AsrTester {
                     if (sb.isNotBlank()) return sb.toString().trim()
                 }
             }
+        }
+        // 走到这里还没取到 text/results/segments：如果它其实是 JSON，那就是业务错误
+        // （HTTP 200 + {"error":{...}} 或 {"code":...}），不能把整段 JSON 当识别结果（#196）。
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            val obj = runCatching { JSONObject(trimmed) }.getOrNull()
+            val err =
+                obj?.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+                    ?: obj?.optString("message")?.takeIf { it.isNotBlank() && obj.has("code") }
+            throw IllegalStateException(err ?: "转写服务返回了无法识别的 JSON 响应")
         }
         // 真的是裸文本（response_format=text 的返回），原样用。
         return trimmed
