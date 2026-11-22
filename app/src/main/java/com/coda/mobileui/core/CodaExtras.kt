@@ -279,14 +279,35 @@ object CodaExtras {
             else -> kind
         }
 
+    /** JSONObject.NULL 要当成「没有值」，否则界面会显示字面串 "null"（#239）。 */
+    private fun jsonValueOrNull(v: Any?): Any? = if (v == null || v == JSONObject.NULL) null else v
+
     fun anyToText(v: Any?): String =
         when (v) {
-            null -> ""
+            null, JSONObject.NULL -> ""
             is String -> v
             is Boolean -> if (v) "true" else "false"
-            is Double -> if (v.isFinite() && v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
+            is Double -> doubleText(v)
             else -> v.toString()
         }
+
+    /**
+     * Double 的展示文本（#240）。
+     *
+     * 旧写法 v == v.toLong().toDouble() 在 |v| >= 2^63 时会被 toLong() 饱和成
+     * Long.MAX_VALUE 并误判为整数，输出 9223372036854775807 这种假值；
+     * 超过 2^53 后 Long↔Double 往返还会丢精度，让不同的值印出同一串数字。
+     * 因此只在「安全整数范围」内做整数化，其余交给 BigDecimal 保留原值。
+     */
+    fun doubleText(v: Double): String {
+        if (!v.isFinite()) return v.toString()
+        // 2^53：Double 能精确表示的整数上界。
+        val safe = 9_007_199_254_740_992.0
+        if (kotlin.math.abs(v) < safe && v == kotlin.math.floor(v)) {
+            return v.toLong().toString()
+        }
+        return java.math.BigDecimal(v).stripTrailingZeros().toPlainString()
+    }
 
     fun findPluginDetail(
         root: JSONObject?,
@@ -336,17 +357,26 @@ object CodaExtras {
             val all = mutableListOf<String>()
             while (keys.hasNext()) all += keys.next()
             all.sorted().forEach { key ->
-                val o = cfg.optJSONObject(key) ?: return@forEach
+                // userConfig 的值可能是标量简写（"apiKey": "xxx"），不能整条跳过：
+                // 声明了却不出现在详情页里，用户根本没法配（#239）。
+                val o = cfg.optJSONObject(key)
+                val scalar = if (o == null) cfg.get(key) else null
                 options +=
                     PluginConfigOption(
                         key = key,
-                        title = o.optString("title").takeIf { it.isNotEmpty() },
-                        description = o.optString("description").takeIf { it.isNotEmpty() },
-                        type = o.optString("type", "string").ifEmpty { "string" },
-                        default = if (o.has("default")) o.get("default") else null,
-                        required = o.optBoolean("required", false),
-                        sensitive = o.optBoolean("sensitive", false),
-                        current = if (configured != null && configured.has(key)) configured.get(key) else null,
+                        title = o?.optString("title")?.takeIf { it.isNotEmpty() },
+                        description = o?.optString("description")?.takeIf { it.isNotEmpty() },
+                        type = o?.optString("type", "string")?.ifEmpty { "string" } ?: "string",
+                        default = if (o != null && o.has("default")) jsonValueOrNull(o.get("default")) else null,
+                        required = o?.optBoolean("required", false) ?: false,
+                        sensitive = o?.optBoolean("sensitive", false) ?: false,
+                        // 标量简写时，那个值本身就是当前值。
+                        current =
+                            when {
+                                configured != null && configured.has(key) -> jsonValueOrNull(configured.get(key))
+                                scalar != null -> jsonValueOrNull(scalar)
+                                else -> null
+                            },
                     )
             }
         }
@@ -378,11 +408,17 @@ object CodaExtras {
     )
 
     /** 读取工作区级与用户级 settings.json 的 hooks 段（兼容新旧两种结构）。 */
+    /** 最近一次 readHooks 的读取错误（按来源），供页面区分「空」与「读失败」（#237）。 */
+    @Volatile
+    var lastReadErrors: List<String> = emptyList()
+        private set
+
     fun readHooks(
         workspacePath: String?,
         homeDir: File,
     ): List<HookItem> {
         val out = mutableListOf<HookItem>()
+        val readErrors = mutableListOf<String>()
         val files = mutableListOf<Pair<String, File>>()
         if (workspacePath != null) {
             files += "工作区" to File(workspacePath, ".zcode/settings.json")
@@ -415,9 +451,13 @@ object CodaExtras {
                         }
                     }
                 }
-            } catch (_: Throwable) {
+            } catch (e: Exception) {
+                // 空 catch 会让「读取失败」与「确实没配钩子」长得一样（#237）。
+                AppLog.w(TAG, "读取钩子配置失败：${f.absolutePath} ${e.javaClass.simpleName}: ${e.message}")
+                readErrors += "${label}：${e.message ?: e.javaClass.simpleName}"
             }
         }
+        lastReadErrors = readErrors
         return out
     }
 
