@@ -3921,8 +3921,13 @@ class MainActivity : BaseActivity() {
                 .subtitle(reason.ifEmpty { "该操作需要你的确认。" })
         sheet.onDismiss {
             if (!responded) {
-                zc.runtime.respond(requestId, org.json.JSONObject().put("decision", "deny"))
+                // 下拉 / 点遮罩 / 返回键关闭不等于拒绝（#52）：
+                // 用户可能只是想看后面的对话，误触就把工具授权永久拒了、
+                // 那一轮直接中断。改成入暂缓队列，由提示条提供继续入口。
+                responded = true
+                deferredRequests.addLast(DeferredRequest(requestId, params, question = false))
                 clearPendingPermission()
+                showDeferredSnackbar()
             }
         }
         sheet.content { col ->
@@ -3987,8 +3992,11 @@ class MainActivity : BaseActivity() {
                 .title(questionText)
         sheet.onDismiss {
             if (!responded) {
-                zc.runtime.respond(requestId, org.json.JSONObject().put("action", "decline"))
+                // 与权限弹窗一致：关闭不等于拒绝，入暂缓队列（#52）。
+                responded = true
+                deferredRequests.addLast(DeferredRequest(requestId, params, question = true))
                 clearPendingPermission()
+                showDeferredSnackbar()
             }
         }
         if (labels.isNotEmpty()) {
