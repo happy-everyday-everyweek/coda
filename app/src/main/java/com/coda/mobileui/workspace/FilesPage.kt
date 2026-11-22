@@ -257,6 +257,7 @@ open class FilesPage(
         if (current.absolutePath != oldPath) return
         editing = newFile
         loadedMtime = runCatching { newFile.lastModified() }.getOrDefault(loadedMtime)
+        sizeCachePath = null
         refreshEditorTitle()
         refreshCursorStatus()
         toast("文件已移动到 ${newFile.name}")
@@ -268,7 +269,11 @@ open class FilesPage(
         if (current.absolutePath != path) return
         editing = null
         readOnlyPreview = true
+        // 解除绑定后状态栏改走只读分支：字节数按当前正文算，并清掉旧路径的大小缓存。
+        previewBytes = editorInput.text?.toString()?.toByteArray(editorCharset)?.size?.toLong() ?: 0L
+        sizeCachePath = null
         refreshEditorTitle()
+        refreshCursorStatus()
         toast("文件已被删除，当前内容不再写回磁盘")
     }
 
@@ -620,19 +625,52 @@ override fun menuItems(): List<String> =
             return
         }
         host.background(
-            work = {
-                runCatching {
-                    if (file.renameTo(target)) true else file.copyRecursively(target) && file.deleteRecursively()
-                }.getOrDefault(false)
-            },
-            then = { ok ->
-                if (ok) host.onFilesMoved(file.absolutePath, target.absolutePath)
-                toast(if (ok) "已移动到 ${dir.name}" else "移动失败")
+            work = { moveOutcome(file, target) },
+            then = { outcome ->
+                when (outcome) {
+                    "ok" -> {
+                        host.onFilesMoved(file.absolutePath, target.absolutePath)
+                        toast("已移动到 ${dir.name}")
+                    }
+                    "exists" -> toast("目标目录已有同名条目")
+                    "copied-not-removed" -> toast("已复制，但原文件删除失败，两处都还在")
+                    else -> toast("移动失败，已清理未完成的目标")
+                }
                 renderList()
                 renderRightPane()
             },
-            onError = { toast("移动失败") },
+            onError = {
+                runCatching { if (target.exists()) target.deleteRecursively() }
+                toast("移动失败")
+            },
         )
+    }
+
+    /**
+     * 在后台执行移动，返回结果代号。
+     *
+     * 三条硬要求（#510）：存在性检查与写入在同一次任务里做，避免检查后被别人占名；
+     * 拷贝中途失败要把半成品删掉，否则残树会让下次重试永远被「已存在」挡住；
+     * 源删不掉时不能反过来删目标——那会把唯一一份完整数据也丢掉。
+     */
+    private fun moveOutcome(
+        file: File,
+        target: File,
+    ): String {
+        if (target.exists()) return "exists"
+        if (file.renameTo(target)) return "ok"
+        val copied =
+            try {
+                file.copyRecursively(target, overwrite = false)
+            } catch (t: Throwable) {
+                runCatching { target.deleteRecursively() }
+                return "fail"
+            }
+        if (!copied) {
+            runCatching { target.deleteRecursively() }
+            return "fail"
+        }
+        return if (file.deleteRecursively()) "ok" else "copied-not-removed"
     }
 
     private fun copyFileToDir(
@@ -653,15 +691,41 @@ override fun menuItems(): List<String> =
             return
         }
         host.background(
-            work = { runCatching { file.copyRecursively(target, overwrite = false) }.getOrDefault(false) },
-            then = { ok ->
-                toast(if (ok) "已复制到 ${dir.name}" else "复制失败")
-                if (ok) {
+            work = {
+                // 与移动同理：检查放进任务里，失败时清掉半成品（#510）。
+                if (target.exists()) {
+                    "exists"
+                } else {
+                    val ok =
+                        try {
+                            file.copyRecursively(target, overwrite = false)
+                        } catch (t: Throwable) {
+                            runCatching { target.deleteRecursively() }
+                            false
+                        }
+                    if (ok) {
+                        "ok"
+                    } else {
+                        runCatching { target.deleteRecursively() }
+                        "fail"
+                    }
+                }
+            },
+            then = { outcome ->
+                when (outcome) {
+                    "ok" -> toast("已复制到 ${dir.name}")
+                    "exists" -> toast("同名文件已存在")
+                    else -> toast("复制失败，已清理未完成的目标")
+                }
+                if (outcome == "ok") {
                     renderList()
                     renderRightPane()
                 }
             },
-            onError = { toast("复制失败") },
+            onError = {
+                runCatching { if (target.exists()) target.deleteRecursively() }
+                toast("复制失败")
+            },
         )
     }
 
@@ -918,6 +982,7 @@ override fun menuItems(): List<String> =
         markdownMode = false
         editorCharset = Charsets.UTF_8
         originalText = content
+        previewBytes = content.toByteArray(Charsets.UTF_8).size.toLong()
         dirty = false
         editorRules = CodeHighlighter.detect(name)
         indentUnit = if (editorRules == null) "    " else detectIndentUnit(content)
@@ -2183,39 +2248,28 @@ override fun menuItems(): List<String> =
 
     /** 底部状态：路径 · 大小 · 行数 · 行列 · 语言。 */
     private fun refreshCursorStatus() {
-        val file = editing ?: return
+        // 只读预览（压缩包内文件）没有 editing，但它同样需要行列号：
+        // 用 editing 判空会让整个状态栏在预览时完全不刷新（#514）。
+        val file = editing
+        if (file == null && !readOnlyPreview) return
         val text = editorInput.text ?: return
         val caret = editorInput.selectionStart.coerceAtLeast(0)
-        var line = 1
-        var lineStart = 0
-        // 一次遍历同时得到逻辑行总数与插入点所在行：状态栏与「转到行」按 `\n` 数，
-        // 不能用 lineCount（自动换行后那是视觉行数）。
-        var total = 1
-        var i = 0
-        while (i < text.length) {
-            if (text[i] == '\n') {
-                total++
-                if (i < caret) {
-                    line++
-                    lineStart = i + 1
-                }
-            }
-            i++
-        }
-        val column = caret - lineStart + 1
+        val pos = CaretPosition.of(text, caret)
         val language = editorRules?.name
         editorStatus.text =
             buildString {
-                append(file.absolutePath)
+                append(file?.absolutePath ?: saved.optString("name").ifEmpty { "只读预览" })
                 append(" · ")
-                append(readableSize(file.length()))
+                // 预览没有磁盘文件，用载入时算好的字节数；有文件时大小按路径缓存，
+                // 不必每次按键都 stat 或重新编码整篇正文（#514）。
+                append(readableSize(file?.let { cachedFileSize(it) } ?: previewBytes))
                 append(" · ")
-                append(total)
+                append(pos.totalLines)
                 append(" 行")
                 append(" · Ln ")
-                append(line)
+                append(pos.line)
                 append(", Col ")
-                append(column)
+                append(pos.column)
                 if (editorCharset != Charsets.UTF_8) {
                     append(" · ")
                     append(editorCharset.name())
@@ -2226,6 +2280,21 @@ override fun menuItems(): List<String> =
                 }
                 if (wrapEnabled) append(" · 自动换行")
             }
+    }
+
+    /** 文件大小按路径缓存：每次按键都 file.length() 是一次无谓的磁盘 stat。 */
+    private var sizeCachePath: String? = null
+    private var sizeCacheValue = 0L
+
+    /** 只读预览的字节数：载入时算一次，避免每次刷新状态栏都重新编码整篇正文。 */
+    private var previewBytes = 0L
+
+    private fun cachedFileSize(file: File): Long {
+        val path = file.absolutePath
+        if (path == sizeCachePath) return sizeCacheValue
+        sizeCachePath = path
+        sizeCacheValue = runCatching { file.length() }.getOrDefault(0L)
+        return sizeCacheValue
     }
 
     /** 转到指定行（1 起），把光标与选区落在该行行首。 */
@@ -2636,6 +2705,7 @@ override fun menuItems(): List<String> =
         editorCharset = charset
         originalText = content
         loadedMtime = runCatching { file.lastModified() }.getOrDefault(0L)
+        sizeCachePath = null
         dirty = false
         editorRules = rulesFor(file)
         indentUnit = if (editorRules == null) "    " else detectIndentUnit(content)
@@ -2685,6 +2755,7 @@ override fun menuItems(): List<String> =
                     originalText = text
                     // 写盘之后刷新基线，避免切回来时把自己刚写的内容当成"磁盘被改过"。
                     loadedMtime = runCatching { file.lastModified() }.getOrDefault(loadedMtime)
+                    sizeCachePath = null
                     dirty = editorInput.text.toString() != text
                     refreshEditorTitle()
                     refreshCursorStatus()
