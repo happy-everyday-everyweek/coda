@@ -1,7 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+        圆角四档（#53）。
+
+        之前全项目散落 2/3/8/14/15/16/18/19/20/22/25/26/28dp 十三种值，
+        其中 14/15/16、18/19/20、25/26/28 三组相邻到看不出语义差异。
+        这里定义唯一档位，新代码一律引用；旧值按需逐步替换，不一次全改。
+    -->
+    <dimen name="corner_small">8dp</dimen>
+    <dimen name="corner_card">16dp</dimen>
+    <dimen name="corner_bubble">20dp</dimen>
+    <dimen name="corner_panel">28dp</dimen>
+
+    <!--
+        最小触控目标（#53 / #50 / #87）。
+
+        之前发送 42dp、附件 40dp、返回 44dp、模型项 42dp 各写一份，
+        没有任何地方声明基线。图标视觉可以更小，可点区域不得小于这个值。
+    -->
+    <dimen name="touch_min">48dp</dimen>
+
     <!-- 设置分组卡片：圆角只出现在分组首行的上边与末行的下边，中间行为直角。 -->
-    <dimen name="settings_card_corner">16dp</dimen>
+    <dimen name="settings_card_corner">@dimen/corner_card</dimen>
     <!-- 分组内相邻行之间的断开缝（与页面背景同色的细线）。 -->
     <dimen name="settings_card_gap">3dp</dimen>
     <!--
@@ -46,4 +66,5 @@
         标题都会自动跟着对齐，不会出现「改了行距忘了改标题」。
     -->
     <dimen name="content_inset_total">36dp</dimen>
+
 </resources>

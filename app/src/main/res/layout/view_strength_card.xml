@@ -12,7 +12,7 @@
     android:layout_marginTop="10dp"
     android:stateListAnimator="@null"
     app:cardBackgroundColor="?attr/colorSurfaceContainerLowest"
-    app:cardCornerRadius="20dp"
+    app:cardCornerRadius="@dimen/corner_bubble"
     app:cardElevation="0dp"
     app:cardUseCompatPadding="false"
     app:strokeWidth="0dp">
