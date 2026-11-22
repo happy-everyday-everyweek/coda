@@ -36,8 +36,9 @@ internal class DiffView(
 
     private val margin = resources.getDimensionPixelSize(R.dimen.settings_card_margin)
 
-    private val green = 0xFF35B37E.toInt()
-    private val red = 0xFFE0574C.toInt()
+    // 增删色走资源，浅色/深色各有一套；写死 ARGB 在浅色主题下对比度不足（#501）。
+    private val green = ContextCompat.getColor(activity, R.color.diff_added)
+    private val red = ContextCompat.getColor(activity, R.color.diff_removed)
 
     init {
         orientation = VERTICAL
@@ -72,20 +73,11 @@ internal class DiffView(
     // ------------------------------------------------------------ 统计
 
     private fun statLine(lines: List<String>): View {
-        var files = 0
-        var added = 0
-        var removed = 0
-        // 拼接两段 diff 时同一文件会出现两条 `diff --git`：按文件名去重，别报成两个文件。
-        val seen = HashSet<String>()
-        for (line in lines) {
-            when {
-                line.startsWith("diff --git ") -> {
-                    if (seen.add(parseDiffName(line.removePrefix("diff --git ").trim()))) files++
-                }
-                line.startsWith("+") && !line.startsWith("+++") -> added++
-                line.startsWith("-") && !line.startsWith("---") -> removed++
-            }
-        }
+        // 统计交给 DiffLines：它维护 hunk 状态，hunk 内的 ---/+++ 内容行不会被漏计（#499）。
+        val stat = DiffLines.stat(lines)
+        val files = stat.files
+        val added = stat.added
+        val removed = stat.removed
         val summary =
             buildString {
                 if (files > 0) append("$files 个文件 · ")
@@ -130,11 +122,8 @@ internal class DiffView(
      * 路径含空格时 git 会给两端加引号，按空格切分会得到 `file.txt"` 这样的残片；
      * 这里先按带引号的完整形式匹配，再退回无引号形式。
      */
-    private fun parseDiffName(tail: String): String {
-        Regex("^\"a/(.*)\" \"b/(.*)\"$").find(tail)?.let { return it.groupValues[2] }
-        Regex("^a/(.*) b/(.*)$").find(tail)?.let { return it.groupValues[2] }
-        return tail.split(' ').lastOrNull()?.removePrefix("b/").orEmpty()
-    }
+    /** 文件名解析统一走 DiffLines，避免两份实现漂移。 */
+    private fun parseDiffName(tail: String): String = DiffLines.fileName(tail)
 
     private fun fileCard(
         group: Group,
@@ -209,21 +198,22 @@ internal class DiffView(
         val variant = colorOf(com.google.android.material.R.attr.colorOnSurfaceVariant)
         val primary = colorOf(androidx.appcompat.R.attr.colorPrimary)
         val sb = SpannableStringBuilder()
+        // 分类交给 DiffLines（有单测）：hunk 内以 @@/+++/---/diff --git 开头的内容行
+        // 不再被误当成头部着色（#499）。
+        val kinds = DiffLines.classify(lines, conflict = mode == Mode.CONFLICT)
         lines.forEachIndexed { index, line ->
             val start = sb.length
             sb.append(line)
             val color =
-                when {
-                    mode == Mode.CONFLICT && line.startsWith("<<<<<<<") -> red
-                    mode == Mode.CONFLICT && line.startsWith(">>>>>>>") -> green
-                    mode == Mode.CONFLICT && line.startsWith("=======") -> primary
-                    mode == Mode.CONFLICT -> null
-                    line.startsWith("@@") -> primary
-                    line.startsWith("+++") || line.startsWith("---") -> variant
-                    line.startsWith("+") -> green
-                    line.startsWith("-") -> red
-                    line.startsWith("diff --git") -> variant
-                    else -> null
+                when (kinds[index]) {
+                    DiffLineKind.CONFLICT_OURS -> red
+                    DiffLineKind.CONFLICT_THEIRS -> green
+                    DiffLineKind.CONFLICT_SEPARATOR -> primary
+                    DiffLineKind.HUNK_HEADER -> primary
+                    DiffLineKind.FILE_HEADER -> variant
+                    DiffLineKind.ADDED -> green
+                    DiffLineKind.REMOVED -> red
+                    DiffLineKind.CONTEXT -> null
                 }
             if (color != null) {
                 sb.setSpan(

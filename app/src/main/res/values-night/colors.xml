@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- diff 增删行色：随深浅色各自取值，不再在代码里写死 ARGB（#501）。 -->
+    <color name="diff_added">#35B37E</color>
+    <color name="diff_removed">#E0574C</color>
+
     <!-- MD3 静态回退色板（深色，黑白中性） -->
     <color name="md3_primary">#E6E6E6</color>
     <color name="md3_on_primary">#1B1B1B</color>
