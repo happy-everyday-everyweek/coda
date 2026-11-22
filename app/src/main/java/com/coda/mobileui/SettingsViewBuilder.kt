@@ -59,7 +59,10 @@ object SettingsViewBuilder {
         val corner = context.resources.getDimension(R.dimen.settings_card_corner)
         // 卡片自身的左右外距。传 0 时清零，其余情况沿用布局里的 settings_card_margin。
         val cardMargin = context.resources.getDimensionPixelSize(R.dimen.settings_card_margin)
-        val radioRows = mutableListOf<Pair<View, MaterialRadioButton>>()
+        // 单选项按分组记录：互斥只发生在同一视觉分组内（Header/Custom 是边界），
+        // 全页扁平集合会把别的分组的选中一并清掉。
+        val radioRows = mutableListOf<Triple<View, MaterialRadioButton, Int>>()
+        var radioGroup = 0
         // 卡片内文字离卡片边缘的距离。这是卡片内部排版，与宿主留白无关，
         // 所以固定取值，不跟着 horizontalInsetPx 走（否则传 0 时文字贴边）。
         val cardTextInset = context.resources.getDimensionPixelSize(R.dimen.settings_card_text_inset)
@@ -79,6 +82,7 @@ object SettingsViewBuilder {
 
         rows.forEachIndexed { index, row ->
             if (row is SettingRow.Header) {
+                radioGroup++
                 val header = inflater.inflate(R.layout.view_settings_header, container, false)
                 header.findViewById<TextView>(R.id.header_title).text = row.title
                 // 分组标题的水平位置也归 insetH 管。layout 里已经不再写死 32dp，
@@ -88,11 +92,18 @@ object SettingsViewBuilder {
                 return@forEachIndexed
             }
 
-            val isFirstInGroup = index == 0 || rows[index - 1] is SettingRow.Header
-            val isLastInGroup = index == rows.lastIndex || rows[index + 1] is SettingRow.Header
             // 自定义视图自带容器样式，不参与分组圆角，前后也不需要组内分隔线。
             // 热力图例外：它已经是标准卡片容器，按普通行参与分组与分隔。
             val isCustom = row is SettingRow.Custom && row.kind != SettingRow.Custom.KIND_HEATMAP
+            // Custom 行同样是分组边界：它自带卡片，紧贴的普通行必须另起圆角，
+            // 否则直角边与 Custom 卡片视觉粘连。
+            val prevIsBoundary = index == 0 || rows[index - 1] is SettingRow.Header ||
+                (rows[index - 1] as? SettingRow.Custom)?.let { it.kind != SettingRow.Custom.KIND_HEATMAP } == true
+            val nextIsBoundary = index == rows.lastIndex || rows[index + 1] is SettingRow.Header ||
+                (rows[index + 1] as? SettingRow.Custom)?.let { it.kind != SettingRow.Custom.KIND_HEATMAP } == true
+            val isFirstInGroup = prevIsBoundary
+            val isLastInGroup = nextIsBoundary
+            if (isCustom) radioGroup++
             val prevIsCustom =
                 index > 0 &&
                     (rows[index - 1] as? SettingRow.Custom)?.let { it.kind != SettingRow.Custom.KIND_HEATMAP } == true
@@ -101,10 +112,10 @@ object SettingsViewBuilder {
                 // 断开缝要跟卡片同宽：卡片此时可能有 0 或 16dp 的左右外距，
                 // 让缝也带上同样的外距，否则缝会比卡片宽出一截，
                 // 分组之间看起来就是「一条线横穿整屏」。
-                if (horizontalInsetPx == 0) {
+                if (horizontalInsetPx >= 0) {
                     (gap.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
-                        lp.marginStart = 0
-                        lp.marginEnd = 0
+                        lp.marginStart = horizontalInsetPx
+                        lp.marginEnd = horizontalInsetPx
                         gap.layoutParams = lp
                     }
                 }
@@ -128,26 +139,28 @@ object SettingsViewBuilder {
             view.findViewById<View?>(R.id.row_inner)?.let { inner ->
                 inner.setPadding(cardTextInset, inner.paddingTop, cardTextInset, inner.paddingBottom)
             }
-            // 卡片外距：只有调用方显式传 0 时才清零，其余保持布局里的
-            // settings_card_margin（设置主页面那几页本来就是这个值，不受影响）。
-            if (horizontalInsetPx == 0) {
+            // 卡片外距：显式传入的 inset（含 0 与任意非负值）都生效，
+            // 与分组标题的 insetH 对齐；未显式传入时保持布局默认。
+            if (horizontalInsetPx >= 0) {
                 (view.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
-                    lp.marginStart = 0
-                    lp.marginEnd = 0
+                    lp.marginStart = horizontalInsetPx
+                    lp.marginEnd = horizontalInsetPx
                     view.layoutParams = lp
                 }
             }
             container.addView(view)
         }
 
-        // 单选项互斥；未接交互时只在本地切换选中态。
-        radioRows.forEach { (rowView, radio) ->
+        // 单选项：点击立即更新本组选中态（不等宿主重渲染），互斥只在同组内。
+        // 空 key 不回调：那是「无动作」的行，回调空串会让宿主误处理。
+        radioRows.forEach { (rowView, radio, group) ->
             rowView.setOnClickListener {
+                radioRows.forEach { (_, other, otherGroup) ->
+                    if (otherGroup == group) other.isChecked = other === radio
+                }
                 val key = rowView.getTag(R.id.tag_setting_key) as? String
-                if (key != null && listener != null) {
+                if (!key.isNullOrEmpty() && listener != null) {
                     listener.onRadioSelect(key)
-                } else {
-                    radioRows.forEach { (_, other) -> other.isChecked = other === radio }
                 }
             }
         }
@@ -168,10 +181,9 @@ object SettingsViewBuilder {
         /** 卡片内文字内距。独立于 horizontalInsetPx，见 render 里的说明。 */
         cardTextInset: Int = 0,
     ): View? =
+        // Header 在 render 里提前处理，不会进到这里；不再保留不可达的 null 分支。
         when (row) {
-            is SettingRow.Header -> {
-                null
-            }
+            is SettingRow.Header -> error("Header 由 render 直接处理，不应进入 buildRow")
 
             is SettingRow.Category -> {
                 inflater
@@ -186,13 +198,7 @@ object SettingsViewBuilder {
                         findViewById<View?>(R.id.category_inner)?.let { inner ->
                             inner.setPadding(cardTextInset, inner.paddingTop, cardTextInset, inner.paddingBottom)
                         }
-                        if (horizontalInsetPx == 0) {
-                            (layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
-                                lp.marginStart = 0
-                                lp.marginEnd = 0
-                                layoutParams = lp
-                            }
-                        }
+                        // 卡片外距由 render 统一按 horizontalInsetPx 设置，这里不再重复。
                     }
             }
 
@@ -229,10 +235,13 @@ object SettingsViewBuilder {
                         switch.visibility = View.VISIBLE
                         switch.isChecked = row.checked
                         switch.isClickable = false
-                        if (listener != null) {
-                            setOnClickListener { listener.onToggleChange(row.key, !row.checked) }
-                        } else {
-                            setOnClickListener { switch.toggle() }
+                        // 上报值以控件当前状态为准：闭包捕获渲染时的 row.checked
+                        // 在连续点击/宿主不重建时会反复上报同一个目标值。
+                        setOnClickListener {
+                            switch.toggle()
+                            if (listener != null && row.key.isNotEmpty()) {
+                                listener.onToggleChange(row.key, switch.isChecked)
+                            }
                         }
                     }
             }
@@ -244,8 +253,12 @@ object SettingsViewBuilder {
                         findViewById<TextView>(R.id.row_title).text = row.title
                         val radio = findViewById<MaterialRadioButton>(R.id.row_radio)
                         radio.isChecked = row.checked
+                        // 按钮本身不可点：点按钮与点行必须走同一条回调，
+                        // 否则按钮本地勾选了但设置值从未生效。
+                        radio.isClickable = false
+                        radio.isFocusable = false
                         setTag(R.id.tag_setting_key, row.key)
-                        radioRows += this to radio
+                        radioRows += Triple(this, radio, radioGroup)
                     }
             }
 
