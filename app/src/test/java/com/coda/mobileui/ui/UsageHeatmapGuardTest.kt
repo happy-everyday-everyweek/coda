@@ -16,7 +16,7 @@ import org.junit.Test
  */
 class UsageHeatmapGuardTest {
     private val cell = UsageHeatmapView.Cell(2, 100, 1, "2026-01-05")
-    private val weeks = listOf(List(7) { cell })
+    private val weeks = listOf(List(7) { cell }, List(7) { cell })
 
     // 布局参数：leftPad=16 topPad=14 cell=11 gap=3 rowGap=3
     private fun hit(x: Float, y: Float) = hitCell(weeks, x, y, 16, 14, 11, 3, 3)

@@ -115,7 +115,7 @@ class WorkflowParseGuardTest {
         assertTrue("data 应是 Base64 内容而不是长度数字", b64.isNotEmpty())
         val bytes = java.util.Base64.getDecoder().decode(b64)
         assertEquals(payload.size, bytes.size)
-        assertEquals(1, bytes[0])
+        assertEquals(1.toByte(), bytes[0])
         assertEquals(payload.size, decoded.optInt("data_length"))
         assertEquals("AudioOnly", decoded.optString("event"))
         assertEquals(0, decoded.optInt("status_code"))
