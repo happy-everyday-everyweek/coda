@@ -19,9 +19,22 @@ data class ExtensionManifest(
     val description: String,
     /** 随包分发的文件，装载时按权限释放到运行目录。 */
     val binaries: List<Binary>,
-    /** 原始清单，供各分类读取自己的专属段。 */
-    val raw: JSONObject,
 ) {
+    /**
+     * 原始清单，供各分类读取自己的专属段。
+     *
+     * 刻意放在类体而不是主构造里（#471）：JSONObject 可变、非线程安全，且 equals/hashCode
+     * 按引用比较——纳入 data class 状态会让内容相同的两份清单永不相等，toString 还会
+     * 把整份 JSON 打进日志。现在相等性只由 id/name/version/category/description/binaries 决定。
+     *
+     * 读取时通过 [section] / [stringList] 取只读视图；需要直接改 raw 的调用方应自行复制。
+     */
+    var raw: JSONObject = JSONObject()
+        internal set
+
+    /** 相等性只看声明字段，不含 raw；toString 也不打印整份清单。 */
+    override fun toString(): String = "ExtensionManifest(id=$id, name=$name, version=$version, category=$category)"
+
     /**
      * 一个随拓展分发的文件。
      *
@@ -71,7 +84,9 @@ data class ExtensionManifest(
             val obj =
                 try {
                     JSONObject(text)
-                } catch (_: Throwable) {
+                } catch (_: org.json.JSONException) {
+                    // 只吞解析异常：OOM/StackOverflow 这类 Error 不属于「清单无效」，
+                    // 被转成 null 会丢掉崩溃现场（#472）。
                     return null
                 }
             val id = obj.optString("id", "").trim()
@@ -84,8 +99,7 @@ data class ExtensionManifest(
                 category = category,
                 description = obj.optString("description", "").trim(),
                 binaries = parseBinaries(obj.optJSONArray("binaries")),
-                raw = obj,
-            )
+            ).also { it.raw = obj }
         }
 
         private fun parseBinaries(arr: JSONArray?): List<Binary> {

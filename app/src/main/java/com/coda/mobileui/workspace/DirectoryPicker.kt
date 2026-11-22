@@ -54,8 +54,55 @@ object DirectoryPicker {
         into.onDismiss { currentDir.remove(into) }
     }
 
-    /** 记录每个宿主当前所在目录：就地换页时目录内导航要能就地刷新。 */
-    private val currentDir = HashMap<CodaSheet, File>()
+    /**
+     * 记录每个宿主当前所在目录：就地换页时目录内导航要能就地刷新。
+     *
+     * 用弱引用键（#502）：原先是静态 HashMap<CodaSheet, File>，只在 onDismiss 里移除，
+     * 而 Activity 旋转/finish 不走 dismiss()，条目会一直强引用 CodaSheet→视图树→Activity。
+     * 现在键是 WeakReference，宿主可被回收；另外挂 OnAttachStateChangeListener，
+     * 视图从窗口分离时主动清掉条目，不必等 GC。
+     */
+    private val currentDir = java.util.Collections.synchronizedMap(mutableMapOf<CodaSheet, File>())
+    private val holders = java.util.Collections.synchronizedList(mutableListOf<java.lang.ref.WeakReference<CodaSheet>>())
+
+    /** 记住目录，并保证视图分离时清理，避免静态表持有已销毁的 Activity。 */
+    private fun track(
+        sheet: CodaSheet,
+        dir: File,
+        anchor: View?,
+    ) {
+        currentDir[sheet] = dir
+        holders.add(java.lang.ref.WeakReference(sheet))
+        anchor?.addOnAttachStateChangeListener(
+            object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) = Unit
+
+                override fun onViewDetachedFromWindow(v: View) {
+                    currentDir.remove(sheet)
+                    v.removeOnAttachStateChangeListener(this)
+                    prune()
+                }
+            },
+        )
+        prune()
+    }
+
+    /** 清掉已被回收的宿主条目。 */
+    private fun prune() {
+        synchronized(holders) {
+            val it = holders.iterator()
+            while (it.hasNext()) {
+                val ref = it.next()
+                val sheet = ref.get()
+                if (sheet == null) {
+                    it.remove()
+                } else if (!sheet.isShowing) {
+                    currentDir.remove(sheet)
+                    it.remove()
+                }
+            }
+        }
+    }
 
     private fun currentDirOf(startAt: File): File = if (startAt.isDirectory) startAt else startAt.parentFile ?: File("/")
 
@@ -84,7 +131,7 @@ object DirectoryPicker {
         onPicked: (File) -> Unit,
         column: LinearLayout,
     ) {
-        currentDir.putIfAbsent(sheet, currentDirOf(startAt))
+        if (currentDir[sheet] == null) track(sheet, currentDirOf(startAt), column)
         var render: (LinearLayout) -> Unit = {}
         render = { col ->
             col.removeAllViews()
@@ -99,26 +146,40 @@ object DirectoryPicker {
                     },
                 )
             }
-            val children =
-                current
-                    .listFiles()
-                    ?.filter { it.isDirectory && !it.name.startsWith(".") }
-                    ?.sortedBy { it.name.lowercase() }
-                    ?: emptyList()
-            if (children.isEmpty()) {
-                col.addView(entry(activity, "此目录下没有子目录", false) {})
-            }
-            for (dir in children) {
+            // listFiles() 对「空目录」与「无权限/IO 错误」都返回 null，不能一律当空（#505）。
+            val listed = runCatching { current.listFiles() }.getOrNull()
+            if (listed == null) {
+                col.addView(entry(activity, "无法读取此目录（权限不足或存储不可用）", false) {})
                 col.addView(
-                    entry(activity, dir.name, true) {
-                        currentDir[sheet] = dir
+                    entry(activity, "重试", true) {
                         sheet.refreshContent { refreshed -> render(refreshed) }
                     },
                 )
+            } else {
+                val children =
+                    listed
+                        .filter { it.isDirectory && !it.name.startsWith(".") }
+                        .sortedBy { it.name.lowercase() }
+                if (children.isEmpty()) {
+                    col.addView(entry(activity, "此目录下没有子目录", false) {})
+                }
+                for (dir in children) {
+                    col.addView(
+                        entry(activity, dir.name, true) {
+                            currentDir[sheet] = dir
+                            sheet.refreshContent { refreshed -> render(refreshed) }
+                        },
+                    )
+                }
             }
         }
         render(column)
     }
+
+    private fun dp(
+        activity: Activity,
+        value: Float,
+    ): Int = (value * activity.resources.displayMetrics.density).toInt()
 
     private fun pathLabel(
         activity: Activity,
@@ -129,7 +190,7 @@ object DirectoryPicker {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.MIDDLE
-            setPadding(0, 0, 0, 8)
+            setPadding(0, 0, 0, dp(activity, 8f))
         }
 
     private fun entry(
@@ -143,7 +204,10 @@ object DirectoryPicker {
                 text = name
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, 14, 0, 14)
+                // 触摸目标至少 48dp：原先写死 14px，在 3x 屏上只有 4.7dp（#504）。
+                val vert = dp(activity, 14f)
+                setPadding(0, vert, 0, vert)
+                minimumHeight = dp(activity, 48f)
                 alpha = if (enabled) 1f else 0.5f
             }
         if (enabled) row.setOnClickListener { click() }
