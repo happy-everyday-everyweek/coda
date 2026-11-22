@@ -119,9 +119,38 @@ private data class DrawerConversation(
  */
 class MainActivity : BaseActivity() {
     companion object {
-        /** 从设置页返回主界面时，需要在主界面展开抽屉。 */
+        /**
+         * 从设置页返回主界面时需要在主界面展开抽屉（#599）。
+         *
+         * 之前是公开可写的 var，任何地方都能置 true 且没有时效：
+         * 如果消费方那次 onResume 没跑到，标记会一直留着，
+         * 之后一次无关的 resume 会莫名其妙把抽屉弹开。
+         * 现在只能通过 [requestOpenDrawer] 登记，并带上登记时刻。
+         */
+        private var pendingOpenDrawerAt = 0L
+
+        /** 登记一次「下次回到主界面时展开抽屉」。 */
         @JvmStatic
-        var pendingOpenDrawer = false
+        fun requestOpenDrawer() {
+            pendingOpenDrawerAt = android.os.SystemClock.elapsedRealtime()
+        }
+
+        /**
+         * 一次性消费：读走即清零，且超过时限的请求作废。
+         *
+         * 时限存在的意义是：设置页可能根本没走到主界面的 onResume
+         * （被别的宿主启动、进程复用等），那种情况下这个意图已经过期。
+         */
+        @JvmStatic
+        fun consumeOpenDrawerRequest(): Boolean {
+            val at = pendingOpenDrawerAt
+            pendingOpenDrawerAt = 0L
+            if (at == 0L) return false
+            return android.os.SystemClock.elapsedRealtime() - at <= DRAWER_REQUEST_TTL_MS
+        }
+
+        /** 抽屉请求的有效期：正常返回远小于这个值。 */
+        private const val DRAWER_REQUEST_TTL_MS = 10_000L
 
         private const val KEY_SHOWING_SETTINGS = "showing_settings"
         private const val KEY_SHOWING_BOT = "showing_bot"
@@ -4831,8 +4860,7 @@ class MainActivity : BaseActivity() {
                 if (err != null) AppLog.w("WebUi", "自动恢复失败：$err")
             }
         }
-        if (pendingOpenDrawer) {
-            pendingOpenDrawer = false
+        if (consumeOpenDrawerRequest()) {
             drawerLayout.openDrawer(Gravity.LEFT)
         }
     }

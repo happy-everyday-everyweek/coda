@@ -23,6 +23,14 @@ class SettingsActivity : BaseActivity() {
         findViewById<View>(R.id.settings_root).applySystemBarsInset()
 
         findViewById<View>(R.id.btn_back).setOnClickListener { backToDrawer() }
+        // 系统返回键/返回手势也要走同一条路径：之前它只 finish()，抽屉不展开，
+        // 与返回按钮、右滑手势的行为不一致（#598）。
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : androidx.activity.OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() = backToDrawer()
+            },
+        )
         findViewById<View>(R.id.btn_more).setOnClickListener { view ->
             Snackbar.make(view, R.string.settings_more_placeholder, Snackbar.LENGTH_SHORT).show()
         }
@@ -70,7 +78,8 @@ class SettingsActivity : BaseActivity() {
 
     /** 回到主界面并展开抽屉。 */
     private fun backToDrawer() {
-        MainActivity.pendingOpenDrawer = true
+        // 走一次性登记 API，不再直接写别处的公开静态字段（#599）。
+        MainActivity.requestOpenDrawer()
         finish()
     }
 }

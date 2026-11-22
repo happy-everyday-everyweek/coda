@@ -48,12 +48,27 @@ class OAuthAccountsSheet(
         fallback: Int,
     ): Int = MaterialColors.getColor(host.window.decorView, attr, fallback)
 
-    private val onSurface: Int
-        get() = color(com.google.android.material.R.attr.colorOnSurface, Color.WHITE)
-    private val onSurfaceVariant: Int
-        get() = color(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
-    private val surfaceHigh: Int
-        get() = color(com.google.android.material.R.attr.colorSurfaceContainerHigh, Color.DKGRAY)
+    /**
+     * 主题色缓存（#594）。
+     *
+     * 之前是 get() 每次重解析，platformCard/accountRow 循环里每行读好几次，
+     * 列表重建一次就是几十次重复的主题查询。本对象随卡片创建、随卡片作废，
+     * 所以 lazy 就够了，不需要额外的失效钩子。
+     */
+    private val onSurface: Int by lazy { color(com.google.android.material.R.attr.colorOnSurface, Color.WHITE) }
+    private val onSurfaceVariant: Int by lazy { color(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY) }
+    private val surfaceHigh: Int by lazy { color(com.google.android.material.R.attr.colorSurfaceContainerHigh, Color.DKGRAY) }
+
+    /**
+     * 本次作用域内的平台（#591 #593）。
+     *
+     * render 与「全部签到」共用同一份，避免两处各算一遍导致
+     * 「界面只显示一个平台、批量操作却打到所有平台」。
+     * 指定了 id 但注册表里没有时返回空列表——不能回退到全量，
+     * 那会把「平台不存在」伪装成「平台列表正常」。
+     */
+    private fun scopedPlatforms(): List<OAuthProviders.Provider> =
+        onlyProviderId?.let { id -> OAuthProviders.all.filter { it.id == id } } ?: OAuthProviders.all
 
     /** 健康度对应的颜色。绿、黄、红三档足够分辨，不再细分。 */
     private fun healthColor(health: OAuthAccounts.Health): Int =
@@ -90,6 +105,8 @@ class OAuthAccountsSheet(
             .secondaryAction("关闭") { self -> self.dismiss() }
             .onDismiss {
                 closed = true
+                // 关掉后不再持有已移除的视图树（#595）。
+                column = null
                 io.shutdownNow()
             }
             .show()
@@ -125,10 +142,7 @@ class OAuthAccountsSheet(
                 val store =
                     com.coda.mobileui.core.ProviderStore
                         .load(host)
-                val platforms =
-                    onlyProviderId
-                        ?.let { id -> OAuthProviders.all.filter { it.id == id } }
-                        ?: OAuthProviders.all
+                val platforms = scopedPlatforms()
                 val rows =
                     platforms.map { p ->
                         val authorized = store.any { it.id == p.id }
@@ -137,6 +151,13 @@ class OAuthAccountsSheet(
                 main.post {
                     if (closed) return@post
                     target.removeAllViews()
+                    // 指定了平台却一个都没匹配上：这是「平台不存在」，不是「没有账号」。
+                    // 空列表上 rows.all { ... } 是空真，会误报成后者（#593）。
+                    if (platforms.isEmpty()) {
+                        target.addView(hint("未找到该平台，可能已被移除或不再支持。"))
+                        target.addView(hint("返回供应商列表重新选择一个平台即可。"))
+                        return@post
+                    }
                     if (rows.all { it.accounts.isEmpty() }) {
                         target.addView(hint("还没有账号。点右上角 ＋ 选一个平台授权，同一个平台可以加多个账号。"))
                     }
@@ -311,7 +332,11 @@ class OAuthAccountsSheet(
 
     /** 子面板改动后回到这里重新拉数据。 */
     private fun refreshList() {
-        column?.let { render(it) }
+        // 卡片已关闭、或被子页 attachTo 接管后，这个列已经脱离视图树：
+        // 再走一遍完整 IO 往返只是白跑，还可能往 detached hierarchy 里塞内容（#595）。
+        val col = column ?: return
+        if (closed || col.parent == null) return
+        render(col)
     }
 
     /** 打开某个平台的授权流程；不指定平台就先让用户选。 */
@@ -358,7 +383,8 @@ class OAuthAccountsSheet(
                         .load(host)
                 val lines = mutableListOf<String>()
                 var anyFail = false
-                OAuthProviders.all.forEach { p ->
+                // 与界面同一份作用域：单平台模式下不能打到其它平台（#591）。
+                scopedPlatforms().forEach { p ->
                     if (store.none { it.id == p.id }) return@forEach
                     val caps = OAuthAccounts.capabilities(host, p)
                     if (!caps.checkin) return@forEach

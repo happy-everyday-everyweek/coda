@@ -224,7 +224,8 @@ class OAuthSheet(
                                             override fun onValueClick(key: String) {
                                                 realm = if (key == "realm_global") "global" else "cn"
                                                 sheet2.dismiss()
-                                                sheet.refreshContent { col -> renderDisclaimer(col) }
+                                                // 可见卡片可能是宿主那张（attachTo），不能只刷新自建的那张（#602）。
+                                                hostSheet.refreshContent { col -> renderDisclaimer(col) }
                                             }
                                         },
                                 )
@@ -662,7 +663,15 @@ class OAuthSheet(
 
             1 -> {
                 if (!authorized) {
-                    statusText?.text = "请先完成授权"
+                    // statusText 只在第三步创建，这里用 ?. 等于空操作：
+                    // 用户点「继续」什么都看不到，会以为按钮坏了（#603）。
+                    // 优先写进第二步的进度面板（持久可见），没有面板才退回 Toast。
+                    val panel = progressPanel
+                    when {
+                        panel != null -> panel.append("请先完成授权，再点「继续」", emphasis = true)
+                        statusText != null -> statusText?.text = "请先完成授权"
+                        else -> Toast.makeText(host, "请先完成授权", Toast.LENGTH_SHORT).show()
+                    }
                     return
                 }
                 step = 2
@@ -716,7 +725,7 @@ class OAuthSheet(
                                     polling = false
                                     authorized = true
                                     statusText?.text = "已授权"
-                                    sheet.primaryAction("继续") { self -> onPrimary(self) }
+                                    hostSheet.primaryAction("继续") { self -> onPrimary(self) }
                                 }
 
                                 is OAuthLogin.Result.Failed -> {

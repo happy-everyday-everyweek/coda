@@ -55,7 +55,7 @@ class CodaBotHistoryBatchTest {
 
     @Test
     fun emptyRemainingYieldsEmptyBatch() {
-        val plan = CodaBotHistoryBatch.plan(emptyList(), batchSize = 3)
+        val plan = CodaBotHistoryBatch.plan(emptyList<String>(), batchSize = 3)
         assertTrue(plan.batch.isEmpty())
         assertTrue(plan.remaining.isEmpty())
         assertTrue(plan.exhausted)
