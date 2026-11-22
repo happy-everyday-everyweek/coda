@@ -45,12 +45,18 @@ class PhoneAccessibilityService : AccessibilityService() {
                         context.contentResolver,
                         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
                     ) ?: return false
-                val full = context.packageName + "/" + PhoneAccessibilityService::class.java.name
+                // 冒号分隔的 pkg/cls 列表按条目精确比较：子串 contains 会把
+                // 名字里恰好包含目标串的其他服务误判为已启用。
+                val cls = PhoneAccessibilityService::class.java.name
+                val full = context.packageName + "/" + cls
+                // short 形式只在类确实位于应用包下时构造，否则不生成伪条目。
                 val short =
-                    context.packageName + "/." +
-                        PhoneAccessibilityService::class.java.name
-                            .removePrefix(context.packageName + ".")
-                enabled.contains(full) || enabled.contains(short)
+                    if (cls.startsWith(context.packageName + ".")) {
+                        context.packageName + "/." + cls.removePrefix(context.packageName + ".")
+                    } else {
+                        null
+                    }
+                enabled.split(':').any { it == full || (short != null && it == short) }
             } catch (_: Throwable) {
                 false
             }
@@ -97,7 +103,11 @@ class PhoneAccessibilityService : AccessibilityService() {
         val nodes = JSONArray()
         try {
             appendChildren(root, nodes, 0, maxDepth, counter, maxNodes, includeInvisible)
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
+            // 异常降级必须可见：部分结果与完整结果不能长得一样。
+            AppLog.w("PhoneAccessibility", "dumpUi 遍历中断，返回部分结果：${e.message}")
+            out.put("partial", true)
+            out.put("error", e.message ?: e.javaClass.simpleName)
         } finally {
             runCatching { root.recycle() }
         }
@@ -190,10 +200,13 @@ class PhoneAccessibilityService : AccessibilityService() {
     ): Boolean =
         try {
             val path = Path().apply { moveTo(x, y) }
-            val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
+            // 与 swipe 同一套范围约束：0/负数/超大值会让 StrokeDescription 抛
+            // IllegalArgumentException，被吞掉后与「手势被拒」无法区分。
+            val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs.coerceIn(1L, 5000L))
             val gesture = GestureDescription.Builder().addStroke(stroke).build()
             dispatchGesture(gesture, null, null)
-        } catch (_: Throwable) {
+        } catch (e: Exception) {
+            AppLog.w("PhoneAccessibility", "tap 手势派发失败：${e.javaClass.simpleName}: ${e.message}")
             false
         }
 

@@ -324,6 +324,10 @@ class LinuxEnv(
             ENV_LAUNCH_ENTRY to entry.toString(),
             "PROOT_LOADER" to loaderPath,
             "PROOT_TMP_DIR" to tmpDir.absolutePath,
+            // 与 builder()/probe() 一致：显式置空继承的 LD_LIBRARY_PATH，
+            // 否则动态加载器优先搜 Node 运行时的库目录，proot 可能加载错库。
+            // env -i 已清环境，但内核若把这份 Map 合并进继承环境，空值覆盖仍必要。
+            "LD_LIBRARY_PATH" to "",
         )
     }
 
@@ -508,7 +512,13 @@ class LinuxEnv(
             reader.start()
             val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
             if (!finished) {
+                // destroy 只给 proot 发 SIGTERM：容器内子进程收不到信号会成为孤儿。
+                // destroyForcibly + 短暂 waitFor 确认退出；proot 卡死时 SIGTERM 可能无效。
                 process.destroy()
+                if (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
+                    process.destroyForcibly()
+                    process.waitFor(500, TimeUnit.MILLISECONDS)
+                }
                 AppLog.w("LinuxEnv", "exec 超时（${timeoutMs}ms）：${guestArgv.firstOrNull()}")
             }
             runCatching { reader.join(500) }
@@ -557,8 +567,16 @@ class LinuxEnv(
             throw IllegalStateException("无法备份旧根文件系统，已保留原环境")
         }
         if (!staging.renameTo(rootfs)) {
-            if (backup.exists()) backup.renameTo(rootfs)
-            throw IllegalStateException("根文件系统无法就位，已回退到上一版")
+            // 回退结果必须核实：不检查 renameTo 返回值就宣称「已回退」，
+            // 失败时唯一完好副本还在 rootfs.bak，用户却被告知环境已恢复。
+            val restored = backup.exists() && backup.renameTo(rootfs)
+            deleteRecursive(staging)
+            if (restored) {
+                throw IllegalStateException("根文件系统无法就位，已回退到上一版")
+            }
+            throw IllegalStateException(
+                "根文件系统无法就位且回退失败：上一版保留在 ${backup.absolutePath}，请检查存储空间后重试",
+            )
         }
         deleteRecursive(backup)
     }
