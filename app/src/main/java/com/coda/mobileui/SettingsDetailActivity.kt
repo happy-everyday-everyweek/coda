@@ -92,6 +92,16 @@ class SettingsDetailActivity :
             androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
         ) { uri: Uri? -> if (uri != null) confirmImportCategories(uri) }
 
+    /** 从 DeepSeek 导出包导入聊天记录（#733）。 */
+    private val chatImportLauncher =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+        ) { uri: Uri? -> if (uri != null) confirmChatImport(uri) }
+
+    /** 导入是否被用户取消：逐会话循环每轮看一次，已写入的会话保留。 */
+    @Volatile
+    private var chatImportCancelled = false
+
     /** Coda Bot 本地图片：选图后写入 Bot 配置。 */
     private val codaBotAvatarLauncher =
         registerForActivityResult(
@@ -677,6 +687,10 @@ class SettingsDetailActivity :
 
             key == "backup_import" -> {
                 confirmImportBackup()
+            }
+
+            key == "chat_import_deepseek" -> {
+                chatImportLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
             }
 
             key.startsWith("sysprompt_edit:") -> {
@@ -1522,6 +1536,115 @@ class SettingsDetailActivity :
                         doImportBackup(uri)
                     }.secondaryAction("取消") { it.dismiss() }
                     .show()
+            }
+        }.start()
+    }
+
+    /**
+     * DeepSeek 导入前确认（#733）：展示识别出的来源、会话数与写入目标。
+     *
+     * 来源不对就直说，不进导入流程；识别与计数都要落盘读包，放后台。
+     */
+    private fun confirmChatImport(uri: Uri) {
+        snack("正在识别导出包…")
+        Thread {
+            val source = com.coda.mobileui.core.ChatImportRunner.detect(this, uri)
+            val count =
+                if (source == com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK) {
+                    com.coda.mobileui.core.ChatImportRunner.countSessions(this, uri)
+                } else {
+                    0
+                }
+            val wp = ZController.get(this).workspacePath()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val neutral =
+                    MaterialColors.getColor(
+                        this,
+                        com.google.android.material.R.attr.colorOnSurfaceVariant,
+                        android.graphics.Color.GRAY,
+                    )
+                if (source != com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK) {
+                    val hint =
+                        when (source) {
+                            com.coda.mobileui.core.ChatImportRunner.Source.CODA_BACKUP ->
+                                "这是 Coda 自己的备份包，请用上面的「导入数据」。"
+                            else -> "没能识别为 DeepSeek v3 导出包（需要 manifest.json 与 chat_session_index.json）。"
+                        }
+                    CodaSheet(this).title("无法导入").content { col ->
+                        col.addView(TextView(this).apply { text = hint; textSize = 14f; setTextColor(neutral) })
+                    }.primaryAction("知道了") { it.dismiss() }.show()
+                    return@runOnUiThread
+                }
+                CodaSheet(this)
+                    .title("导入 DeepSeek 聊天记录")
+                    .content { col ->
+                        col.addView(
+                            TextView(this).apply {
+                                text = "识别到 DeepSeek 导出包，共 $count 个会话可导入。"
+                                textSize = 14f
+                                setPadding(0, 0, 0, dp(4))
+                            },
+                        )
+                        col.addView(
+                            TextView(this).apply {
+                                text = "将写入工作区：$wp"
+                                textSize = 13f
+                                setTextColor(neutral)
+                                setPadding(0, 0, 0, dp(4))
+                            },
+                        )
+                        col.addView(
+                            TextView(this).apply {
+                                text =
+                                    "思考内容会并入正文，联网搜索与网页抓取降级为文本行；" +
+                                    "图片与附件暂不导入。重复导入同一份导出会产生重复会话。"
+                                textSize = 13f
+                                setTextColor(neutral)
+                            },
+                        )
+                    }.primaryAction("开始导入") { sheet ->
+                        sheet.dismiss()
+                        runChatImport(uri)
+                    }.secondaryAction("取消") { it.dismiss() }
+                    .show()
+            }
+        }.start()
+    }
+
+    /** 执行导入：逐会话建会话，进度与结果都落到界面上。 */
+    private fun runChatImport(uri: Uri) {
+        chatImportCancelled = false
+        val controller = ZController.get(this)
+        snack("正在导入…")
+        Thread {
+            val report =
+                com.coda.mobileui.core.ChatImportRunner.importDeepSeek(
+                    ctx = this,
+                    uri = uri,
+                    onProgress = { done, total ->
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                android.widget.Toast
+                                    .makeText(this, "正在导入 $done/$total", android.widget.Toast.LENGTH_SHORT)
+                                    .show()
+                            }
+                        }
+                    },
+                    isCancelled = { chatImportCancelled },
+                    createSession = { history -> controller.createImportedSession(history) },
+                )
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                controller.refreshSessions(null)
+                CodaSheet(this).title("导入结果").content { col ->
+                    col.addView(
+                        TextView(this).apply {
+                            text = report.summary()
+                            textSize = 14f
+                        },
+                    )
+                }.primaryAction("知道了") { it.dismiss() }.show()
             }
         }.start()
     }

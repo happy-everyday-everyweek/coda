@@ -1376,8 +1376,10 @@ object SettingsData {
     fun backup(ctx: Context): SettingsPage {
         val rows = mutableListOf<SettingRow>()
         rows += SettingRow.Header("备份")
-        rows += SettingRow.Value("导出全部数据", "设置、供应商与提示词", "backup_export")
-        rows += SettingRow.Value("导入数据", "从备份恢复", "backup_import")
+        rows += SettingRow.Value("导出数据", "按分类勾选，默认全选", "backup_export")
+        rows += SettingRow.Value("导入数据", "从 Coda 备份恢复", "backup_import")
+        rows += SettingRow.Header("从其他应用导入")
+        rows += SettingRow.Value("DeepSeek 聊天记录", "官网导出的 deepseek_data-*.zip", "chat_import_deepseek")
         rows += SettingRow.Header("当前数据")
         rows += SettingRow.Value("可备份内容", DataBackup.describe(ctx))
         rows += SettingRow.Value("不包含", "会话记录、日志与应用本身")

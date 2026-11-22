@@ -1588,6 +1588,48 @@ class ZController private constructor(
         }
     }
 
+    /**
+     * 用一份导入历史建会话（#733）。
+     *
+     * 内核 `session/create` 支持 `importedHistory`，会话会带上这段历史真实落地，
+     * 出现在会话列表里且可继续对话——不是写只读的 SessionCache。
+     *
+     * 同步阻塞等结果：导入是逐会话串行的后台流程，调用方已在后台线程。
+     * [timeoutMs] 到点仍未返回就判失败，不让整批卡死在一个会话上。
+     */
+    fun createImportedSession(
+        history: JSONObject,
+        workspaceOverride: String? = null,
+        timeoutMs: Long = 30_000,
+    ): Boolean {
+        val wp = workspaceOverride?.takeIf { it.isNotBlank() } ?: workspacePath()
+        val params =
+            JSONObject()
+                .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
+                .put("mode", prefs.getString("default_mode", "build"))
+                .put("titleGenerationEnabled", false)
+                .put("importedHistory", history)
+        buildModelSelection()?.let { params.put("model", it) }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var ok = false
+        runtime.call("session/create", params) { success, body ->
+            ok = success
+            if (success) {
+                // 只更新快照，不 openSession：导入过程中把用户当前会话切走会很突兀。
+                post { applySnapshot(body) }
+            } else {
+                AppLog.w("ChatImport", "建导入会话失败：${errMsg(body)}")
+            }
+            latch.countDown()
+        }
+        return try {
+            latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) && ok
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+    }
+
     fun openSession(
         sessionId: String,
         cb: ((Boolean) -> Unit)?,
