@@ -157,12 +157,47 @@ abstract class WorkspacePage(
         minHeightDp: Int = 48,
         longClick: (() -> Unit)? = null,
         click: (() -> Unit)? = null,
+    ): LinearLayout =
+        buildRow(
+            iconRes = iconRes,
+            titleText = titleText,
+            subtitleText = subtitleText,
+            trailing = trailing,
+            minHeightDp = minHeightDp,
+            verticalPadDp = 10f,
+            titleSp = 15f,
+            subtitleSp = 12f,
+            trailingSp = 12f,
+            subtitleEllipsize = android.text.TextUtils.TruncateAt.END,
+            click = click,
+            longClick = longClick,
+        )
+
+    /**
+     * 行构建的唯一实现。
+     *
+     * cardRow 与 listRow 原本各写一套装配逻辑，尺寸、内边距与省略模式各自漂移，
+     * 改一处忘另一处就会让两种行样式不一致（#578）。差异全部作为参数传入。
+     */
+    private fun buildRow(
+        iconRes: Int?,
+        titleText: String,
+        subtitleText: String?,
+        trailing: String?,
+        minHeightDp: Int,
+        verticalPadDp: Float,
+        titleSp: Float,
+        subtitleSp: Float,
+        trailingSp: Float,
+        subtitleEllipsize: android.text.TextUtils.TruncateAt,
+        click: (() -> Unit)?,
+        longClick: (() -> Unit)?,
     ): LinearLayout {
         val row =
             LinearLayout(host).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(16f), dp(10f), dp(16f), dp(10f))
+                setPadding(dp(16f), dp(verticalPadDp), dp(16f), dp(verticalPadDp))
                 minimumHeight = dp(minHeightDp.toFloat())
             }
         if (iconRes != null) {
@@ -181,26 +216,33 @@ abstract class WorkspacePage(
                 layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             }
         texts.addView(
-            label(titleText, 15f, onSurface).apply {
+            TextView(host).apply {
+                text = titleText
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, titleSp)
                 setTextColor(onSurface)
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-                setPadding(0, 0, 0, 0)
             },
         )
         if (!subtitleText.isNullOrEmpty()) {
             texts.addView(
-                label(subtitleText, 12f, onSurfaceVariant).apply {
-                    maxLines = 2
-                    ellipsize = android.text.TextUtils.TruncateAt.END
+                TextView(host).apply {
+                    text = subtitleText
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, subtitleSp)
+                    setTextColor(onSurfaceVariant)
                     setPadding(0, dp(2f), 0, 0)
+                    maxLines = 2
+                    ellipsize = subtitleEllipsize
                 },
             )
         }
         row.addView(texts)
         if (!trailing.isNullOrEmpty()) {
             row.addView(
-                label(trailing, 12f, onSurfaceVariant).apply {
+                TextView(host).apply {
+                    text = trailing
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, trailingSp)
+                    setTextColor(onSurfaceVariant)
                     gravity = Gravity.END
                     setPadding(dp(8f), 0, 0, 0)
                 },
@@ -403,74 +445,21 @@ abstract class WorkspacePage(
         minHeightDp: Int = 48,
         click: (() -> Unit)? = null,
         longClick: (() -> Unit)? = null,
-    ): LinearLayout {
-        val row =
-            LinearLayout(host).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(16f), dp(12f), dp(16f), dp(12f))
-                minimumHeight = dp(minHeightDp.toFloat())
-            }
-        if (iconRes != null) {
-            row.addView(
-                ImageView(host).apply {
-                    setImageResource(iconRes)
-                    setColorFilter(onSurfaceVariant)
-                    val size = dp(20f)
-                    layoutParams = LinearLayout.LayoutParams(size, size).apply { rightMargin = dp(14f) }
-                },
-            )
-        }
-        val texts =
-            LinearLayout(host).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
-            }
-        texts.addView(
-            TextView(host).apply {
-                text = titleText
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-                setTextColor(onSurface)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.MIDDLE
-            },
+    ): LinearLayout =
+        buildRow(
+            iconRes = iconRes,
+            titleText = titleText,
+            subtitleText = subtitleText,
+            trailing = trailing,
+            minHeightDp = minHeightDp,
+            verticalPadDp = 12f,
+            titleSp = 16f,
+            subtitleSp = 14f,
+            trailingSp = 13f,
+            subtitleEllipsize = android.text.TextUtils.TruncateAt.MIDDLE,
+            click = click,
+            longClick = longClick,
         )
-        if (!subtitleText.isNullOrEmpty()) {
-            texts.addView(
-                TextView(host).apply {
-                    text = subtitleText
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                    setTextColor(onSurfaceVariant)
-                    setPadding(0, dp(2f), 0, 0)
-                    maxLines = 2
-                    ellipsize = TextUtils.TruncateAt.MIDDLE
-                },
-            )
-        }
-        row.addView(texts)
-        if (!trailing.isNullOrEmpty()) {
-            row.addView(
-                TextView(host).apply {
-                    text = trailing
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    setTextColor(onSurfaceVariant)
-                    gravity = Gravity.END
-                    setPadding(dp(8f), 0, 0, 0)
-                },
-            )
-        }
-        if (click != null) {
-            row.setOnClickListener { click() }
-            row.pressFeedback()
-        }
-        if (longClick != null) {
-            row.setOnLongClickListener {
-                longClick()
-                true
-            }
-        }
-        return row
-    }
 
     /** 分组下方留白，避免两个分组贴在一起。 */
     protected fun groupSpacing(): View =
