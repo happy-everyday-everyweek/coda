@@ -2222,6 +2222,11 @@ class MainActivity : BaseActivity() {
                             textSize = 13f
                             setTextColor(neutral)
                             setPadding(dp(12), dp(6), dp(12), dp(6))
+                            // 48dp 触控目标 + 按下反馈（#50）：原来只有约 26dp 高、无 ripple，
+                            // 长对话里紧挨着的工具行很容易点错且没有任何「点到了」的反馈。
+                            minHeight = dp(48)
+                            gravity = Gravity.CENTER_VERTICAL
+                            background = rippleBackground()
                             isClickable = true
                             setOnClickListener { v ->
                                 val open = toolHost.visibility == View.VISIBLE
@@ -2310,6 +2315,21 @@ class MainActivity : BaseActivity() {
         return if (t > 0 && System.currentTimeMillis() - t < 10 * 60 * 1000L) t else System.currentTimeMillis()
     }
 
+    /**
+     * 主题的无边界 ripple（#50）。
+     *
+     * 聊天区这几个可点元素原来都是裸 TextView，按下没有任何变化，
+     * 用户不知道刚才那一下有没有点中。
+     */
+    private fun rippleBackground(): android.graphics.drawable.Drawable? {
+        val value = android.util.TypedValue()
+        return if (theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, value, true)) {
+            androidx.core.content.ContextCompat.getDrawable(this, value.resourceId)
+        } else {
+            null
+        }
+    }
+
     /** 思考块：参考样式「一行标题 + 用时 + 折叠箭头」；无底色，点阵/标题/正文左对齐（12dp）。 */
     private fun buildReasoningBlock(
         messageId: String,
@@ -2351,6 +2371,9 @@ class MainActivity : BaseActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(2), 0, dp(2))
+                // 48dp 触控目标 + ripple（#50）：原来只有文字高度，很难点中也没有反馈。
+                minimumHeight = dp(48)
+                background = rippleBackground()
             }
         val title =
             TextView(this).apply {
@@ -2428,7 +2451,9 @@ class MainActivity : BaseActivity() {
             val nowCollapsed = reasoningCollapsed[messageId] ?: true
             reasoningCollapsed[messageId] = !nowCollapsed
             body.visibility = if (nowCollapsed) View.VISIBLE else View.GONE
-            chevron.rotation = if (nowCollapsed) 180f else 0f
+            // 箭头跟着展开同步旋转，而不是硬切（#50）。
+            chevron.animate().cancel()
+            chevron.animate().rotation(if (nowCollapsed) 180f else 0f).setDuration(160).start()
         }
         wrap.addView(header)
         wrap.addView(body)
