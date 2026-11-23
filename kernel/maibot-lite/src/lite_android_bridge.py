@@ -21,13 +21,34 @@ def _client_type(item: Dict[str, Any]) -> str:
     raw = str(item.get("api_type") or "").strip().lower()
     if not raw:
         return "openai"
+    # responses 必须先判（#796）：`startswith("openai")` 会把 openai-responses
+    # 悄悄降级成普通 openai，两种协议的请求体完全不同。
+    if "responses" in raw:
+        return "openai_responses"
     if raw.startswith("openai"):
         return "openai"
-    if raw.startswith("anthropic"):
-        return "anthropic"
     if raw.startswith("gemini"):
         return "gemini"
+    # 这个 lite 内核**没有注册 anthropic 客户端**（#796）：
+    # client_registry 只有 openai / openai_responses / gemini。
+    # 映射成 "anthropic" 会在运行期抛 KeyError，比早报 unsupported 更难排查。
+    # Anthropic 供应商需要经 OpenAI 兼容网关接入，宿主侧应把 api_type 填 openai。
     return "unsupported"
+
+
+def _model_capability_lines(item: Dict[str, Any]) -> list:
+    """ModelInfo 真正消费的能力字段（#797）。
+
+    只写 schema 里存在的键。`max_tokens` 是**输出**上限，不是上下文窗口；
+    宿主给的 context_window 是输入窗口，语义不同，不能拿来填这里。
+    上下文条数由全局 chat.max_context_size 控制，工具能力内核没有模型级开关，
+    两者都不在模型表里表达。
+    """
+    out = []
+    limit = int(item.get("max_output_tokens") or 0)
+    if limit > 0:
+        out.append(f"max_tokens = {limit}")
+    return out
 
 
 def _auth_fields(item: Dict[str, Any]) -> Dict[str, str]:
@@ -37,7 +58,10 @@ def _auth_fields(item: Dict[str, Any]) -> Dict[str, str]:
     `Authorization: Bearer`（空令牌会被上游直接拒绝）。
     """
 
-    client = _client_type(item)
+    # 按**原始 api_type** 判鉴权形状，不看 _client_type（#796）：
+    # anthropic 现在映射为 unsupported（内核没有对应客户端），
+    # 但经 OpenAI 兼容网关接入时仍需要 x-api-key 这个头形状。
+    raw = str(item.get("api_type") or "").strip().lower()
     has_key = bool(str(item.get("api_key") or "").strip())
     if not has_key:
         return {
@@ -46,7 +70,7 @@ def _auth_fields(item: Dict[str, Any]) -> Dict[str, str]:
             "auth_header_prefix": "",
             "auth_query_name": "api_key",
         }
-    if client == "anthropic":
+    if raw.startswith("anthropic"):
         return {
             "auth_type": "header",
             "auth_header_name": "x-api-key",
@@ -112,10 +136,13 @@ def _write_model_config(root: Path, planner: Dict[str, Any], reply: Dict[str, An
                 f"model_identifier = {_toml_string(item['model'])}",
                 f"name = {_toml_string(model_name)}",
                 f"api_provider = {_toml_string(provider_name)}",
-                # 上游真实窗口与工具能力：不传的话内核只能吃默认值，
-                # 长对话可能超窗，不支持工具的模型也会被注入工具定义（#34）。
-                f"max_context_size = {int(item.get('context_window') or 0)}",
-                f"supports_tool_call = {'true' if item.get('supports_tool_call', True) else 'false'}",
+                # 这里曾经写 max_context_size / supports_tool_call（#797）。
+                # 两个键都不在 ModelInfo 的 schema 里，ConfigBase.from_dict 每次加载
+                # 都把它们当冗余属性剥掉并打日志——那段「修复」是空操作。
+                # 内核的真实情况：上下文预算是全局 chat.max_context_size（**消息条数**，
+                # 默认 30），不是模型级的 token 窗口；工具能力也没有模型级开关。
+                # 所以这里只写 ModelInfo 真正消费的字段，窗口与工具能力另行处理。
+                *_model_capability_lines(item),
                 "price_in = 0.0",
                 "cache = false",
                 "cache_price_in = 0.0",

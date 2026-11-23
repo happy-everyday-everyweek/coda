@@ -47,7 +47,8 @@ def test_bearer_auth_for_openai():
     assert fields["auth_header_prefix"] == "Bearer"
 
 
-def test_anthropic_uses_x_api_key():
+def test_anthropic_auth_shape_kept_for_gateway():
+    # 客户端未注册，但鉴权形状仍保留：经兼容网关接入时宿主要能取到正确的头。
     fields = _auth_fields({"api_type": "anthropic-messages", "api_key": "sk-a"})
     assert fields["auth_header_name"] == "x-api-key"
     # Anthropic 的值不带 Bearer 前缀。

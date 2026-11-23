@@ -86,10 +86,57 @@ _BANNED_FLAGS = (
     "--in-place",
     # 这些能让只读命令起进程或调用分页器执行任意命令。
     "--open-files-in-pager",
-    "--pre",
 )
+# 必须按**完整 token**匹配的禁用选项（#794）。
+# `--pre` 用子串匹配会连带命中 `--pretty` / `--pretty=format:...`，
+# 而那是 git log/diff/show 最常用的只读选项，等于把这些命令全禁掉。
+_BANNED_EXACT_FLAGS = ("--pre",)
 
 _SHELL_WRITE_TOKENS = (">", "<", "`", "$(", "${", "&&", "||", ";", "\n", "\r")
+
+
+# git branch / tag 只读列出时允许出现的选项（#795）。
+# 白名单而非黑名单：写操作的花样太多（长选项、位置参数、缩写），
+# 黑名单永远追不完，而列出用法是有限且稳定的。
+_BRANCH_LIST_FLAGS = {
+    "-a", "--all", "-r", "--remotes", "-l", "--list", "-v", "-vv", "--verbose",
+    "--show-current", "--contains", "--no-contains", "--merged", "--no-merged",
+    "--points-at", "--sort", "--format", "--color", "--no-color", "--column",
+    "--no-column", "--abbrev", "--no-abbrev", "-q", "--quiet", "--ignore-case",
+}
+_TAG_LIST_FLAGS = {
+    "-l", "--list", "-n", "--contains", "--no-contains", "--merged", "--no-merged",
+    "--points-at", "--sort", "--format", "--color", "--no-color", "--column",
+    "--no-column", "-i", "--ignore-case", "--omit-empty",
+}
+# 这些选项后面跟一个值（模式、提交、格式串），值本身不是位置参数。
+_REF_VALUE_FLAGS = {
+    "--contains", "--no-contains", "--merged", "--no-merged", "--points-at",
+    "--sort", "--format", "--abbrev", "-n",
+    # `--list <pattern>` / `-l <pattern>` 是合法的列出用法，模式不是位置参数。
+    "--list", "-l",
+}
+
+
+def _ref_listing_violation(sub: str, args: list) -> Optional[str]:
+    """branch/tag 只允许「列出」用法；其余一律拒绝。"""
+    allowed = _BRANCH_LIST_FLAGS if sub == "branch" else _TAG_LIST_FLAGS
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if not arg.startswith("-"):
+            # 位置参数：`git branch new HEAD` / `git tag v1` 都是创建。
+            # 列出用法里的模式必须写成 --list <pattern>，不能裸给。
+            return f"只读检查不允许：git {sub} 只能列出，不能带位置参数（那会创建或删除引用）"
+        name = arg.split("=", 1)[0]
+        if name not in allowed:
+            return f"只读检查不允许 git {sub} {name}（只接受列出类选项）"
+        # `--sort=xxx` 自带值；`--sort xxx` 的值在下一个 token。
+        if "=" not in arg and name in _REF_VALUE_FLAGS:
+            skip_next = True
+    return None
 
 
 def _readonly_violation(command: str) -> Optional[str]:
@@ -106,6 +153,12 @@ def _readonly_violation(command: str) -> Optional[str]:
         if flag in lowered:
             return f"只读检查不允许使用 {flag}"
     parts = text.split()
+    # 按完整 token 判：`--pre` 与 `--pre=x` 拒绝，`--pretty` 放行（#794）。
+    for token in parts:
+        low = token.lower()
+        for flag in _BANNED_EXACT_FLAGS:
+            if low == flag or low.startswith(flag + "="):
+                return f"只读检查不允许使用 {flag}"
     first = parts[0].split("/")[-1]
     # sort/tree/uniq/du 的 -o 会把结果写进文件，属于写操作。
     if first in {"sort", "tree", "uniq", "du"} and "-o" in parts[1:]:
@@ -116,19 +169,16 @@ def _readonly_violation(command: str) -> Optional[str]:
         if parts[1] not in _GIT_READONLY_SUBCOMMANDS:
             return f"git {parts[1]} 会修改仓库，只读检查不允许"
         args = parts[2:]
-        # branch/tag 既可能只读列出，也可能 -d/-m 写仓库：按参数再挡一层。
-        if parts[1] == "branch" and any(
-            arg in {"-d", "-D", "-m", "-M", "-c", "-C", "-u", "--edit-description"}
-            or arg.startswith("--set-upstream-to")
-            or arg.startswith("--unset-upstream")
-            for arg in args
-        ):
-            return "只读检查不允许 git branch 的写操作（删除/改名/设置上游）"
-        if parts[1] == "tag" and any(
-            arg in {"-d", "-a", "-s", "-f", "-m", "-F"} or arg.startswith("-a") or arg.startswith("--delete")
-            for arg in args
-        ):
-            return "只读检查不允许：git tag 只能列出现有标签，不能创建或删除"
+        # branch/tag 既可能只读列出，也可能写 refs。
+        #
+        # 改成**白名单**（#795）：原来是黑名单，只挡了几个短选项，
+        # `--delete/--move/--copy/--force/--annotate/--sign/--message/--file`
+        # 以及位置参数建分支（`git branch new HEAD`）全部绕过。
+        # 这个函数是唯一的屏障——命令最终经 /bin/bash -lc 在宿主环境执行。
+        if parts[1] in {"branch", "tag"}:
+            why = _ref_listing_violation(parts[1], args)
+            if why:
+                return why
         if "-O" in args:
             return "只读检查不允许 -O（会启动分页器执行命令）"
         return None
