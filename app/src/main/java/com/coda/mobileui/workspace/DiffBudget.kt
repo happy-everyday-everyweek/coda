@@ -33,7 +33,9 @@ internal object DiffBudget {
     fun trimText(text: String): TrimmedText {
         // 按 UTF-8 字节而不是 UTF-16 码元（OCR #821）：CJK/emoji 下 length
         // 只有实际字节的 1/3~1/4，内存上界形同虚设。ASCII 快速路径保留。
-        val byteLen = if (text.all { it.code < 0x80 }) text.length else text.toByteArray(Charsets.UTF_8).size
+        // 逐码点数字节（OCR r10）：toByteArray 会在主线程渲染路径上
+        // 为量尺寸复制整份 diff（几十 MB），数一遍就够了。
+        val byteLen = utf8Length(text)
         if (byteLen <= MAX_DIFF_BYTES) {
             val lineCount = text.count { it == '\n' } + 1
             if (lineCount <= MAX_DIFF_LINES) return TrimmedText(text, false)
@@ -43,6 +45,23 @@ internal object DiffBudget {
         val lines = capped.split('\n')
         if (lines.size <= MAX_DIFF_LINES) return TrimmedText(capped, true)
         return TrimmedText(lines.take(MAX_DIFF_LINES).joinToString("\n"), true)
+    }
+
+    /** UTF-8 字节数：不物化字节数组，代理对按一个码点计。 */
+    private fun utf8Length(text: String): Int {
+        var bytes = 0
+        var i = 0
+        while (i < text.length) {
+            val cp = text.codePointAt(i)
+            bytes += when {
+                cp < 0x80 -> 1
+                cp < 0x800 -> 2
+                cp < 0x10000 -> 3
+                else -> 4
+            }
+            i += Character.charCount(cp)
+        }
+        return bytes
     }
 
     /** 截到字节预算内：逐码点累计，不切代理对、不切多字节字符。 */

@@ -41,7 +41,7 @@ object DiffLines {
                 // 也要认，否则多 hunk 文件的后续 hunk 全按 CONTEXT 丢主色。
                 // 只认 `@@ -n,m +n,m @@` 完整形状，hunk 正文里恰好以 @@
                 // 开头的内容行（如 "@@foo"）不会误判。
-                HUNK_HEADER.matches(line) -> {
+                HUNK_HEADER.containsMatchIn(line) -> {
                     inHunk = true
                     DiffLineKind.HUNK_HEADER
                 }
@@ -84,10 +84,19 @@ object DiffLines {
         // 混合引号（OCR #821）：git 对两侧独立加引号，`a/plain "b/with space"`
         // 两条锚定正则都不匹配，旧回退返回残片 space"。按 b 侧锚点切：
         // 找到 ` b/` 或 ` "b/` 的位置，取其后整段再剥引号。
-        val bPlain = pair.indexOf(" b/")
-        val bQuoted = pair.indexOf(" \"b/")
+        // 搜索必须跳过 a 侧（OCR r10）：`"a/dir b/old" b/new` 里第一个
+        // ` b/` 落在 a 侧引号内，从那里切会得到 old" b/new 残片。
+        val searchFrom =
+            if (pair.startsWith("\"")) {
+                val close = pair.indexOf('\"', 1)
+                if (close >= 0) close + 1 else 0
+            } else {
+                pair.indexOf(' ').takeIf { it >= 0 } ?: 0
+            }
+        val bPlain = pair.indexOf(" b/", searchFrom)
+        val bQuoted = pair.indexOf(" \"b/", searchFrom)
         val at = when {
-            bQuoted >= 0 && (bPlain < 0 || bQuoted < bPlain) -> bQuoted + 2
+            bQuoted >= 0 && (bPlain < 0 || bQuoted < bPlain) -> bQuoted + 1
             bPlain >= 0 -> bPlain + 1
             else -> -1
         }

@@ -178,8 +178,17 @@ object ProviderStore {
      * writeLock 直接写这三份文件，同 mtime tick 内等长重写时签名不变，
      * 快路径会继续端出写前数据。绕过本类写盘的路径完成后必须调用这里。
      */
+    /**
+     * 外部写者（DataBackup.restore）必须在这把锁内写这三份文件（OCR r11）：
+     * 只做事后 invalidate 仍会被「读旧内容→写盘→sigAfter==sigNow」的在途
+     * load 重新钉回旧缓存。锁与 load/save 同一把，写期间读方进不来。
+     */
+    fun <T> withWriteLock(block: () -> T): T = synchronized(writeLock) { block() }
+
     fun invalidateReadCache() {
-        readCache = null
+        // 持写锁清（OCR r11）：无锁清会被在途 load 的「sigAfter==sigNow」
+        // 重新钉回旧缓存——同 mtime tick 等长重写正是这个钩子要防的场景。
+        synchronized(writeLock) { readCache = null }
     }
 
     /** 三份文件的 (存在, mtime, size) 签名；任一变化都让缓存失效。 */

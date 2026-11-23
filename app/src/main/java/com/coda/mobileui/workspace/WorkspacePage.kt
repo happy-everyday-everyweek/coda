@@ -348,8 +348,10 @@ abstract class WorkspacePage(
                 val padT = row.contentPaddingTop
                 val padR = row.contentPaddingRight
                 val padB = row.contentPaddingBottom
+                // marginStart/End 在未布局的新卡上还没解析进 left/right（OCR r10）：
+                // 只拷绝对边距会读到 0，相对边距必须一并搬。
                 val margins = (row.layoutParams as? ViewGroup.MarginLayoutParams)?.let {
-                    intArrayOf(it.leftMargin, it.topMargin, it.rightMargin, it.bottomMargin)
+                    intArrayOf(it.leftMargin, it.topMargin, it.rightMargin, it.bottomMargin, it.marginStart, it.marginEnd)
                 }
                 row.removeAllViews()
                 inner.forEach { child -> card.addView(child, ViewGroup.LayoutParams(MATCH, WRAP)) }
@@ -357,17 +359,28 @@ abstract class WorkspacePage(
                 if (margins != null) {
                     (card.layoutParams as? ViewGroup.MarginLayoutParams)?.let { outer ->
                         outer.setMargins(margins[0], margins[1], margins[2], margins[3])
+                        outer.marginStart = margins[4]
+                        outer.marginEnd = margins[5]
                         card.layoutParams = outer
                     }
                 }
                 if (wasClickable || click != null) {
                     card.isClickable = true
                     card.isFocusable = true
-                    click?.let { card.setOnClickListener(it) }
+                    if (click != null) {
+                        card.setOnClickListener(click)
+                    } else {
+                        // 反射被 hidden-API 拦下时不能静默丢交互（OCR r10）：
+                        // 外壳把事件转发回原卡片，由它自己的监听器处理。
+                        card.setOnClickListener { row.performClick() }
+                    }
                 }
-                longClick?.let {
+                if (longClick != null) {
                     card.isLongClickable = true
-                    card.setOnLongClickListener(it)
+                    card.setOnLongClickListener(longClick)
+                } else if (row.isLongClickable) {
+                    card.isLongClickable = true
+                    card.setOnLongClickListener { row.performLongClick() }
                 }
             } else {
                 card.addView(row, ViewGroup.LayoutParams(MATCH, WRAP))

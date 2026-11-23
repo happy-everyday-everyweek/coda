@@ -2798,6 +2798,8 @@ class SettingsDetailActivity :
         sheet?.show()
         // 检查阶段的取消接线（OCR r9 medium）：check 里的 ping 排名 + 最长 90s
         // 清单预算也是后台长任务，关卡片/销毁页面必须能停，与下载同口径。
+        // 二次点击先取消上一轮（OCR r11）：与下载同口径，字段覆盖后旧检查无人能停。
+        updateCheckCancel?.cancel()
         val checkCancel = com.coda.mobileui.core.Downloader.Cancel()
         updateCheckCancel = checkCancel
         sheet?.onDismiss { checkCancel.cancel() }

@@ -1748,9 +1748,10 @@ class MainActivity : BaseActivity() {
     override fun onStop() {
         // Bot 页在内容区里，按 Home 或切后台不会走 close()：这里把录音收回。
         botPage?.onHostPause()
-        // 后台时把定时轮询拉长到 5 分钟，别每 30 秒唤醒一次（#222）。
+        // 后台时把定时轮询拉长到 5 分钟（#222）。按宿主计数判（OCR r11）：
+        // 配置变更时本 onStop 晚于新实例 onResume，直接置 false 会盖掉新实例。
         com.coda.mobileui.core.AutomationScheduler
-            .setForeground(false)
+            .hostPaused()
         super.onStop()
     }
 
@@ -1784,10 +1785,9 @@ class MainActivity : BaseActivity() {
         if (isFinishing) {
             com.coda.mobileui.core.AutomationScheduler
                 .stop()
-        } else {
-            com.coda.mobileui.core.AutomationScheduler
-                .setForeground(false)
         }
+        // 非 finishing 不再重复置后台：onStop 的 hostPaused 已按计数处理，
+        // 这里再置一次再引入一轮迟到覆盖（OCR r11）。
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
@@ -5046,7 +5046,7 @@ class MainActivity : BaseActivity() {
         com.coda.mobileui.core.AutomationScheduler
             .start(zc)
         com.coda.mobileui.core.AutomationScheduler
-            .setForeground(true)
+            .hostResumed()
         // 暂缓队列非空时重挂提示（#745）：Snackbar 可被滑走/被其他提示顶掉，
         // 消失后队列没有任何 UI 入口，内核无限等待。回前台就重新展示。
         if (deferredRequests.isNotEmpty()) showDeferredSnackbar()

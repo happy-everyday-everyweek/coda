@@ -490,15 +490,33 @@ object DataBackup {
                                 }
 
                                 name == ENTRY_PROVIDERS -> {
-                                    ProviderStore.fileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
+                                    // 持 ProviderStore 写锁写盘（OCR r11）：事后 invalidate
+                                    // 挡不住在途 load 把旧内容钉回缓存。
+                                    ProviderStore.withWriteLock {
+                                        ProviderStore.fileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
+                                        ProviderStore.invalidateReadCache()
+                                    }
+                                    count++
                                 }
 
                                 name == ENTRY_PROVIDER_META -> {
-                                    ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
+                                    // 持 ProviderStore 写锁写盘（OCR r11）：事后 invalidate
+                                    // 挡不住在途 load 把旧内容钉回缓存。
+                                    ProviderStore.withWriteLock {
+                                        ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
+                                        ProviderStore.invalidateReadCache()
+                                    }
+                                    count++
                                 }
 
                                 name == ENTRY_ASR_PROVIDERS -> {
-                                    ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
+                                    // 持 ProviderStore 写锁写盘（OCR r11）：事后 invalidate
+                                    // 挡不住在途 load 把旧内容钉回缓存。
+                                    ProviderStore.withWriteLock {
+                                        ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
+                                        ProviderStore.invalidateReadCache()
+                                    }
+                                    count++
                                 }
 
                                 name == "file-modes.txt" -> {

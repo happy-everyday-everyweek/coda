@@ -107,16 +107,31 @@ object MirrorSpeedTester {
      * 用 TCP 连接 443 而不是 ICMP：Android 上发 ICMP 需要 root；而且对 HTTP 镜像来说，
      * TCP 握手成功才是真的可用，ping 通不代表 443 通。
      */
-    fun pingAll(
+    internal fun pingAll(
         mirrors: List<GhMirror>,
         timeoutMs: Int = 1_500,
+        cancel: Downloader.Cancel? = null,
     ): List<PingResult> {
         val pool = Executors.newFixedThreadPool(PING_CONCURRENCY)
         return try {
-            val futures = mirrors.map { m -> pool.submit(Callable { ping(m, timeoutMs) }) }
+            // 取消穿透（OCR r11）：任务体内先查，等待循环也查——退出页面后
+            // 不再把整批探测跑完。
+            val futures =
+                mirrors.map { m ->
+                    pool.submit(
+                        Callable {
+                            if (cancel?.isCancelled == true) null else ping(m, timeoutMs)
+                        },
+                    )
+                }
             futures
                 .mapNotNull { f ->
-                    runCatching { f.get(timeoutMs + 3_000L, TimeUnit.MILLISECONDS) }.getOrNull()
+                    if (cancel?.isCancelled == true) {
+                        f.cancel(true)
+                        null
+                    } else {
+                        runCatching { f.get(timeoutMs + 3_000L, TimeUnit.MILLISECONDS) }.getOrNull()
+                    }
                 }
                 // 通的按延迟升序在前；不通的排后面（调用方会滤掉）。
                 .sortedWith(compareBy({ !it.ok }, { it.latencyMs }))
@@ -148,10 +163,11 @@ object MirrorSpeedTester {
      *
      * @param firstPick 达标即停的阈值；到达就提前返回，不必等所有镜像测完。
      */
-    fun testAll(
+    internal fun testAll(
         mirrors: List<GhMirror>,
         url: String,
         firstPick: Long = FAST_BPS,
+        cancel: Downloader.Cancel? = null,
     ): List<Result> {
         // 洗牌：内置清单按历史延迟排序，固定顺序会让靠前的源每次都先占用并发名额，
         // 靠后的永远测不到真实成绩。
@@ -165,7 +181,7 @@ object MirrorSpeedTester {
                 shuffled.map { m ->
                     pool.submit(
                         Callable {
-                            if (picked.get()) return@Callable null
+                            if (picked.get() || cancel?.isCancelled == true) return@Callable null
                             val r = probe(m, url)
                             if (r.ok && r.sustainedBps >= firstPick) {
                                 pickedResult.set(r)
@@ -178,6 +194,10 @@ object MirrorSpeedTester {
             // 等待上限要覆盖最坏路径：连接 5s + 窗口 6s + 读取结束 8s，另留余量。
             val waitMs = WINDOW_MS + 15_000L
             for (f in futures) {
+                if (cancel?.isCancelled == true) {
+                    f.cancel(true)
+                    continue
+                }
                 val r = runCatching { f.get(waitMs, TimeUnit.MILLISECONDS) }.getOrNull()
                 if (r != null) done.add(r)
                 if (picked.get()) break

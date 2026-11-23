@@ -1275,6 +1275,13 @@ class WorkspaceActivity : BaseActivity() {
                     if (page is FilesPage && page.hasUnsavedEditor()) {
                         page.requestLeaveEditor { canClose ->
                             if (canClose) {
+                                // 保存回调可能晚于总览被收起（OCR r10）：卡片已
+                                // detach 时动画只排队不执行，withEndAction 永远
+                                // 不跑，标签关不掉。detach 就直接关。
+                                if (!card.isAttachedToWindow) {
+                                    closeTabNow(entry.data.id)
+                                    return@requestLeaveEditor
+                                }
                                 card
                                     .animate()
                                     .scaleX(0.92f)

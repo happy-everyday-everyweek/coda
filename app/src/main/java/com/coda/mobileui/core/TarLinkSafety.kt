@@ -111,20 +111,26 @@ internal object TarLinkSafety {
         fun budgetFor(path: String): Int = baseBudget + path.length * 4
     }
 
-    @Volatile
-    private var preparedSource: Map<String, String>? = null
+    // 源与结果必须同一对象原子发布（OCR r11 high）：两个独立 @Volatile
+    // 字段在并发解压时会被交叉写，读到「B 的源配 A 的索引」等于给错的
+    // 归档做越界判定（缺别名即 fail-open）。
+    private class PreparedEntry(
+        // 软引用（OCR r11）：进程级单例不能强持上一个归档的整份链接表，
+        // 内存吃紧时允许回收；调用方在归档处理期间本来就强持这份 map。
+        val source: java.lang.ref.SoftReference<Map<String, String>>,
+        val prepared: Prepared,
+    )
 
     @Volatile
-    private var preparedValue: Prepared? = null
+    private var preparedEntry: PreparedEntry? = null
 
     private fun preparedFor(symlinkTargets: Map<String, String>): Prepared? {
-        preparedValue?.let {
-            if (preparedSource === symlinkTargets) return if (it.indexed != null) it else null
+        preparedEntry?.let {
+            if (it.source.get() === symlinkTargets) return if (it.prepared.indexed != null) it.prepared else null
         }
         // 失败结果同样缓存（indexed=null）：歧义归档不能每个成员都重建一遍。
         val built = buildPrepared(symlinkTargets) ?: Prepared(null, 0)
-        preparedSource = symlinkTargets
-        preparedValue = built
+        preparedEntry = PreparedEntry(java.lang.ref.SoftReference(symlinkTargets), built)
         return if (built.indexed != null) built else null
     }
 
@@ -160,7 +166,15 @@ internal object TarLinkSafety {
                     acc.add(s)
                 }
                 // 按不断增长的 indexed 解析：别名可达的父路径也要展开。
-                val pp = walk(parentSegs, indexed, budget) ?: continue
+                // walk 失败分两种（OCR r11）：越界可跳过（该成员自己的
+                // linkStaysInside 会拒），预算耗尽必须整体拒绝——跳过等于
+                // 漏注册物理别名，正是 fail-open。
+                val exhausted = java.util.concurrent.atomic.AtomicBoolean(false)
+                val pp = walk(parentSegs, indexed, budget, exhausted)
+                if (pp == null) {
+                    if (exhausted.get()) return null
+                    continue
+                }
                 val alias = if (pp.isEmpty()) segs.last() else "$pp/${segs.last()}"
                 if (alias == k) continue
                 val existing = indexed[alias]
@@ -189,12 +203,17 @@ internal object TarLinkSafety {
         segs: List<Pair<String, String?>>,
         targets: Map<String, String>,
         budget: Int,
+        exhausted: java.util.concurrent.atomic.AtomicBoolean? = null,
     ): String? {
         val pending = ArrayList(segs)
         val out = ArrayList<String>()
         var steps = 0
         while (pending.isNotEmpty()) {
-            if (++steps > budget) return null
+            if (++steps > budget) {
+                // 预算耗尽与越界必须区分（OCR r11）：前者跳过会漏注册别名。
+                exhausted?.set(true)
+                return null
+            }
             val (seg, literalBase) = pending.removeAt(0)
             if (seg == "..") {
                 if (out.isEmpty()) return null

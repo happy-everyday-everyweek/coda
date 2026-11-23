@@ -152,7 +152,7 @@ object GhMirrors {
             return rankOffline(mirrors, history)
         }
         onLog("探测镜像连通性…")
-        val pinged = MirrorSpeedTester.pingAll(mirrors)
+        val pinged = MirrorSpeedTester.pingAll(mirrors, cancel = cancel)
         // 过滤一次复用：两次 filter 是两份中间集合；latencyOf 只有小文件分支用，
         // 大文件走测速路径时不为它白建一张 map。
         val okPings = pinged.filter { it.ok }
@@ -195,7 +195,7 @@ object GhMirrors {
         if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("镜像排序已取消")
         val usable =
             MirrorSpeedTester
-                .testAll(alive, probeUrl)
+                .testAll(alive, probeUrl, cancel = cancel)
                 .filter { it.ok && it.sustainedBps > 0 }
         if (usable.isEmpty()) {
             onLog("测速无结果，按 ping 延迟顺序尝试")

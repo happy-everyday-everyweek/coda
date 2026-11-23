@@ -91,8 +91,11 @@ open class FilesPage(
     /** 单调编辑计数：TextWatcher 每次改动递增，供高亮缓存判「变过又变回来」。 */
     private var editorEditRevision = 0L
 
-    /** 逻辑总行数缓存（OCR #821）：文本变化时重算，光标移动不再全文扫。 */
+    /** 逻辑总行数缓存（OCR #821）：文本变化时增量维护，光标移动不再全文扫。 */
     private var editorTotalLines = 1
+
+    /** beforeTextChanged 记下的被删段换行数，供增量计数。 */
+    private var pendingRemovedNewlines = 0
 
     private var wrapEnabled = false
 
@@ -400,6 +403,14 @@ open class FilesPage(
         if (!force && mtime <= loadedMtime) return
         if (dirty) {
             // 不推进 loadedMtime：否则这次冲突会被“记住已处理”，保存时直接覆盖外部改动。
+            externalConflict = true
+            toast("磁盘上的文件已被修改，当前未保存内容保留；保存前会再确认")
+            return
+        }
+        // 等长替换的判脏是去抖的（OCR r10）：读+解码可能超过 200ms 窗口，
+        // 先结算在途判脏再决定，否则刚打过的字被当成干净覆盖掉。
+        flushDirty()
+        if (dirty) {
             externalConflict = true
             toast("磁盘上的文件已被修改，当前未保存内容保留；保存前会再确认")
             return
@@ -1863,7 +1874,19 @@ open class FilesPage(
                             st: Int,
                             c: Int,
                             a: Int,
-                        ) = Unit
+                        ) {
+                            // 记下被删段的换行数（OCR r10）：onTextChanged 只数
+                            // 新增段，总行数增量维护，不再每键 O(n) 全文扫。
+                            pendingRemovedNewlines =
+                                if (s != null && c > 0) {
+                                    var n = 0
+                                    val end = (st + c).coerceAtMost(s.length)
+                                    for (k in st until end) if (s[k] == '\n') n++
+                                    n
+                                } else {
+                                    0
+                                }
+                        }
 
                         override fun onTextChanged(
                             s: CharSequence?,
@@ -1875,9 +1898,14 @@ open class FilesPage(
                             // 单调编辑计数：节流窗口内 A→B→A 内容指纹不变，
                             // 但 replace 已丢替换区内的 span，靠计数才能判出要重建。
                             editorEditRevision++
-                            // 总行数只在文本变化时重算（OCR #821）：s 是变化后的
-                            // 完整序列，一次 O(n) 换掉每次按键/光标移动的 O(n)。
-                            editorTotalLines = 1 + (s?.count { it == '\n' } ?: 0)
+                            // 增量维护总行数（OCR r10）：只数新增段，减去
+                            // beforeTextChanged 记下的被删段，按键不再 O(n)。
+                            var added = 0
+                            if (s != null && c > 0) {
+                                val end = (st + c).coerceAtMost(s.length)
+                                for (k in st until end) if (s[k] == '\n') added++
+                            }
+                            editorTotalLines = (editorTotalLines + added - pendingRemovedNewlines).coerceAtLeast(1)
                             refreshDirty()
                             refreshEditorChrome()
                             host.scheduleHighlight(highlightTick)
@@ -2039,6 +2067,9 @@ open class FilesPage(
     // 光标移动只换 active span；滚动只平移 translationY，不重建。
     private var gutterStructureKey = ""
     private var gutterNumbers = IntArray(0)
+
+    /** 每条视觉行编号在串内的 [start,end)：结构重建时一次算好，光标移动 O(1) 取。 */
+    private var gutterLineOffsets = IntArray(0)
     private var gutterActiveLine = -1
     private var gutterActiveSpans = emptyList<Any>()
 
@@ -2087,10 +2118,24 @@ open class FilesPage(
                     android.text.Spanned.SPAN_INCLUSIVE_INCLUSIVE,
                 )
             }
+            // 逐行偏移一次算好（OCR r10）：光标移动不再走到光标行为止的
+            // 全部行、也不再为每行分配 n.toString()。
+            val offsets = IntArray(visualCount * 2)
+            var off = 0
+            for (i in 0 until visualCount) {
+                val n = numbers[i]
+                val len = if (n > 0) n.toString().length else 1
+                offsets[i * 2] = off
+                offsets[i * 2 + 1] = off + len
+                off += len + 1
+            }
+            gutterLineOffsets = offsets
             gutterNumbers = numbers
             gutterActiveLine = -1
             gutterActiveSpans = emptyList()
-            editorGutterText.text = markup
+            // 必须按 SPANNABLE 缓冲存（OCR r10 critical）：默认 NORMAL 会把
+            // SpannableString 拷成 SpannedString，后面的强转直接 ClassCastException。
+            editorGutterText.setText(markup, android.widget.TextView.BufferType.SPANNABLE)
             gutterStructureKey = key
         }
         updateGutterActive()
@@ -2106,11 +2151,11 @@ open class FilesPage(
         gutterActiveSpans = emptyList()
         gutterActiveLine = current
         val numbers = gutterNumbers
-        var offset = 0
-        for (n in numbers) {
-            val label = if (n > 0) n.toString() else " "
-            val end = offset + label.length
-            if (n == current) {
+        val offsets = gutterLineOffsets
+        for (i in numbers.indices) {
+            if (numbers[i] == current) {
+                val offset = offsets[i * 2]
+                val end = offsets[i * 2 + 1]
                 val color = android.text.style.ForegroundColorSpan(primary)
                 val bold = android.text.style.StyleSpan(Typeface.BOLD)
                 markup.setSpan(color, offset, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -2118,7 +2163,6 @@ open class FilesPage(
                 gutterActiveSpans = listOf(color, bold)
                 return
             }
-            offset = end + 1
         }
     }
 
@@ -2131,12 +2175,20 @@ open class FilesPage(
         val text = editorInput.text ?: return 1
         val offset = editorInput.selectionStart.coerceIn(0, text.length)
         if (caretIndexRevision != editorEditRevision) {
-            val starts = ArrayList<Int>()
-            starts.add(0)
+            // 两趟原始数组（OCR r10）：ArrayList<Int> 会把每个换行位置装箱，
+            // 短行大文件是几十万个 Integer 外加一次数组复制。
+            var count = 1
+            for (i in 0 until text.length) if (text[i] == '\n') count++
+            val starts = IntArray(count)
+            starts[0] = 0
+            var k = 1
             for (i in 0 until text.length) {
-                if (text[i] == '\n') starts.add(i + 1)
+                if (text[i] == '\n') {
+                    starts[k] = i + 1
+                    k++
+                }
             }
-            caretLineStarts = starts.toIntArray()
+            caretLineStarts = starts
             caretIndexRevision = editorEditRevision
         }
         var lo = 0
@@ -2212,7 +2264,9 @@ open class FilesPage(
     private fun refreshChromeHeavy() {
         if (!::editorGutterText.isInitialized) return
         if (editor.visibility != View.VISIBLE) return
-        editorGutterText.text = gutterMarkup()
+        // gutterMarkup 内部已按 SPANNABLE 写入并贴好 active span；
+        // 这里不能再赋值一遍（默认 setText 会拷成 SpannedString 丢可变性）。
+        gutterMarkup()
         editorGutterText.translationY = -editorInput.scrollY.toFloat()
         refreshIndentGuides()
     }

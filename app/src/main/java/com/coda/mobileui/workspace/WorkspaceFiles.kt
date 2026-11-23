@@ -54,6 +54,7 @@ object WorkspaceFiles {
             AppLog.w("WorkspaceFiles", "无法打开 file_paths.xml，按不可共享处理")
             return emptyList()
         }
+        var anyBaseNull = false
         val parsed =
             runCatching {
                 var event = parser.eventType
@@ -78,6 +79,10 @@ object WorkspaceFiles {
                         if (base != null) {
                             val f = if (sub.isEmpty()) base else File(base, sub)
                             out += runCatching { f.canonicalFile }.getOrDefault(f)
+                        } else {
+                            // 外置存储未挂载时 getExternalFilesDir 返回 null（OCR r10）：
+                            // 不能把残缺根列表永久缓存，挂载恢复后要能重解析。
+                            anyBaseNull = true
                         }
                     }
                     event = parser.next()
@@ -89,9 +94,9 @@ object WorkspaceFiles {
             AppLog.w("WorkspaceFiles", "解析 file_paths.xml 失败，按不可共享处理：${parsed.exceptionOrNull()?.message}")
             return emptyList()
         }
-        // 解析成功才建缓存；失败不缓存，让下次调用还能重试。
+        // 解析成功且根齐全才建缓存；失败或根缺失不缓存，让下次调用还能重试。
         val roots = out.toList()
-        rootsCache = roots
+        if (!anyBaseNull) rootsCache = roots
         return roots
     }
 

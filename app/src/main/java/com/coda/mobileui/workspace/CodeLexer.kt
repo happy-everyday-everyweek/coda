@@ -200,9 +200,11 @@ object CodeLexer {
             } else {
                 null
             }
-        val isKeyword = if (word != null) rules.keywords.contains(word) else containsRegion(rules.keywords, text, start, end)
+        val isKeyword =
+            if (word != null) rules.keywords.contains(word) else containsRegion(rules.keywordsByLen, text, start, end)
         if (isKeyword) return TokenKind.KEYWORD
-        val isType = if (word != null) rules.types.contains(word) else containsRegion(rules.types, text, start, end)
+        val isType =
+            if (word != null) rules.types.contains(word) else containsRegion(rules.typesByLen, text, start, end)
         if (isType) return TokenKind.TYPE
         return if (nextNonSpace(text, end) == '(') TokenKind.FUNCTION else TokenKind.IDENT
     }
@@ -214,16 +216,26 @@ object CodeLexer {
      * 关键字表规模是几十个，长度筛后通常只剩 0~2 个候选。
      */
     private fun containsRegion(
-        words: Set<String>,
+        wordsByLen: Map<Int, List<String>>,
         text: CharSequence,
         start: Int,
         end: Int,
     ): Boolean {
-        // 子串转 String 一次再哈希查（OCR #821）：线性扫整个关键词/类型表
-        // 在 200k 字符文件上是每轮数百万次比较。标识符长度有限，
-        // 一次小分配的代价远低于全表扫描。
-        if (words.isEmpty() || end <= start) return false
-        return words.contains(text.subSequence(start, end).toString())
+        // 长度分桶 + 逐字符比较（OCR r10）：哈希查需要 subSequence().toString()
+        // 为每个标识符复制一份字符串，正是 #494 设计刻意去掉的分配。
+        // 桶内通常 0~2 个候选，全程零分配。
+        val candidates = wordsByLen[end - start] ?: return false
+        for (w in candidates) {
+            var ok = true
+            for (k in w.indices) {
+                if (text[start + k] != w[k]) {
+                    ok = false
+                    break
+                }
+            }
+            if (ok) return true
+        }
+        return false
     }
 
     private fun startsWith(

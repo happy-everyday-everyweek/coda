@@ -457,10 +457,15 @@ class TerminalPage(
                                 val char = code.toChar()
                                 val ctrl = event.isCtrlPressed || ctrlArmed
                                 val alt = event.isAltPressed || altArmed
-                                var out = if (ctrl) controlCode(char).toString() else char.toString()
+                                val mapped = controlCode(char)
+                                // 未映射的 Ctrl 组合（Ctrl+1 等）不能当控制码直发
+                                // （OCR r10）：可打印字节进了 shell 却不进回显，
+                                // 退格 DEL 数量错位。按普通字符走 typeText。
+                                val realCtrl = ctrl && mapped != char
+                                var out = if (realCtrl) mapped.toString() else char.toString()
                                 // ALT 语义是 ESC 前缀，软键盘路径原先完全不看 altArmed（#564）。
                                 if (alt) out = "\u001b$out"
-                                if (ctrl || alt) {
+                                if (realCtrl || alt) {
                                     // 控制码/ESC 序列直发会话（OCR #821）：typeText 是
                                     // 本地回显 API，会把 \u001b 与控制字节追加进 echo，
                                     // 转录显示原始转义符且退格 DEL 数量错位。
@@ -484,9 +489,10 @@ class TerminalPage(
         for (char in text) {
             when (char) {
                 '\u007f' -> {
-                    if (echo.isNotEmpty()) {
+                    // 送达确认后才缩回显（OCR r10）：写失败时 shell 没收到 DEL，
+                    // 本地先删会让回显与行缓冲错位。
+                    if (echo.isNotEmpty() && writeRaw("\u007f")) {
                         echo.deleteCharAt(echo.length - 1)
-                        writeRaw("\u007f")
                     }
                 }
 
@@ -591,21 +597,27 @@ class TerminalPage(
                         // 缓冲限长（OCR #821）：主线程忙时 yes/大 cat 会把
                         // StringBuilder 灌到几 MB。丢最旧内容，保最新输出。
                         if (incoming.length > MAX_PENDING * 2) {
-                            incoming.delete(0, incoming.length - MAX_PENDING * 2)
+                            var cut = incoming.length - MAX_PENDING * 2
+                            // 不切代理对（OCR r10）：截断点落在高代理后会让
+                            // 保留区以孤儿低代理开头，emoji/CJK 扩展渲染损坏。
+                            if (cut > 0 && cut < incoming.length && Character.isHighSurrogate(incoming[cut - 1])) cut++
+                            incoming.delete(0, cut)
                         }
                     }
                     if (pumpScheduled.compareAndSet(false, true)) {
                         val mySession = session
                         main.post {
                             pumpScheduled.set(false)
+                            // 守卫必须在排空之前（OCR r10 high）：旧 reader 的
+                            // 迟到 pump 若先 drain 再判会话，会把新会话刚缓冲的
+                            // 首批输出吞掉。不是自己的会话就一个字节都不动。
+                            if (process !== mySession) return@post
                             val text = synchronized(incomingLock) {
                                 val buffered = incoming.toString()
                                 incoming.setLength(0)
                                 buffered
                             }
-                            // 会话守卫（OCR #821）：重开会话后旧 reader 的在途
-                            // pump 不得把上一会话的输出画进新转录。
-                            if (process === mySession && text.isNotEmpty()) appendChunk(text)
+                            if (text.isNotEmpty()) appendChunk(text)
                         }
                     }
                 }
@@ -634,6 +646,9 @@ class TerminalPage(
         // 清掉在途输出缓冲（OCR #821）：旧 reader 可能已缓冲数据且 pump
         // 已排队，不清会把上一会话的输出渲染进新会话。
         synchronized(incomingLock) { incoming.setLength(0) }
+        // 复位调度旗标（OCR r10 high）：旧 pump 还占着 true 时，新 reader 的
+        // compareAndSet 会失败，新会话的首批输出永远没人排泵。
+        pumpScheduled.set(false)
         // 先把引用取下来再清空：顺序反了（先置 null 再读）会让 destroy 永远走不到。
         val alive = process
         process = null

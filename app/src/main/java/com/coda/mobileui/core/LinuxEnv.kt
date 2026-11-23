@@ -656,6 +656,27 @@ class LinuxEnv(
         throw java.io.FileNotFoundException("根文件系统归档缺失，候选：${ROOTFS_ASSETS.joinToString("、")}")
     }
 
+    /**
+     * 祖先路径不得经过已解出的符号链接（OCR r11 high）。
+     *
+     * 词法重定基假设父目录是真实目录：`a/b -> ..` 先解出后，`a/b/c` 的
+     * 物理位置其实是 dest/c，按词法父目录算出的相对目标会指到宿主机。
+     * 这里在写入任何成员前逐段核查祖先，命中链接即拒绝该成员（fail-closed）。
+     * 只查已登记的链接表，不碰真实文件系统，可单测。
+     */
+    internal fun ancestorTraversalSafe(
+        relative: String,
+        links: Set<String>,
+    ): Boolean {
+        val segs = relative.split('/').filter { it.isNotEmpty() && it != "." }
+        var prefix = ""
+        for (s in segs.dropLast(1)) {
+            prefix = if (prefix.isEmpty()) s else "$prefix/$s"
+            if (prefix in links) return false
+        }
+        return true
+    }
+
     /** 精简 ustar 解包器：归档只含常规文件、目录与符号链接，不带 pax 扩展头。 */
     private fun untar(
         input: InputStream,
@@ -663,6 +684,8 @@ class LinuxEnv(
     ) {
         val header = ByteArray(512)
         val buffer = ByteArray(1 shl 16)
+        // 已解出的链接成员（组件规范化键）：后续成员的祖先核查与物理落点都靠它。
+        val extractedLinks = HashSet<String>()
         while (true) {
             if (!readBlock(input, header)) return
             if (header[0] == 0.toByte()) return
@@ -685,7 +708,12 @@ class LinuxEnv(
                 }
 
             var consumed = false
-            if (target != null) {
+            // 祖先经过已解出的链接：物理落点与词法假设脱钩，一律拒绝（OCR r11 high）。
+            val traversalOk = target != null && ancestorTraversalSafe(relative, extractedLinks)
+            if (target != null && !traversalOk) {
+                AppLog.w("LinuxEnv", "跳过祖先经过符号链接的成员：$relative")
+            }
+            if (target != null && traversalOk) {
                 when {
                     type == '5' -> {
                         target.mkdirs()
@@ -702,6 +730,9 @@ class LinuxEnv(
                             target.parentFile?.mkdirs()
                             target.delete()
                             runCatching { Os.symlink(hostSafe, target.absolutePath) }
+                            extractedLinks.add(
+                                relative.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/"),
+                            )
                         } else {
                             AppLog.w("LinuxEnv", "跳过越界的符号链接：$relative -> $linkName")
                         }

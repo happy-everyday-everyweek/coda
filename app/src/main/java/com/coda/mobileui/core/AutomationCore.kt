@@ -1107,6 +1107,13 @@ object AutomationHost {
             cv.put("enabled", if (on) 1 else 0)
             cv.put("lifecycle_status", if (on) "active" else "paused")
         }
+        // 内核还会把已达上限的活跃有限任务置 completed（OCR r11）：
+        // 降低 maxRuns 到 <= 已执行次数时不能让它再多跑一轮。
+        val reachedMaxNow =
+            !nextRecurring &&
+                has("maxRuns") &&
+                params.optInt("maxRuns") <= cur.optInt("scheduled_run_count", 0) &&
+                explicitEnabled != true
         if (next == null) {
             cv.putNull("next_run_at")
             // 显式暂停保持 paused；显式启用但算不出下次运行的拒绝，
@@ -1120,6 +1127,11 @@ object AutomationHost {
                 cv.put("lifecycle_status", "completed")
                 cv.put("enabled", 0)
             }
+        } else if (reachedMaxNow) {
+            // 新上限已被执行次数追平：与内核一致直接完成，不再排下一轮。
+            cv.putNull("next_run_at")
+            cv.put("lifecycle_status", "completed")
+            cv.put("enabled", 0)
         } else {
             cv.put("next_run_at", next)
             if (scheduleChanged || curEnabled) {
@@ -1221,6 +1233,22 @@ class AutomationScheduler private constructor(
         /** 宿主退到后台/回前台：拉长或恢复轮询间隔（#222）。 */
         fun setForeground(value: Boolean) {
             instance?.setForeground(value)
+        }
+
+        // 配置变更时旧实例的 onStop/onDestroy 晚于新实例 onResume（OCR r11）：
+        // 按「活跃宿主计数」判前后台，旧实例的迟到后台信号不会盖掉新实例。
+        private var foregroundHosts = 0
+
+        @Synchronized
+        fun hostResumed() {
+            foregroundHosts++
+            instance?.setForeground(true)
+        }
+
+        @Synchronized
+        fun hostPaused() {
+            foregroundHosts = (foregroundHosts - 1).coerceAtLeast(0)
+            if (foregroundHosts == 0) instance?.setForeground(false)
         }
 
         /** 宿主销毁时停掉轮询，避免进程里留一个永远自我重投递的 Runnable（#222）。 */

@@ -33,7 +33,12 @@ class LanguageRules(
     val types: Set<String>,
     /** 关键字与类型是否大小写不敏感（SQL 这类语言需要）。 */
     val caseInsensitive: Boolean = false,
-)
+) {
+    // 按长度分桶的懒索引（OCR r10）：大小写敏感热路径不再为每个标识符
+    // subSequence().toString() 复制字符串，长度筛后通常 0~2 个候选逐字符比。
+    val keywordsByLen: Map<Int, List<String>> by lazy { keywords.groupBy { it.length } }
+    val typesByLen: Map<Int, List<String>> by lazy { types.groupBy { it.length } }
+}
 
 /**
  * 词法高亮。

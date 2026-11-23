@@ -65,6 +65,9 @@ object WebUiHost {
     /** /api/send 的共享超时调度器：单线程守护，取消即出队（OCR r9 medium）。 */
     private var sendTimeout: java.util.concurrent.ScheduledThreadPoolExecutor? = null
 
+    /** 已移交所有权的连接（OCR r11）：stop 丢任务时必须兜底关 socket，否则 fd 泄漏。 */
+    private val deferredSockets = java.util.Collections.synchronizedSet(mutableSetOf<java.net.Socket>())
+
     @Synchronized
     private fun sendTimeoutScheduler(): java.util.concurrent.ScheduledThreadPoolExecutor {
         sendTimeout?.takeIf { !it.isShutdown }?.let { return it }
@@ -311,6 +314,12 @@ object WebUiHost {
     fun stop() {
         sendTimeout?.shutdownNow()
         sendTimeout = null
+        // shutdownNow 丢掉在途超时与写回任务（OCR r11）：内核同时被拆时
+        // 回调可能永远不来，这里兜底关闭全部已移交连接。
+        synchronized(deferredSockets) {
+            for (sock in deferredSockets) runCatching { sock.close() }
+            deferredSockets.clear()
+        }
         running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
@@ -540,6 +549,7 @@ object WebUiHost {
                                 runCatching(block).onFailure {
                                     AppLog.w("WebUi", "发送响应写回失败：${it.message}")
                                 }
+                                deferredSockets.remove(s)
                                 runCatching { s.close() }
                             }
                             val dispatched =
@@ -549,12 +559,20 @@ object WebUiHost {
                     }
                     // 校验全部通过，所有权此刻移交给回调/定时器。
                     deferredSocket = true
+                    deferredSockets.add(s)
+                    // stop() 可能恰好在此刻关掉调度器（OCR r11）：schedule 抛
+                    // RejectedExecutionException 时不能把连接晾着，直接回 503。
                     timeoutFuture =
-                        timeout.schedule(
-                            { respondOnce { respondJson(output, JSONObject().put("error", "发送超时"), 504) } },
-                            30,
-                            TimeUnit.SECONDS,
-                        )
+                        runCatching {
+                            timeout.schedule(
+                                { respondOnce { respondJson(output, JSONObject().put("error", "发送超时"), 504) } },
+                                30,
+                                TimeUnit.SECONDS,
+                            )
+                        }.getOrElse {
+                            respondOnce { respondJson(output, JSONObject().put("error", "服务已停止"), 503) }
+                            return
+                        }
                     try {
                         zc.send(msg) { ok, err ->
                             respondOnce {

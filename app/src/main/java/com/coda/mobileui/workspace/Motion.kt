@@ -97,7 +97,10 @@ private fun isInsideBounds(
  * 按压动画）时直接返回。
  */
 private fun releasePress(v: View) {
-    if (v.scaleX == 1f && v.scaleY == 1f && v.getTag(R.id.coda_press_settling) == null) return
+    // 只看恢复态标记（OCR r10 high）：settle 在途时 scaleX != 1，按缩放值判
+    // 会让每次越界 MOVE 都 cancel+重启，回弹永远从第 0 帧开始。
+    if (v.getTag(R.id.coda_press_settling) != null) return
+    if (v.scaleX == 1f && v.scaleY == 1f) return
     v.setTag(R.id.coda_press_settling, true)
     v.animate().cancel()
     v
@@ -106,7 +109,17 @@ private fun releasePress(v: View) {
         .scaleY(1f)
         .setDuration(Motion.SETTLE_MS)
         .setInterpolator(Motion.settle)
-        .withEndAction { v.setTag(R.id.coda_press_settling, null) }
+        // withEndAction 只在自然完成时跑（OCR r10）：快速再按下或同视图
+        // 其它动画会 cancel，标记不清就永远早退、按压反馈再也不恢复。
+        // 监听器在 end 清标记与自身（cancel 路径平台会续派 end）。
+        .setListener(
+            object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    v.animate().setListener(null)
+                    v.setTag(R.id.coda_press_settling, null)
+                }
+            },
+        )
         .start()
     fadeContent(v, 1f, Motion.SETTLE_MS)
 }
