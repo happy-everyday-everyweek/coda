@@ -291,7 +291,15 @@ object SettingsData {
                 SnapshotFallback.clearReason(key)
                 when {
                     key == "providers" -> {
-                        snapshots.put("providers", ProviderStore.load(app), now())
+                        val list = ProviderStore.load(app)
+                        // load 自己吞掉 JSON 损坏（返回部分列表），不会抛到这里，
+                        // reasonFor 永远不置位、页面保护永不激活（OCR r6 high）。
+                        // 显式查损坏状态并记录原因，让 providers/providersOfKind
+                        // 的错误行与添加/编辑拦截真正生效。
+                        if (ProviderStore.anyCorrupt()) {
+                            SnapshotFallback.emptyFor("providers", null, "配置文件损坏，已保留原件与 .corrupt 备份")
+                        }
+                        snapshots.put("providers", list, now())
                     }
 
                     key.startsWith("assets:") -> {

@@ -135,6 +135,11 @@ class ReadonlyGuardTest(unittest.TestCase):
         self.deny("git diff *")
         self.deny("ls ?")
         self.deny("cat [ab]*")
+    def test_option_shaped_glob_denied(self):
+        # OCR r6：-* 以 - 开头躲过词首检查，展开后仍可能变成 --output=evil。
+        self.deny("git diff -*")
+        self.deny("git log --open*")
+        self.deny("grep --col?r foo .")
     def test_pattern_after_list_still_allowed(self):
         # v* 是 --list 的合法模式，值内通配不误杀。
         self.allow("git tag --list v*")

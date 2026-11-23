@@ -93,11 +93,10 @@ internal object TarLinkSafety {
             val key = k.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
             if (key.isNotEmpty()) targets[key] = v
         }
-        // 每个待处理段携带字面父路径（查键用）；物理深度由 out 独立承载。
-        // 两条必须分开：链接目标相对**物理**父目录解析（外层链接可能已把
-        // 深度变浅），而成员键是**字面**归档路径（a -> b 后的 a/s 仍叫 a/s）。
-        // 混用任何一边都会漏判越界（OCR r5 critical/high）。
-        val pending = ArrayDeque<Pair<String, String>>()
+        // 待处理段：seg + 字面父路径（null 表示这是链接目标的展开段，
+        // 不是归档成员路径，不得按字面键查——否则 L -> t 展开出的 t 会
+        // 伪匹配成员 L/t，双重展开把物理深度搞坏，OCR r6 high）。
+        val pending = ArrayDeque<Pair<String, String?>>()
         val segs = path.split('/').filter { it.isNotEmpty() && it != "." }
         val acc = ArrayList<String>()
         for (seg in segs) {
@@ -117,24 +116,21 @@ internal object TarLinkSafety {
                 continue
             }
             out.add(seg)
-            // 字面 base 也要消 `..`：q/../a/s 的成员键是 a/s，不是 q/../a/s。
-            val normalizedBase = if (literalBase.isEmpty()) "" else (normalize(literalBase) ?: return null)
-            val literalPrefix = if (normalizedBase.isEmpty()) seg else "$normalizedBase/$seg"
             val resolvedPrefix = out.joinToString("/")
-            val linkTarget = targets[literalPrefix] ?: targets[resolvedPrefix]
+            // 原始段先按字面键查（base 里的 .. 先规范化）；展开段只按物理前缀查。
+            var linkTarget: String? = null
+            if (literalBase != null) {
+                val normalizedBase = if (literalBase.isEmpty()) "" else (normalize(literalBase) ?: return null)
+                val literalPrefix = if (normalizedBase.isEmpty()) seg else "$normalizedBase/$seg"
+                linkTarget = targets[literalPrefix]
+            }
+            if (linkTarget == null) linkTarget = targets[resolvedPrefix]
             if (linkTarget == null) continue
             if (linkTarget.isEmpty() || linkTarget.startsWith("/")) return null
             // 弹掉链接段本身：目标接在物理父目录之后。
             out.removeAt(out.size - 1)
             val tSegs = linkTarget.split('/').filter { it.isNotEmpty() && it != "." }
-            val tAcc = ArrayList<String>()
-            val newItems = ArrayList<Pair<String, String>>()
-            for (tSeg in tSegs) {
-                val tBase = literalPrefix + (if (tAcc.isEmpty()) "" else "/" + tAcc.joinToString("/"))
-                newItems.add(tSeg to tBase)
-                tAcc.add(tSeg)
-            }
-            for (item in newItems.asReversed()) pending.addLast(item)
+            for (tSeg in tSegs.asReversed()) pending.addLast(tSeg to null)
         }
         return out.joinToString("/")
     }

@@ -196,6 +196,15 @@ class TarLinkSafetyTest {
     }
 
     @Test
+    fun `链接展开段不得伪匹配同名成员键`() {
+        // OCR r6 high：L -> t 展开出的 t 是物理目标段，不是归档成员 L/t。
+        // 给它带上字面键会双重展开、把物理深度搞坏。L/z 应落 t/z（根内）。
+        val links = setOf("L", "L/t")
+        val targets = mapOf("L" to "t", "L/t" to "../../evil")
+        assertTrue(TarLinkSafety.linkStaysInside("/tmp/out", "y", "L/z", links, targets))
+    }
+
+    @Test
     fun `字面 base 里的上跳先规范化再查键`() {
         // OCR r5 high：q/../a/s 的成员键是 a/s；base 不消 .. 会查不到，
         // 链接被当普通目录，../../evil 按字面深度误放行。

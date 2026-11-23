@@ -391,19 +391,24 @@ object AutomationSchedule {
             for (token in s.split(',')) {
                 val body = token.trim()
                 if (body.isEmpty()) throw AutomationException("无效的 cron 字段: $s")
-                val step = body.substringAfter('/', "1").toIntOrNull()
-                    ?: throw AutomationException("无效的 cron 步长: $body")
+                val step =
+                    body.substringAfter('/', "1").toIntOrNull()
+                        ?: throw AutomationException("无效的 cron 步长: $body")
                 if (step < 1) throw AutomationException("无效的 cron 步长: $body")
                 val range = body.substringBefore('/')
                 val (lo, hi) =
                     when {
-                        range == "*" -> min to max
+                        range == "*" -> {
+                            min to max
+                        }
+
                         '-' in range -> {
                             val pair = range.split('-', limit = 2)
                             val a = pair[0].toIntOrNull() ?: throw AutomationException("无效的 cron 区间: $body")
                             val b = pair[1].toIntOrNull() ?: throw AutomationException("无效的 cron 区间: $body")
                             a to b
                         }
+
                         else -> {
                             val v = range.toIntOrNull() ?: throw AutomationException("无效的 cron 字段: $body")
                             v to v
@@ -420,7 +425,19 @@ object AutomationSchedule {
             return out.toList()
         }
 
-        fun single(idx: Int): Int? = expand(idx, 0, 59)?.takeIf { it.size == 1 }?.first()
+        // 分钟/小时只接受单值或通配（#757）：interval 规则一个周期只有一个
+        // 分钟/小时槽位，多值/步长（0,30、*/15、9-17）表达不了。旧实现
+        // takeIf{size==1} 把它们静默丢掉回退 anchor，用户规则被悄悄改写。
+        // 现在显式拒绝，让用户改用 cron 规则（computeCronNext 支持多值）。
+        fun single(idx: Int): Int? {
+            val values = expand(idx, 0, 59) ?: return null
+            if (values.size != 1) {
+                throw AutomationException(
+                    "每 N 单位的规则里分钟/小时只能是单值或 *；多值与步长请用 cron 表达式",
+                )
+            }
+            return values.first()
+        }
         val zone = ZoneId.systemDefault()
         val anchor = Instant.ofEpochMilli(anchorAt).atZone(zone)
         val minute = single(0) ?: anchor.minute
@@ -539,6 +556,16 @@ class AutomationStore(
                         throw IllegalStateException("初始化 automations 表失败", e)
                     }
                 }
+                // 一次性回填（#758）：旧版 fail() 把重试耗尽的行标成
+                // failed_to_dispatch 但仍 enabled=1/active，新闸门只认
+                // idle/retry，这些行升级后永久选不中。这里把它们放回 idle。
+                // 幂等：跑过一次后没有匹配行，重复执行无副作用。
+                runCatching {
+                    d.execSQL(
+                        "UPDATE automations SET dispatch_status = 'idle', dispatch_attempts = 0 " +
+                            "WHERE dispatch_status NOT IN ('idle','retry') AND enabled = 1 AND lifecycle_status = 'active'",
+                    )
+                }.onFailure { AppLog.w(tag, "dispatch_status 回填失败：${it.message}") }
                 db = d
                 d
             } catch (e: Throwable) {
@@ -607,12 +634,13 @@ class AutomationStore(
         val d = open() ?: return emptyList()
         val out = mutableListOf<JSONObject>()
         try {
-            d.rawQuery(
-                "SELECT * FROM automations WHERE workspace_key = ? ORDER BY created_at DESC",
-                arrayOf(workspaceKey),
-            ).use { c ->
-                while (c.moveToNext()) out += rowToJson(c)
-            }
+            d
+                .rawQuery(
+                    "SELECT * FROM automations WHERE workspace_key = ? ORDER BY created_at DESC",
+                    arrayOf(workspaceKey),
+                ).use { c ->
+                    while (c.moveToNext()) out += rowToJson(c)
+                }
         } catch (e: Throwable) {
             AppLog.e(tag, "列出任务失败", e)
         }
@@ -990,8 +1018,7 @@ object AutomationHost {
         return toProtocol(row)
     }
 
-    fun list(ctrl: ZController): List<JSONObject> =
-        AutomationStore(ctrl.appContext()).listRows(ctrl.workspacePath()).map { toProtocol(it) }
+    fun list(ctrl: ZController): List<JSONObject> = AutomationStore(ctrl.appContext()).listRows(ctrl.workspacePath()).map { toProtocol(it) }
 
     fun update(
         ctrl: ZController,
@@ -1034,18 +1061,38 @@ object AutomationHost {
         }
         val rule = AutomationSchedule.parseRule(ruleJson)
         val next = AutomationSchedule.computeNext(newCron, rule, now)
+        // 是否动了计划本身（#759）：只有改 cronExpr/interval/recurring 或显式
+        // 传 enabled 才允许复活；改标题/prompt 不得把用户暂停的任务重新拉起。
+        val scheduleChanged = has("cronExpr") || has("interval") || has("recurring") || has("enabled")
+        val curEnabled = cur.optInt("enabled", 1) == 1
+        if (has("enabled")) {
+            val on = params.optBoolean("enabled", true)
+            cv.put("enabled", if (on) 1 else 0)
+            cv.put("lifecycle_status", if (on) "active" else "paused")
+        }
         if (next == null) {
             cv.putNull("next_run_at")
-            cv.put("lifecycle_status", "completed")
-            cv.put("enabled", 0)
+            // 暂停的任务算不出下次运行也保持 paused，不能标 completed（#759）。
+            if (curEnabled || scheduleChanged) {
+                cv.put("lifecycle_status", "completed")
+                cv.put("enabled", 0)
+            }
         } else {
             cv.put("next_run_at", next)
-            // 暂停或已完成的任务编辑出有效计划后要真正复活，否则 listDue 永远取不到它。
-            cv.put("enabled", 1)
-            cv.put("lifecycle_status", "active")
+            if (scheduleChanged || curEnabled) {
+                // 计划变了或本来就启用：复活，否则 listDue 永远取不到它。
+                if (!has("enabled")) {
+                    cv.put("enabled", 1)
+                    cv.put("lifecycle_status", "active")
+                }
+            }
+            // 否则保持 cur 的 enabled/lifecycle_status：暂停仍是暂停。
         }
         cv.putNull("retry_at")
         cv.put("dispatch_attempts", 0)
+        // 旧版 fail() 留下的 failed_to_dispatch 行要能重新派发（#758）：
+        // listDue 的新闸门只认 idle/retry，不重置就永久选不中。
+        cv.put("dispatch_status", "idle")
         cv.putNull("last_error")
         cv.put("updated_at", now)
         store.update(id, cv, wp)

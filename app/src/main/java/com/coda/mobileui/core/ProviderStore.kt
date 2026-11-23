@@ -127,7 +127,15 @@ object ProviderStore {
         return v
     }
 
-    fun load(ctx: Context): MutableList<Provider> {
+    /**
+     * 读取也要持写锁（OCR r6 high）：损坏标志由 load 重置/置位，
+     * 不持锁的 load（Bg 预热、OAuth 刷新）与 update 并发时，会把
+     * update 刚置位的 mainCorrupt 重置掉，损坏保护被绕过。
+     * 锁可重入，update/save 内部再调 load 不死锁。
+     */
+    fun load(ctx: Context): MutableList<Provider> = synchronized(writeLock) { loadLocked(ctx) }
+
+    private fun loadLocked(ctx: Context): MutableList<Provider> {
         // 每轮读取重新判定：用户修好或删掉损坏文件后，迁移逻辑应该恢复工作。
         sidecarCorrupt = false
         mainCorrupt = false
@@ -205,7 +213,8 @@ object ProviderStore {
         }
         if (legacyMarker || kernelHasAsr || repaired || (combined.any { it.kind == ProviderKind.LLM } && !metaHasCapabilities)) {
             AppLog.i("ProviderStore", "迁移旧供应商配置：清理 Coda 字段、修端点并把 ASR 移出内核文件")
-            save(ctx, combined)
+            // 已在写锁内且刚确认无损坏：直接 saveLocked，不再经 save 重复 load。
+            saveLocked(ctx, combined)
         }
         return mergeBuiltins(combined)
     }
@@ -620,6 +629,15 @@ object ProviderStore {
         providers: List<Provider>,
     ): Boolean =
         synchronized(writeLock) {
+            // 直接 load→改→save 的路径也要过损坏保护（OCR r6 high）：
+            // 设置页的添加/编辑/删除表单不走 update，只护 update 等于没护。
+            // 在锁内重新 load 一次拿最新损坏状态：调用方可能在锁外 load 过，
+            // 那份状态可能被并发的另一次 load 重置（见下）。
+            load(ctx)
+            if (anyCorrupt()) {
+                AppLog.w("ProviderStore", "配置处于损坏保护状态，save 拒绝落盘")
+                return@synchronized false
+            }
             saveLocked(ctx, providers)
         }
 

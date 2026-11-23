@@ -559,9 +559,11 @@ object AsrTester {
         // （HTTP 200 + {"error":{...}} 或 {"code":...}），不能把整段 JSON 当识别结果（#196）。
         if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             val obj = runCatching { JSONObject(trimmed) }.getOrNull()
+            // has("code") 放进对 obj 本身的 takeIf（#756）：安全调用链不会把
+            // 可空接收者智能转换进 lambda，obj.has 在 lambda 里编译不过。
             val err =
                 obj?.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
-                    ?: obj?.optString("message")?.takeIf { it.isNotBlank() && obj.has("code") }
+                    ?: obj?.takeIf { it.has("code") }?.optString("message")?.takeIf { it.isNotBlank() }
             throw IllegalStateException(err ?: "转写服务返回了无法识别的 JSON 响应")
         }
         // 真的是裸文本（response_format=text 的返回），原样用。

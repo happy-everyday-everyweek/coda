@@ -1115,29 +1115,49 @@ class CodaSheet(
         backCallback = null
         panelView?.animate()?.cancel()
         val exit = ((panelView?.height ?: 0) + dp(CARD_GAP_DP)).toFloat()
+        // 收尾只跑一次：正常结束与被取消都要清引用、派发回调（#752）。
+        // withEndAction 只在正常结束时执行，动画被 cancel（拖动打断、
+        // 视图 detach）时清理被跳过，视图树与回调全泄漏。
+        var exitApplied = false
+
+        fun finishExit() {
+            if (exitApplied) return
+            exitApplied = true
+            if (!shouldApplyDismiss(myGen, generation)) return
+            (rootView.parent as? ViewGroup)?.removeView(rootView)
+            root = null
+            scrim = null
+            panel = null
+            grabberRow = null
+            footerRow = null
+            // 这些引用指向已从窗口移除的视图：不清掉会一直持有整棵视图树，
+            // 而且同一个 CodaSheet 实例被复用时 navigate 会操作僵尸视图。
+            livePanel = null
+            liveScroll = null
+            liveContentCol = null
+            liveColors = null
+            navigating = false
+            val block = pendingDismissBlock
+            pendingDismissBlock = null
+            block?.invoke()
+        }
         panelView
             ?.animate()
             ?.translationY(exit)
             ?.setDuration(Motion.STANDARD)
-            ?.withEndAction {
-                if (!shouldApplyDismiss(myGen, generation)) return@withEndAction
-                (rootView.parent as? ViewGroup)?.removeView(rootView)
-                root = null
-                scrim = null
-                panel = null
-                grabberRow = null
-                footerRow = null
-                // 这些引用指向已从窗口移除的视图：不清掉会一直持有整棵视图树，
-                // 而且同一个 CodaSheet 实例被复用时 navigate 会操作僵尸视图。
-                livePanel = null
-                liveScroll = null
-                liveContentCol = null
-                liveColors = null
-                navigating = false
-                val block = pendingDismissBlock
-                pendingDismissBlock = null
-                block?.invoke()
-            }?.start()
+            ?.setListener(
+                object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        panelView.animate().setListener(null)
+                        finishExit()
+                    }
+
+                    override fun onAnimationCancel(animation: android.animation.Animator) {
+                        panelView.animate().setListener(null)
+                        finishExit()
+                    }
+                },
+            )?.start()
         scrimView
             ?.animate()
             ?.alpha(0f)

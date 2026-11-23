@@ -193,6 +193,11 @@ def _readonly_violation(command: str) -> Optional[str]:
     for _tok in _raw_tokens:
         if _tok and _tok[0] in "*?[":
             return "只读检查不允许以通配符开头的词（展开后的词无法在守卫侧核实）"
+        # 以 - 开头且含通配的 token 同样危险（OCR r6 high）：`git diff -*`
+        # 展开后可能变成 --output=evil 这样的选项。选项名本身不含通配，
+        # 含通配的「选项」一定是 glob，拒绝。
+        if _tok.startswith("-") and any(c in _tok for c in "*?["):
+            return "只读检查不允许含通配的选项形态（展开后可能变成任意选项）"
     import re
     if re.search(r"(^|\s)~", text):
         return "只读检查不允许以 ~ 开头的路径（家目录展开无法在守卫侧核实）"
