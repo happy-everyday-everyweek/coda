@@ -16,6 +16,8 @@ import android.widget.TextView
 import com.coda.mobileui.R
 import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.ArchiveKit
+import com.coda.mobileui.core.TarLinkSafety
+import com.coda.mobileui.core.TarListing
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -274,7 +276,9 @@ open class FilesPage(
         val current = editing ?: return
         if (current.absolutePath != path) return
         editing = null
-        readOnlyPreview = true
+        // 用独立的 detached 状态而不是 readOnlyPreview（#793）：
+        // 后者会强清 dirty 并让 hasUnsavedEditor 失效，未保存编辑被静默丢弃。
+        detachedFile = true
         // 解除绑定后状态栏改走只读分支：字节数按当前正文算，并清掉旧路径的大小缓存。
         previewBytes = editorInput.text?.toString()?.toByteArray(editorCharset)?.size?.toLong() ?: 0L
         sizeCachePath = null
@@ -586,6 +590,14 @@ override fun menuItems(): List<String> =
 
     /** 磁盘内容在编辑器脏状态下变过：保存前必须再次确认，不能静默覆盖。 */
     private var externalConflict = false
+
+    /**
+     * 目标文件已被删除，但正文留在编辑框里（#793）。
+     *
+     * 不复用 [readOnlyPreview]：那条分支会强清 dirty，关标签时把未保存编辑
+     * 当成干净直接丢弃，保存提示还会说「压缩包内文件只读」。
+     */
+    private var detachedFile = false
 
     /** 当前选中的文件（用于复制/移动到另一栏）。 */
     private var selectedFile: File? = null
@@ -1099,18 +1111,28 @@ override fun menuItems(): List<String> =
     ): Boolean {
         val listed = host.env.exec(listOf("tar", "-tf", pack.absolutePath), timeoutMs = 60_000L)
         if (!listed.ok) return false
-        fun unsafe(path: String): Boolean = path.startsWith("/") || path.split('/').any { it == ".." }
-        if (listed.output.lineSequence().any { it.isNotBlank() && unsafe(it.trim()) }) return false
+        val names = listed.output.lineSequence().filter { it.isNotBlank() }.toList()
+        if (names.any { !TarLinkSafety.memberSafe(it.removeSuffix("\r")) }) return false
         val detailed = host.env.exec(listOf("tar", "-tvf", pack.absolutePath), timeoutMs = 60_000L)
-        if (detailed.ok) {
-            for (line in detailed.output.lineSequence()) {
-                if (!line.startsWith("l")) continue
-                val link = line.substringAfter(" -> ", "").trim()
-                if (link.isEmpty() || unsafe(link)) return false
-                // 相对链接必须仍落在目标目录内。
-                val resolved = File(target, link).canonicalFile
-                val root = target.canonicalFile
-                if (resolved != root && !resolved.path.startsWith(root.path + File.separator)) return false
+        // 详细列表拿不到就无从判断链接：必须判不安全（#792）。
+        // 旧实现在这里直接跳过整段校验并返回 true，等于 fail-open。
+        if (!TarLinkSafety.listingUsable(detailed.ok, detailed.output)) return false
+        // 已列举的成员集合：硬链接的目标必须在其中（#792）。
+        val known =
+            names.map { TarListing.normalizePath(it.removeSuffix("\r")).trimEnd('/') }.toSet()
+        val root = target.absolutePath
+        for (line in detailed.output.lineSequence()) {
+            val link = TarListing.parseLink(line) ?: continue
+            val ok =
+                if (link.hardLink) {
+                    TarLinkSafety.hardLinkStaysInside(root, link.path, link.target, known)
+                } else {
+                    // 相对目标按链接自身所在目录解析，不是解压根（#792）。
+                    TarLinkSafety.linkStaysInside(root, link.path, link.target)
+                }
+            if (!ok) {
+                AppLog.w("FilesPage", "拒绝越界链接：${link.path} -> ${link.target}")
+                return false
             }
         }
         return true
@@ -2062,7 +2084,8 @@ override fun menuItems(): List<String> =
             dirty = false
             return
         }
-        if (editing == null) return
+        // detached（文件被删）仍要跟踪脏标记（#793）：正文还在编辑框里。
+        if (editing == null && !detachedFile) return
         val text = editorInput.text ?: return
         // 长度一变就能断定有改动：不必每个字符都把整篇复制出来比较。
         if (text.length != originalText.length) {
@@ -2081,7 +2104,7 @@ override fun menuItems(): List<String> =
     private fun compareDirty() {
         if (suppressEdits) return
         if (readOnlyPreview) return
-        if (editing == null) return
+        if (editing == null && !detachedFile) return
         val changed = editorInput.text.toString() != originalText
         if (changed == dirty) return
         dirty = changed
@@ -2801,6 +2824,8 @@ override fun menuItems(): List<String> =
         editing = file
         markdownMode = markdown
         readOnlyPreview = false
+        detachedFile = false
+        externalConflict = false
         editorCharset = charset
         originalText = content
         loadedMtime = runCatching { file.lastModified() }.getOrDefault(0L)
@@ -2832,23 +2857,85 @@ override fun menuItems(): List<String> =
      * 会直接卡住界面，慢存储上更明显。
      */
     private fun saveEditor(onDone: ((Boolean) -> Unit)? = null) {
-        if (readOnlyPreview) {
-            toast("压缩包内文件只读，无法保存")
-            onDone?.invoke(false)
-            return
+        // 关标签/切工作区都会走这里，先把去抖中的判脏落实（#791）。
+        flushDirty()
+        val verdict =
+            EditorSavePolicy.decide(
+                EditorSavePolicy.State(
+                    readOnlyPreview = readOnlyPreview,
+                    hasTarget = editing != null,
+                    detached = detachedFile,
+                    dirty = dirty,
+                    externalConflict = externalConflict,
+                ),
+            )
+        when (verdict) {
+            EditorSavePolicy.Verdict.BLOCKED_ARCHIVE -> {
+                toast("压缩包内文件只读，无法保存")
+                onDone?.invoke(false)
+                return
+            }
+            EditorSavePolicy.Verdict.BLOCKED_DETACHED -> {
+                // 与压缩包只读分开（#793）：这里是「文件被删了」，正文还在，
+                // 用压缩包的文案会把用户引向完全错误的方向。
+                toast("文件已被删除，无法写回；可复制正文后另存为新文件")
+                onDone?.invoke(false)
+                return
+            }
+            EditorSavePolicy.Verdict.CONFIRM_OVERWRITE -> {
+                // 兑现提示里承诺的「保存前会再确认」（#789）：此前只写标志不读，
+                // 脏编辑器会静默覆盖外部改动，不可逆。
+                confirmOverwriteExternal { yes ->
+                    if (yes) {
+                        externalConflict = false
+                        writeEditor(onDone)
+                    } else {
+                        onDone?.invoke(false)
+                    }
+                }
+                return
+            }
+            EditorSavePolicy.Verdict.SAVE -> Unit
         }
-        val file = editing
-        if (file == null) {
-            // 目标文件已被删除（或从未绑定）：明确说明，不静默什么都不做。
-            toast("文件已被删除，无法保存")
-            onDone?.invoke(false)
-            return
+        writeEditor(onDone)
+    }
+
+    /** 覆盖外部改动前的确认（#789）。 */
+    private fun confirmOverwriteExternal(onChoice: (Boolean) -> Unit) {
+        val sheet =
+            sheet().compact()
+                .title("磁盘上的文件已被修改")
+                .subtitle("保存会用当前编辑内容覆盖外部改动，此操作不可撤销")
+        sheet.secondaryAction("取消") {
+            sheet.dismiss()
+            onChoice(false)
         }
+        sheet.primaryAction("覆盖保存") {
+            sheet.dismiss()
+            onChoice(true)
+        }
+        // 点遮罩或返回键等于取消：不能把「没选」当成同意覆盖。
+        sheet.onDismiss { onChoice(false) }
+        sheet.show()
+    }
+
+    /** 真正落盘：编码 REPORT + 原子写（#790）。 */
+    private fun writeEditor(onDone: ((Boolean) -> Unit)?) {
+        val file = editing ?: run { onDone?.invoke(false); return }
         val text = editorInput.text.toString()
         val charset = editorCharset
+        // 编码在主线程做：编辑器上限 MAX_EDIT_BYTES，转字节的开销远小于写盘，
+        // 而失败要立刻给出可见提示，不能等到后台回来才说。
+        val encoded = EditorSavePolicy.encode(text, charset)
+        if (!encoded.ok) {
+            toast("${encoded.error}；请改用 UTF-8 保存或移除这些字符")
+            onDone?.invoke(false)
+            return
+        }
         host.background(
-            // 按读入时识别到的编码写回：GBK 文件保存后仍是 GBK，不会把汉字换成 U+FFFD。
-            work = { runCatching { file.writeBytes(text.toByteArray(charset)) }.isSuccess },
+            // 按读入时识别到的编码写回，且先写临时文件再改名（#790）：
+            // 原地截断遇到进程中断会把原文一起丢掉。
+            work = { EditorSavePolicy.writeAtomic(file, encoded.bytes!!) },
             then = { ok ->
                 if (ok) {
                     originalText = text
@@ -2871,13 +2958,42 @@ override fun menuItems(): List<String> =
         )
     }
 
-    /** 编辑器是否有未保存修改：供关闭标签、切换工作区前询问。 */
-    fun hasUnsavedEditor(): Boolean = editing != null && dirty
+    /**
+     * 编辑器是否有未保存修改：供关闭标签、切换工作区前询问。
+     *
+     * 必须先把去抖中的比较落实（#791）：等长替换只会在 200ms 后才跑 compareDirty，
+     * 那个窗口里 dirty 仍是 false，替换后立刻关标签就会丢掉编辑。
+     * detached（文件被删）也算有正文要问（#793）。
+     */
+    fun hasUnsavedEditor(): Boolean {
+        if (editing == null && !detachedFile) return false
+        flushDirty()
+        return dirty
+    }
+
+    /** 立刻结算去抖中的判脏，不等 200ms（#791）。 */
+    private fun flushDirty() {
+        if (suppressEdits || readOnlyPreview) return
+        if (editing == null && !detachedFile) return
+        editorInput.removeCallbacks(dirtyTick)
+        val changed =
+            EditorSavePolicy.isDirty(
+                original = originalText,
+                current = editorInput.text?.toString() ?: "",
+                debouncePending = true,
+            )
+        if (changed != dirty) {
+            dirty = changed
+            refreshEditorTitle()
+        }
+    }
 
     /** 关闭前询问；回调 true 才继续关闭。 */
     fun requestLeaveEditor(onDone: (Boolean) -> Unit) {
+        // 先结算去抖中的判脏（#791），否则等长替换后的编辑会被当成干净。
+        flushDirty()
         val file = editing
-        if (file == null || !dirty) {
+        if ((file == null && !detachedFile) || !dirty) {
             onDone(true)
             return
         }
@@ -2887,13 +3003,25 @@ override fun menuItems(): List<String> =
             answered = true
             onDone(ok)
         }
-        val sheet = sheet().title("未保存的修改").subtitle(file.name)
+        // detached（文件被删）也要问（#793）：正文还在，直接关掉就没了。
+        val sheet = sheet().title("未保存的修改").subtitle(file?.name ?: "已删除的文件")
         sheet.content { column ->
-            column.addView(label("关闭前可以先把修改写回文件。", 13f, onSurfaceVariant))
+            column.addView(
+                label(
+                    if (file == null) "文件已被删除，正文无法写回；关闭会丢失这些内容。" else "关闭前可以先把修改写回文件。",
+                    13f,
+                    onSurfaceVariant,
+                ),
+            )
         }
-        sheet.primaryAction("保存并关闭") {
+        sheet.primaryAction(if (file == null) "仍然关闭" else "保存并关闭") {
             sheet.dismiss()
-            saveEditor { ok -> if (ok) finish(true) }
+            if (file == null) {
+                dirty = false
+                finish(true)
+            } else {
+                saveEditor { ok -> if (ok) finish(true) }
+            }
         }
         sheet.secondaryAction("放弃修改") {
             sheet.dismiss()
@@ -2930,6 +3058,8 @@ override fun menuItems(): List<String> =
     private fun leaveEditor() {
         editing = null
         readOnlyPreview = false
+        detachedFile = false
+        externalConflict = false
         originalText = ""
         editorRules = null
         dirty = false

@@ -91,6 +91,49 @@ class ChunkedFetchGuardTest {
             )
         assertNotEquals(DownloadOutcome.Kind.OK, out.kind)
         assertTrue(DownloadOutcome.shouldTryNextMirror(out.kind))
+        // 必须带上「不支持 Range」标志：调用方据此退回单连接而不是白换一圈镜像。
+        assertTrue("缺少 rangeUnsupported 标志", out.rangeUnsupported)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `镜像 5xx 不算不支持 Range`() {
+        val dir = tmpDir()
+        val part = File(dir, "f.part")
+        val chunks = ChunkPlan.split(total = 200, concurrency = 2)
+        val out =
+            ChunkedFetch.run(
+                part = part,
+                chunks = chunks,
+                done = AtomicLongArray(chunks.size),
+                total = 200,
+                cancel = null,
+                progress = null,
+                open = { _, _ -> FakeConn(503, null, ByteArray(0)) },
+            )
+        // 503 是镜像挂了，换源有意义；不能误判成「这个源不支持 Range」。
+        assertFalse(out.rangeUnsupported)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `用户取消不带不支持 Range 标志`() {
+        val dir = tmpDir()
+        val part = File(dir, "f.part")
+        val chunks = ChunkPlan.split(total = 200, concurrency = 2)
+        val cancel = Downloader.Cancel()
+        cancel.cancel()
+        val out =
+            ChunkedFetch.run(
+                part = part,
+                chunks = chunks,
+                done = AtomicLongArray(chunks.size),
+                total = 200,
+                cancel = cancel,
+                progress = null,
+                open = { from, to -> FakeConn(206, "bytes $from-$to/200", ByteArray((to - from + 1).toInt()) { 1 }) },
+            )
+        assertFalse(out.rangeUnsupported)
         dir.deleteRecursively()
     }
 

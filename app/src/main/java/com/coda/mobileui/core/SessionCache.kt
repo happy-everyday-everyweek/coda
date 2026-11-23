@@ -235,15 +235,34 @@ object SessionCache {
         }
     }
 
-    /** 读回某个会话的缓存消息；没有缓存时返回空表。 */
+    /** 读回某个会话的缓存消息；没有缓存或读失败时返回空表。只适用于「有就用、没有就算了」的场景。 */
     fun loadMessages(
         ctx: Context,
         sessionId: String,
-    ): List<ZMessage> {
+    ): List<ZMessage> = readMessages(ctx, sessionId).messages ?: emptyList()
+
+    /**
+     * 一次缓存读取的结果（#772）。
+     *
+     * [messages] 为 null 表示「文件不存在或读不出来」，空表表示「持久化的就是空会话」。
+     * 两者必须分开：清空消息是合法状态，把它当成读失败会让界面停在上一会话的内容上，
+     * 而调用方已经回报了「打开成功」。
+     */
+    data class Read(
+        val messages: List<ZMessage>?,
+    ) {
+        val ok: Boolean get() = messages != null
+    }
+
+    /** 读缓存消息，区分「读不出」与「持久态为空」。 */
+    fun readMessages(
+        ctx: Context,
+        sessionId: String,
+    ): Read {
         val file = msgFile(ctx, sessionId)
-        if (!file.isFile) return emptyList()
+        if (!file.isFile) return Read(null)
         return runCatching {
-            val array = JSONObject(file.readText()).optJSONArray("messages") ?: return emptyList()
+            val array = JSONObject(file.readText()).optJSONArray("messages") ?: return Read(null)
             val out = ArrayList<ZMessage>(array.length())
             for (i in 0 until array.length()) {
                 val o = array.optJSONObject(i) ?: continue
@@ -255,8 +274,8 @@ object SessionCache {
                 if (text.isNotEmpty()) m.parts.add(ZPart.Text(text))
                 out += m
             }
-            out
-        }.getOrDefault(emptyList())
+            Read(out)
+        }.getOrDefault(Read(null))
     }
 
     /** 只保留最近几个会话的消息文件，其余删掉；写盘残留的临时文件一并清理。 */

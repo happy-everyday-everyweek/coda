@@ -38,6 +38,14 @@ internal object ChunkedFetch {
         val kind: DownloadOutcome.Kind,
         val bytes: Long = 0,
         val detail: String = "",
+        /**
+         * 这个源答不出 206（#814）。
+         *
+         * 单独立一个标志而不是让调用方匹配 detail 文案：文案会改，
+         * 而「退回单连接」这个决定必须稳定。换镜像对这种源没有意义，
+         * 同一份内容用一条连接就能下下来。
+         */
+        val rangeUnsupported: Boolean = false,
     )
 
     /**
@@ -92,7 +100,12 @@ internal object ChunkedFetch {
                                 }
                             failure.compareAndSet(
                                 null,
-                                Outcome(kind, detail = "块 ${c.index}：${e.javaClass.simpleName}: ${e.message}"),
+                                Outcome(
+                                    kind,
+                                    detail = "块 ${c.index}：${e.javaClass.simpleName}: ${e.message}",
+                                    // 2xx 但不是 206：这个源不支持 Range，可以退回单连接。
+                                    rangeUnsupported = e is ChunkHttpException && e.code in 200..299 && e.code != 206,
+                                ),
                             )
                             // 一块失败就让其余块尽快停下，别继续耗流量；只动本任务的标志。
                             stopped.set(true)

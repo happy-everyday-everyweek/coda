@@ -237,6 +237,13 @@ internal object Downloader {
                     )
             if (canChunk) {
                 chunked = true
+                // 进分块前清掉单连接记录（#808 配套）：分块的 part 会被预分配到全长，
+                // 留着 schema-1 记录，下次入口的 ResumeState.check 会判 ALREADY_COMPLETE，
+                // 把稀疏文件当成完整的连续前缀。分块进度只由 schema-2 表达。
+                if (req.resume && saved != null) {
+                    runCatching { sidecar.delete() }
+                    runCatching { tmp.delete() }
+                }
                 return fetchChunked(req, target, tmp, sidecar, total, conn, onProgress, cancel)
             }
             // 续传时 hash 必须覆盖整个文件（已有字节 + 新字节），不能只算这一段。
@@ -250,55 +257,13 @@ internal object Downloader {
                         }
                     }
                 }
-            if (req.resume) {
+if (req.resume) {
                 ResumeState.save(
                     sidecar,
                     ResumeState(req.url, pumped.bytes, total, etag, lastModified),
                 )
             }
-            val verdict =
-                DownloadOutcome.verify(
-                    actualSize = pumped.bytes,
-                    expectedSize = req.expectedSize,
-                    actualSha256 = pumped.sha256,
-                    expectedSha256 = req.expectedSha256,
-                )
-            // 两项期望都没给时退化为「必须非空」：AssetFetcher.verify 一直是这个约定，
-            // 否则一个 0 字节的响应会被当成合法资产上线。
-            val effective =
-                if (verdict == DownloadOutcome.Kind.OK &&
-                    req.expectedSize <= 0 &&
-                    req.expectedSha256.isNullOrBlank() &&
-                    pumped.bytes <= 0
-                ) {
-                    DownloadOutcome.Kind.VERIFY_FAILED
-                } else {
-                    verdict
-                }
-            if (effective != DownloadOutcome.Kind.OK) {
-                AppLog.w(
-                    TAG,
-                    "下载内容校验不通过 ${req.url} 期望长度=${req.expectedSize} 实际=${pumped.bytes}",
-                )
-                // 校验失败必须作废断点：坏字节留着，下次续传只会把坏文件拼得更长。
-                if (req.resume) ResumeState.discard(tmp, sidecar) else runCatching { tmp.delete() }
-                return Result(effective, bytes = pumped.bytes, detail = "内容校验不通过")
-            }
-            return when (val placed = AssetPlacement.place(tmp, target)) {
-                is AssetPlacement.Result.Placed -> {
-                    // 上线成功才清状态文件，否则下次会把已完成的下载又续一遍。
-                    runCatching { sidecar.delete() }
-                    Result(DownloadOutcome.Kind.OK, bytes = placed.bytes)
-                }
-
-                is AssetPlacement.Result.Failed ->
-                    Result(
-                        DownloadOutcome.Kind.PLACE_FAILED,
-                        bytes = pumped.bytes,
-                        detail = placed.reason,
-                        partial = tmp,
-                    )
-            }
+            return finishSingle(req, target, tmp, sidecar, pumped)
         } catch (e: CancellationException) {
             // 取消不是「这次失败，换下一个源」。开启续传时保留已下载字节与记录（#730），
             // 用户下次触发同一下载可以接着下；未开启时按旧行为清掉半成品。
@@ -344,6 +309,131 @@ internal object Downloader {
                                 lastModified = prev?.lastModified ?: conn?.getHeaderField("Last-Modified"),
                             ),
                         )
+                    }
+                }
+            } else {
+                runCatching { tmp.delete() }
+            }
+            return Result(DownloadOutcome.Kind.IO, detail = "${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
+    }
+
+    /**
+     * 单连接下载的收尾：校验 + 上线（#814 抽出共享）。
+     *
+     * 全量、续传、以及「分块失败退回单连接」三条路径的收尾完全一样，
+     * 各写一份必然出现「改了这边漏了那边」。
+     */
+    private fun finishSingle(
+        req: Request,
+        target: File,
+        tmp: File,
+        sidecar: File,
+        pumped: Pumped,
+    ): Result {
+        val verdict =
+            DownloadOutcome.verify(
+                actualSize = pumped.bytes,
+                expectedSize = req.expectedSize,
+                actualSha256 = pumped.sha256,
+                expectedSha256 = req.expectedSha256,
+            )
+        // 两项期望都没给时退化为「必须非空」：AssetFetcher.verify 一直是这个约定，
+        // 否则一个 0 字节的响应会被当成合法资产上线。
+        val effective =
+            if (verdict == DownloadOutcome.Kind.OK &&
+                req.expectedSize <= 0 &&
+                req.expectedSha256.isNullOrBlank() &&
+                pumped.bytes <= 0
+            ) {
+                DownloadOutcome.Kind.VERIFY_FAILED
+            } else {
+                verdict
+            }
+        if (effective != DownloadOutcome.Kind.OK) {
+            AppLog.w(TAG, "下载内容校验不通过 ${req.url} 期望长度=${req.expectedSize} 实际=${pumped.bytes}")
+            // 校验失败必须作废断点：坏字节留着，下次续传只会把坏文件拼得更长。
+            if (req.resume) ResumeState.discard(tmp, sidecar) else runCatching { tmp.delete() }
+            return Result(effective, bytes = pumped.bytes, detail = "内容校验不通过")
+        }
+        return when (val placed = AssetPlacement.place(tmp, target)) {
+            is AssetPlacement.Result.Placed -> {
+                // 上线成功才清状态文件，否则下次会把已完成的下载又续一遍。
+                runCatching { sidecar.delete() }
+                Result(DownloadOutcome.Kind.OK, bytes = placed.bytes)
+            }
+            is AssetPlacement.Result.Failed ->
+                Result(
+                    DownloadOutcome.Kind.PLACE_FAILED,
+                    bytes = pumped.bytes,
+                    detail = placed.reason,
+                    partial = tmp,
+                )
+        }
+    }
+
+    /**
+     * 分块失败后退回单连接全量重下（#814）。
+     *
+     * 触发条件只有一个：这个源对块请求答了 2xx 却不是 206，说明它忽略 Range。
+     * 换镜像对这种情况没有帮助（同一份内容在哪个镜像都不支持 Range），
+     * 用一条连接从头下才是正解。调用前 part 与 sidecar 必须已作废：
+     * 分块的 part 是稀疏文件，任何已有字节都不能当成连续前缀。
+     */
+    private fun fetchSingle(
+        req: Request,
+        target: File,
+        tmp: File,
+        sidecar: File,
+        total: Long,
+        onProgress: Progress?,
+        cancel: Cancel?,
+    ): Result {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = open(req, 0)
+            val kind = DownloadOutcome.ofHttp(conn.responseCode)
+            if (kind != DownloadOutcome.Kind.OK) {
+                runCatching { conn.errorStream?.close() }
+                return Result(kind, detail = "HTTP ${conn.responseCode}")
+            }
+            val wantHash = !req.expectedSha256.isNullOrBlank()
+            val pumped =
+                FileOutputStream(tmp).use { o ->
+                    conn.inputStream.use { input -> pump(input, o, total, onProgress, cancel, wantHash) }
+                }
+            if (req.resume) {
+                ResumeState.save(
+                    sidecar,
+                    ResumeState(
+                        req.url,
+                        pumped.bytes,
+                        total,
+                        conn.getHeaderField("ETag"),
+                        conn.getHeaderField("Last-Modified"),
+                    ),
+                )
+            }
+            return finishSingle(req, target, tmp, sidecar, pumped)
+        } catch (e: CancellationException) {
+            if (req.resume) {
+                runCatching {
+                    if (tmp.isFile) {
+                        ResumeState.save(sidecar, ResumeState(req.url, tmp.length(), total, null, null))
+                    }
+                }
+            } else {
+                runCatching { tmp.delete() }
+            }
+            return Result(DownloadOutcome.Kind.CANCELLED, detail = "已取消")
+        } catch (e: Exception) {
+            AppLog.w(TAG, "单连接重下异常 ${req.url}：${e.javaClass.simpleName}: ${e.message}")
+            if (req.resume) {
+                runCatching {
+                    if (tmp.isFile) {
+                        ResumeState.save(sidecar, ResumeState(req.url, tmp.length(), total, null, null))
                     }
                 }
             } else {
@@ -439,11 +529,20 @@ internal object Downloader {
             )
         val got = ChunkPlan.totalDone(chunks, (0 until chunks.size).map { done.get(it) })
         if (out.kind != DownloadOutcome.Kind.OK) {
-            // 失败与取消都保留各块断点：下次只补未完成的块。
-            saveState()
             if (out.kind == DownloadOutcome.Kind.CANCELLED) {
+                // 取消保留各块断点：下次只补未完成的块。
+                saveState()
                 return Result(DownloadOutcome.Kind.CANCELLED, bytes = got, detail = "已取消")
             }
+            if (out.rangeUnsupported) {
+                // 这个源答不出 206（#814）：换镜像未必有用，同一份内容用单连接就能下。
+                // 分块的 part 是稀疏文件，必须整份作废后从零全量重下。
+                AppLog.i(TAG, "源不支持 Range，退回单连接：${req.url}")
+                ResumeState.discard(tmp, sidecar)
+                return fetchSingle(req, target, tmp, sidecar, total, onProgress, cancel)
+            }
+            // 其余失败保留各块断点：下次只补未完成的块。
+            saveState()
             AppLog.w(TAG, "分块下载失败 ${req.url}：${out.kind} ${out.detail}")
             return Result(out.kind, bytes = got, detail = out.detail)
         }

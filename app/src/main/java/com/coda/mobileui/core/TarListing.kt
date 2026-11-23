@@ -114,6 +114,40 @@ internal object TarListing {
         )
     }
 
+    /** 一条链接成员（#792）。 */
+    data class Link(
+        val path: String,
+        val target: String,
+        /** true 表示硬链接（`h` 行，`link to`），false 表示符号链接（`l` 行，`->`）。 */
+        val hardLink: Boolean,
+    )
+
+    /**
+     * 解析链接行，取出成员名与链接目标（#792）。
+     *
+     * 符号链接是 `l... name -> target`，硬链接是 `h... name link to target`。
+     * 用 [parseLine] 同一套字段切分与转义还原，名字里的空格与引号不会被截断；
+     * 之前调用方自己 `substringAfter(" -> ").trim()` 会把这两类名字弄坏，
+     * 而且完全看不到硬链接。非链接行返回 null。
+     */
+    fun parseLink(raw: String): Link? {
+        val line = raw.removeSuffix("\r")
+        if (line.isBlank()) return null
+        val mode = line.firstOrNull() ?: return null
+        if (mode != 'l' && mode != 'h') return null
+        val parts = line.split(Regex("\\s+"), limit = 6)
+        if (parts.size < 6) return null
+        val rest = parts[5]
+        val hard = mode == 'h'
+        val sep = if (hard) " link to " else " -> "
+        val at = rest.indexOf(sep)
+        if (at < 0) return null
+        val name = normalizePath(unescape(rest.substring(0, at)))
+        val target = unescape(rest.substring(at + sep.length))
+        if (name.isEmpty()) return null
+        return Link(path = name.trimEnd('/'), target = target, hardLink = hard)
+    }
+
     /** 把 `2024-05-06 07:08` 解析成毫秒；解析不出返回 0，由上层决定回退值。 */
     fun parseStamp(stamp: String): Long =
         runCatching {

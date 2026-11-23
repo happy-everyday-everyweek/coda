@@ -1047,6 +1047,11 @@ class ZController private constructor(
             val cached = SessionCache.loadSessions(app)
             if (cached.isEmpty()) return@Thread
             post {
+                // 读盘期间内核可能已经起来并填好了实时列表（#775）。
+                // 入口那次 isNotEmpty 是同步检查，管不到这个窗口：
+                // 晚到的缓存会覆盖实时数据，还把 cacheOnly 置真，
+                // 之后的打开都读缓存而不再订阅内核。
+                if (sessions.isNotEmpty()) return@post
                 cacheOnly = true
                 sessions = cached.toMutableList()
                 for (l in listeners) l.onStateChanged()
@@ -1061,7 +1066,13 @@ class ZController private constructor(
      * 刻意不改工作区、不发任何请求——内核没起来时任何请求都会失败，
      * 还会在界面上报一串错。这里就是要让用户安静地看一眼上次聊了什么。
      */
-    fun openCachedSession(sessionId: String): Boolean = openCachedSession(sessionId, switchGuard.begin(sessionId))
+    fun openCachedSession(sessionId: String): Boolean {
+        // 先确认缓存真的在，再登记打开意图（#771）。
+        // 未命中是完全正常的结果，但 begin() 会推进代际，把另一个会话在途的
+        // open/refresh 全部作废——用户会停在陈旧内容上。
+        if (!SessionCache.hasMessages(app, sessionId)) return false
+        return openCachedSession(sessionId, switchGuard.begin(sessionId))
+    }
 
     /** 用调用方已经领好的代际读缓存，避免同一次打开里重复递增把自己的 token 作废。 */
     private fun openCachedSession(
@@ -1070,10 +1081,18 @@ class ZController private constructor(
     ): Boolean {
         if (!SessionCache.hasMessages(app, sessionId)) return false
         Thread {
-            val cached = SessionCache.loadMessages(app, sessionId)
-            if (cached.isEmpty()) return@Thread
+            val read = SessionCache.readMessages(app, sessionId)
+            // 空列表是合法持久态（消息被清空/删除），必须照样应用（#772）：
+            // 否则函数已回报 true、openSession 也已 cb(true)，而界面还停在上一会话。
+            // 只有真读不出来才放弃，并且要通知界面刷新，别留在「正在打开」的假象里。
+            val cached = read.messages
             post {
                 if (!switchGuard.isCurrent(token)) return@post
+                if (cached == null) {
+                    AppLog.w("ZController", "缓存消息读取失败：$sessionId")
+                    for (l in listeners) l.onStateChanged()
+                    return@post
+                }
                 cacheOnly = true
                 currentSessionId = sessionId
                 messages = cached.toMutableList()
