@@ -68,7 +68,12 @@ internal object ChatImportRunner {
         runCatching {
             withTempPackage(ctx, uri) { file ->
                 ZipFile(file).use { zip ->
-                    val names = zip.entries().asSequence().map { it.name }.toList()
+                    val names =
+                        zip
+                            .entries()
+                            .asSequence()
+                            .map { it.name }
+                            .toList()
                     val manifestEntry = zip.getEntry("manifest.json") ?: return@use Source.UNKNOWN
                     val manifest =
                         runCatching {
@@ -143,12 +148,18 @@ internal object ChatImportRunner {
                         return@use Report(0, 0, emptyList(), DeepSeekImport.Reject.NO_CONVERSATIONS)
                     }
                     var totalBytes = 0L
-                    picked.forEachIndexed { i, meta ->
+                    var done = 0
+                    // 带标签的 for：取消与总量超限必须 break 整个循环。
+                    // forEachIndexed 的 return 只跳过当前元素，剩余会话会继续
+                    // 解压、继续追加重复的「已取消」理由，最后还报完成（#810）。
+                    loop@ for (i in picked.indices) {
+                        val meta = picked[i]
                         if (isCancelled()) {
                             reasons.add("已取消，剩余 ${picked.size - i} 个未导入")
-                            return@forEachIndexed
+                            break@loop
                         }
                         onProgress(i, picked.size)
+                        done = i + 1
                         val id = meta.optString("id")
                         val title = DeepSeekImport.trimTitle(meta.optString("title"))
                         val entry =
@@ -156,42 +167,30 @@ internal object ChatImportRunner {
                         if (entry == null) {
                             skipped++
                             reasons.add("$title：包内找不到会话文件")
-                            return@forEachIndexed
+                            continue@loop
                         }
                         val bytes =
                             runCatching {
                                 zip.getInputStream(entry).use { input ->
-                                    val buf = ByteArray(64 * 1024)
-                                    val out = java.io.ByteArrayOutputStream()
-                                    var read = 0L
-                                    while (true) {
-                                        val n = input.read(buf)
-                                        if (n < 0) break
-                                        read += n
-                                        if (read > DeepSeekImport.MAX_ENTRY_BYTES) {
-                                            throw IllegalStateException("会话条目超过上限")
-                                        }
-                                        out.write(buf, 0, n)
-                                    }
-                                    out.toByteArray()
+                                    readBounded(input, DeepSeekImport.MAX_HEAP_ENTRY_BYTES)
                                 }
                             }.getOrNull()
                         if (bytes == null) {
                             skipped++
                             reasons.add("$title：会话文件过大或读取失败")
-                            return@forEachIndexed
+                            continue@loop
                         }
                         totalBytes += bytes.size
                         if (totalBytes > DeepSeekImport.MAX_TOTAL_BYTES) {
                             reasons.add("已达整包解压上限，剩余会话未导入")
-                            return@forEachIndexed
+                            break@loop
                         }
                         val session =
                             runCatching { JSONObject(bytes.toString(Charsets.UTF_8)) }.getOrNull()
                         if (session == null) {
                             skipped++
                             reasons.add("$title：会话 JSON 无法解析")
-                            return@forEachIndexed
+                            continue@loop
                         }
                         val messages = messageListOf(session)
                         val current =
@@ -201,7 +200,7 @@ internal object ChatImportRunner {
                         if (converted.isEmpty()) {
                             skipped++
                             reasons.add("$title：没有可导入的消息")
-                            return@forEachIndexed
+                            continue@loop
                         }
                         val history =
                             DeepSeekImport.importedHistory(
@@ -217,7 +216,8 @@ internal object ChatImportRunner {
                             reasons.add("$title：内核建会话失败")
                         }
                     }
-                    onProgress(picked.size, picked.size)
+                    // 取消/超限时不再报「全部完成」：进度停在真正处理到的位置。
+                    onProgress(done, picked.size)
                     Report(imported, skipped, reasons)
                 }
             }
@@ -247,6 +247,54 @@ internal object ChatImportRunner {
         }.getOrNull()
     }
 
+    /**
+     * 有界读入堆（#812）：超过 [limit] 立即抛错，不再继续分配。
+     * ByteArrayOutputStream 翻倍扩容，无界读会在远未到磁盘预算时就 OOM。
+     */
+    internal fun readBounded(
+        input: java.io.InputStream,
+        limit: Long,
+    ): ByteArray {
+        val buf = ByteArray(64 * 1024)
+        val out = java.io.ByteArrayOutputStream()
+        var read = 0L
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            read += n
+            if (read > limit) throw IllegalStateException("条目超过上限")
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * 有界拷贝到临时文件（#811）：边拷边判，超过 [limit] 立即抛错并删除半成品。
+     * 旧实现 input.copyTo 无上限，512MB 检查在拷贝之后，多 GB 文件会先填满
+     * 数据分区；detect/countSessions 甚至完全不查大小。
+     */
+    internal fun copyBounded(
+        input: java.io.InputStream,
+        tmp: File,
+        limit: Long,
+    ) {
+        val buf = ByteArray(64 * 1024)
+        var total = 0L
+        FileOutputStream(tmp).use { out ->
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > limit) {
+                    out.close()
+                    runCatching { tmp.delete() }
+                    throw IllegalStateException("所选文件超过导入上限")
+                }
+                out.write(buf, 0, n)
+            }
+        }
+    }
+
     /** 把 Uri 落到私有临时文件后交给 [block]，结束时一定删掉。 */
     private fun <T> withTempPackage(
         ctx: Context,
@@ -256,7 +304,7 @@ internal object ChatImportRunner {
         val tmp = File(ctx.cacheDir, "chat-import-${System.nanoTime()}.zip")
         try {
             ctx.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tmp).use { out -> input.copyTo(out) }
+                copyBounded(input, tmp, DeepSeekImport.MAX_TOTAL_BYTES)
             } ?: throw IllegalStateException("无法读取所选文件")
             return block(tmp)
         } finally {

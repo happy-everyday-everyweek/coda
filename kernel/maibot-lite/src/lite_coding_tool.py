@@ -179,6 +179,20 @@ def _readonly_violation(command: str) -> Optional[str]:
     for ch in ("{", "}", "$"):
         if ch in text:
             return f"只读检查不允许出现 {ch}（brace/变量展开无法在守卫侧核实）"
+    # 路径通配同样不建模（OCR r5 high）：`git diff *` 里若工作区有名为
+    # `--output=evil` 的文件（Coding Agent 自己就能创建），bash 展开后
+    # 它变成一个新 token 被目标程序当选项解析。
+    # 但 `git tag --list v*` 的模式是合法列出用法，不能误杀：
+    # 只拒绝「独立成词」或「以通配开头」的 token——展开结果落在词首的
+    # 才可能被当选项；`v*`、`--sort=*` 这类值内通配交给程序自己处理。
+    import shlex as _shlex
+    try:
+        _raw_tokens = _shlex.split(text, comments=False, posix=True)
+    except ValueError:
+        return "只读检查不允许：命令引号不闭合或无法按 shell 规则分词"
+    for _tok in _raw_tokens:
+        if _tok and _tok[0] in "*?[":
+            return "只读检查不允许以通配符开头的词（展开后的词无法在守卫侧核实）"
     import re
     if re.search(r"(^|\s)~", text):
         return "只读检查不允许以 ~ 开头的路径（家目录展开无法在守卫侧核实）"

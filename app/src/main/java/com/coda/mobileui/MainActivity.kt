@@ -961,9 +961,6 @@ class MainActivity : BaseActivity() {
     /** 重建时会话列表可能还没到：记住待恢复的 id，等下一次状态刷新再补上。 */
     private var pendingRestoreConversationId: String? = null
 
-    /** 恢复路径上真正 open 成功过的会话 id：防止状态回调里重复 open（OCR medium）。 */
-    private var restoredSessionId: String? = null
-
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_SHOWING_SETTINGS, showingSettings)
@@ -996,7 +993,7 @@ class MainActivity : BaseActivity() {
                 // 抽屉里的会话列表来自内核快照，重建时可能还没到：记下来等状态刷新再补，
                 // 不要拿演示数据去顶替，也不要静默什么都不做。
                 pendingRestoreConversationId = id
-                runCatching { zc.openSession(id) { ok -> if (ok) restoredSessionId = id } }
+                runCatching { zc.openSession(id, null) }
             }
         }
     }
@@ -1797,16 +1794,16 @@ class MainActivity : BaseActivity() {
                         if (live != null) {
                             pendingRestoreConversationId = null
                             currentConversationId = live.id
-                            // 不能拿 currentSessionId 当「上次 open 已成功」的代理
-                            // （OCR medium）：session/create 等无关响应也会设置它。
-                            // 用 openSession 自身的幂等判定：ZController 对同一会话
-                            // 的重复 open 有 switchGuard 代际，这里补一个显式的
-                            // 「已打开且消息已加载」检查——restoredSessionId 由
-                            // openSession 成功回调记录，只有它才代表真正打开过。
-                            if (restoredSessionId != live.id) {
-                                runCatching {
-                                    zc.openSession(live.id) { ok -> if (ok) restoredSessionId = live.id }
-                                }
+                            // 会话出现在 zc.sessions 且 currentSessionId 就是它，
+                            // 说明 onRestoreInstanceState 发起的 open 已走到
+                            // applySnapshot（它同步触发本回调）。此时不再补 open：
+                            // 回调先于 openSession 的 cb 执行，restoredSessionId
+                            // 还没置位，拿它当判据会再发一次（OCR r5 high）。
+                            // currentSessionId 由 applySnapshot 在 open 路径上设置，
+                            // session/create 等无关响应设置它时 pending 早已清空，
+                            // 走不到这里。只有当前会话不是它（open 失败/被切走）才补。
+                            if (zc.currentSessionId != live.id) {
+                                runCatching { zc.openSession(live.id, null) }
                             }
                             renderFromController()
                             return

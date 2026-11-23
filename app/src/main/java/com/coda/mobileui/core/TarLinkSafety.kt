@@ -93,9 +93,10 @@ internal object TarLinkSafety {
             val key = k.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
             if (key.isNotEmpty()) targets[key] = v
         }
-        // 每个待处理段携带它在归档里的**字面父路径**：经另一条链接到达的成员
-        // （a -> b 后的 a/s）只有字面键能对上，且目标相对字面父目录解析。
-        // 只跟踪已解析前缀会把它当普通目录，`..` 按错误深度消掉（OCR 复审 high）。
+        // 每个待处理段携带字面父路径（查键用）；物理深度由 out 独立承载。
+        // 两条必须分开：链接目标相对**物理**父目录解析（外层链接可能已把
+        // 深度变浅），而成员键是**字面**归档路径（a -> b 后的 a/s 仍叫 a/s）。
+        // 混用任何一边都会漏判越界（OCR r5 critical/high）。
         val pending = ArrayDeque<Pair<String, String>>()
         val segs = path.split('/').filter { it.isNotEmpty() && it != "." }
         val acc = ArrayList<String>()
@@ -103,7 +104,6 @@ internal object TarLinkSafety {
             pending.addLast(seg to acc.joinToString("/"))
             acc.add(seg)
         }
-        // 队尾是下一个要处理的：初始段整体反转，removeLast 先取第一段。
         pending.reverse()
         val out = ArrayList<String>()
         var steps = 0
@@ -117,35 +117,23 @@ internal object TarLinkSafety {
                 continue
             }
             out.add(seg)
-            val literalPrefix = if (literalBase.isEmpty()) seg else "$literalBase/$seg"
+            // 字面 base 也要消 `..`：q/../a/s 的成员键是 a/s，不是 q/../a/s。
+            val normalizedBase = if (literalBase.isEmpty()) "" else (normalize(literalBase) ?: return null)
+            val literalPrefix = if (normalizedBase.isEmpty()) seg else "$normalizedBase/$seg"
             val resolvedPrefix = out.joinToString("/")
-            // 字面键优先：命中时目标相对字面父目录展开，out 回退到字面深度。
-            val viaLiteral = targets[literalPrefix] != null
             val linkTarget = targets[literalPrefix] ?: targets[resolvedPrefix]
             if (linkTarget == null) continue
-            val parent = if (viaLiteral) literalBase else resolvedPrefix.substringBeforeLast('/', "")
-            if (viaLiteral) {
-                out.clear()
-                literalBase.split('/').filter { it.isNotEmpty() }.forEach { out.add(it) }
-            } else {
-                out.removeAt(out.size - 1)
-            }
             if (linkTarget.isEmpty() || linkTarget.startsWith("/")) return null
-            // 目标各段带上各自的字面父路径（parent + 已展开前缀）。
+            // 弹掉链接段本身：目标接在物理父目录之后。
+            out.removeAt(out.size - 1)
             val tSegs = linkTarget.split('/').filter { it.isNotEmpty() && it != "." }
             val tAcc = ArrayList<String>()
             val newItems = ArrayList<Pair<String, String>>()
             for (tSeg in tSegs) {
-                val tBase =
-                    if (parent.isEmpty()) {
-                        tAcc.joinToString("/")
-                    } else {
-                        parent + (if (tAcc.isEmpty()) "" else "/" + tAcc.joinToString("/"))
-                    }
+                val tBase = literalPrefix + (if (tAcc.isEmpty()) "" else "/" + tAcc.joinToString("/"))
                 newItems.add(tSeg to tBase)
                 tAcc.add(tSeg)
             }
-            // 队尾是下一个要处理的：新段反序压到队尾，先于剩余段消费。
             for (item in newItems.asReversed()) pending.addLast(item)
         }
         return out.joinToString("/")
@@ -157,7 +145,8 @@ internal object TarLinkSafety {
         symlinkMembers: Set<String>,
     ): Boolean {
         if (symlinkMembers.isEmpty()) return false
-        val segs = path.split('/').filter { it.isNotEmpty() }
+        // 去 . 与空段：成员键已按组件规范化，前缀也必须同一套形状。
+        val segs = path.split('/').filter { it.isNotEmpty() && it != "." }
         var prefix = ""
         for (s in segs) {
             prefix = if (prefix.isEmpty()) s else "$prefix/$s"
@@ -180,7 +169,10 @@ internal object TarLinkSafety {
         symlinkMembers: Set<String> = emptySet(),
     ): Boolean {
         if (!memberSafe(member) || !memberSafe(target)) return false
-        val t = TarListing.normalizePath(target).trimEnd('/')
+        // 与 symlinks 集合同一套组件规范化（去 . 与空段）：只去尾部斜杠时
+        // `a/./s` 拼出的键对不上集合里的 `a/s`，指向符号链接成员的硬链接
+        // 会被漏放（OCR r5 high）。
+        val t = target.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
         if (t !in knownMembers) return false
         // 目标本身是符号链接成员时，它的落点无法在这里核实：
         // 硬链接会跟着那条链接跑到归档外，等于绕过符号链接校验。

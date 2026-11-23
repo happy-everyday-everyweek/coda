@@ -129,6 +129,16 @@ class ReadonlyGuardTest(unittest.TestCase):
         self.deny("git branch $X")
         self.deny('git tag "$TAGS"')
         self.deny("ls ~/x")
+    # ---------------------------------------------------------- OCR r5：路径通配
+    def test_leading_glob_denied(self):
+        # `git diff *` 展开后可能把名为 --output=evil 的文件变成选项。
+        self.deny("git diff *")
+        self.deny("ls ?")
+        self.deny("cat [ab]*")
+    def test_pattern_after_list_still_allowed(self):
+        # v* 是 --list 的合法模式，值内通配不误杀。
+        self.allow("git tag --list v*")
+        self.allow("git branch --list 'release-*'")
     # ---------------------------------------------------------- OCR 复审：白名单吞值
     def test_list_flag_does_not_swallow_write_flag(self):
         # --list/-l 是布尔模式开关，不吃值；盲目 skip_next 会把

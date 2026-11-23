@@ -1165,7 +1165,8 @@ open class FilesPage(
         // 旧实现在这里直接跳过整段校验并返回 true，等于 fail-open。
         if (!TarLinkSafety.listingUsable(detailed.ok, detailed.output)) return false
         // 已列举的成员集合：硬链接的目标必须在其中（#792）。
-        val known = names.map { TarListing.normalizePath(it).trimEnd('/') }.toSet()
+        // 与 symlinks/symlinkTargets 同一套组件规范化：硬链接目标按这套键查成员。
+        val known = names.map { n -> n.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/") }.toSet()
         val root = target.absolutePath
         val lines =
             detailed.output

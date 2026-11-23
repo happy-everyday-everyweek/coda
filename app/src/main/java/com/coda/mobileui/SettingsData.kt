@@ -446,6 +446,14 @@ object SettingsData {
     ): SettingsPage {
         val list = (cachedProviders(ctx) ?: return loadingPage("供应商", "providers")).filter { it.kind == kind }
         val rows = mutableListOf<SettingRow>()
+        // 损坏保护下不给「添加/编辑」入口（OCR r5 high）：添加/编辑表会现场
+        // load 出空列表再 save，把读不出但存在的配置原子替换成空。
+        SnapshotFallback.reasonFor("providers")?.let {
+            rows += SettingRow.Header("读取失败")
+            rows += SettingRow.Value("配置文件读取失败", it)
+            rows += SettingRow.Value("重新读取", "修复文件后点这里重试", "settings_reload:providers")
+            return SettingsPage("供应商", rows)
+        }
         val addKey = if (kind == ProviderStore.ProviderKind.ASR) "providers_add_asr" else "providers_add"
         rows +=
             SettingRow.Value(

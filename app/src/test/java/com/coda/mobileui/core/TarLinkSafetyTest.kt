@@ -186,6 +186,25 @@ class TarLinkSafetyTest {
     }
 
     @Test
+    fun `外层链接变浅后内层目标按物理深度判`() {
+        // OCR r5 critical：d/e/a -> ../../b 物理落 root/b（深度 1），
+        // d/e/a/s -> ../../evil 物理上从 root/b/s 上跳两层出根。
+        // 按字面深度（d/e/a/s）消 .. 会误判成 d/evil（根内）。
+        val links = setOf("d/e/a", "d/e/a/s")
+        val targets = mapOf("d/e/a" to "../../b", "d/e/a/s" to "../../evil")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "y", "d/e/a/s/pwn", links, targets))
+    }
+
+    @Test
+    fun `字面 base 里的上跳先规范化再查键`() {
+        // OCR r5 high：q/../a/s 的成员键是 a/s；base 不消 .. 会查不到，
+        // 链接被当普通目录，../../evil 按字面深度误放行。
+        val links = setOf("a", "a/s", "q/z")
+        val targets = mapOf("a" to "b", "a/s" to "../x", "q/z" to "../a/s/../../evil")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "y", "q/../a/s/../../evil", links, targets))
+    }
+
+    @Test
     fun `硬链接指向符号链接成员时拒绝`() {
         assertFalse(
             TarLinkSafety.hardLinkStaysInside(

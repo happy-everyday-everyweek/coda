@@ -130,6 +130,7 @@ object ProviderStore {
     fun load(ctx: Context): MutableList<Provider> {
         // 每轮读取重新判定：用户修好或删掉损坏文件后，迁移逻辑应该恢复工作。
         sidecarCorrupt = false
+        mainCorrupt = false
         val f = fileFor(ctx)
         var legacyMarker = false
         // 主文件解析失败时只读降级：任何自动迁移都不能把一份还能手工抢救的配置换成空内容。
@@ -198,6 +199,7 @@ object ProviderStore {
         // 任何一份文件坏掉都不做自动迁移：内存里此时只有「能解析出来的那部分」，
         // 照常 save() 会把损坏文件连同旁路数据一起覆盖成空。
         if (corrupt || sidecarCorrupt) {
+            mainCorrupt = corrupt
             AppLog.w("ProviderStore", "供应商配置或其旁路文件解析失败，本次跳过自动迁移，保留磁盘原文件")
             return mergeBuiltins(combined)
         }
@@ -232,6 +234,27 @@ object ProviderStore {
      */
     @Volatile
     private var sidecarCorrupt = false
+
+    /**
+     * 主文件（provider_config.json）本轮 load 是否解析失败（#770）。
+     *
+     * 之前只是 load 的局部变量，update 看不到：load 因损坏跳过迁移返回部分列表，
+     * update 却无条件 save，把损坏但可救的文件覆盖成空——.corrupt 备份成了唯一副本。
+     */
+    @Volatile
+    private var mainCorrupt = false
+
+    /** 本轮 load 后是否有任一文件处于损坏状态；update 据此拒绝写盘。 */
+    internal fun anyCorrupt(): Boolean = mainCorrupt || sidecarCorrupt
+
+    /**
+     * 损坏保护判定（#770 的可测内核）：任一文件损坏时 update 不得执行 block、
+     * 不得写盘，返回 false。load 返回的部分列表只够展示，不够落盘。
+     */
+    internal fun updateAllowed(
+        mainCorrupt: Boolean,
+        sidecarCorrupt: Boolean,
+    ): Boolean = !mainCorrupt && !sidecarCorrupt
 
     /** 把解析失败的文件留一份原件；已有备份时不覆盖最早那份。 */
     private fun backupCorrupt(f: File) {
@@ -576,12 +599,31 @@ object ProviderStore {
     ): Boolean =
         synchronized(writeLock) {
             val list = load(ctx)
+            // 任一文件损坏时拒绝写盘（#770）：load 返回的是部分解析结果，
+            // 无条件 save 会把损坏但可救的文件覆盖成空，.corrupt 备份成唯一副本。
+            if (anyCorrupt()) {
+                AppLog.w("ProviderStore", "配置处于损坏保护状态，本次更新不落盘")
+                return@synchronized false
+            }
             block(list)
             save(ctx, list)
         }
 
-    @Synchronized
+    /**
+     * 落盘。锁用 [writeLock] 而不是实例监视器（#804）：
+     * update 持 writeLock 再进 @Synchronized save，而直接调 save 的线程
+     * 先拿实例监视器再在 writeTextAtomic 里等 writeLock——两把锁相反顺序，
+     * OAuth 后台线程与 UI 线程并发时经典死锁。统一成一把可重入锁。
+     */
     fun save(
+        ctx: Context,
+        providers: List<Provider>,
+    ): Boolean =
+        synchronized(writeLock) {
+            saveLocked(ctx, providers)
+        }
+
+    private fun saveLocked(
         ctx: Context,
         providers: List<Provider>,
     ): Boolean {

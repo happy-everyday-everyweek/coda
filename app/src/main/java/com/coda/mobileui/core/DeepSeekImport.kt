@@ -25,8 +25,17 @@ internal object DeepSeekImport {
     /** 整包解压上限：与 DataBackup 的量级对齐，防止高压缩比包耗尽存储。 */
     const val MAX_TOTAL_BYTES = 512L * 1024 * 1024
 
-    /** 单条目解压后上限。 */
+    /** 单条目解压后上限（磁盘预算，用于 withinLimits 的总量判定）。 */
     const val MAX_ENTRY_BYTES = 256L * 1024 * 1024
+
+    /**
+     * 单会话 JSON 的**堆内**上限（#812）。
+     *
+     * 256MB 是磁盘预算不是堆预算：Android 典型堆 256-512MB，
+     * ByteArrayOutputStream 翻倍扩容会在远未到 256MB 时就 OOM。
+     * 会话 JSON 几 MB 已属极大，8MB 足够宽裕又不会把进程拖垮。
+     */
+    const val MAX_HEAP_ENTRY_BYTES = 8L * 1024 * 1024
 
     /** 条目数上限。 */
     const val MAX_ENTRIES = 200_000
@@ -122,8 +131,7 @@ internal object DeepSeekImport {
     }
 
     /** 被内容过滤撤回的回答：整轮（含提问）都要略去。 */
-    fun isWithdrawn(message: JSONObject): Boolean =
-        message.optString("status").uppercase() == "CONTENT_FILTER"
+    fun isWithdrawn(message: JSONObject): Boolean = message.optString("status").uppercase() == "CONTENT_FILTER"
 
     /** 非 FINISHED 的回答给一句可展示的失败说明；正常回答返回 null。 */
     fun failureNote(message: JSONObject): String? {
