@@ -12,11 +12,38 @@ package com.coda.mobileui
  * 键必须与 [SettingsData.hasSnapshot] 查的完全一致，否则落了也白落。
  */
 internal object SnapshotFallback {
+    /**
+     * 最近一次各键的失败原因（OCR medium）。
+     *
+     * 非 hooks 键的空快照与「真的没配置」不可区分：provider_config.json 损坏时
+     * 页面显示「0 个供应商」，用户以为配置丢了、在坏文件上重建配置。
+     * 页面构建器查这里，非空就先渲染一行错误说明。进程内存即可：
+     * 重启后 prewarm 会重跑，失败会再记。
+     */
+    private val reasons = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** 该键最近一次预热失败的原因；null 表示没有失败记录。 */
+    fun reasonFor(key: String): String? = reasons[key]
+
+    /** 预热成功后清掉失败记录，避免错误行一直挂着。 */
+    fun clearReason(key: String) {
+        reasons.remove(key)
+    }
+
     /** 返回「键 → 空值」；未知键或无从构造键时返回 null。 */
     fun emptyFor(
         key: String,
         workspacePath: String?,
         reason: String = "读取失败",
+    ): Pair<String, Any>? {
+        reasons[key] = reason
+        return emptyValueFor(key, workspacePath, reason)
+    }
+
+    private fun emptyValueFor(
+        key: String,
+        workspacePath: String?,
+        reason: String,
     ): Pair<String, Any>? =
         when {
             key == "providers" -> "providers" to emptyList<Any>()

@@ -1169,9 +1169,10 @@ open class FilesPage(
                 .lineSequence()
                 .filter { it.isNotBlank() }
                 .toList()
-        // 第一趟：收集全部符号链接成员。链接链（父路径经过另一条链接）会让
-        // 字面深度与解压时的实际深度不符，必须先知道有哪些链接才能判。
+        // 第一趟：收集全部符号链接成员及其目标。目标路径的中间组件也可能
+        // 是链接（OCR high），必须能按目标展开而不是只按字面深度消 `..`。
         val symlinks = HashSet<String>()
+        val symlinkTargets = HashMap<String, String>()
         for (line in lines) {
             val first = line.firstOrNull()
             if (first != 'l' && first != 'h') continue
@@ -1182,7 +1183,10 @@ open class FilesPage(
                 AppLog.w("FilesPage", "拒绝无法解析的链接行")
                 return false
             }
-            if (!link.hardLink) symlinks.add(link.path)
+            if (!link.hardLink) {
+                symlinks.add(link.path)
+                symlinkTargets[TarListing.normalizePath(link.path).trimEnd('/')] = link.target
+            }
         }
         for (line in lines) {
             val link = TarListing.parseLink(line) ?: continue
@@ -1190,8 +1194,9 @@ open class FilesPage(
                 if (link.hardLink) {
                     TarLinkSafety.hardLinkStaysInside(root, link.path, link.target, known, symlinks)
                 } else {
-                    // 相对目标按链接自身所在目录解析，不是解压根（#792）。
-                    TarLinkSafety.linkStaysInside(root, link.path, link.target, symlinks)
+                    // 相对目标按链接自身所在目录解析，不是解压根（#792）；
+                    // 目标经过其他链接成员时按那条链接的目标展开（OCR high）。
+                    TarLinkSafety.linkStaysInside(root, link.path, link.target, symlinks, symlinkTargets)
                 }
             if (!ok) {
                 AppLog.w("FilesPage", "拒绝越界链接：${link.path} -> ${link.target}")

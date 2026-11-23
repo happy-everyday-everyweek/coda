@@ -109,31 +109,48 @@ _TAG_LIST_FLAGS = {
     "--points-at", "--sort", "--format", "--color", "--no-color", "--column",
     "--no-column", "-i", "--ignore-case", "--omit-empty",
 }
-# 这些选项后面跟一个值（模式、提交、格式串），值本身不是位置参数。
+# 这些选项后面跟一个值（提交、格式串），值本身不是位置参数。
+# 注意 --list/-l 不在这里：它们是布尔模式开关，模式是**位置参数**，
+# 把它们当吃值选项会盲目吞掉下一个 token——`--list --unset-upstream`
+# 里的写选项就被当成「值」放过去了（OCR high）。
 _REF_VALUE_FLAGS = {
     "--contains", "--no-contains", "--merged", "--no-merged", "--points-at",
     "--sort", "--format", "--abbrev", "-n",
-    # `--list <pattern>` / `-l <pattern>` 是合法的列出用法，模式不是位置参数。
-    "--list", "-l",
 }
-
-
+# --color[=<when>] / --column[=<options>] 的可选值只能用 `=` 附着，
+# 裸用时不消费下一个 token，所以它们不在 _REF_VALUE_FLAGS 里（OCR high）。
 def _ref_listing_violation(sub: str, args: list) -> Optional[str]:
     """branch/tag 只允许「列出」用法；其余一律拒绝。"""
     allowed = _BRANCH_LIST_FLAGS if sub == "branch" else _TAG_LIST_FLAGS
+    # 列出模式（`--list v*` / `-l 'release-*'`）是位置参数，但只在
+    # 显式出现过 --list/-l 之后才允许，且必须跟在它后面。
+    expect_pattern = False
     skip_next = False
     for arg in args:
         if skip_next:
             skip_next = False
+            # 吃值选项的值不得长得像选项：`--sort --delete` 里的 --delete
+            # 不是值而是写操作，吞掉它等于放行（OCR high）。
+            if arg.startswith("-"):
+                return f"只读检查不允许：git {sub} 的选项值不能是另一个选项（{arg}）"
             continue
         if not arg.startswith("-"):
+            if expect_pattern:
+                # --list/-l 后面的模式：合法的列出用法。
+                expect_pattern = False
+                continue
             # 位置参数：`git branch new HEAD` / `git tag v1` 都是创建。
-            # 列出用法里的模式必须写成 --list <pattern>，不能裸给。
             return f"只读检查不允许：git {sub} 只能列出，不能带位置参数（那会创建或删除引用）"
         name = arg.split("=", 1)[0]
         if name not in allowed:
             return f"只读检查不允许 git {sub} {name}（只接受列出类选项）"
+        if name in {"--list", "-l"}:
+            # `--list=v*` 自带模式；裸 --list 允许后面跟一个模式。
+            expect_pattern = "=" not in arg
+            continue
+        expect_pattern = False
         # `--sort=xxx` 自带值；`--sort xxx` 的值在下一个 token。
+        # --color/--column 的可选值只能 = 附着，裸用不吞下一个。
         if "=" not in arg and name in _REF_VALUE_FLAGS:
             skip_next = True
     return None
@@ -152,7 +169,17 @@ def _readonly_violation(command: str) -> Optional[str]:
     for flag in _BANNED_FLAGS:
         if flag in lowered:
             return f"只读检查不允许使用 {flag}"
-    parts = text.split()
+    # 命令经 /bin/bash -lc 执行：bash 会剥掉引号与反斜杠后才把参数交给程序。
+    # 按原始空白切分会把 `'--pre=evil'`、`--p're'` 当成无害 token 放行（OCR high）。
+    # 用 shlex 按 POSIX 规则分词，校验的就是 bash 实际交付的 token；
+    # 引号不闭合等分词失败一律拒绝（fail-closed）。
+    import shlex
+    try:
+        parts = shlex.split(text, comments=False, posix=True)
+    except ValueError:
+        return "只读检查不允许：命令引号不闭合或无法按 shell 规则分词"
+    if not parts:
+        return "命令为空"
     # 按完整 token 判：`--pre` 与 `--pre=x` 拒绝，`--pretty` 放行（#794）。
     for token in parts:
         low = token.lower()

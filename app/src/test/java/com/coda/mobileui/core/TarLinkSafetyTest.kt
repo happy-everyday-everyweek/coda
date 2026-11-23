@@ -129,6 +129,38 @@ class TarLinkSafetyTest {
     }
 
     @Test
+    fun `目标路径经过符号链接成员时按实际落点判越界`() {
+        // OCR high：只查成员的父目录不够，目标自身的中间组件也可能是链接。
+        // d/s -> ../a 实际落在 root/a（深度 1），y -> d/s/../../evil 字面
+        // 规范化成 evil（看似安全），实际 root/a/../../evil 越界。
+        val links = setOf("d/s")
+        val targets = mapOf("d/s" to "../a")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "y", "d/s/../../evil", links, targets))
+    }
+
+    @Test
+    fun `目标经过符号链接但实际仍在根内时放行`() {
+        // d/s -> ../a 落在 root/a；y -> d/s/../b 实际是 root/b，安全。
+        val links = setOf("d/s")
+        val targets = mapOf("d/s" to "../a")
+        assertTrue(TarLinkSafety.linkStaysInside("/tmp/out", "y", "d/s/../b", links, targets))
+    }
+
+    @Test
+    fun `目标经过的链接自身越界时拒绝`() {
+        val links = setOf("d/s")
+        val targets = mapOf("d/s" to "../../outside")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "y", "d/s/file", links, targets))
+    }
+
+    @Test
+    fun `符号链接成环时拒绝`() {
+        val links = setOf("a", "b")
+        val targets = mapOf("a" to "b/x", "b" to "a/y")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "z", "a/file", links, targets))
+    }
+
+    @Test
     fun `硬链接指向符号链接成员时拒绝`() {
         assertFalse(
             TarLinkSafety.hardLinkStaysInside(

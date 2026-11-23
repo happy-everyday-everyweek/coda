@@ -77,6 +77,7 @@ class CodaSheet(
     private var panel: LinearLayout? = null
     private var grabberRow: FrameLayout? = null
     private var footerRow: LinearLayout? = null
+
     /** 拖拽区（把手 + headerAction 行）；navigate 换页时重建其中的操作行。 */
     private var dragAreaRow: LinearLayout? = null
     private var backCallback: OnBackPressedCallback? = null
@@ -155,18 +156,24 @@ class CodaSheet(
      */
     fun onDismiss(block: () -> Unit): CodaSheet =
         apply {
+            // 每个回调都要护异常，包括最新注册的这一个：它处于链尾，
+            // 只包 prev 的话最后一个抛异常照样在主线程崩溃（OCR medium）。
+            val guarded = {
+                try {
+                    block()
+                } catch (e: Exception) {
+                    com.coda.mobileui.core.AppLog
+                        .w("CodaSheet", "dismiss 回调失败：${e.message}")
+                }
+            }
             val prev = onDismissBlock
             onDismissBlock =
                 if (prev == null) {
-                    block
+                    guarded
                 } else {
                     {
-                        try {
-                            prev()
-                        } catch (e: Exception) {
-                            com.coda.mobileui.core.AppLog.w("CodaSheet", "dismiss 回调失败：${e.message}")
-                        }
-                        block()
+                        prev()
+                        guarded()
                     }
                 }
         }
@@ -220,6 +227,10 @@ class CodaSheet(
         if (isShowing) return
         abandonClosingSheet()
         generation += 1
+        // 重开是新一轮生命周期：上一轮的 dismiss 回调已在 abandonClosingSheet
+        // 里执行过，链不清空的话每次 show 都再叠一层，注册方（OAuthSheet 等
+        // 每次 show 都重新 onDismiss）会越积越多、清理逻辑重复执行（OCR medium）。
+        onDismissBlock = null
         val decor = activity.window.decorView as ViewGroup
         val screenH = activity.resources.displayMetrics.heightPixels
         statusBarH = statusBarHeightPx()
@@ -782,6 +793,7 @@ class CodaSheet(
      * navigate() 用它换页；show() 首次构建时逻辑与这里一致，但为了不改动已验证的
      * 首次展开流程，只在这里复刻一份等价实现（标题、内容、按钮的样式与间距完全相同）。
      */
+
     /**
      * 按当前 headerAction 字段重建操作行：新页定义了才显示，没定义就移除。
      * navigate 换页只重建内容区时，旧操作行会残留（点了触发旧逻辑），
@@ -1029,7 +1041,9 @@ class CodaSheet(
         secondaryText = null
         secondaryBlock = null
         contentBlock = null
-
+        // dismiss 回调也属于「这一页」：翻页后旧页的清理不该跟着新页走，
+        // 新页要用就在自己的 block 里重新注册（OCR medium）。
+        onDismissBlock = null
         // 在同一个实例上应用新一页
         block()
 

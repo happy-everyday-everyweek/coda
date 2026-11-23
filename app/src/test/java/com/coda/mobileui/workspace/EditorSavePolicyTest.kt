@@ -130,4 +130,112 @@ class EditorSavePolicyTest {
     fun `长度不同直接判脏`() {
         assertTrue(EditorSavePolicy.isDirty(original = "abc", current = "abcd", debouncePending = false))
     }
+    // ---------------------------------------------------------- 权限位搬运（OCR high）
+
+    /** JVM 侧用 NIO 的 POSIX 权限模拟 Os.stat/chmod。 */
+    private object NioModeOps : EditorSavePolicy.ModeOps {
+        private fun perms(mode: Int): Set<java.nio.file.attribute.PosixFilePermission> {
+            val all =
+                java.nio.file.attribute.PosixFilePermission
+                    .values()
+            // values() 顺序：OWNER_READ/WRITE/EXECUTE, GROUP_*, OTHERS_*，高位在前。
+            return all.filterIndexed { i, _ -> mode and (1 shl (8 - i)) != 0 }.toSet()
+        }
+
+        override fun mode(path: String): Int? =
+            runCatching {
+                val ps =
+                    Files.getPosixFilePermissions(
+                        java.nio.file.Paths
+                            .get(path),
+                    )
+                var m = 0
+                java.nio.file.attribute.PosixFilePermission.values().forEachIndexed { i, p ->
+                    if (p in ps) m = m or (1 shl (8 - i))
+                }
+                m
+            }.getOrNull()
+
+        override fun apply(
+            path: String,
+            mode: Int,
+        ): Boolean =
+            runCatching {
+                Files.setPosixFilePermissions(
+                    java.nio.file.Paths
+                        .get(path),
+                    perms(mode),
+                )
+            }.isSuccess
+    }
+
+    @Test
+    fun `私有文件保存后权限位不被放宽`() {
+        val prev = EditorSavePolicy.modeOps
+        EditorSavePolicy.modeOps = NioModeOps
+        try {
+            val dir = tmpDir()
+            val f = File(dir, "secret.txt")
+            f.writeText("旧")
+            Files.setPosixFilePermissions(
+                f.toPath(),
+                NioModeOps.let {
+                    java.nio.file.attribute.PosixFilePermissions
+                        .fromString("rw-------")
+                },
+            )
+            assertTrue(EditorSavePolicy.writeAtomic(f, "新".toByteArray()))
+            assertEquals("新", f.readText())
+            assertEquals(0x180, NioModeOps.mode(f.absolutePath))
+            dir.deleteRecursively()
+        } finally {
+            EditorSavePolicy.modeOps = prev
+        }
+    }
+
+    @Test
+    fun `可执行位保存后保留`() {
+        val prev = EditorSavePolicy.modeOps
+        EditorSavePolicy.modeOps = NioModeOps
+        try {
+            val dir = tmpDir()
+            val f = File(dir, "run.sh")
+            f.writeText("echo old")
+            Files.setPosixFilePermissions(
+                f.toPath(),
+                java.nio.file.attribute.PosixFilePermissions
+                    .fromString("rwxr-xr-x"),
+            )
+            assertTrue(EditorSavePolicy.writeAtomic(f, "echo new".toByteArray()))
+            assertEquals(0x1ED, NioModeOps.mode(f.absolutePath))
+            dir.deleteRecursively()
+        } finally {
+            EditorSavePolicy.modeOps = prev
+        }
+    }
+
+    @Test
+    fun `权限复制失败时整次保存失败且原文未动`() {
+        val prev = EditorSavePolicy.modeOps
+        EditorSavePolicy.modeOps =
+            object : EditorSavePolicy.ModeOps {
+                override fun mode(path: String): Int? = 0x180
+
+                override fun apply(
+                    path: String,
+                    mode: Int,
+                ): Boolean = false
+            }
+        try {
+            val dir = tmpDir()
+            val f = File(dir, "keep.txt")
+            f.writeText("原文")
+            assertFalse(EditorSavePolicy.writeAtomic(f, "新文".toByteArray()))
+            assertEquals("原文", f.readText())
+            assertEquals(1, dir.listFiles()!!.size)
+            dir.deleteRecursively()
+        } finally {
+            EditorSavePolicy.modeOps = prev
+        }
+    }
 }

@@ -38,8 +38,12 @@ class SessionSearchPage(
      * 直接遍历 zc.sessions 会抛 CME 并被吞成空结果。
      */
     private val extras: (String, List<com.coda.mobileui.core.ZSessionInfo>) -> List<Extra>,
-    /** 主线程取会话快照；默认空表，便于不需要它的调用方。 */
-    private val zcSessionSnapshot: () -> List<com.coda.mobileui.core.ZSessionInfo> = { emptyList() },
+    /**
+     * 主线程取会话快照。**必传**（OCR medium）：extras 的会话内容命中全靠它，
+     * 默认空表会让漏传的调用方静默丢掉全部会话搜索结果——正是 #747 的症状，
+     * 且没有编译错误也没有日志。契约在编译期强制。
+     */
+    private val zcSessionSnapshot: () -> List<com.coda.mobileui.core.ZSessionInfo>,
     private val onClose: () -> Unit,
     private val onPick: (ZSessionInfo) -> Unit,
 ) {
@@ -57,6 +61,7 @@ class SessionSearchPage(
     )
 
     private val dp: (Float) -> Int = { (it * host.resources.displayMetrics.density).toInt() }
+
     // 每个按键都同步跑 extras() 会在大历史上卡住 UI 线程（#658）：
     // 去抖 180ms，取数放后台，序号丢弃过期结果。
     private val searchHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -64,9 +69,10 @@ class SessionSearchPage(
     private var lastQuery: String? = null
     private var searchSeq = 0
     private var appliedSeq = 0
-    private val searchPool = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-        Thread(r, "session-search").apply { isDaemon = true }
-    }
+    private val searchPool =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "session-search").apply { isDaemon = true }
+        }
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
     private lateinit var input: EditText
@@ -109,9 +115,19 @@ class SessionSearchPage(
                 layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
                 addTextChangedListener(
                     object : TextWatcher {
-                        override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                        override fun beforeTextChanged(
+                            s: CharSequence?,
+                            a: Int,
+                            b: Int,
+                            c: Int,
+                        ) = Unit
 
-                        override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
+                        override fun onTextChanged(
+                            s: CharSequence?,
+                            a: Int,
+                            b: Int,
+                            c: Int,
+                        ) {
                             scheduleSearch(s?.toString().orEmpty())
                         }
 
@@ -164,7 +180,13 @@ class SessionSearchPage(
     private fun scheduleSearch(raw: String) {
         if (!::results.isInitialized) return
         val q = raw.trim()
-        lastQuery?.let { if (com.coda.mobileui.ui.SearchLogic.shouldSkipRender(it, q)) return }
+        lastQuery?.let {
+            if (com.coda.mobileui.ui.SearchLogic
+                    .shouldSkipRender(it, q)
+            ) {
+                return
+            }
+        }
         lastQuery = q
         pendingSearch?.let { searchHandler.removeCallbacks(it) }
         val mine = ++searchSeq
@@ -234,7 +256,8 @@ class SessionSearchPage(
         val others =
             rawExtras.filter {
                 com.coda.mobileui.ui.SearchLogic.keeps(
-                    com.coda.mobileui.ui.SearchLogic.ExtraHit(it.section, it.title, it.subtitle, it.matched),
+                    com.coda.mobileui.ui.SearchLogic
+                        .ExtraHit(it.section, it.title, it.subtitle, it.matched),
                     q,
                 )
             }
@@ -249,35 +272,35 @@ class SessionSearchPage(
                 },
             )
             group.forEach { extra ->
-            results.addView(
-                LinearLayout(host).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
-                    isClickable = true
-                    setOnClickListener { extra.run() }
-                    addView(
-                        TextView(host).apply {
-                            text = highlight(extra.title, q)
-                            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
-                            setTextColor(color(com.google.android.material.R.attr.colorOnSurface))
-                            maxLines = 1
-                            ellipsize = android.text.TextUtils.TruncateAt.END
-                        },
-                    )
-                    if (extra.subtitle.isNotEmpty()) {
+                results.addView(
+                    LinearLayout(host).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                        isClickable = true
+                        setOnClickListener { extra.run() }
                         addView(
                             TextView(host).apply {
-                                text = extra.subtitle
-                                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
-                                setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                                text = highlight(extra.title, q)
+                                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
+                                setTextColor(color(com.google.android.material.R.attr.colorOnSurface))
                                 maxLines = 1
                                 ellipsize = android.text.TextUtils.TruncateAt.END
-                                setPadding(0, dp(3f), 0, 0)
                             },
                         )
-                    }
-                },
-            )
+                        if (extra.subtitle.isNotEmpty()) {
+                            addView(
+                                TextView(host).apply {
+                                    text = extra.subtitle
+                                    setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+                                    setTextColor(color(com.google.android.material.R.attr.colorOnSurfaceVariant))
+                                    maxLines = 1
+                                    ellipsize = android.text.TextUtils.TruncateAt.END
+                                    setPadding(0, dp(3f), 0, 0)
+                                },
+                            )
+                        }
+                    },
+                )
             }
         }
         if (others.isNotEmpty()) hint.visibility = View.GONE
@@ -309,8 +332,12 @@ class SessionSearchPage(
         val where = session.workspacePath?.takeIf { it.isNotEmpty() }?.let { File(it).name }
         val time = timeFormat.format(Date(session.updatedAt))
         // 查询命中父目录时，光显示 basename 看不出匹配理由，补一行命中的路径前缀。
-        val ctx = com.coda.mobileui.ui.SearchLogic.pathContext(session.workspacePath, q)
-        val sub = com.coda.mobileui.ui.SearchLogic.subtitle(where, time)
+        val ctx =
+            com.coda.mobileui.ui.SearchLogic
+                .pathContext(session.workspacePath, q)
+        val sub =
+            com.coda.mobileui.ui.SearchLogic
+                .subtitle(where, time)
         row.addView(
             TextView(host).apply {
                 text = sub
@@ -352,7 +379,8 @@ class SessionSearchPage(
         val value = android.util.TypedValue()
         host.theme.resolveAttribute(attr, value, true)
         return if (value.resourceId != 0) {
-            androidx.core.content.ContextCompat.getColor(host, value.resourceId)
+            androidx.core.content.ContextCompat
+                .getColor(host, value.resourceId)
         } else {
             value.data
         }

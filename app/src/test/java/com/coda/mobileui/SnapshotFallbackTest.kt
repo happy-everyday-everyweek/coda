@@ -72,4 +72,14 @@ class SnapshotFallbackTest {
         val (_, v) = SnapshotFallback.emptyFor("providers", null)!!
         assertNotNull(v)
     }
+
+    @Test
+    fun `失败原因可查询可清除`() {
+        // OCR medium：非 hooks 键的空快照与「真的没配置」不可区分，
+        // 页面构建器要靠 reasonFor 渲染错误行。
+        SnapshotFallback.emptyFor("providers", null, "JSON 损坏")
+        assertEquals("JSON 损坏", SnapshotFallback.reasonFor("providers"))
+        SnapshotFallback.clearReason("providers")
+        assertNull(SnapshotFallback.reasonFor("providers"))
+    }
 }

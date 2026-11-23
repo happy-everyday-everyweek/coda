@@ -43,21 +43,64 @@ internal object TarLinkSafety {
         member: String,
         target: String,
         symlinkMembers: Set<String> = emptySet(),
+        symlinkTargets: Map<String, String> = emptyMap(),
     ): Boolean {
         if (target.isEmpty() || target.startsWith("/")) return false
         if (!memberSafe(member)) return false
         // 关键：基准是链接自身的父目录，不是解压根。
         val parent = TarListing.normalizePath(member).substringBeforeLast('/', "")
-        // 父路径经过任何符号链接成员时，字面深度与解压时的实际深度不一致：
-        // `d/s -> ../a` 之后 `d/s/x -> ../../evil` 字面规范化成 `evil`（看似安全），
-        // 实际却落在 root/a/x 上，`../../evil` 解析成 root/../evil，越界。
-        // 无法在这里可靠地传递解析，直接 fail-closed。
-        if (parent.isNotEmpty() && traversesSymlink(parent, symlinkMembers)) return false
         val joined = if (parent.isEmpty()) target else "$parent/$target"
-        val normalized = normalize(joined) ?: return false
+        // 逐组件解析：路径上任一前缀是符号链接成员时，按那条链接的目标展开，
+        // 而不是按字面深度消 `..`。只查成员的父目录不够——目标自身的中间
+        // 组件也可能是链接（OCR high）：`d/s -> ../a` 之后 `y -> d/s/../../evil`
+        // 字面规范化成 `evil`（看似安全），实际 root/a/../../evil 越界。
+        // 拿不到目标表时退回 fail-closed：经过链接就拒绝。
+        val normalized =
+            if (symlinkTargets.isEmpty() && symlinkMembers.isNotEmpty()) {
+                if (traversesSymlink(joined, symlinkMembers)) return false
+                normalize(joined) ?: return false
+            } else {
+                resolve(joined, symlinkTargets) ?: return false
+            }
         // 规范化后为空表示落在根本身：链接指向目录自身没有意义，也不安全。
         if (normalized.isEmpty()) return false
         return !normalized.startsWith("/") && normalized.split('/').none { it == ".." }
+    }
+
+    /**
+     * 逐组件解析相对路径，遇到符号链接成员就按目标展开。
+     *
+     * [symlinkTargets] 的键是成员在归档里的路径，值是链接目标（相对链接自身目录）。
+     * 展开有步数上限：链接成环或恶意长链时直接判 null（fail-closed）。
+     */
+    internal fun resolve(
+        path: String,
+        symlinkTargets: Map<String, String>,
+    ): String? {
+        if (symlinkTargets.isEmpty()) return normalize(path)
+        // 待处理组件栈（逆序存放，栈顶在末尾）。
+        val pending = ArrayDeque<String>()
+        path.split('/').asReversed().forEach { if (it.isNotEmpty() && it != ".") pending.addLast(it) }
+        val out = ArrayList<String>()
+        var steps = 0
+        val budget = (path.length + symlinkTargets.values.sumOf { it.length }) * 2 + 64
+        while (pending.isNotEmpty()) {
+            if (++steps > budget) return null
+            val seg = pending.removeLast()
+            if (seg == "..") {
+                if (out.isEmpty()) return null
+                out.removeAt(out.size - 1)
+                continue
+            }
+            out.add(seg)
+            val prefix = out.joinToString("/")
+            val linkTarget = symlinkTargets[prefix] ?: continue
+            // 当前前缀是符号链接：弹掉它，把链接目标（相对其父目录）压回栈顶。
+            out.removeAt(out.size - 1)
+            if (linkTarget.isEmpty() || linkTarget.startsWith("/")) return null
+            linkTarget.split('/').asReversed().forEach { if (it.isNotEmpty() && it != ".") pending.addLast(it) }
+        }
+        return out.joinToString("/")
     }
 
     /** [path] 的任一前缀是否是已知的符号链接成员。 */

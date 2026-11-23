@@ -101,8 +101,36 @@ class ReadonlyGuardTest(unittest.TestCase):
         self.allow("git tag --list v*")
         self.allow("git tag -n")
 
+    # ---------------------------------------------------------- OCR 复审：bash 引号剥离
+    def test_quoted_pre_is_denied(self):
+        # 命令经 /bin/bash -lc 执行，引号在守卫之后才被剥掉：
+        # 按原始空白切分会把 `'--pre=...'` 当成无害 token 放行。
+        self.deny("rg '--pre=touch /tmp/pwned #' x .")
+        self.deny("rg --p're' x .")
+        self.deny('grep "--pre=evil" foo .')
+        self.deny("git log --pre\\=evil")
+    def test_quoted_pretty_still_allowed(self):
+        # shlex 剥引号后 --pretty 仍须放行，不能因修复而误杀。
+        self.allow("git log '--pretty=oneline' -20")
+        self.allow('git show "--pretty=format:%H" HEAD')
+    def test_unbalanced_quotes_denied(self):
+        self.deny("rg 'unterminated x .")
+    # ---------------------------------------------------------- OCR 复审：白名单吞值
+    def test_list_flag_does_not_swallow_write_flag(self):
+        # --list/-l 是布尔模式开关，不吃值；盲目 skip_next 会把
+        # 紧随的写选项当「值」放过去。
+        self.deny("git branch --list --unset-upstream")
+        self.deny("git tag --list --delete=v1")
+        self.deny("git tag -l --force v1")
+    def test_optional_value_flags_do_not_swallow_next(self):
+        # --color/--column 的可选值只能用 = 附着；裸用时不消费下一个 token，
+        # 否则 `--column --list v1` 里的 --list 被当值吞掉、v1 反而按位置参数误拒，
+        # 或更糟：吞掉的恰是白名单项而放行后续写操作。
+        self.deny("git branch --color --delete victim")
+        self.deny("git tag --column --delete v1")
+        self.allow("git tag --column --list v1")
+        self.allow("git branch --color=always --list")
     # ---------------------------------------------------------- 既有边界不能退化
-
     def test_shell_tokens_denied(self):
         self.deny("git status > /tmp/x")
         self.deny("git status && rm -rf /")

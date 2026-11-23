@@ -124,8 +124,9 @@ internal object EditorSavePolicy {
         return try {
             tmp.writeBytes(bytes)
             // 临时文件是默认权限：直接改名会把可执行脚本的执行位抹掉、
-            // 把 0600 的私有文件放宽。先把原文件的权限位搬过去。
-            copyMode(target, tmp)
+            // 把 0600 的私有文件放宽。先把原文件的权限位原样搬过去；
+            // 搬不动就放弃这次保存，不能以放宽的权限落盘。
+            if (!copyMode(target, tmp)) return false
             if (tmp.renameTo(target)) {
                 true
             } else {
@@ -139,17 +140,62 @@ internal object EditorSavePolicy {
         }
     }
 
-    /** 把 [from] 的读写执行位复制到 [to]；文件不存在时什么都不做。 */
+    /**
+     * 把 [from] 的完整权限位复制到 [to]；文件不存在时什么都不做。
+     *
+     * 不能用 canRead()/canWrite() + setReadable(..., ownerOnly=false)：
+     * 前者反映的是**当前进程**的有效访问（root 下 0600 也返回 true），
+     * 后者把位写给**所有用户**——0600 的私有文件会被放宽成全局可读写，
+     * 恰好制造了注释声称要防的泄露（OCR high）。用 Os.stat 取真实 mode
+     * 再 Os.chmod 原样搬运，组/其他位与特殊位都不失真。
+     * 复制失败必须让整次保存失败：宁可保存不了，也不能以放宽的权限落盘。
+     */
+
+    /** stat/chmod 的注入点：Android 上是 Os，JVM 单测里换成 NIO 的 POSIX 权限。 */
+    internal var modeOps: ModeOps = AndroidModeOps
+
+    internal interface ModeOps {
+        /** 读不到权限（非 POSIX 文件系统等）时返回 null。 */
+        fun mode(path: String): Int?
+
+        fun apply(
+            path: String,
+            mode: Int,
+        ): Boolean
+    }
+
+    private object AndroidModeOps : ModeOps {
+        override fun mode(path: String): Int? =
+            runCatching {
+                android.system.Os
+                    .stat(path)
+                    .st_mode and 0xFFF
+            }.getOrNull()
+
+        override fun apply(
+            path: String,
+            mode: Int,
+        ): Boolean = runCatching { android.system.Os.chmod(path, mode) }.isSuccess
+    }
+
     private fun copyMode(
         from: File,
         to: File,
-    ) {
-        if (!from.isFile) return
-        runCatching {
-            to.setReadable(from.canRead(), false)
-            to.setWritable(from.canWrite(), false)
-            // 执行位单独判：普通文本文件没有它，脚本有。
-            if (from.canExecute()) to.setExecutable(true, false)
+    ): Boolean {
+        if (!from.isFile) return true
+        val mode = modeOps.mode(from.absolutePath)
+        if (mode == null) {
+            // 读不到原权限（非 POSIX 文件系统）：保持临时文件默认权限继续，
+            // 与旧行为一致；能读到就必须原样搬运。
+            com.coda.mobileui.core.AppLog
+                .w("EditorSave", "读不到原文件权限位，按默认权限落盘：${from.name}")
+            return true
         }
+        if (!modeOps.apply(to.absolutePath, mode)) {
+            com.coda.mobileui.core.AppLog
+                .w("EditorSave", "复制权限位失败，放弃原子写：${from.name}")
+            return false
+        }
+        return true
     }
 }

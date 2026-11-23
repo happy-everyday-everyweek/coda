@@ -503,7 +503,9 @@ class MainActivity : BaseActivity() {
                     requestCode: Int,
                     grantResult: Int,
                 ) {
-                    if (com.coda.mobileui.core.ShizukuShell.handlePermissionResult(requestCode, intArrayOf(grantResult))) {
+                    if (com.coda.mobileui.core.ShizukuShell
+                            .handlePermissionResult(requestCode, intArrayOf(grantResult))
+                    ) {
                         enableOwnAccessibilityViaShizuku()
                     }
                 }
@@ -517,8 +519,11 @@ class MainActivity : BaseActivity() {
             runCatching {
                 // 先按已保存的 OAuth 供应商把网关拉起来，并回写实际端口；
                 // 再对账模型清单。端口变了就必须重启内核，否则它仍拿旧地址发请求。
-                val endpointChanged = com.coda.mobileui.core.OAuthLogin.ensureStoredGateways(this)
-                com.coda.mobileui.core.OAuthLogin.refreshStoredModels(this)
+                val endpointChanged =
+                    com.coda.mobileui.core.OAuthLogin
+                        .ensureStoredGateways(this)
+                com.coda.mobileui.core.OAuthLogin
+                    .refreshStoredModels(this)
                 // 网关没起来时不能只在日志里说：用户看到 OAuth 供应商还在，但所有请求都会失败。
                 val gatewayDown =
                     runCatching {
@@ -526,8 +531,16 @@ class MainActivity : BaseActivity() {
                             com.coda.mobileui.core.ProviderStore
                                 .load(this)
                                 .filter { it.origin == com.coda.mobileui.core.ProviderStore.ProviderOrigin.OAUTH }
-                        val needWb = oauth.any { com.coda.mobileui.core.OAuthProviders.usesWorkBuddyGateway(it.id) }
-                        val needProxy = oauth.any { !com.coda.mobileui.core.OAuthProviders.usesWorkBuddyGateway(it.id) }
+                        val needWb =
+                            oauth.any {
+                                com.coda.mobileui.core.OAuthProviders
+                                    .usesWorkBuddyGateway(it.id)
+                            }
+                        val needProxy =
+                            oauth.any {
+                                !com.coda.mobileui.core.OAuthProviders
+                                    .usesWorkBuddyGateway(it.id)
+                            }
                         (needWb && !com.coda.mobileui.core.WorkBuddyGateway.isRunning) ||
                             (needProxy && !com.coda.mobileui.core.ProxyHost.isRunning)
                     }.getOrDefault(false)
@@ -538,11 +551,16 @@ class MainActivity : BaseActivity() {
                     // 冷启动时内核还没起来，它接下来自然会读新配置；这时再 restartCore
                     // 会与首页的首次 ensureStarted 抢时序，可能出现「重启请求先到、
                     // 首次启动后到」，反而让新地址没生效。
-                    val controller = com.coda.mobileui.core.ZController.get(this)
+                    val controller =
+                        com.coda.mobileui.core.ZController
+                            .get(this)
                     if (controller.runtime.isRunning) {
                         runOnUiThread {
                             controller.restartCore { ok, msg ->
-                                if (!ok) com.coda.mobileui.core.AppLog.w("Coda", "OAuth 网关地址更新后重启内核失败：$msg")
+                                if (!ok) {
+                                    com.coda.mobileui.core.AppLog
+                                        .w("Coda", "OAuth 网关地址更新后重启内核失败：$msg")
+                                }
                             }
                         }
                     }
@@ -852,8 +870,11 @@ class MainActivity : BaseActivity() {
                 updateSendAvailability()
             },
         )
-        val botProfile = com.coda.mobileui.personal.CodaBotStore.profile(this)
-        val botRow = createActionRow(inflater, actions, R.drawable.ic_ring, botProfile.name) {
+        val botProfile =
+            com.coda.mobileui.personal.CodaBotStore
+                .profile(this)
+        val botRow =
+            createActionRow(inflater, actions, R.drawable.ic_ring, botProfile.name) {
                 // 与会话、设置同级：只在内容区换页，不新开页面。
                 drawerLayout.closeDrawer(Gravity.LEFT)
                 hideSettingsPage()
@@ -862,10 +883,11 @@ class MainActivity : BaseActivity() {
         botRow.tag = "drawer_bot"
         actions.addView(
             botRow,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(2) },
+            LinearLayout
+                .LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(2) },
         )
         // 新对话与设置之间的间隔比「历史列表与动作项」再小一半。
         actions.addView(
@@ -923,6 +945,7 @@ class MainActivity : BaseActivity() {
 
     // 当前是否停留在设置页（配置变更后需要恢复）。
     private var showingSettings = false
+
     /** 是否停留在 Bot 页：它与会话、设置同级，只占用内容区。 */
     private var showingBot = false
     private var botPage: com.coda.mobileui.personal.CodaBotPage? = null
@@ -1690,7 +1713,11 @@ class MainActivity : BaseActivity() {
         }
     // ------------------------------------------------------------ 运行时对接
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    override fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?,
+    ) {
         super.onActivityResult(requestCode, resultCode, data)
         botPage?.handleActivityResult(requestCode, resultCode, data)
     }
@@ -1699,7 +1726,8 @@ class MainActivity : BaseActivity() {
         // Bot 页在内容区里，按 Home 或切后台不会走 close()：这里把录音收回。
         botPage?.onHostPause()
         // 后台时把定时轮询拉长到 5 分钟，别每 30 秒唤醒一次（#222）。
-        com.coda.mobileui.core.AutomationScheduler.setForeground(false)
+        com.coda.mobileui.core.AutomationScheduler
+            .setForeground(false)
         super.onStop()
     }
 
@@ -1721,7 +1749,8 @@ class MainActivity : BaseActivity() {
         }
         shizukuPermissionListener = null
         // 定时调度器不能比 Activity 活得久：它每 30 秒自我重投递（#222）。
-        com.coda.mobileui.core.AutomationScheduler.stop()
+        com.coda.mobileui.core.AutomationScheduler
+            .stop()
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
@@ -1765,7 +1794,14 @@ class MainActivity : BaseActivity() {
                         if (live != null) {
                             pendingRestoreConversationId = null
                             currentConversationId = live.id
-                            runCatching { zc.openSession(live.id, null) }
+                            // 会话出现在 zc.sessions 通常正是因为 onRestoreInstanceState
+                            // 里那次 openSession 已成功（applySnapshot 插入后触发本回调）。
+                            // 再 open 一次会推进 switchGuard、作废第一次在途的消息刷新，
+                            // 并把 subscribe/messages 等 RPC 全部重发（OCR medium）。
+                            // 只有当前会话不是它时才需要真正打开。
+                            if (zc.currentSessionId != live.id) {
+                                runCatching { zc.openSession(live.id, null) }
+                            }
                             renderFromController()
                             return
                         }
@@ -2342,7 +2378,8 @@ class MainActivity : BaseActivity() {
     private fun rippleBackground(): android.graphics.drawable.Drawable? {
         val value = android.util.TypedValue()
         return if (theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, value, true)) {
-            androidx.core.content.ContextCompat.getDrawable(this, value.resourceId)
+            androidx.core.content.ContextCompat
+                .getDrawable(this, value.resourceId)
         } else {
             null
         }
@@ -2471,7 +2508,11 @@ class MainActivity : BaseActivity() {
             body.visibility = if (nowCollapsed) View.VISIBLE else View.GONE
             // 箭头跟着展开同步旋转，而不是硬切（#50）。
             chevron.animate().cancel()
-            chevron.animate().rotation(if (nowCollapsed) 180f else 0f).setDuration(Motion.QUICK).start()
+            chevron
+                .animate()
+                .rotation(if (nowCollapsed) 180f else 0f)
+                .setDuration(Motion.QUICK)
+                .start()
         }
         wrap.addView(header)
         wrap.addView(body)
@@ -3603,7 +3644,11 @@ class MainActivity : BaseActivity() {
         val row = inflater.inflate(R.layout.view_drawer_conversation, container, false)
         row.tag = session.id
         // 正在查看的会话即时算已读；其余按完成时间与上次查看时间判断是否未读。
-        if (session.id == zc.currentSessionId) SettingsStore.get(this).markSessionSeen(session.id, liveSessionIds = zc.sessions.map { it.id })
+        if (session.id ==
+            zc.currentSessionId
+        ) {
+            SettingsStore.get(this).markSessionSeen(session.id, liveSessionIds = zc.sessions.map { it.id })
+        }
         val status = sessionConvStatus(session)
         row.findViewById<TextView>(R.id.conv_status).apply {
             val label =
@@ -3854,17 +3899,20 @@ class MainActivity : BaseActivity() {
             runCatching {
                 zc.runtime.respond(req.id, org.json.JSONObject().put("action", "decline"))
             }.onFailure {
-                com.coda.mobileui.core.AppLog.w("Chat", "销毁时拒绝暂缓请求失败：${it.message}")
+                com.coda.mobileui.core.AppLog
+                    .w("Chat", "销毁时拒绝暂缓请求失败：${it.message}")
             }
         }
-        com.coda.mobileui.core.AppLog.i("Chat", "页面销毁，已拒绝 ${pending.size} 个未应答请求")
+        com.coda.mobileui.core.AppLog
+            .i("Chat", "页面销毁，已拒绝 ${pending.size} 个未应答请求")
     }
 
     /** 暂缓提示：一次只显示队首，处理完自动弹出下一个。 */
     private fun showDeferredSnackbar() {
         if (deferredRequests.isEmpty()) return
         val root = findViewById<View>(android.R.id.content) ?: return
-        Snackbar.make(root, "有 ${deferredRequests.size} 个请求已暂缓", Snackbar.LENGTH_INDEFINITE)
+        Snackbar
+            .make(root, "有 ${deferredRequests.size} 个请求已暂缓", Snackbar.LENGTH_INDEFINITE)
             .setAction("继续处理") {
                 val pending = deferredRequests.removeFirstOrNull() ?: return@setAction
                 if (pending.question) {
@@ -3873,8 +3921,7 @@ class MainActivity : BaseActivity() {
                     showPermissionDialog(pending.id, pending.params)
                 }
                 showDeferredSnackbar()
-            }
-            .show()
+            }.show()
     }
 
     /** 「稍后处理」行：不自动拒绝，改由提示条提供继续入口。 */
@@ -4623,13 +4670,13 @@ class MainActivity : BaseActivity() {
                         val draft = inputMessage.text?.toString().orEmpty()
                         inputMessage.text?.clear()
                         if (draft.isNotBlank()) {
-                            Snackbar.make(findViewById(android.R.id.content), "已清空输入", Snackbar.LENGTH_LONG)
+                            Snackbar
+                                .make(findViewById(android.R.id.content), "已清空输入", Snackbar.LENGTH_LONG)
                                 .setAction("撤销") {
                                     inputMessage.setText(draft)
                                     inputMessage.setSelection(draft.length)
                                     updateSendAvailability()
-                                }
-                                .show()
+                                }.show()
                         }
                         hideSettingsPage()
                         pendingNewSession = true
@@ -4896,9 +4943,13 @@ class MainActivity : BaseActivity() {
         findViewById<View>(R.id.drawer_content)
             ?.findViewWithTag<View>("drawer_bot")
             ?.findViewById<TextView>(R.id.action_title)
-            ?.text = com.coda.mobileui.personal.CodaBotStore.profile(this).name
+            ?.text =
+            com.coda.mobileui.personal.CodaBotStore
+                .profile(this)
+                .name
         // 回前台恢复定时轮询节奏（#222）。
-        com.coda.mobileui.core.AutomationScheduler.setForeground(true)
+        com.coda.mobileui.core.AutomationScheduler
+            .setForeground(true)
         // 浏览器控制引擎需要 Activity 承载隐藏 WebView。
         BrowserControl.attachActivity(this)
         // 从设置页回来时，宠物形象与三项开关可能已经改过，这里重新套一遍。
@@ -5072,6 +5123,7 @@ class MainActivity : BaseActivity() {
      * 只在充电时纳入（对齐“只在部分情况下索引”的要求），避免常态耗电。
      */
     /** 会话正文与聊天里发过的图片落一份可检索的文本索引；只在会话渲染时增量写，不额外跑后台任务。 */
+
     /** 索引写盘的去抖窗口：流式期间合并成一次写入。 */
     private val INDEX_DEBOUNCE_MS = 800L
     private val pendingIndex = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -5087,7 +5139,8 @@ class MainActivity : BaseActivity() {
                     dir.mkdirs()
                     snapshot.forEach { (id, body) -> java.io.File(dir, "$id.txt").writeText(body) }
                 }.onFailure {
-                    com.coda.mobileui.core.AppLog.w("Search", "写会话索引失败：${it.message}")
+                    com.coda.mobileui.core.AppLog
+                        .w("Search", "写会话索引失败：${it.message}")
                 }
             }
         }
@@ -5107,8 +5160,16 @@ class MainActivity : BaseActivity() {
                     if (t.isNotEmpty()) sb.append("TXT ").append(t.replace('\n', ' ').take(400)).append('\n')
                     m.parts.filterIsInstance<com.coda.mobileui.core.ZPart.FilePart>().forEach { f ->
                         if (f.mime.startsWith("image/")) {
-                            sb.append("IMG ").append(f.filename).append(' ').append(f.url)
-                                .append(' ').append(f.width).append('x').append(f.height).append('\n')
+                            sb
+                                .append("IMG ")
+                                .append(f.filename)
+                                .append(' ')
+                                .append(f.url)
+                                .append(' ')
+                                .append(f.width)
+                                .append('x')
+                                .append(f.height)
+                                .append('\n')
                         }
                     }
                 }
@@ -5159,8 +5220,17 @@ class MainActivity : BaseActivity() {
                     out +=
                         SessionSearchPage.Extra(
                             "Coda Bot",
-                            m.text.lineSequence().first().take(40),
-                            if (m.fromUser) "你" else com.coda.mobileui.personal.CodaBotStore.profile(this).name,
+                            m.text
+                                .lineSequence()
+                                .first()
+                                .take(40),
+                            if (m.fromUser) {
+                                "你"
+                            } else {
+                                com.coda.mobileui.personal.CodaBotStore
+                                    .profile(this)
+                                    .name
+                            },
                             // 标题只取首行 40 字符，命中常在后面的行：带上整条正文（#659）。
                             matched = m.text,
                         ) {
@@ -5169,7 +5239,8 @@ class MainActivity : BaseActivity() {
                 }
             }
         }
-        SettingsData.home(this)
+        SettingsData
+            .home(this)
             .filterIsInstance<SettingRow.Category>()
             .forEach { c ->
                 out +=
@@ -5182,6 +5253,7 @@ class MainActivity : BaseActivity() {
             }
         return out
     }
+
     /**
      * 进入会话搜索页：与设置页、Bot 页同级，只在内容区换页。
      *
@@ -5260,12 +5332,17 @@ class MainActivity : BaseActivity() {
      * 不再替用户决定形象；没走完引导就不打开 Bot 页。
      */
     private fun ensureBotOnboarding(then: () -> Unit) {
-        if (com.coda.mobileui.personal.CodaBotStore.isOnboarded(this)) {
+        if (com.coda.mobileui.personal.CodaBotStore
+                .isOnboarded(this)
+        ) {
             then()
             return
         }
         val sheet = CodaSheet(this).title("先选一个形象").subtitle("之后可以在 设置 → Coda Bot 里改")
-        var chosen = com.coda.mobileui.personal.CodaBotStore.profile(this).avatarSkinId
+        var chosen =
+            com.coda.mobileui.personal.CodaBotStore
+                .profile(this)
+                .avatarSkinId
         sheet.content { column ->
             column.removeAllViews()
             com.coda.mobileui.core.PetSkins.all(this).forEach { skin ->
@@ -5300,10 +5377,15 @@ class MainActivity : BaseActivity() {
         skinId: String,
         then: () -> Unit,
     ) {
-        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        val profile =
+            com.coda.mobileui.personal.CodaBotStore
+                .profile(this)
         val field =
             EditText(this).apply {
-                setText(com.coda.mobileui.personal.CodaBotStore.defaultPersona(skinId))
+                setText(
+                    com.coda.mobileui.personal.CodaBotStore
+                        .defaultPersona(skinId),
+                )
                 setSelection(text.length)
                 minLines = 4
                 gravity = Gravity.TOP or Gravity.START
@@ -5316,11 +5398,15 @@ class MainActivity : BaseActivity() {
         }
         sheet.primaryAction("开始聊天") {
             profile.avatarSkinId = skinId
-            profile.persona = field.text?.toString()?.trim().orEmpty().ifEmpty {
-                com.coda.mobileui.personal.CodaBotStore.defaultPersona(skinId)
-            }
-            com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
-            com.coda.mobileui.personal.CodaBotStore.markOnboarded(this)
+            profile.persona =
+                field.text?.toString()?.trim().orEmpty().ifEmpty {
+                    com.coda.mobileui.personal.CodaBotStore
+                        .defaultPersona(skinId)
+                }
+            com.coda.mobileui.personal.CodaBotStore
+                .saveProfile(this, profile)
+            com.coda.mobileui.personal.CodaBotStore
+                .markOnboarded(this)
             sheet.dismiss()
             // 第三步：模型。聊天入口要求两个模型都已配置，引导里不给选就必然首条报错。
             ensureBotModelsThenStart(then)
@@ -5339,13 +5425,16 @@ class MainActivity : BaseActivity() {
      * 新用户的第一条消息必然收到「请先选择模型」。
      */
     private fun ensureBotModelsThenStart(then: () -> Unit) {
-        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        val profile =
+            com.coda.mobileui.personal.CodaBotStore
+                .profile(this)
         if (profile.plannerModel.isNotBlank() && profile.replyModel.isNotBlank()) {
             then()
             return
         }
         val options =
-            com.coda.mobileui.core.ProviderStore.load(this)
+            com.coda.mobileui.core.ProviderStore
+                .load(this)
                 .filter { it.kind == com.coda.mobileui.core.ProviderStore.ProviderKind.LLM }
                 .flatMap { p -> p.models.map { m -> Triple(p.id, p.name, m) } }
         if (options.isEmpty()) {
@@ -5364,7 +5453,8 @@ class MainActivity : BaseActivity() {
                 sheet.dismiss()
                 // 没有模型时不能 then()：Bot 页首条消息必然失败。送用户去模型设置子页。
                 startActivity(
-                    android.content.Intent(this, SettingsDetailActivity::class.java)
+                    android.content
+                        .Intent(this, SettingsDetailActivity::class.java)
                         .putExtra(SettingsDetailActivity.EXTRA_PAGE, SettingsDetailActivity.PAGE_PROVIDERS),
                 )
             }
@@ -5390,12 +5480,15 @@ class MainActivity : BaseActivity() {
                         setPadding(dp(8), dp(14), dp(8), dp(14))
                         isClickable = true
                         setOnClickListener {
-                            val fresh = com.coda.mobileui.personal.CodaBotStore.profile(this@MainActivity)
+                            val fresh =
+                                com.coda.mobileui.personal.CodaBotStore
+                                    .profile(this@MainActivity)
                             fresh.plannerProviderId = option.first
                             fresh.plannerModel = option.third
                             fresh.replyProviderId = option.first
                             fresh.replyModel = option.third
-                            com.coda.mobileui.personal.CodaBotStore.saveProfile(this@MainActivity, fresh)
+                            com.coda.mobileui.personal.CodaBotStore
+                                .saveProfile(this@MainActivity, fresh)
                             sheet.dismiss()
                             then()
                         }
@@ -5416,7 +5509,9 @@ class MainActivity : BaseActivity() {
         // 三个页共用内容区：进来之前先把设置页收掉，避免叠两层、返回时多退一级。
         if (showingSettings) hideSettingsPage()
         // 第一次进 Bot 页先走引导：不替用户决定形象。
-        if (!com.coda.mobileui.personal.CodaBotStore.isOnboarded(this)) {
+        if (!com.coda.mobileui.personal.CodaBotStore
+                .isOnboarded(this)
+        ) {
             ensureBotOnboarding { showBotPage() }
             return
         }
@@ -5429,7 +5524,9 @@ class MainActivity : BaseActivity() {
         val area = findViewById<FrameLayout>(R.id.content_area) ?: return
         val page =
             botPage
-                ?: com.coda.mobileui.personal.CodaBotPage(this) { hideBotPage() }.also { botPage = it }
+                ?: com.coda.mobileui.personal
+                    .CodaBotPage(this) { hideBotPage() }
+                    .also { botPage = it }
         area.addView(page, FrameLayout.LayoutParams(-1, -1))
         page.open()
         showingBot = true
@@ -5782,22 +5879,30 @@ class MainActivity : BaseActivity() {
 
 /** 有 Shizuku 就请求一次授权；已授权则直接打开本应用的无障碍服务。 */
     private fun ensureShizukuAccessibility() {
-        if (!com.coda.mobileui.core.ShizukuShell.available()) return
-        if (com.coda.mobileui.core.ShizukuShell.isReady()) {
+        if (!com.coda.mobileui.core.ShizukuShell
+                .available()
+        ) {
+            return
+        }
+        if (com.coda.mobileui.core.ShizukuShell
+                .isReady()
+        ) {
             enableOwnAccessibilityViaShizuku()
             return
         }
         val prefs = getSharedPreferences("shizuku", MODE_PRIVATE)
         if (!prefs.getBoolean("asked", false)) {
             prefs.edit().putBoolean("asked", true).apply()
-            com.coda.mobileui.core.ShizukuShell.requestPermission()
+            com.coda.mobileui.core.ShizukuShell
+                .requestPermission()
         }
     }
 
     /** 通过 Shizuku 写系统设置，把本应用的无障碍服务挂上。 */
     private fun enableOwnAccessibilityViaShizuku() {
         val service = "$packageName/com.coda.mobileui.core.PhoneAccessibilityService"
-        com.coda.mobileui.core.ShizukuShell.enableAccessibility(service)
+        com.coda.mobileui.core.ShizukuShell
+            .enableAccessibility(service)
     }
 
     /**

@@ -9,11 +9,11 @@ import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.DataBackup
 import com.coda.mobileui.core.HooksCore
-import com.coda.mobileui.core.SystemPrompts
 import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.PhoneAccessibilityService
 import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.ProviderStore
+import com.coda.mobileui.core.SystemPrompts
 import com.coda.mobileui.core.UpdateChecker
 import com.coda.mobileui.core.WebUiHost
 import com.coda.mobileui.core.ZController
@@ -287,18 +287,28 @@ object SettingsData {
         val app = ctx.applicationContext
         com.coda.mobileui.core.Bg.run {
             runCatching {
+                // 成功读到就清掉上次的失败记录，错误行不再挂着。
+                SnapshotFallback.clearReason(key)
                 when {
-                    key == "providers" -> snapshots.put("providers", ProviderStore.load(app), now())
+                    key == "providers" -> {
+                        snapshots.put("providers", ProviderStore.load(app), now())
+                    }
+
                     key.startsWith("assets:") -> {
                         val kind = runCatching { AgentAssets.Kind.valueOf(key.removePrefix("assets:")) }.getOrNull()
                         if (kind != null) snapshots.put(key, AgentAssets.list(app, kind), now())
                     }
+
                     key == "automations" -> {
                         val db = File(File(app.filesDir, "zcode-data/.zcode/v2"), "tasks-index.sqlite")
                         snapshots.put("automations", CodaExtras.readAutomations(db), now())
                     }
+
                     // 提示词状态（#743）：读 14 份文件 + SHA-256，必须留在后台。
-                    key == "sysprompts" -> snapshots.put("sysprompts", SystemPrompts.statuses(app), now())
+                    key == "sysprompts" -> {
+                        snapshots.put("sysprompts", SystemPrompts.statuses(app), now())
+                    }
+
                     key == "hooks" || key.startsWith("hooks:") -> {
                         val wp = workspacePath ?: ZController.get(app).workspacePath()
                         if (wp != null) {
@@ -307,11 +317,22 @@ object SettingsData {
                     }
                 }
             }.onFailure {
-                com.coda.mobileui.core.AppLog.w("Settings", "预热 $key 失败：${it.message}")
+                com.coda.mobileui.core.AppLog
+                    .w("Settings", "预热 $key 失败：${it.message}")
                 // 必须落一份空结果（#751）：只打日志的话 hasSnapshot 永远为 false，
                 // ensureSnapshot → prewarm → onDone → renderPage → ensureSnapshot
                 // 会变成没有退避的后台 IO/渲染死循环，页面却一直停在「正在读取」。
-                SnapshotFallback.emptyFor(key, workspacePath, it.message ?: "读取失败")?.let { (k, v) ->
+                // hooks 的键含工作区路径：参数为 null 时成功路径会现场解析，
+                // 失败路径也必须同样解析（OCR medium），否则 emptyFor 拿 null
+                // 构造不出键，死循环照旧。解析本身也可能抛，用 runCatching 兜住；
+                // 仍拿不到路径时 hasSnapshot 对 null 路径本就短路，不会循环。
+                val wpForFallback =
+                    if (key == "hooks" || key.startsWith("hooks:")) {
+                        workspacePath ?: runCatching { ZController.get(app).workspacePath() }.getOrNull()
+                    } else {
+                        workspacePath
+                    }
+                SnapshotFallback.emptyFor(key, wpForFallback, it.message ?: "读取失败")?.let { (k, v) ->
                     snapshots.put(k, v, now())
                 }
             }
@@ -342,15 +363,30 @@ object SettingsData {
         workspacePath: String? = null,
     ): Boolean =
         when {
-            key == "providers" -> cachedProviders(ctx) != null
+            key == "providers" -> {
+                cachedProviders(ctx) != null
+            }
+
             key.startsWith("assets:") -> {
                 val kind = runCatching { AgentAssets.Kind.valueOf(key.removePrefix("assets:")) }.getOrNull()
                 kind != null && cachedAssets(ctx, kind) != null
             }
-            key == "automations" -> cachedAutomations(ctx, File(ctx.filesDir, "tasks-index.sqlite")) != null
-            key == "hooks" -> workspacePath != null && cachedHooks(ctx, workspacePath, File(ctx.filesDir, "home")) != null
-            key == "sysprompts" -> cachedPromptStatus(ctx) != null
-            else -> true
+
+            key == "automations" -> {
+                cachedAutomations(ctx, File(ctx.filesDir, "tasks-index.sqlite")) != null
+            }
+
+            key == "hooks" -> {
+                workspacePath != null && cachedHooks(ctx, workspacePath, File(ctx.filesDir, "home")) != null
+            }
+
+            key == "sysprompts" -> {
+                cachedPromptStatus(ctx) != null
+            }
+
+            else -> {
+                true
+            }
         }
 
     /** 写操作后作废相关快照，下次渲染重新读。 */
@@ -361,6 +397,18 @@ object SettingsData {
     /** 模型设置页：读取真实的供应商配置（provider_config.json），支持增删改。 */
     fun providers(ctx: Context): SettingsPage {
         val all = cachedProviders(ctx) ?: return loadingPage("模型设置", "providers")
+        // 读失败落的空快照与「真的没配置」不可区分（OCR medium）：
+        // 先渲染错误行，避免用户以为配置丢了、在坏文件上重建。
+        SnapshotFallback.reasonFor("providers")?.let {
+            return SettingsPage(
+                "模型设置",
+                listOf(
+                    SettingRow.Header("读取失败"),
+                    SettingRow.Value("配置文件读取失败", it),
+                    SettingRow.Value("重新读取", "修复文件后点这里重试", "settings_reload:providers"),
+                ),
+            )
+        }
         val llm = all.filter { it.kind == ProviderStore.ProviderKind.LLM }
         val asr = all.filter { it.kind == ProviderStore.ProviderKind.ASR }
         val rows = mutableListOf<SettingRow>()
@@ -486,6 +534,12 @@ object SettingsData {
     ): SettingsPage {
         val items = cachedAssets(ctx, kind) ?: return loadingPage(title, "assets:${kind.name}")
         val rows = mutableListOf<SettingRow>()
+        // 读失败的空快照要先说明，不能装作「暂无」（OCR medium）。
+        SnapshotFallback.reasonFor("assets:${kind.name}")?.let {
+            rows += SettingRow.Header("读取失败")
+            rows += SettingRow.Value("目录读取失败", it)
+            rows += SettingRow.Value("重新读取", "修复后点这里重试", "settings_reload:assets:${kind.name}")
+        }
         rows += SettingRow.Header("已保存")
         if (items.isEmpty()) {
             rows += SettingRow.Value("暂无$title", "点此新建", "assets_new:${kind.name}")
@@ -834,6 +888,11 @@ object SettingsData {
         val dbFile = File(File(ctx.filesDir, "zcode-data/.zcode/v2"), "tasks-index.sqlite")
         val items = cachedAutomations(ctx, dbFile) ?: return loadingPage("定时任务", "automations")
         val rows = mutableListOf<SettingRow>()
+        SnapshotFallback.reasonFor("automations")?.let {
+            rows += SettingRow.Header("读取失败")
+            rows += SettingRow.Value("任务数据库读取失败", it)
+            rows += SettingRow.Value("重新读取", "修复后点这里重试", "settings_reload:automations")
+        }
         rows += SettingRow.Header("已创建任务")
         if (items.isEmpty()) {
             rows += SettingRow.Value("暂无定时任务", "在对话中让 Agent 创建，例如：每天早上 9 点总结待办")
@@ -1238,6 +1297,11 @@ object SettingsData {
      */
     fun systemPrompt(ctx: Context): SettingsPage {
         val rows = mutableListOf<SettingRow>()
+        SnapshotFallback.reasonFor("sysprompts")?.let {
+            rows += SettingRow.Header("读取失败")
+            rows += SettingRow.Value("模板状态读取失败", it)
+            rows += SettingRow.Value("重新读取", "修复后点这里重试", "settings_reload:sysprompts")
+        }
         rows += SettingRow.Header("模板文件")
         // 状态来自后台快照（#743）：这里在主线程渲染，绝不能逐份读文件算摘要。
         val status = cachedPromptStatus(ctx)
@@ -1251,18 +1315,28 @@ object SettingsData {
     }
 
     /** 读取 Coda Bot 配置；设置页与聊天页共用同一份本地存储。 */
-    private fun codaBotProfile(ctx: Context) = com.coda.mobileui.personal.CodaBotStore.profile(ctx)
+    private fun codaBotProfile(ctx: Context) =
+        com.coda.mobileui.personal.CodaBotStore
+            .profile(ctx)
 
     private fun codaBotSkinTitle(
         ctx: Context,
         skinId: String,
     ): String =
-        com.coda.mobileui.core.PetSkins.all(ctx).firstOrNull { it.id == skinId }?.title ?: "自定义图片"
+        com.coda.mobileui.core.PetSkins
+            .all(ctx)
+            .firstOrNull { it.id == skinId }
+            ?.title ?: "自定义图片"
 
     private fun codaBotBrief(
         value: String,
         fallback: String,
-    ): String = value.trim().replace('\n', ' ').take(24).ifEmpty { fallback }
+    ): String =
+        value
+            .trim()
+            .replace('\n', ' ')
+            .take(24)
+            .ifEmpty { fallback }
 
     private fun codaBotModelBrief(model: String): String = if (model.isBlank()) "未选择" else model
 
@@ -1273,18 +1347,21 @@ object SettingsData {
         rows += SettingRow.Header("名称")
         rows += SettingRow.Value("显示名称", profile.name, "coda_bot_name")
         rows += SettingRow.Header("动画形象")
-        for (skin in com.coda.mobileui.core.PetSkins.all(ctx)) {
-            rows += SettingRow.Radio(
-                skin.title,
-                profile.avatarUri.isEmpty() && profile.avatarSkinId == skin.id,
-                "coda_bot_skin=${skin.id}",
-            )
+        for (skin in com.coda.mobileui.core.PetSkins
+            .all(ctx)) {
+            rows +=
+                SettingRow.Radio(
+                    skin.title,
+                    profile.avatarUri.isEmpty() && profile.avatarSkinId == skin.id,
+                    "coda_bot_skin=${skin.id}",
+                )
         }
-        rows += SettingRow.Value(
-            "本地图片",
-            if (profile.avatarUri.isBlank()) "从相册选择" else "已设置，点击更换",
-            "coda_bot_avatar_pick",
-        )
+        rows +=
+            SettingRow.Value(
+                "本地图片",
+                if (profile.avatarUri.isBlank()) "从相册选择" else "已设置，点击更换",
+                "coda_bot_avatar_pick",
+            )
         if (profile.avatarUri.isNotBlank()) {
             rows += SettingRow.Value("恢复动画形象", "移除本地图片", "coda_bot_avatar_clear")
         }
@@ -1323,7 +1400,10 @@ object SettingsData {
     /** Coda Bot → 了解你。 */
     fun codaBotMemory(ctx: Context): SettingsPage {
         val profile = codaBotProfile(ctx)
-        val count = com.coda.mobileui.personal.CodaBotStore.messages(ctx).size
+        val count =
+            com.coda.mobileui.personal.CodaBotStore
+                .messages(ctx)
+                .size
         return SettingsPage(
             "了解你",
             listOf(
@@ -1364,7 +1444,9 @@ object SettingsData {
     /** Coda Bot → 聊天与数据。 */
     fun codaBotChat(ctx: Context): SettingsPage {
         val profile = codaBotProfile(ctx)
-        val forwardsEvents = com.coda.mobileui.personal.CodaBotStore.forwardsCodingEvents(ctx)
+        val forwardsEvents =
+            com.coda.mobileui.personal.CodaBotStore
+                .forwardsCodingEvents(ctx)
         return SettingsPage(
             "聊天与数据",
             listOf(
