@@ -31,7 +31,15 @@ import java.util.Locale
 class SessionSearchPage(
     private val host: MainActivity,
     private val sessions: () -> List<ZSessionInfo>,
-    private val extras: (String) -> List<Extra>,
+    /**
+     * 附加结果 provider（#747）。
+     *
+     * 第二个参数是**主线程取好的会话快照**：provider 在搜索线程跑，
+     * 直接遍历 zc.sessions 会抛 CME 并被吞成空结果。
+     */
+    private val extras: (String, List<com.coda.mobileui.core.ZSessionInfo>) -> List<Extra>,
+    /** 主线程取会话快照；默认空表，便于不需要它的调用方。 */
+    private val zcSessionSnapshot: () -> List<com.coda.mobileui.core.ZSessionInfo> = { emptyList() },
     private val onClose: () -> Unit,
     private val onPick: (ZSessionInfo) -> Unit,
 ) {
@@ -160,12 +168,22 @@ class SessionSearchPage(
         lastQuery = q
         pendingSearch?.let { searchHandler.removeCallbacks(it) }
         val mine = ++searchSeq
+        // provider 里会遍历 zc.sessions（普通 MutableList，主线程随时在改）。
+        // 直接在搜索线程里调会抛 ConcurrentModificationException，
+        // 又被外层 runCatching 吞成空结果——表现为「搜索时好时坏」（#747）。
+        // 这里先在主线程取一份快照传下去，provider 只用快照，不再碰活列表。
+        val sessionSnapshot = runCatching { zcSessionSnapshot() }.getOrDefault(emptyList())
         val task =
             Runnable {
                 searchPool.execute {
                     // provider 可能读全部会话索引文件，绝不能在主线程跑。
                     val all = runCatching { sessions() }.getOrDefault(emptyList())
-                    val others = if (q.isEmpty()) emptyList() else runCatching { extras(q) }.getOrDefault(emptyList())
+                    val others =
+                        if (q.isEmpty()) {
+                            emptyList()
+                        } else {
+                            runCatching { extras(q, sessionSnapshot) }.getOrDefault(emptyList())
+                        }
                     searchHandler.post {
                         // 迟到的旧结果不能覆盖新查询的结果。
                         if (mine >= appliedSeq) {
@@ -190,7 +208,7 @@ class SessionSearchPage(
         if (!::results.isInitialized) return
         val q = raw.trim()
         lastQuery = q
-        paint(q, sessions(), if (q.isEmpty()) emptyList() else extras(q))
+        paint(q, sessions(), if (q.isEmpty()) emptyList() else extras(q, zcSessionSnapshot()))
     }
 
     private fun paint(

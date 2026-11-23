@@ -306,7 +306,15 @@ object SettingsData {
                         }
                     }
                 }
-            }.onFailure { com.coda.mobileui.core.AppLog.w("Settings", "预热 $key 失败：${it.message}") }
+            }.onFailure {
+                com.coda.mobileui.core.AppLog.w("Settings", "预热 $key 失败：${it.message}")
+                // 必须落一份空结果（#751）：只打日志的话 hasSnapshot 永远为 false，
+                // ensureSnapshot → prewarm → onDone → renderPage → ensureSnapshot
+                // 会变成没有退避的后台 IO/渲染死循环，页面却一直停在「正在读取」。
+                SnapshotFallback.emptyFor(key, workspacePath, it.message ?: "读取失败")?.let { (k, v) ->
+                    snapshots.put(k, v, now())
+                }
+            }
             onDone()
         }
     }

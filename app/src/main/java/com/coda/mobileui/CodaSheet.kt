@@ -143,7 +143,33 @@ class CodaSheet(
             secondaryBlock = block
         }
 
-    fun onDismiss(block: () -> Unit): CodaSheet = apply { onDismissBlock = block }
+    /**
+     * 注册关闭回调，**叠加而不是覆盖**（#749）。
+     *
+     * 同一个 sheet 可能被多方绑定：OAuthAccountsSheet 自己注册了
+     * `closed = true; io.shutdownNow()`，而 attachTo 里的 bindAccountPage 又注册
+     * `io.shutdown()`。原来的单回调赋值会让后者顶掉前者，于是 closed 永远不置位、
+     * 列表的单线程执行器每次打开都泄漏一条线程，新加的 `if (closed)` 守卫全部失效。
+     *
+     * 按注册顺序依次执行；其中一个抛异常不影响其余清理。
+     */
+    fun onDismiss(block: () -> Unit): CodaSheet =
+        apply {
+            val prev = onDismissBlock
+            onDismissBlock =
+                if (prev == null) {
+                    block
+                } else {
+                    {
+                        try {
+                            prev()
+                        } catch (e: Exception) {
+                            com.coda.mobileui.core.AppLog.w("CodaSheet", "dismiss 回调失败：${e.message}")
+                        }
+                        block()
+                    }
+                }
+        }
 
     /** 紧凑模式：高度随内容自适应（上限约 0.72 屏），仅支持下拉关闭。 */
     fun compact(): CodaSheet = apply { compactMode = true }

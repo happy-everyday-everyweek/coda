@@ -1757,6 +1757,19 @@ class MainActivity : BaseActivity() {
                     // 重建时没找到的会话：会话列表一到就补选中，否则页面一直空着。
                     val pending = pendingRestoreConversationId
                     if (pending != null) {
+                        // 必须查内核的真实会话列表（#753）：conversations 是一份
+                        // 硬编码演示数据（conv-1…conv-6），从 KEY_CONVERSATION_ID
+                        // 恢复出来的真实 id 永远匹配不上，这段「等状态刷新再补上」
+                        // 对每个真实会话都是死代码。
+                        val live = zc.sessions.firstOrNull { it.id == pending }
+                        if (live != null) {
+                            pendingRestoreConversationId = null
+                            currentConversationId = live.id
+                            runCatching { zc.openSession(live.id, null) }
+                            renderFromController()
+                            return
+                        }
+                        // 兼容旧的演示会话 id（本地草稿等仍可能存在）。
                         val target = conversations.firstOrNull { it.id == pending }
                         if (target != null) {
                             pendingRestoreConversationId = null
@@ -5106,13 +5119,16 @@ class MainActivity : BaseActivity() {
         indexHandler.postDelayed(indexFlush, INDEX_DEBOUNCE_MS)
     }
 
-    private fun searchExtras(q: String): List<SessionSearchPage.Extra> {
+    private fun searchExtras(
+        q: String,
+        sessionSnapshot: List<com.coda.mobileui.core.ZSessionInfo> = zc.sessionSnapshot(),
+    ): List<SessionSearchPage.Extra> {
         val out = mutableListOf<SessionSearchPage.Extra>()
         // 会话正文：用户消息、AI 回复都在里面；命中的那一行当作摘要。
         runCatching {
             java.io.File(filesDir, "search/sessions").listFiles()?.forEach { f ->
                 val id = f.nameWithoutExtension
-                val session = zc.sessions.firstOrNull { it.id == id }
+                val session = sessionSnapshot.firstOrNull { it.id == id }
                 f.readLines().forEach { line ->
                     val hit =
                         when {
@@ -5188,7 +5204,8 @@ class MainActivity : BaseActivity() {
                 ?: SessionSearchPage(
                     this,
                     sessions = { zc.sessions },
-                    extras = { q -> searchExtras(q) },
+                    extras = { q, snapshot -> searchExtras(q, snapshot) },
+                    zcSessionSnapshot = { zc.sessionSnapshot() },
                     onClose = { hideSearchPage() },
                     onPick = { openSessionFromSearch(it) },
                 ).also { searchPage = it }

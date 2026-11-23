@@ -15,7 +15,13 @@ package com.coda.mobileui
 internal class SettingsSnapshotCache(
     private val ttlMs: Long = DEFAULT_TTL_MS,
 ) {
-    private val entries = HashMap<String, Pair<Long, Any>>()
+    /**
+     * 必须是并发容器（#750）：put 来自 Bg 工作线程（SettingsData.prewarm），
+     * get/invalidatePrefix 在主线程（页面构建、保存后作废）。
+     * 普通 HashMap 跨线程读写会丢写、发布半构造状态，甚至在扩容时损坏表——
+     * 丢一次 put 就让页面永远停在加载态，还会配合预热重试变成死循环。
+     */
+    private val entries = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Any>>()
 
     /** 取一份仍然新鲜的快照；缺失或过期返回 null。 */
     @Suppress("UNCHECKED_CAST")
