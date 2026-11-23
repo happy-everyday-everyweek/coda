@@ -214,6 +214,36 @@ class TarLinkSafetyTest {
     }
 
     @Test
+    fun `上跳跨过链接展开段后字面跟踪必须作废`() {
+        // OCR r7 high：d1/d2/q -> ../../x 物理落 root/x，原始 .. 弹回 root，
+        // 后续 a 的字面 base 规范化回 d1/d2 会伪匹配成员 d1/d2/a（u/v/w，深度3），
+        // 三个 .. 看似落在根内。物理上 root/a 深度 1，三个 .. 出根，必须拒绝。
+        val links = setOf("d1/d2/q", "d1/d2/a")
+        val targets = mapOf("d1/d2/q" to "../../x", "d1/d2/a" to "u/v/w")
+        assertFalse(
+            TarLinkSafety.linkStaysInside("/tmp/out", "y", "d1/d2/q/../a/../../../evil", links, targets),
+        )
+    }
+
+    @Test
+    fun `经物理别名到达的成员链接也要展开`() {
+        // OCR r7 medium：L -> t/u 使成员 L/t 实际落在 t/u/t。
+        // y -> t/u/t/../../../evil 若把 t/u/t 当普通目录（深度3）会误放行；
+        // 物理上它是链接 ../evil（落 t/evil，深度2），三个 .. 出根。
+        val links = setOf("L", "L/t")
+        val targets = mapOf("L" to "t/u", "L/t" to "../evil")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "y", "t/u/t/../../../evil", links, targets))
+    }
+
+    @Test
+    fun `物理别名展开后仍在根内的放行`() {
+        // 同一组链接，t/u/t/x 经别名展开到 t/evil/x，深度足够，合法。
+        val links = setOf("L", "L/t")
+        val targets = mapOf("L" to "t/u", "L/t" to "../evil")
+        assertTrue(TarLinkSafety.linkStaysInside("/tmp/out", "y", "t/u/t/x", links, targets))
+    }
+
+    @Test
     fun `硬链接指向符号链接成员时拒绝`() {
         assertFalse(
             TarLinkSafety.hardLinkStaysInside(

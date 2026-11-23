@@ -774,6 +774,8 @@ class MainActivity : BaseActivity() {
         sheet.show()
     }
 
+    /** 在途更新下载的取消句柄（#776）：onDestroy 与卡片 dismiss 都会触发。 */
+    private var updateDownloadCancel: com.coda.mobileui.core.Downloader.Cancel? = null
     private fun updateBodyText(text: String): TextView =
         TextView(this).apply {
             this.text = text
@@ -796,6 +798,11 @@ class MainActivity : BaseActivity() {
         sheet: CodaSheet,
     ) {
         val activity = this
+        // 取消接线（#776）：关掉卡片或销毁 Activity 都要停掉镜像循环，
+        // 否则用户退出后几十 MB 的下载还在后台继续跑。
+        val cancel = com.coda.mobileui.core.Downloader.Cancel()
+        updateDownloadCancel = cancel
+        sheet.onDismiss { cancel.cancel() }
         var panel: ProgressLogView? = null
         // 进度行原地更新：下载回调几百次，每次追加会把前面步骤挤掉。
         var progressLine: android.widget.TextView? = null
@@ -810,6 +817,7 @@ class MainActivity : BaseActivity() {
                 UpdateInstaller.download(
                     activity,
                     r,
+                    cancel = cancel,
                     onProgress = { done, total ->
                         val pct = if (total > 0) (done * 100 / total).toInt() else 0
                         val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
@@ -1739,6 +1747,9 @@ class MainActivity : BaseActivity() {
     }
 
     override fun onDestroy() {
+        // 在途更新下载随 Activity 终止（#776）。
+        updateDownloadCancel?.cancel()
+        updateDownloadCancel = null
         // 暂缓的审批/输入请求只活在本实例里：销毁前必须给内核一个结论，
         // 否则它会一直等下去（#673）。
         denyDeferredRequests()
@@ -1755,13 +1766,18 @@ class MainActivity : BaseActivity() {
             runCatching { rikka.shizuku.Shizuku.removeRequestPermissionResultListener(l) }
         }
         shizukuPermissionListener = null
-        // 定时调度器是进程级单例（ZController.ensureStarted 启动，还服务
-        // WebUiHost/Bot）：旋转重建也走 onDestroy，无条件 stop 后
-        // ensureStarted 因 started&&isRunning 短路，谁也不会再 start，
-        // 定时任务静默停摆到内核重启（#746）。只在真正 finishing 时停。
-        if (isFinishing) {
+        // 定时调度器是进程级单例（ZController.ensureStarted 启动）：旋转重建
+        // 也走 onDestroy，无条件 stop 后 ensureStarted 因 started&&isRunning
+        // 短路，谁也不会再 start，定时任务静默停摆到内核重启（#746）。
+        // finishing 时停；系统回收（非 finishing）时若 WebUi 服务还在跑就
+        // 保留但转后台节奏，否则也停——没有任何宿主时不能留 30s 空转
+        // （OCR r8 medium）。onResume 的幂等 start 负责回到前台后重启。
+        if (isFinishing || !WebUiHost.isRunning()) {
             com.coda.mobileui.core.AutomationScheduler
                 .stop()
+        } else {
+            com.coda.mobileui.core.AutomationScheduler
+                .setForeground(false)
         }
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
@@ -2092,9 +2108,10 @@ class MainActivity : BaseActivity() {
      */
     private fun waitingTool(): String? {
         pendingPermissionName?.let { return it }
-        // 暂缓队列也是「等你确认」（#745）：Snackbar 被滑走后宠物栏仍显示
-        // 等待态，点宠物栏能重新唤起提示，队列不会无声消失。
-        if (deferredRequests.isNotEmpty()) return "已暂缓的请求"
+        // 暂缓队列也是「等你确认」（#745）：Snackbar 被滑走后 header pill
+        // 仍显示待处理数，点它重新唤起提示，队列不会无声消失。
+        // （宠物栏已迁去 Personal Agent 页，本屏没有可点的宠物栏。）
+        if (deferredRequests.isNotEmpty()) return getString(R.string.deferred_requests_waiting)
         val last = zc.messages.lastOrNull() ?: return null
         val asking =
             last.parts
@@ -3921,7 +3938,9 @@ class MainActivity : BaseActivity() {
                 if (req.question) {
                     zc.runtime.respond(req.id, org.json.JSONObject().put("action", "decline"))
                 } else {
-                    zc.respondPermission(req.id, false)
+                    // 用队列自存的 params（OCR r8 medium）：控制器缓存只留
+                    // 最近 10 条，排队久了会退化成裸 deny，丢选项专属形状。
+                    zc.respondPermission(req.id, req.params, false)
                 }
             }.onFailure {
                 com.coda.mobileui.core.AppLog
@@ -3932,23 +3951,39 @@ class MainActivity : BaseActivity() {
             .i("Chat", "页面销毁，已拒绝 ${pending.size} 个未应答请求")
     }
 
+    /** 当前暂缓提示条（OCR r8 medium）：单实例，重显前先撤下旧的。 */
+    private var deferredSnackbar: Snackbar? = null
     /** 暂缓提示：一次只显示队首，处理完自动弹出下一个。 */
     private fun showDeferredSnackbar() {
         // 队列变化同步胶囊指示（#745）：空了恢复模型名，非空显示待处理数。
         syncHeaderPill()
-        if (deferredRequests.isEmpty()) return
+        if (deferredRequests.isEmpty()) {
+            deferredSnackbar?.dismiss()
+            deferredSnackbar = null
+            return
+        }
+        // 已有一条在显示就不再叠：onResume/胶囊点击/处理完都会走到这里，
+        // 叠多条会让旧提示的「继续处理」答掉与对话框不对应的请求。
+        deferredSnackbar?.let { if (it.isShown) return }
         val root = findViewById<View>(android.R.id.content) ?: return
-        Snackbar
-            .make(root, "有 ${deferredRequests.size} 个请求已暂缓", Snackbar.LENGTH_INDEFINITE)
-            .setAction("继续处理") {
-                val pending = deferredRequests.removeFirstOrNull() ?: return@setAction
-                if (pending.question) {
-                    showUserInputDialog(pending.id, pending.params)
-                } else {
-                    showPermissionDialog(pending.id, pending.params)
+        deferredSnackbar?.dismiss()
+        val bar =
+            Snackbar
+                .make(root, getString(R.string.deferred_requests_snackbar, deferredRequests.size), Snackbar.LENGTH_INDEFINITE)
+                .setAction("继续处理") {
+                    val pending = deferredRequests.removeFirstOrNull() ?: return@setAction
+                    // 先撤下自己再弹下一个：旧条目的回调不得再响应新队首。
+                    deferredSnackbar?.dismiss()
+                    deferredSnackbar = null
+                    if (pending.question) {
+                        showUserInputDialog(pending.id, pending.params)
+                    } else {
+                        showPermissionDialog(pending.id, pending.params)
+                    }
+                    showDeferredSnackbar()
                 }
-                showDeferredSnackbar()
-            }.show()
+        deferredSnackbar = bar
+        bar.show()
     }
 
     /** 「稍后处理」行：不自动拒绝，改由提示条提供继续入口。 */

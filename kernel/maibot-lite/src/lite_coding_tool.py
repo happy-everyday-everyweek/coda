@@ -183,8 +183,10 @@ def _readonly_violation(command: str) -> Optional[str]:
     # `--output=evil` 的文件（Coding Agent 自己就能创建），bash 展开后
     # 它变成一个新 token 被目标程序当选项解析。
     # 但 `git tag --list v*` 的模式是合法列出用法，不能误杀：
-    # 只拒绝「独立成词」或「以通配开头」的 token——展开结果落在词首的
-    # 才可能被当选项；`v*`、`--sort=*` 这类值内通配交给程序自己处理。
+    # 拒绝「以通配开头」的 token（展开结果落在词首才可能被当选项），
+    # `v*` 这类值内通配交给程序自己处理。以 - 开头且含通配的 token
+    # 一律拒绝（含 `--sort=*`）：选项名本身不含通配，含通配的「选项」
+    # 一定是 glob，展开后可能变成任意选项（OCR r6 high、r7 low）。
     import shlex as _shlex
     try:
         _raw_tokens = _shlex.split(text, comments=False, posix=True)

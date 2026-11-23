@@ -30,6 +30,20 @@ internal object SnapshotFallback {
         reasons.remove(key)
     }
 
+    /**
+     * 只记录失败原因，不构造空快照（OCR r7 low）。
+     *
+     * 部分读取成功的键（如 providers 损坏时返回部分列表）要保留部分数据，
+     * 只挂错误行；借 emptyFor 的副作用记原因容易被后续重构误接返回值，
+     * 把部分列表整个换成空的。
+     */
+    fun recordReason(
+        key: String,
+        reason: String,
+    ) {
+        reasons[key] = reason
+    }
+
     /** 返回「键 → 空值」；未知键或无从构造键时返回 null。 */
     fun emptyFor(
         key: String,

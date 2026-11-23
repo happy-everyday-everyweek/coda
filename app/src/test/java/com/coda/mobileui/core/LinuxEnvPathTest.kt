@@ -15,8 +15,16 @@ class LinuxEnvPathTest {
     private val dest = File("/tmp/coda-test-rootfs")
 
     @Test
-    fun rejectsAbsoluteTargets() {
-        assertFalse(LinuxEnv.symlinkStaysInside(dest, "etc/resolv.conf", "/etc/resolv.conf"))
+    fun rebasesAbsoluteTargetsOntoGuestRoot() {
+        // #767：Alpine 的 /bin/sh -> /bin/busybox 是 rootfs 标准链接，
+        // proot 下按 guest 根解析，必须放行而不是静默跳过。
+        assertTrue(LinuxEnv.symlinkStaysInside(dest, "bin/sh", "/bin/busybox"))
+        assertTrue(LinuxEnv.symlinkStaysInside(dest, "etc/resolv.conf", "/etc/resolv.conf"))
+    }
+    @Test
+    fun rejectsAbsoluteTargetsEscapingGuestRoot() {
+        assertFalse(LinuxEnv.symlinkStaysInside(dest, "etc/link", "/../../data/local/tmp/x"))
+        assertFalse(LinuxEnv.symlinkStaysInside(dest, "link", "/.."))
     }
 
     @Test

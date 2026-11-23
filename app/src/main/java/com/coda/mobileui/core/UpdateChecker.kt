@@ -30,7 +30,7 @@ import org.json.JSONObject
  * 一律用 versionCode。versionName 有过 `0.8.4-core` 这种带后缀形态，语义比较不可靠；
  * versionCode 单调递增，是覆盖安装的硬依据。
  */
-object UpdateChecker {
+internal object UpdateChecker {
     /** dev 渠道固定 tag，由 dev-prerelease.yml 维护，永远只有这一个。 */
     private const val DEV_TAG = "dev-latest"
 
@@ -107,6 +107,7 @@ object UpdateChecker {
     fun check(
         ctx: Context,
         onLog: (String) -> Unit = {},
+        cancel: Downloader.Cancel? = null,
     ): Result {
         val headers =
             mapOf(
@@ -135,9 +136,9 @@ object UpdateChecker {
 
         // 两个渠道都取。任一拿不到都不影响另一个——单渠道坏掉时仍能更新。
         onLog("查询版本清单（dev 与 release 两个渠道）")
-        val dev = httpGet(ctx, DEV_MANIFEST_URL, headers, ranked, net, onLog)?.let { parseManifest(it, "dev") }
+        val dev = httpGet(ctx, DEV_MANIFEST_URL, headers, ranked, net, onLog, cancel)?.let { parseManifest(it, "dev") }
         onLog(if (dev != null) "dev 清单：${dev.versionCode}" else "dev 清单不可用")
-        val rel = httpGet(ctx, RELEASE_MANIFEST_URL, headers, ranked, net, onLog)?.let { parseManifest(it, "release") }
+        val rel = httpGet(ctx, RELEASE_MANIFEST_URL, headers, ranked, net, onLog, cancel)?.let { parseManifest(it, "release") }
         onLog(if (rel != null) "release 清单：${rel.versionCode}" else "release 清单不可用")
         val candidates = listOfNotNull(dev, rel)
         if (candidates.isEmpty()) {
@@ -241,32 +242,38 @@ object UpdateChecker {
         ranked: List<GhMirror>,
         net: MirrorScoreboard.Net,
         onLog: (String) -> Unit = {},
+        cancel: Downloader.Cancel? = null,
     ): JSONObject? {
+        // 总截止时间先算（OCR r8 medium）：直连的 8s+12s 超时也计入预算，
+        // 否则直连慢时 90s 之外再叠 20s，弱网检查拖得更久。
+        val deadline = System.currentTimeMillis() + MANIFEST_TOTAL_BUDGET_MS
         // 清单 URL 是编译期常量且在信任白名单上（#755）：先直连官方源，
         // 不依赖 ping 排名——受限网络下直连 ping 失败会让 ranked 里一个
         // 可信候选都不剩，更新检测整段失效。直连失败再走排名兜底。
         if (UpdateTrust.trustedManifestUrl(url)) {
             val t0 = System.currentTimeMillis()
-            val direct = fetchJson(url, headers)
+            val direct = fetchJson(url, headers, cancel)
+            // 记账用镜像清单里的规范 id "github"（OCR r8 low）：自造
+            // "github-direct" 键永远影响不了 rank 对直连条目的排序。
+            // 失败也要记 FAILED，与排名候选同一口径，直连的持续劣化才可见。
+            ctx?.let {
+                MirrorScoreboard.record(
+                    it,
+                    net,
+                    "github",
+                    if (direct != null) MirrorScoreboard.Outcome.VERIFIED else MirrorScoreboard.Outcome.FAILED,
+                    elapsedMs = System.currentTimeMillis() - t0,
+                )
+            }
             if (direct != null) {
-                ctx?.let {
-                    MirrorScoreboard.record(
-                        it,
-                        net,
-                        "github-direct",
-                        MirrorScoreboard.Outcome.VERIFIED,
-                        elapsedMs = System.currentTimeMillis() - t0,
-                    )
-                }
                 AppLog.i(TAG, "清单取自官方直连")
                 return direct
             }
             AppLog.i(TAG, "官方直连失败，试排名里的可信兜底源")
         }
-        // 总截止时间：单连接 8s+12s 超时叠上几十个源，弱网下一次检查可能拖数分钟。
-        // 90 秒后不再试剩余源，快速失败留给下一次检查。
-        val deadline = System.currentTimeMillis() + MANIFEST_TOTAL_BUDGET_MS
         for (mirror in ranked) {
+            // 取消传播（#776）：退出页面后不再试剩余镜像。
+            if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("取清单已取消")
             if (System.currentTimeMillis() > deadline) {
                 AppLog.w(TAG, "取清单超出总时限 ${MANIFEST_TOTAL_BUDGET_MS / 1000}s，放弃剩余源：$url")
                 break
@@ -279,7 +286,7 @@ object UpdateChecker {
                 continue
             }
             val t0 = System.currentTimeMillis()
-            val json = fetchJson(candidate, headers)
+            val json = fetchJson(candidate, headers, cancel)
             val cost = System.currentTimeMillis() - t0
             if (json != null) {
                 ctx?.let {
@@ -330,6 +337,7 @@ object UpdateChecker {
     private fun fetchJson(
         fullUrl: String,
         headers: Map<String, String>,
+        cancel: Downloader.Cancel? = null,
     ): JSONObject? {
         // 连接、超时、状态码分类与有上限读取都走统一引擎（#729），
         // 这里只保留「必须是合法 JSON」这条业务判定与 NO_PROXY、8s/12s 的清单专用参数。
@@ -343,6 +351,7 @@ object UpdateChecker {
                     proxy = java.net.Proxy.NO_PROXY,
                 ),
                 maxChars = MAX_MANIFEST_CHARS,
+                cancel = cancel,
             )
         if (res.kind == DownloadOutcome.Kind.CANCELLED) {
             // 取消必须向上传播：吞掉它会让镜像循环在协程取消后继续跑。

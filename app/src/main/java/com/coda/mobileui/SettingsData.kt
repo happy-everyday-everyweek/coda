@@ -297,7 +297,7 @@ object SettingsData {
                         // 显式查损坏状态并记录原因，让 providers/providersOfKind
                         // 的错误行与添加/编辑拦截真正生效。
                         if (ProviderStore.anyCorrupt()) {
-                            SnapshotFallback.emptyFor("providers", null, "配置文件损坏，已保留原件与 .corrupt 备份")
+                            SnapshotFallback.recordReason("providers", "配置文件损坏，已保留原件与 .corrupt 备份")
                         }
                         snapshots.put("providers", list, now())
                     }

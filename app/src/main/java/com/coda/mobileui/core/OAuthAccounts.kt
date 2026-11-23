@@ -34,11 +34,17 @@ object OAuthAccounts {
         capabilityCache.clear()
     }
 
-    /** 只有完整探测出的正结果才值得缓存。 */
+    /**
+     * 只有完整探测出的正结果才值得缓存。
+     *
+     * 按 routes 判而不是逐个布尔旗标（OCR r8 medium）：探测确认到的每条路由
+     * 都会映射到某个能力，只实现 /enable+/disable 或 /checkin/config 的插件
+     * 同样是完整正结果；枚举旗标会随 Capabilities 增长漏字段。
+     */
     internal fun cacheable(
         reachable: Boolean,
         caps: Capabilities,
-    ): Boolean = reachable && (caps.panel || caps.checkin || caps.growth || caps.refresh || caps.keepalive)
+    ): Boolean = reachable && caps.routes.isNotEmpty()
 
     /** 一个已登录账号。字段取自插件 dashboard，缺失的一律给默认值。 */
     data class Account(
@@ -207,9 +213,11 @@ object OAuthAccounts {
         provider: OAuthProviders.Provider,
     ): Capabilities {
         val cacheKey = "${provider.id}:${provider.pluginId}"
-        capabilityCache[cacheKey]?.let { (at, caps) ->
-            if (System.currentTimeMillis() - at < CAPABILITY_TTL_MS) return caps
-            capabilityCache.remove(cacheKey)
+        capabilityCache[cacheKey]?.let { entry ->
+            if (System.currentTimeMillis() - entry.first < CAPABILITY_TTL_MS) return entry.second
+            // 双参 remove（OCR r8 low）：只删自己观察到的过期条目，
+            // 别的线程刚插入的新鲜结果不能被顺手清掉。
+            capabilityCache.remove(cacheKey, entry)
         }
         val html = ProxyHost.resourceText(ctx, "/v0/resource/plugins/${provider.pluginId}/panel")
         val panelRoutes = if (html == null) emptySet() else parseRoutes(html)
@@ -231,13 +239,14 @@ object OAuthAccounts {
         }
 
         if (panelRoutes.isEmpty() && !exists("/accounts")) {
+            // 全 false 负结果永不缓存（#748）：直接返回，不挂缓存钩子。
             return Capabilities(
                 panel = false,
                 checkin = false,
                 growth = false,
                 refresh = false,
                 keepalive = false,
-            ).also { if (cacheable(reachable, it)) capabilityCache[cacheKey] = System.currentTimeMillis() to it }
+            )
         }
 
         val routes = mutableSetOf<String>()

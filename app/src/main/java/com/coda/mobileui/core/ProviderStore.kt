@@ -133,7 +133,54 @@ object ProviderStore {
      * update 刚置位的 mainCorrupt 重置掉，损坏保护被绕过。
      * 锁可重入，update/save 内部再调 load 不死锁。
      */
-    fun load(ctx: Context): MutableList<Provider> = synchronized(writeLock) { loadLocked(ctx) }
+    fun load(ctx: Context): MutableList<Provider> {
+        // 热路径免锁（OCR r7 medium）：UI 线程频繁 load，写锁被后台 OAuth
+        // 刷新/迁移按住整个磁盘 I/O 时会把主线程卡到 ANR。三份文件的
+        // (存在, mtime, size) 签名没变且上次读取无损坏时，直接回缓存深拷贝。
+        // 签名变了或处于损坏保护（需要每轮重试让用户修复生效）才走慢路径。
+        val sig = diskSignature(ctx)
+        val cached = readCache
+        if (cached != null && cached.signature == sig && !anyCorrupt()) {
+            return deepCopy(cached.providers)
+        }
+        synchronized(writeLock) {
+            // 双检：等锁期间别的线程可能刚刷新过缓存。
+            val inner = readCache
+            val sigNow = diskSignature(ctx)
+            if (inner != null && inner.signature == sigNow && !anyCorrupt()) {
+                return deepCopy(inner.providers)
+            }
+            val loaded = loadLocked(ctx)
+            // 损坏时不建缓存：下一轮 load 必须重新读盘，用户修复才能被看见。
+            if (!anyCorrupt()) {
+                readCache = ReadCache(diskSignature(ctx), deepCopy(loaded))
+            } else {
+                readCache = null
+            }
+            return loaded
+        }
+    }
+
+    private class ReadCache(
+        val signature: String,
+        val providers: MutableList<Provider>,
+    )
+
+    @Volatile
+    private var readCache: ReadCache? = null
+
+    /** 三份文件的 (存在, mtime, size) 签名；任一变化都让缓存失效。 */
+    private fun diskSignature(ctx: Context): String {
+        val sb = StringBuilder()
+        for (f in listOf(fileFor(ctx), asrFile(ctx), metaFile(ctx))) {
+            sb.append(f.exists()).append(':').append(f.lastModified()).append(':').append(f.length()).append('|')
+        }
+        return sb.toString()
+    }
+
+    /** 深拷贝：Provider 全是 var，调用方会就地改字段，缓存不能被共享引用污染。 */
+    private fun deepCopy(list: List<Provider>): MutableList<Provider> =
+        list.map { it.copy(models = it.models.toMutableList()) }.toMutableList()
 
     private fun loadLocked(ctx: Context): MutableList<Provider> {
         // 每轮读取重新判定：用户修好或删掉损坏文件后，迁移逻辑应该恢复工作。
@@ -615,7 +662,9 @@ object ProviderStore {
                 return@synchronized false
             }
             block(list)
-            save(ctx, list)
+            // 锁自 load 起连续持有，损坏状态不会被别的写者改变：
+            // 直接 saveLocked，不再经 save 重复 load 三个文件（OCR r7 medium）。
+            saveLocked(ctx, list)
         }
 
     /**
@@ -744,6 +793,9 @@ object ProviderStore {
         }
         // 原子替换：内核可能正好在这次写盘期间读取配置，直接 writeText 会让它读到
         // 半截 JSON，strict 解析失败后当作「没有任何供应商」，模型列表瞬间全空。
-        return writeTextAtomic(fileFor(ctx), root.toString(2))
+        val ok = writeTextAtomic(fileFor(ctx), root.toString(2))
+        // 写盘后签名已变，缓存自然失效；显式清掉避免 mtime 粒度粗时误命中。
+        readCache = null
+        return ok
     }
 }

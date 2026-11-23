@@ -373,7 +373,10 @@ object WebUiHost {
         appCtx: Context,
     ) {
         socket.soTimeout = 15_000
-        socket.use { s ->
+        // 异步响应分支把关闭权交给回调/定时器；其余路径由 finally 统一关闭。
+        var deferredSocket = false
+        try {
+            val s = socket
             val input = BufferedInputStream(s.getInputStream())
             val output = s.getOutputStream()
             val requestLine =
@@ -440,10 +443,15 @@ object WebUiHost {
             if (method != "GET" && method != "HEAD" && originHeader != null) {
                 val originHost =
                     runCatching { java.net.URI(originHeader).host }.getOrNull()?.lowercase()
+                // Origin: null（沙箱 iframe、data:/file: 页面、隐私浏览器）与
+                // 解析失败的 Origin 一律不可信（#773 fail-closed）：旧实现把
+                // null 当本机，跨站写防护对这些来源形同虚设。
                 val local =
-                    originHost == null ||
-                        originHost in setOf("localhost", "127.0.0.1", "::1") ||
-                        originHost in localAddresses()
+                    originHost != null &&
+                        (
+                            originHost in setOf("localhost", "127.0.0.1", "::1") ||
+                                originHost in localAddresses()
+                        )
                 if (!local) {
                     respondJson(output, JSONObject().put("error", "跨站请求被拒绝"), 403)
                     return
@@ -470,6 +478,9 @@ object WebUiHost {
                 }
 
                 method == "POST" && path == "/api/send" -> {
+                    // 异步响应接管 socket：use 块不得在 handler 返回时关闭连接，
+                    // 否则回调写回必然落在已关闭的流上（#774）。
+                    deferredSocket = true
                     val zc = ZController.get(appCtx)
                     val msg = runCatching { JSONObject(body).optString("text") }.getOrDefault("")
                     if (msg.isBlank()) {
@@ -489,20 +500,44 @@ object WebUiHost {
                         )
                         return
                     }
-                    val latch = java.util.concurrent.CountDownLatch(1)
-                    var sent = false
-                    var failure = ""
-                    zc.send(msg) { ok, err ->
-                        sent = ok
-                        failure = err
-                        latch.countDown()
+                    // 发送结果异步写回（#774）：latch.await 会把连接 worker 占住
+                    // 最长 30s，4核/8max 的池被几个卡顿发送占满后 /api/state
+                    // 与静态资源全被 503。改成回调里直接写响应，worker 立即归还；
+                    // 超时由独立定时器兜底，同样不占 worker。respondOnce 保证
+                    // 超时与回调竞态时只写一次响应。
+                    val responded = java.util.concurrent.atomic.AtomicBoolean(false)
+                    val timeout =
+                        java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+                            Thread(r, "coda-webui-send-timeout").apply { isDaemon = true }
+                        }
+                    fun respondOnce(block: () -> Unit) {
+                        if (responded.compareAndSet(false, true)) {
+                            runCatching(block).onFailure {
+                                AppLog.w("WebUi", "发送响应写回失败：${it.message}")
+                            }
+                            timeout.shutdown()
+                            runCatching { s.close() }
+                        }
                     }
-                    if (!latch.await(30, TimeUnit.SECONDS)) {
-                        respondJson(output, JSONObject().put("error", "发送超时"), 504)
-                    } else if (sent) {
-                        respondJson(output, JSONObject().put("ok", true))
-                    } else {
-                        respondJson(output, JSONObject().put("error", failure.ifEmpty { "发送失败" }), 502)
+                    timeout.schedule(
+                        { respondOnce { respondJson(output, JSONObject().put("error", "发送超时"), 504) } },
+                        30,
+                        TimeUnit.SECONDS,
+                    )
+                    try {
+                        zc.send(msg) { ok, err ->
+                            respondOnce {
+                                if (ok) {
+                                    respondJson(output, JSONObject().put("ok", true))
+                                } else {
+                                    respondJson(output, JSONObject().put("error", err.ifEmpty { "发送失败" }), 502)
+                                }
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        respondOnce {
+                            respondJson(output, JSONObject().put("error", t.message ?: "发送失败"), 502)
+                        }
                     }
                 }
 
@@ -574,6 +609,8 @@ object WebUiHost {
                     respondJson(output, JSONObject().put("error", "method not allowed"), 405)
                 }
             }
+        } finally {
+            if (!deferredSocket) runCatching { socket.close() }
         }
     }
 

@@ -1370,6 +1370,8 @@ class ZController private constructor(
                 .put("pluginId", pluginId)
                 .put("enabled", enabled)
         runtime.call("plugins/setEnabled", params) { ok, body ->
+            // 启停改变路由是否响应，缓存必须失效（OCR r8 medium，#748）。
+            if (ok) OAuthAccounts.invalidateCapabilities()
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
@@ -1530,6 +1532,7 @@ class ZController private constructor(
                 .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
                 .put("pluginId", pluginId)
         runtime.call("plugins/restoreBuiltin", params) { ok, body ->
+            if (ok) OAuthAccounts.invalidateCapabilities()
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
@@ -2321,6 +2324,21 @@ class ZController private constructor(
         allow: Boolean,
     ) {
         val params = pendingPermissionParams.remove(requestId.toString()) ?: JSONObject()
+        respondPermission(requestId, params, allow)
+    }
+
+    /**
+     * 带协议参数的应答（OCR r8 medium）：暂缓队列可能排队很久，
+     * pendingPermissionParams 只留最近 10 条，被逐出后无参重载会退化成
+     * 裸 {"decision":"deny"}，丢掉选项专属的拒绝形状（#744）。
+     * 调用方持有原始 params 时走这里，不依赖控制器缓存。
+     */
+    fun respondPermission(
+        requestId: Any,
+        params: JSONObject,
+        allow: Boolean,
+    ) {
+        pendingPermissionParams.remove(requestId.toString())
         val response =
             (if (allow) findAllowResponse(params) else findDenyResponse(params))
                 ?: JSONObject().put("decision", if (allow) "allow" else "deny")

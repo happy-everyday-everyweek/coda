@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 3. **不覆盖用户在下载的东西**。走的是 UpdateInstaller.download，它按
  *    `coda-<versionCode>.apk` 命名，与手动下载同版本时天然复用同一个文件。
  */
-object SilentUpdater {
+internal object SilentUpdater {
     private const val TAG = "SilentUpdater"
 
     /** 正在跑（或已跑过）的标记。跨启动不做持久化：每次冷启动都算新机会。 */
@@ -95,7 +95,7 @@ object SilentUpdater {
 
         val r =
             try {
-                UpdateChecker.check(ctx) { AppLog.i(TAG, it) }
+                UpdateChecker.check(ctx, onLog = { AppLog.i(TAG, it) })
             } catch (t: Exception) {
                 lastOutcome = "检查失败：${t.javaClass.simpleName}: ${t.message}"
                 AppLog.e(TAG, "检查抛异常：$lastOutcome", t)

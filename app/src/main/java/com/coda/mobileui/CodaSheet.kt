@@ -1119,10 +1119,12 @@ class CodaSheet(
         // withEndAction 只在正常结束时执行，动画被 cancel（拖动打断、
         // 视图 detach）时清理被跳过，视图树与回调全泄漏。
         var exitApplied = false
-
+        var detachHook: android.view.View.OnAttachStateChangeListener? = null
         fun finishExit() {
             if (exitApplied) return
             exitApplied = true
+            detachHook?.let { rootView.removeOnAttachStateChangeListener(it) }
+            detachHook = null
             if (!shouldApplyDismiss(myGen, generation)) return
             (rootView.parent as? ViewGroup)?.removeView(rootView)
             root = null
@@ -1141,6 +1143,18 @@ class CodaSheet(
             pendingDismissBlock = null
             block?.invoke()
         }
+        // detach 兜底：View.dispatchDetachedFromWindow 走 cancelAnimatingView，
+        // 内部 cancel 不派发 onAnimationCancel/End，上面的监听器收不到任何回调。
+        // 挂 attach 状态监听补一次 finishExit（exitApplied 保证幂等）。
+        val hook =
+            object : android.view.View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: android.view.View) {}
+                override fun onViewDetachedFromWindow(v: android.view.View) {
+                    finishExit()
+                }
+            }
+        detachHook = hook
+        rootView.addOnAttachStateChangeListener(hook)
         panelView
             ?.animate()
             ?.translationY(exit)
@@ -1148,12 +1162,13 @@ class CodaSheet(
             ?.setListener(
                 object : android.animation.AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: android.animation.Animator) {
+                        // 只在 end 清监听器：ViewPropertyAnimator 的 cancel 路径
+                        // 派发完 onAnimationCancel 后会重读 mListener 调 onAnimationEnd，
+                        // 在 cancel 里置 null 会让平台读到空引用（OCR r7 high）。
                         panelView.animate().setListener(null)
                         finishExit()
                     }
-
                     override fun onAnimationCancel(animation: android.animation.Animator) {
-                        panelView.animate().setListener(null)
                         finishExit()
                     }
                 },

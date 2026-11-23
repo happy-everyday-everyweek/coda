@@ -556,15 +556,24 @@ class AutomationStore(
                         throw IllegalStateException("初始化 automations 表失败", e)
                     }
                 }
-                // 一次性回填（#758）：旧版 fail() 把重试耗尽的行标成
-                // failed_to_dispatch 但仍 enabled=1/active，新闸门只认
-                // idle/retry，这些行升级后永久选不中。这里把它们放回 idle。
-                // 幂等：跑过一次后没有匹配行，重复执行无副作用。
+                // 一次性回填（#758，OCR r7 修正）：只修旧版 fail() 留下的
+                // 死行——failed_to_dispatch 且 enabled=1/active/无重试时刻。
+                // claimed（内核在途）与 retry（退避中）都是内核管理的活状态，
+                // 一律不碰：重置它们会绕过重试上限并让热失败任务紧循环。
+                // 用 PRAGMA user_version 门控，只在首次升级时执行一次，
+                // 不再挂在每次 open() 的热路径上。
                 runCatching {
-                    d.execSQL(
-                        "UPDATE automations SET dispatch_status = 'idle', dispatch_attempts = 0 " +
-                            "WHERE dispatch_status NOT IN ('idle','retry') AND enabled = 1 AND lifecycle_status = 'active'",
-                    )
+                    val ver = d.rawQuery("PRAGMA user_version", null).use { c ->
+                        if (c.moveToNext()) c.getInt(0) else 0
+                    }
+                    if (ver < 1) {
+                        d.execSQL(
+                            "UPDATE automations SET dispatch_status = 'idle', dispatch_attempts = 0 " +
+                                "WHERE dispatch_status = 'failed_to_dispatch' AND enabled = 1 " +
+                                "AND lifecycle_status = 'active' AND running = 0 AND retry_at IS NULL",
+                        )
+                        d.execSQL("PRAGMA user_version = 1")
+                    }
                 }.onFailure { AppLog.w(tag, "dispatch_status 回填失败：${it.message}") }
                 db = d
                 d
@@ -1049,7 +1058,13 @@ object AutomationHost {
             newCron = c
             cv.put("cron_expr", c)
         }
-        if (has("recurring")) cv.put("recurring", if (params.optBoolean("recurring", true)) 1 else 0)
+        if (has("recurring")) {
+            val rec = params.optBoolean("recurring", true)
+            cv.put("recurring", if (rec) 1 else 0)
+            // 对齐内核 automationService.update：转无限循环时清掉次数上限，
+            // 否则之后再切回有限任务会带着陈旧 max_runs（OCR r7 medium）。
+            if (rec) cv.putNull("max_runs")
+        }
         if (has("maxRuns")) cv.put("max_runs", params.optInt("maxRuns"))
         val iu = params.optString("intervalUnit").takeIf { it.isNotEmpty() }
         val iv = if (has("interval")) params.optInt("interval") else null
@@ -1063,17 +1078,31 @@ object AutomationHost {
         val next = AutomationSchedule.computeNext(newCron, rule, now)
         // 是否动了计划本身（#759）：只有改 cronExpr/interval/recurring 或显式
         // 传 enabled 才允许复活；改标题/prompt 不得把用户暂停的任务重新拉起。
-        val scheduleChanged = has("cronExpr") || has("interval") || has("recurring") || has("enabled")
+        // maxRuns 也是计划形状（OCR r7 medium）：提高已完成有限任务的上限
+        // 必须能复活它，与内核 reachedMax 重算口径一致。
+        val scheduleChanged =
+            has("cronExpr") || has("interval") || has("recurring") || has("enabled") || has("maxRuns")
         val curEnabled = cur.optInt("enabled", 1) == 1
+        // optBoolean 对数字 0 会落到默认 true，把用户要暂停的任务悄悄拉起
+        // （OCR r7 low）：非布尔形状一律拒绝，fail-closed。
+        var explicitEnabled: Boolean? = null
         if (has("enabled")) {
-            val on = params.optBoolean("enabled", true)
+            val on = params.get("enabled") as? Boolean
+                ?: throw AutomationException("enabled 必须是布尔值")
+            explicitEnabled = on
             cv.put("enabled", if (on) 1 else 0)
             cv.put("lifecycle_status", if (on) "active" else "paused")
         }
         if (next == null) {
             cv.putNull("next_run_at")
-            // 暂停的任务算不出下次运行也保持 paused，不能标 completed（#759）。
-            if (curEnabled || scheduleChanged) {
+            // 显式暂停保持 paused；显式启用但算不出下次运行的拒绝，
+            // 不能静默丢弃用户意图（OCR r7 medium）。
+            if (explicitEnabled == false) {
+                cv.put("lifecycle_status", "paused")
+                cv.put("enabled", 0)
+            } else if (explicitEnabled == true) {
+                throw AutomationException("该计划算不出下次运行时间，无法启用")
+            } else if (curEnabled || scheduleChanged) {
                 cv.put("lifecycle_status", "completed")
                 cv.put("enabled", 0)
             }
@@ -1155,7 +1184,7 @@ object AutomationHost {
  * 派发方式为「新建独立会话并发送 prompt」。后台（进程被杀）不执行，与桌面端的宿主多进程方案不同。
  */
 class AutomationScheduler private constructor(
-    private val ctrl: ZController,
+    @Volatile private var ctrl: ZController,
 ) {
     companion object {
         @Volatile
@@ -1163,7 +1192,14 @@ class AutomationScheduler private constructor(
 
         fun start(ctrl: ZController) {
             synchronized(this) {
-                if (instance == null) instance = AutomationScheduler(ctrl)
+                val cur = instance
+                if (cur == null) {
+                    instance = AutomationScheduler(ctrl)
+                } else if (cur.ctrl !== ctrl) {
+                    // 控制器换代后必须重绑（OCR r8 medium）：只建一次会让
+                    // 调度器永远拿旧 controller/runtime 轮询，任务派发进僵尸内核。
+                    cur.ctrl = ctrl
+                }
             }
             instance?.ensureRunning()
         }

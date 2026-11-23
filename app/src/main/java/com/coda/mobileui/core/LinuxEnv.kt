@@ -109,7 +109,12 @@ class LinuxEnv(
         /**
          * 符号链接是否仍落在解包目录内。
          *
-         * 只做词法归一：绝对路径直接拒绝，`..` 逐段消解后比较前缀。
+         * 只做词法归一：`..` 逐段消解后比较前缀。绝对目标不拒绝而是重定位到
+         * guest 根（#767）：proot 下 `/bin/sh -> /bin/busybox` 这类 rootfs 标准
+         * 链接按 guest 根解析，落点就在 dest 里，一刀切拒绝会静默丢掉 sh、
+         * loader 链接，留下探针能过但实际残废的环境。重定位后仍做同一套
+         * 包含检查，`/../../etc` 这类穿越照样拒绝。
+         *
          * 归档里的链接不需要先存在，所以不能靠 canonicalPath（它会跟随已存在的链接）。
          *
          * 放在 companion 里是为了能直接被单元测试覆盖，不需要构造带 Context 的实例。
@@ -119,14 +124,22 @@ class LinuxEnv(
             relative: String,
             linkName: String,
         ): Boolean {
-            if (linkName.isEmpty() || linkName.startsWith("/")) return false
+            if (linkName.isEmpty()) return false
             val base = dest.absolutePath.trimEnd('/')
-            val parent = File(dest, relative).parentFile?.absolutePath ?: base
             val resolved =
-                java.nio.file.Paths
-                    .get(parent, linkName)
-                    .normalize()
-                    .toString()
+                if (linkName.startsWith("/")) {
+                    // 绝对目标 = guest 根下的路径：剥掉前导斜杠接到 dest 上。
+                    java.nio.file.Paths
+                        .get(base, linkName.trimStart('/'))
+                        .normalize()
+                        .toString()
+                } else {
+                    val parent = File(dest, relative).parentFile?.absolutePath ?: base
+                    java.nio.file.Paths
+                        .get(parent, linkName)
+                        .normalize()
+                        .toString()
+                }
             return resolved == base || resolved.startsWith("$base/")
         }
     }

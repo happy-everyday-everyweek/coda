@@ -93,44 +93,75 @@ internal object TarLinkSafety {
             val key = k.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
             if (key.isNotEmpty()) targets[key] = v
         }
-        // 待处理段：seg + 字面父路径（null 表示这是链接目标的展开段，
-        // 不是归档成员路径，不得按字面键查——否则 L -> t 展开出的 t 会
-        // 伪匹配成员 L/t，双重展开把物理深度搞坏，OCR r6 high）。
-        val pending = ArrayDeque<Pair<String, String?>>()
+        val budget = (path.length + targets.values.sumOf { it.length }) * 4 + 64
+        // 物理别名索引（OCR r7 medium）：成员 L/t 经 L -> t/u 实际落在 t/u/t，
+        // 只按字面键索引会让 y -> t/u/t/../../../evil 把 t/u/t 当普通目录漏放。
+        // 对每个多级键先解析其字面父路径，把「物理父 + 末段」也索引进来。
+        val indexed = HashMap(targets)
+        for (k in targets.keys) {
+            val segs = k.split('/')
+            if (segs.size < 2) continue
+            val parentSegs = ArrayList<Pair<String, String?>>()
+            val acc = ArrayList<String>()
+            for (s in segs.dropLast(1)) {
+                parentSegs.add(s to acc.joinToString("/"))
+                acc.add(s)
+            }
+            val pp = walk(parentSegs, targets, budget) ?: continue
+            val alias = if (pp.isEmpty()) segs.last() else "$pp/${segs.last()}"
+            if (alias != k && alias !in indexed) indexed[alias] = targets.getValue(k)
+        }
         val segs = path.split('/').filter { it.isNotEmpty() && it != "." }
+        val pending = ArrayList<Pair<String, String?>>()
         val acc = ArrayList<String>()
         for (seg in segs) {
-            pending.addLast(seg to acc.joinToString("/"))
+            pending.add(seg to acc.joinToString("/"))
             acc.add(seg)
         }
-        pending.reverse()
+        return walk(pending, indexed, budget)
+    }
+
+    /**
+     * 逐段解析：段携带字面父路径（null = 展开段，只按物理前缀查）。
+     *
+     * 两条 fail-closed 规则（OCR r7 high）：任何 `..` 弹栈后、或展开了含 `..`
+     * 的目标后，物理深度已与字面假设脱钩，剩余段的字面跟踪全部作废——
+     * 否则 `d1/d2/q/../a` 会把字面 base 规范化回 `d1/d2` 伪匹配成员 `d1/d2/a`。
+     */
+    private fun walk(
+        segs: List<Pair<String, String?>>,
+        targets: Map<String, String>,
+        budget: Int,
+    ): String? {
+        val pending = ArrayList(segs)
         val out = ArrayList<String>()
         var steps = 0
-        val budget = (path.length + targets.values.sumOf { it.length }) * 4 + 64
         while (pending.isNotEmpty()) {
             if (++steps > budget) return null
-            val (seg, literalBase) = pending.removeLast()
+            val (seg, literalBase) = pending.removeAt(0)
             if (seg == "..") {
                 if (out.isEmpty()) return null
                 out.removeAt(out.size - 1)
+                for (i in pending.indices) pending[i] = pending[i].first to null
                 continue
             }
             out.add(seg)
-            val resolvedPrefix = out.joinToString("/")
-            // 原始段先按字面键查（base 里的 .. 先规范化）；展开段只按物理前缀查。
             var linkTarget: String? = null
             if (literalBase != null) {
                 val normalizedBase = if (literalBase.isEmpty()) "" else (normalize(literalBase) ?: return null)
                 val literalPrefix = if (normalizedBase.isEmpty()) seg else "$normalizedBase/$seg"
                 linkTarget = targets[literalPrefix]
             }
-            if (linkTarget == null) linkTarget = targets[resolvedPrefix]
+            if (linkTarget == null) linkTarget = targets[out.joinToString("/")]
             if (linkTarget == null) continue
             if (linkTarget.isEmpty() || linkTarget.startsWith("/")) return null
             // 弹掉链接段本身：目标接在物理父目录之后。
             out.removeAt(out.size - 1)
             val tSegs = linkTarget.split('/').filter { it.isNotEmpty() && it != "." }
-            for (tSeg in tSegs.asReversed()) pending.addLast(tSeg to null)
+            if (tSegs.any { it == ".." }) {
+                for (i in pending.indices) pending[i] = pending[i].first to null
+            }
+            pending.addAll(0, tSegs.map { it to null })
         }
         return out.joinToString("/")
     }

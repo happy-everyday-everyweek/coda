@@ -23,7 +23,7 @@ import java.util.concurrent.CancellationException
  * 校验失败不是终止条件，而是换下一个镜像的理由：坏源换掉就好，不该让用户
  * 面对一个无法自愈的失败。
  */
-object AssetFetcher {
+internal object AssetFetcher {
     /** 日志标签。 */
     private const val TAG = "AssetFetcher"
 
@@ -70,10 +70,11 @@ object AssetFetcher {
         spec: Spec,
         onProgress: Progress? = null,
         onLog: (String) -> Unit = {},
+        cancel: Downloader.Cancel? = null,
     ): Boolean =
         // 同一目标串行（#806）：续传用的是确定性 `.part` 与共享 sidecar，
         // 启动补资源与设置页同时获取同一资产会互写字节、互删断点。
-        AssetLocks.withLock(target) { ensureLocked(ctx, target, spec, onProgress, onLog) }
+        AssetLocks.withLock(target) { ensureLocked(ctx, target, spec, onProgress, onLog, cancel) }
 
     private fun ensureLocked(
         ctx: Context,
@@ -81,7 +82,10 @@ object AssetFetcher {
         spec: Spec,
         onProgress: Progress?,
         onLog: (String) -> Unit,
+        cancel: Downloader.Cancel?,
     ): Boolean {
+        // 排队等锁期间可能已被取消（#776）：拿到锁先查，不再白跑探测与下载。
+        if (cancel?.isCancelled == true) throw CancellationException("资产获取已取消：${target.name}")
         // 1. 已经就位：先校验，避免把上次写坏的半截文件当成好的。
         // 只判 isFile，不额外要求非空：合法的空资源（spec.size == 0）也该能复用，
         // 有效性交给 verify 判断——它在没给 size 与 sha256 时才退化为「文件非空」。
@@ -144,6 +148,11 @@ object AssetFetcher {
         // 下载并校验通过、但没能就位的临时文件：留着它，换源重下解决不了写入问题。
         var verifiedTmp: File? = null
         for (m in ranked) {
+            // 每个源开试前查取消（#776）：用户退出页面后镜像循环不得继续跑。
+            if (cancel?.isCancelled == true) {
+                runCatching { tmp.delete() }
+                throw CancellationException("资产获取已取消：${target.name}")
+            }
             val url = GhMirrors.wrap(m.prefix, spec.remoteUrl)
             onLog("下载 ${m.id}…")
             val t0 = System.currentTimeMillis()
@@ -162,6 +171,7 @@ object AssetFetcher {
                         concurrency = ChunkPlan.DEFAULT_CONCURRENCY,
                     ),
                     onProgress = onProgress?.let { p -> Downloader.Progress { d, t, _ -> p.onBytes(d, t) } },
+                    cancel = cancel,
                 )
             val cost = System.currentTimeMillis() - t0
             when (res.kind) {

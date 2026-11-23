@@ -18,7 +18,7 @@ import java.io.File
  * 镜像返回被改写的内容是真实发生过的事故（大小完全相同、内容不同、装上去报
  * 「没有签名」），更新通道比普通资产更该守住这条线。
  */
-object UpdateInstaller {
+internal object UpdateInstaller {
     /** 下载进度。 */
     fun interface Progress {
         fun onBytes(
@@ -41,6 +41,7 @@ object UpdateInstaller {
         result: UpdateChecker.Result,
         onProgress: Progress? = null,
         onLog: (String) -> Unit = {},
+        cancel: Downloader.Cancel? = null,
     ): File? {
         if (result.apkUrl.isEmpty() || result.versionCode <= 0) {
             onLog("更新信息不完整，无法下载")
@@ -66,6 +67,7 @@ object UpdateInstaller {
                 spec = spec,
                 onProgress = onProgress?.let { AssetFetcher.Progress { d, t -> it.onBytes(d, t) } },
                 onLog = onLog,
+                cancel = cancel,
             )
         if (!ok) return null
 
@@ -184,10 +186,7 @@ object UpdateInstaller {
                         android.content.pm.PackageManager.GET_SIGNATURES,
                     )
                 @Suppress("DEPRECATION")
-                info.signatures
-                    ?.firstOrNull()
-                    ?.toByteArray()
-                    ?.let { sha256Hex(it) }
+                fingerprintOf(info.signatures)
             }
         }.getOrNull()
 
@@ -212,29 +211,36 @@ object UpdateInstaller {
                         android.content.pm.PackageManager.GET_SIGNATURES,
                     ) ?: return null
                 @Suppress("DEPRECATION")
-                info.signatures
-                    ?.firstOrNull()
-                    ?.toByteArray()
-                    ?.let { sha256Hex(it) }
+                fingerprintOf(info.signatures)
             }
         }.getOrNull()
 
-    private fun sha256Hex(cert: ByteArray): String =
-        java.security.MessageDigest
-            .getInstance("SHA-256")
-            .digest(cert)
-            .joinToString("") { "%02X".format(it) }
+    private val hexDigits = "0123456789ABCDEF".toCharArray()
 
-    /** 从 signingInfo 取第一个签名者的证书指纹；多签名者时只认第一个（本应用单签名）。 */
-    private fun signerOf(signingInfo: android.content.pm.SigningInfo?): String? {
-        val signatures = signingInfo?.apkContentsSigners ?: return null
-        val cert = signatures.firstOrNull()?.toByteArray() ?: return null
+    /**
+     * 签名数组 → 第一个签名者的证书 SHA-256 指纹（大写 hex）。
+     *
+     * ownSigner/archiveSigner 的 API<28 分支与 signerOf 共用这一份
+     * （OCR r8 low）：查表拼 hex，不用逐字节 String.format——那有
+     * locale 敏感性且每字节一次格式化开销。
+     */
+    private fun fingerprintOf(signatures: Array<android.content.pm.Signature>?): String? {
+        val cert = signatures?.firstOrNull()?.toByteArray() ?: return null
         val digest =
             java.security.MessageDigest
                 .getInstance("SHA-256")
                 .digest(cert)
-        return digest.joinToString("") { "%02X".format(it) }
+        val sb = StringBuilder(digest.size * 2)
+        for (b in digest) {
+            val v = b.toInt() and 0xFF
+            sb.append(hexDigits[v ushr 4]).append(hexDigits[v and 0x0F])
+        }
+        return sb.toString()
     }
+
+    /** 从 signingInfo 取第一个签名者的证书指纹；多签名者时只认第一个（本应用单签名）。 */
+    private fun signerOf(signingInfo: android.content.pm.SigningInfo?): String? =
+        fingerprintOf(signingInfo?.apkContentsSigners)
 
     /**
      * 清理旧的更新包。

@@ -349,6 +349,9 @@ class SettingsDetailActivity :
     }
 
     override fun onDestroy() {
+        // 在途更新下载随页面终止（#776）。
+        updateDownloadCancel?.cancel()
+        updateDownloadCancel = null
         // ASR 测试可能还在录音或挂着实时会话，页面退出时必须收干净，
         // 否则麦克风会一直被占用。取消 scope 会连带触发
         // transcribeStream 的 awaitClose，那里负责停录音与关会话。
@@ -2704,9 +2707,10 @@ class SettingsDetailActivity :
 
         Bg.run {
             val r =
-                checker.check(applicationContext) { msg ->
-                    runOnUiThread { panel?.append(msg) }
-                }
+                checker.check(
+                    applicationContext,
+                    onLog = { msg -> runOnUiThread { panel?.append(msg) } },
+                )
             runOnUiThread {
                 // 静默检查（启动时）只在新版本时打扰用户，其余情况一概不出现。
                 if (silent) {
@@ -2792,11 +2796,17 @@ class SettingsDetailActivity :
     }
 
     /** 下载更新包并拉起系统安装器。下载走 AssetFetcher，带镜像测速与哈希校验。 */
+    /** 在途更新下载的取消句柄（#776）：onDestroy 与卡片 dismiss 都会触发。 */
+    private var updateDownloadCancel: com.coda.mobileui.core.Downloader.Cancel? = null
     private fun startUpdateDownload(
         sheet: CodaSheet,
         r: com.coda.mobileui.core.UpdateChecker.Result,
     ) {
         val activity = this
+        // 取消接线（#776）：关卡片/销毁页面都停掉镜像循环。
+        val cancel = com.coda.mobileui.core.Downloader.Cancel()
+        updateDownloadCancel = cancel
+        sheet.onDismiss { cancel.cancel() }
         var panel: ProgressLogView? = null
         // 进度那一行要原地更新，不能每次追加——下载回调几百次，
         // 每来一次加一行会把前面所有步骤全挤出可视区。
@@ -2812,6 +2822,7 @@ class SettingsDetailActivity :
                 com.coda.mobileui.core.UpdateInstaller.download(
                     activity,
                     r,
+                    cancel = cancel,
                     onProgress = { done, total ->
                         val pct = if (total > 0) (done * 100 / total).toInt() else 0
                         val mb = "%.1f/%.1f MB".format(done / 1024.0 / 1024.0, total / 1024.0 / 1024.0)
