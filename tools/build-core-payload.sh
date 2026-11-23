@@ -68,15 +68,19 @@ kernel_inputs_fingerprint() {
     printf 'script %s\n' "$(file_digest "$ROOT/tools/build-core-payload.sh")"
     printf 'node-base %s\n' "$(file_digest "$NODE_BASE")"
     # 这些文件换了内容就是换了载荷的运行时输入，必须让跳过判定失效。
-    for extra in assets/provider/zcode-builtin.json assets/rg; do
-      if [ -f "$ROOT/$extra" ]; then
-        printf '%s %s\n' "$extra" "$(file_digest "$ROOT/$extra")"
+    # 路径相对 $ASSETS（app/src/main/assets/core/）：仓库里没有 $ROOT/assets/，
+    # 之前写成那样两条 extras 永远 hash 成 missing，指纹形同虚设（#799）。
+    for extra in provider/zcode-builtin.json rg; do
+      if [ -f "$ASSETS/$extra" ]; then
+        printf '%s %s\n' "$extra" "$(file_digest "$ASSETS/$extra")"
       else
         printf '%s missing\n' "$extra"
       fi
     done
-    if [ -d "$ROOT/assets/core/lib" ]; then
-      find "$ROOT/assets/core/lib" -type f -name '*.so' -print0 \
+    if [ -d "$ASSETS/lib" ]; then
+      # '*.so*'：随包库多为版本化 soname（libcrypto.so.3、libicudata.so.78），
+      # 只匹配 '*.so' 会漏掉一大半，换了库指纹也不变（#800）。
+      find "$ASSETS/lib" -type f -name '*.so*' -print0 \
         | LC_ALL=C sort -z \
         | while IFS= read -r -d '' path; do
             printf '%s %s\n' "${path#"$ROOT"/}" "$(file_digest "$path")"
@@ -114,12 +118,15 @@ write_payload_manifest() {
   # 中途失败会留下一份被截断的清单，应用侧 mapNotNull 会静默丢掉坏行，
   # 于是被省略的文件跳过摘要校验——正是清单要防的那种情况。
   local tmp="$ASSETS/payload.txt.tmp.$$"
-  {
+  # 子 shell 而不是 brace group：payload_line 失败走 exit 1，brace group
+  # 在当前 shell 执行，exit 会直接终止整个脚本，下面的 || 清理分支永不执行，
+  # 带 PID 的 tmp 残留还可能被下一次构建打进 APK（#798）。
+  (
     payload_line zcode
     payload_line zcode.cjs
     payload_line node
     payload_line rg
-  } > "$tmp" || {
+  ) > "$tmp" || {
     rm -f "$tmp"
     echo "!! 载荷清单生成失败，保留上一份 payload.txt" >&2
     exit 1

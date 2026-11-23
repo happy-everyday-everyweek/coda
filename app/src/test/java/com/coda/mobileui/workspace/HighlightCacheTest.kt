@@ -54,20 +54,28 @@ class HighlightCacheTest {
     }
 
     @Test
-    fun `等长但内容变了必须整篇重建`() {
-        // 覆盖选区、粘贴替换、撤销回同长度：四个字段全同，
-        // 但 Editable.replace 已丢掉替换区内的 span，必须重建。
-        val a = HighlightCache.Key("buf", rulesA, palA, 3, HighlightCache.contentRevision("abc"))
-        val b = HighlightCache.Key("buf", rulesA, palA, 3, HighlightCache.contentRevision("abd"))
+    fun `等长但编辑计数变了必须整篇重建`() {
+        // 覆盖选区、粘贴替换、撤销回同长度：长度与内容都可能全同，
+        // 但 Editable.replace 已丢掉替换区内的 span，编辑计数必须能判出来。
+        val a = HighlightCache.Key("buf", rulesA, palA, 3, revision = 1L)
+        val b = HighlightCache.Key("buf", rulesA, palA, 3, revision = 2L)
         assertFalse(HighlightCache.reusable(a, b))
     }
 
     @Test
-    fun `内容指纹对同文本稳定对不同文本敏感`() {
-        assertEquals(HighlightCache.contentRevision("hello"), HighlightCache.contentRevision("hello"))
-        assertTrue(HighlightCache.contentRevision("abc") != HighlightCache.contentRevision("abd"))
-        assertTrue(HighlightCache.contentRevision("") != HighlightCache.contentRevision("a"))
+    fun `变过又变回来靠编辑计数判重建`() {
+        // OCR 复审 high：节流窗口内 A→B→A 内容指纹完全相同，
+        // 但 replace 已丢 span。调用方的单调计数才能区分。
+        val same = "buf"
+        val before = HighlightCache.Key(same, rulesA, palA, 3, revision = 5L)
+        val afterAba = HighlightCache.Key(same, rulesA, palA, 3, revision = 7L)
+        assertFalse("A→B→A 后必须整篇重建", HighlightCache.reusable(before, afterAba))
+        val noEdit = HighlightCache.Key(same, rulesA, palA, 3, revision = 5L)
+        assertTrue("没编辑过才可复用", HighlightCache.reusable(before, noEdit))
     }
+
+    // contentRevision 已随内容指纹方案一并移除（31 进制结构性碰撞 + A→B→A 盲区），
+    // 对应测试由「等长但编辑计数变了」「变过又变回来」两条替代。
 
     @Test
     fun `没有历史时不复用`() {

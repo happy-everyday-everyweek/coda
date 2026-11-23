@@ -274,8 +274,9 @@ object DataBackup {
                 text.lineSequence().filter { it.isNotBlank() }.forEach { line ->
                     val parts = line.split('\t', limit = 2)
                     if (parts.size != 2) throw IllegalStateException("链接清单格式错误")
-                    val destination = destinationFor(ctx, parts[0])
-                        ?: throw IllegalStateException("链接清单包含非法路径")
+                    val destination =
+                        destinationFor(ctx, parts[0])
+                            ?: throw IllegalStateException("链接清单包含非法路径")
                     if (safeRelative(destination.second) == null) throw IllegalStateException("链接清单包含非法路径")
                     // Linux rootfs 里的系统链接可以是绝对路径（如 /bin/sh），不能一概拒绝；
                     // 相对链接若越出自己的恢复根目录则拒绝。绝对目标只允许系统路径。
@@ -306,8 +307,10 @@ object DataBackup {
             else -> null
         }
 
-    private fun inside(target: File, base: File): Boolean =
-        target == base || target.path.startsWith(base.path + File.separator)
+    private fun inside(
+        target: File,
+        base: File,
+    ): Boolean = target == base || target.path.startsWith(base.path + File.separator)
 
     private fun safeRelative(name: String): String? {
         if (name.isBlank() || name.startsWith("/") || name.contains('\u0000')) return null
@@ -357,17 +360,29 @@ object DataBackup {
                             total += restoreEntry(ctx.filesDir, name.removePrefix("files/"), stream, MAX_FILE_BYTES)
                             count++
                         }
+
                         // 旧格式残留的 linux-coda/ 分支已删除：导出侧从未产生该前缀
                         // （linux rootfs 走 files/ 树），且其基准路径 root/.coda 与前缀语义不符。
                         name.startsWith("databases/") -> {
-                            total += restoreEntry(File(ctx.filesDir.parentFile, "databases"), name.removePrefix("databases/"), stream, MAX_FILE_BYTES)
+                            total +=
+                                restoreEntry(
+                                    File(ctx.filesDir.parentFile, "databases"),
+                                    name.removePrefix("databases/"),
+                                    stream,
+                                    MAX_FILE_BYTES,
+                                )
                             count++
                         }
+
                         name.startsWith("no-backup/") -> {
                             total += restoreEntry(ctx.noBackupFilesDir, name.removePrefix("no-backup/"), stream, MAX_FILE_BYTES)
                             count++
                         }
-                        name == ENTRY_MANIFEST -> Unit
+
+                        name == ENTRY_MANIFEST -> {
+                            Unit
+                        }
+
                         else -> {
                             val bytes = stream.readLimited(MAX_TEXT_BYTES)
                             total += bytes.size
@@ -377,13 +392,34 @@ object DataBackup {
                                     applyPrefs(ctx, pref, JSONObject(String(bytes, Charsets.UTF_8)))
                                     count++
                                 }
-                                name == ENTRY_PROVIDERS -> ProviderStore.fileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
-                                name == ENTRY_PROVIDER_META -> ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
-                                name == ENTRY_ASR_PROVIDERS -> ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
-                                name == "file-modes.txt" -> applyModes(ctx, String(bytes, Charsets.UTF_8)).also { count++ }
-                                name == "symlinks.txt" -> restoreSymlinks(ctx, String(bytes, Charsets.UTF_8)).also { count++ }
-                                name == ENTRY_GLOBAL_PROMPT -> AgentPrompt.save(AgentPrompt.globalFile(ctx), String(bytes, Charsets.UTF_8)).also { count++ }
-                                name == ENTRY_WORKSPACE_PROMPT -> AgentPrompt.save(AgentPrompt.workspaceFile(ctx), String(bytes, Charsets.UTF_8)).also { count++ }
+
+                                name == ENTRY_PROVIDERS -> {
+                                    ProviderStore.fileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
+                                }
+
+                                name == ENTRY_PROVIDER_META -> {
+                                    ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
+                                }
+
+                                name == ENTRY_ASR_PROVIDERS -> {
+                                    ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8)).also { count++ }
+                                }
+
+                                name == "file-modes.txt" -> {
+                                    applyModes(ctx, String(bytes, Charsets.UTF_8)).also { count++ }
+                                }
+
+                                name == "symlinks.txt" -> {
+                                    restoreSymlinks(ctx, String(bytes, Charsets.UTF_8)).also { count++ }
+                                }
+
+                                name == ENTRY_GLOBAL_PROMPT -> {
+                                    AgentPrompt.save(AgentPrompt.globalFile(ctx), String(bytes, Charsets.UTF_8)).also { count++ }
+                                }
+
+                                name == ENTRY_WORKSPACE_PROMPT -> {
+                                    AgentPrompt.save(AgentPrompt.workspaceFile(ctx), String(bytes, Charsets.UTF_8)).also { count++ }
+                                }
                             }
                         }
                     }
@@ -392,20 +428,28 @@ object DataBackup {
             }
         }
         // 只有包里真的带了供应商配置才重载：部分包（比如只含提示词）不该触发
-            // 供应商重载，更不该删掉 Linux 环境的 resolv.conf。
-            if (BackupCategory.PROVIDERS in present) {
-                runCatching { ProviderStore.load(ctx) }
-            }
-            if (BackupCategory.ROOTFS in present) {
-                runCatching { File(LinuxEnv(ctx).rootfs, "etc/resolv.conf").delete() }
-            }
-            return count
+        // 供应商重载，更不该删掉 Linux 环境的 resolv.conf。
+        if (BackupCategory.PROVIDERS in present) {
+            runCatching { ProviderStore.load(ctx) }
+        }
+        if (BackupCategory.ROOTFS in present) {
+            runCatching { File(LinuxEnv(ctx).rootfs, "etc/resolv.conf").delete() }
+        }
+        return count
     }
 
-    /** 判断路径本身是不是符号链接；File.isFile 会跟随链接，不能用来判断。 */
+    /**
+     * 判断路径本身是不是符号链接；File.isFile 会跟随链接，不能用来判断。
+     *
+     * Os 在 JVM 单测里不可用（stub 抛 RuntimeException），退回 NIO 的
+     * NOFOLLOW_LINKS 读属性：语义一致，都是不跟随链接看自身。
+     */
     private fun isSymlink(file: File): Boolean =
         runCatching {
             OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
+        }.recoverCatching {
+            java.nio.file.Files
+                .isSymbolicLink(file.toPath())
         }.getOrDefault(false)
 
     /** 恢复可执行位：zip 不保存 Unix mode，Linux 环境里的 proot 与工具全靠这一步。 */
@@ -458,7 +502,7 @@ object DataBackup {
      *
      * 链接检测必须针对未 canonical 化的原始路径；否则会先展开链接再写，直接覆盖链接目标。
      */
-    private fun restoreEntry(
+    internal fun restoreEntry(
         base: File,
         rel: String,
         input: InputStream,
@@ -466,7 +510,12 @@ object DataBackup {
     ): Long {
         if (safeRelative(rel) == null) throw IllegalStateException("备份条目路径非法")
         val root = base.canonicalFile
-        val raw = File(base, rel)
+        // raw 必须从 canonical 根拼（#803）：base 是 /data/user/0/…，
+        // root 解析成 /data/data/…，用 base 拼出来的父链永远走不到 root，
+        // 循环一路走到 /data/user/0（本身是符号链接 → 抛错）或 /（越界），
+        // 常规设备上所有备份条目全部失败。根以下的组件保持未规范化，
+        // 符号链接检查才能逐层看到真实路径。
+        val raw = File(root, rel)
         // 父目录也要逐层确认，避免某一级已有符号链接把写入带离恢复根。
         var cursor = raw.parentFile
         while (cursor != null && cursor != root) {
@@ -509,6 +558,7 @@ object DataBackup {
      */
     fun categorySizes(ctx: Context): Map<BackupCategory, Long> {
         val out = mutableMapOf<BackupCategory, Long>()
+
         fun add(
             cat: BackupCategory,
             bytes: Long,
@@ -599,11 +649,26 @@ object DataBackup {
         obj.keys().forEach { key ->
             val item = obj.optJSONObject(key) ?: return@forEach
             when (item.optString("t")) {
-                "s" -> editor.putString(key, item.optString("v"))
-                "b" -> editor.putBoolean(key, item.optBoolean("v"))
-                "i" -> editor.putInt(key, item.optInt("v"))
-                "l" -> editor.putLong(key, item.optLong("v"))
-                "f" -> editor.putFloat(key, item.optDouble("v").toFloat())
+                "s" -> {
+                    editor.putString(key, item.optString("v"))
+                }
+
+                "b" -> {
+                    editor.putBoolean(key, item.optBoolean("v"))
+                }
+
+                "i" -> {
+                    editor.putInt(key, item.optInt("v"))
+                }
+
+                "l" -> {
+                    editor.putLong(key, item.optLong("v"))
+                }
+
+                "f" -> {
+                    editor.putFloat(key, item.optDouble("v").toFloat())
+                }
+
                 "set" -> {
                     val arr = item.optJSONArray("v") ?: JSONArray()
                     val set = HashSet<String>()

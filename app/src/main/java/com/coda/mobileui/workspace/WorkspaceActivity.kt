@@ -539,11 +539,15 @@ class WorkspaceActivity : BaseActivity() {
                     // 恢复期间用户的真实操作（开/关标签）触发的 persist 全被闸门丢弃，
                     // 不回填时内存里的 tabs 已是唯一事实，必须补写一次，
                     // 否则冷启动后立刻开的标签会在切后台时丢失（OCR medium）。
-                    if (currentRestore && persistDroppedDuringRestore && target == root) persist()
-                    persistDroppedDuringRestore = false
+                    // 脏标志的清除也必须在代际守卫内：旧根的迟到回调不得
+                    // 抹掉仍在进行的新恢复的脏标志（OCR 复审 high）。
+                    if (currentRestore) {
+                        if (persistDroppedDuringRestore && target == root) persist()
+                        persistDroppedDuringRestore = false
+                    }
                     return@then
                 }
-                persistDroppedDuringRestore = false
+                if (currentRestore) persistDroppedDuringRestore = false
                 if (saved.isEmpty()) return@then
                 if (saved.none { it.kind == WorkspaceTabs.OVERVIEW }) {
                     saved.add(0, WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.OVERVIEW, JSONObject()))
@@ -551,7 +555,13 @@ class WorkspaceActivity : BaseActivity() {
                 // 用恢复出来的集合替换占位页。
                 val placeholder = tabs.firstOrNull()
                 tabs.clear()
-                placeholder?.let { pageHost.removeView(it.page.view) }
+                placeholder?.let {
+                    pageHost.removeView(it.page.view)
+                    // 占位页 onShown 时把 stateListener 挂上了进程级 ZController，
+                    // 不调 onClosed 摘掉就强引用 OverviewPage→Activity，
+                    // 每次带存档冷启动/切根都泄漏整个 Activity（#802）。
+                    it.page.onClosed()
+                }
                 for (data in saved) tabs += attach(data)
                 val initial = savedActive?.takeIf { id -> tabs.any { it.data.id == id } } ?: tabs.first().data.id
                 setActive(initial)
@@ -562,8 +572,9 @@ class WorkspaceActivity : BaseActivity() {
                     restorePending = false
                     // 读失败时同样可能已有用户操作被丢弃；tabs 里的现状就是事实，补写。
                     if (persistDroppedDuringRestore && target == root) persist()
+                    // 清除同样在守卫内：旧根的迟到 onError 不得抹新恢复的脏标志。
+                    persistDroppedDuringRestore = false
                 }
-                persistDroppedDuringRestore = false
                 com.coda.mobileui.core.AppLog
                     .w("WorkspaceTabs", "恢复标签失败，保留概览页")
             },

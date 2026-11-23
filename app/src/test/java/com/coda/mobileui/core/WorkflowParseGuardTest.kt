@@ -34,6 +34,17 @@ class WorkflowParseGuardTest {
         }
     }
 
+    @Test
+    fun kernelRealDurationFormsParse() {
+        // #768：内核 formatWorkflowRunDuration 的双单位是**单空格**分隔，
+        // 还有 d 单位与进行中阶段的 " so far" 后缀。旧白名单全漏，
+        // ≥1 分钟的阶段全部丢时长列。
+        for (d in listOf("5m 10s", "2h 15m", "3d 2h", "1d", "12s so far", "5m 10s so far")) {
+            val output = "<phases>\n  1. plan  done  $d\n</phases>"
+            assertEquals("时长 '$d' 应被识别", d, ZWorkflowKit.parsePhases(output)[0].duration)
+        }
+    }
+
     // ------------------------------------------------------------ #440（行为不回归）
     @Test
     fun roundsAndCountsParse() {
@@ -92,7 +103,10 @@ class WorkflowParseGuardTest {
     @Test
     fun voiceGenieDataFieldCarriesContentNotLength() {
         // 手工拼一帧二进制响应：field 4=event(text), field 8=data(bytes), field 5=status(varint)。
-        fun text(field: Int, s: String): ByteArray {
+        fun text(
+            field: Int,
+            s: String,
+        ): ByteArray {
             val b = s.toByteArray()
             return VoiceGenieProtocol.varint(((field shl 3) or 2).toLong()) +
                 VoiceGenieProtocol.varint(b.size.toLong()) + b
@@ -111,9 +125,12 @@ class WorkflowParseGuardTest {
             }
         // data 发布的必须是可还原的字节内容（Base64），长度放独立键 data_length。
         val b64 = decoded.optString("data")
-        if (b64.isEmpty()) throw AssertionError("data 为空，实际 keys=${decoded.keys().asSequence().toList()}，值=${decoded}")
+        if (b64.isEmpty()) throw AssertionError("data 为空，实际 keys=${decoded.keys().asSequence().toList()}，值=$decoded")
         assertTrue("data 应是 Base64 内容而不是长度数字", b64.isNotEmpty())
-        val bytes = java.util.Base64.getDecoder().decode(b64)
+        val bytes =
+            java.util.Base64
+                .getDecoder()
+                .decode(b64)
         assertEquals(payload.size, bytes.size)
         assertEquals(1.toByte(), bytes[0])
         assertEquals(payload.size, decoded.optInt("data_length"))

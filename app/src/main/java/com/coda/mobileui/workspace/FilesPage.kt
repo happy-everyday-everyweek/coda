@@ -88,6 +88,9 @@ open class FilesPage(
     /** 高亮重扫的节流令牌：改动后延迟合并，避免每敲一个字都整篇重扫。 */
     private val highlightTick = Runnable { runHighlight() }
 
+    /** 单调编辑计数：TextWatcher 每次改动递增，供高亮缓存判「变过又变回来」。 */
+    private var editorEditRevision = 0L
+
     private var wrapEnabled = false
 
     /** 有未保存修改。用于标题上的圆点，对应 VS Code 的脏标记。 */
@@ -1820,6 +1823,9 @@ open class FilesPage(
                             c: Int,
                         ) {
                             // 改动后立刻重画脏标记、行号与光标位置，高亮交给节流令牌合并。
+                            // 单调编辑计数：节流窗口内 A→B→A 内容指纹不变，
+                            // 但 replace 已丢替换区内的 span，靠计数才能判出要重建。
+                            editorEditRevision++
                             refreshDirty()
                             refreshEditorChrome()
                             host.scheduleHighlight(highlightTick)
@@ -2433,7 +2439,7 @@ open class FilesPage(
             return
         }
         val start = editorInput.selectionStart.coerceAtLeast(0)
-        CodeHighlighter.apply(text, rules, palette())
+        CodeHighlighter.apply(text, rules, palette(), editorEditRevision)
         // 清 span 不会动文本，但部分输入法会重置选区，这里兜一下光标位置。
         if (start <= text.length) editorInput.setSelection(start)
     }

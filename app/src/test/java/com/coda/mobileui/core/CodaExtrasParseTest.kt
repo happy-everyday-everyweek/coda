@@ -26,6 +26,15 @@ class CodaExtrasParseTest {
     }
 
     @Test
+    fun nonIntegralDoubleUsesShortestRoundTrip() {
+        // #766：BigDecimal(double) 构造器输出完整二进制展开，
+        // 0.1 会变成 55 位小数直接写进配置编辑器。字符串构造器保最短往返。
+        assertEquals("0.1", CodaExtras.doubleText(0.1))
+        assertEquals("0.3", CodaExtras.doubleText(0.3))
+        assertEquals("1.005", CodaExtras.doubleText(1.005))
+    }
+
+    @Test
     fun hugeValueIsNotSaturatedToLongMax() {
         // 9.223372036854776E18 的精确值是 9223372036854775808（Long.MAX_VALUE + 1）。
         // 旧实现 toLong() 饱和成 Long.MAX_VALUE 并据此判为整数，输出 ...807（假值）。

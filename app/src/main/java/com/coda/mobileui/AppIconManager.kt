@@ -68,10 +68,12 @@ object AppIconManager {
     ): Boolean = applied == slot && targetEnabled
 
     /**
-     * 按 [planFor] 逐个设置组件，单个失败不中断后续。
+     * 按 [planFor] 逐个设置组件。
      *
-     * 返回是否全部成功。任何一个别名在清单里缺失或受限配置下抛 SecurityException，
-     * 都只影响它自己：目标别名的启用排在最前面，已经落地。
+     * 目标别名的启用排在最前面，但它**可能失败**（清单缺失、SecurityException）。
+     * 启用没落地就继续禁用其余别名，会把桌面清成零入口——图标直接消失，
+     * 正是「先启用后禁用」要防的事故（#817）。启用失败立即中止；
+     * 禁用阶段单个失败只影响它自己，继续处理其余。
      */
     internal fun applyWith(
         slot: Int,
@@ -80,7 +82,10 @@ object AppIconManager {
         var allOk = true
         for ((alias, state) in planFor(slot)) {
             val ok = runCatching { set(alias, state) }.getOrElse { false }
-            if (!ok) allOk = false
+            if (!ok) {
+                allOk = false
+                if (state == STATE_ENABLED) return false
+            }
         }
         return allOk
     }

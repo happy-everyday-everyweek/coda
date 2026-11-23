@@ -69,6 +69,18 @@ object Git {
                     "core.fsmonitor=false",
                     "-c",
                     "core.pager=cat",
+                    // diff.external 与 textconv 驱动也是外部命令执行向量：
+                    // 本模块的 diff HEAD / diff --cached 都会走它们（OCR 复审 high）。
+                    // 置空 diff.external；attributesFile 指向空文件让仓库自定义
+                    // diff.<driver>.command/textconv 无从挂上；autocrlf 关掉，
+                    // 但 clean/smudge filter 由 .gitattributes 内联定义，-c 清不掉，
+                    // 这一条已知残余风险记录在案（父仓库属主异常本身已是前提）。
+                    "-c",
+                    "diff.external=",
+                    "-c",
+                    "core.attributesFile=/dev/null",
+                    "-c",
+                    "core.autocrlf=false",
                 )
         }
         return out
@@ -76,6 +88,10 @@ object Git {
 
     /** 已探测到的 toplevel/commondir，按工作区路径缓存：每次 git 调用都探一遍太贵。 */
     private val discovered = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+
+    /** 环境里 git 是否支持 --path-format（2.31+）；null=未探明。进程级缓存。 */
+    @Volatile
+    private var pathFormatSupported: Boolean? = null
 
     /**
      * 探测真实仓库根。
@@ -97,20 +113,44 @@ object Git {
         val base = listOf("git", "-c", "safe.directory=*", "-c", "core.hooksPath=/dev/null", "-C", guest, "rev-parse")
         // --path-format=absolute 需要 git 2.31+；老版本上先试带它的，
         // 失败再退回不带（输出可能是相对路径，下面按 guest 拼绝对）。
-        var probe = env.exec(base + listOf("--path-format=absolute", "--show-toplevel", "--git-common-dir"), 15_000L)
-        if (!probe.ok) {
+        // 能力判定按环境缓存：不缓存的话老 git 上非仓库工作区每次刷新都要
+        // 白跑两条最长 15s 的失败探测（OCR medium）。null=还没探明。
+        var probe: LinuxEnv.ShellResult? = null
+        if (pathFormatSupported != false) {
+            probe = env.exec(base + listOf("--path-format=absolute", "--show-toplevel", "--git-common-dir"), 15_000L)
+            if (probe.ok) {
+                pathFormatSupported = true
+            } else if (probe.output.contains("unknown option") || probe.output.contains("unknown non-dashed option")) {
+                // 明确的「不认识这个选项」才判老 git；其他失败（不是仓库等）
+                // 不能据此下结论，下次仍先试新写法。
+                pathFormatSupported = false
+                probe = null
+            }
+        }
+        if (probe == null) {
             probe = env.exec(base + listOf("--show-toplevel", "--git-common-dir"), 15_000L)
         }
         if (!probe.ok) {
             // 不是仓库、或 git 不可用：不缓存，下次调用还会重试。
             return emptyList()
         }
+        // exec 把 stderr 并进 stdout：git/proot 在退出码 0 时也可能带
+        // warning:/hint:/proot 诊断行。只排除 fatal 不够，诊断文本会被拼成
+        // safe.directory=$guest/<诊断> 白名单进每条后续 argv（OCR 复审 high）。
+        // 保留正向路径形状检查：绝对路径，或不含空白与冒号的相对路径。
         val kept =
             probe.output
                 .lines()
                 .map { it.trim() }
-                .filter { it.isNotEmpty() && !it.startsWith("fatal") }
-                .map { if (it.startsWith("/")) it else "$guest/$it" }
+                .filter { line ->
+                    line.isNotEmpty() &&
+                        !line.contains(' ') &&
+                        !line.contains(':') &&
+                        !line.contains('\t') &&
+                        // 不带 --path-format 的老 git 输出相对路径：`.`（commondir 即 .git 在 cwd）
+                        // 与 `../…`（linked worktree）都合法。
+                        (line.startsWith("/") || line.startsWith("../") || line == ".." || line == ".")
+                }.map { if (it.startsWith("/")) it else "$guest/$it" }
                 .distinct()
         // 不再按「与 guest 有前缀关系」过滤：那恰好会丢掉本次要修的两种情况——
         // 符号链接解析后的 toplevel（/sdcard → /storage/self/primary）与

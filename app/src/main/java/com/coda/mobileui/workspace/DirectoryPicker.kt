@@ -87,7 +87,15 @@ object DirectoryPicker {
         prune()
     }
 
-    /** 清掉已被回收的宿主条目。 */
+    /**
+     * 清掉已被回收的宿主条目。
+     *
+     * 只按「弱引用已空」清（#801）：track 在 contentBlock 里同步执行，
+     * 那时 CodaSheet.show 还没把 isShowing 置 true，按 !isShowing 清会把
+     * 刚登记的宿主立刻删掉——每次导航点选都被下一次 prune 撤销，
+     * 选择器永远进不了子目录。活着但尚未显示的宿主不能动；
+     * 已显示又关闭的宿主由 onDismiss / onViewDetached 主动清。
+     */
     private fun prune() {
         synchronized(holders) {
             val it = holders.iterator()
@@ -95,9 +103,6 @@ object DirectoryPicker {
                 val ref = it.next()
                 val sheet = ref.get()
                 if (sheet == null) {
-                    it.remove()
-                } else if (!sheet.isShowing) {
-                    currentDir.remove(sheet)
                     it.remove()
                 }
             }

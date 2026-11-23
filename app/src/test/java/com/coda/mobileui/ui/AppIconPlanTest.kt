@@ -60,4 +60,19 @@ class AppIconPlanTest {
         val ok = AppIconManager.applyWith(1) { _, _ -> true }
         assertTrue(ok)
     }
+
+    @Test
+    fun enableFailureAbortsBeforeDisablingOthers() {
+        // #817：目标别名启用失败还继续禁用其余别名，桌面会被清成零入口。
+        // 启用是计划第一步，失败必须立即中止，一个禁用都不能发生。
+        val seen = mutableListOf<Pair<String, Int>>()
+        val ok =
+            AppIconManager.applyWith(2) { alias, state ->
+                seen += alias to state
+                false // 目标启用失败
+            }
+        assertFalse(ok)
+        assertEquals(1, seen.size)
+        assertEquals(AppIconManager.STATE_ENABLED, seen[0].second)
+    }
 }

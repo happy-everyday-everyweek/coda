@@ -309,13 +309,23 @@ object ZWorkflowKit {
     }
 
     private val COLUMN_SPLIT = Regex("\\s{2,}")
+
     /** 一行的前导空白数（tab 记 1，与内核输出的空格缩进一致）。 */
     private fun indentOf(line: String): Int = line.takeWhile { it.isWhitespace() }.length
+
     private val ROUNDS = Regex("^(\\d+) rounds?$")
     private val COUNTS_RUNNING = Regex("^(\\d+) settled, (\\d+) (running|unfinished)$")
     private val COUNTS_SETTLED = Regex("^(\\d+) steps? settled$")
-    /** 时长格式：数字加时间单位的组合（12s / 1m30s / 2h5m / 450ms / 1.5s）。 */
-    private val DURATION = Regex("^\\d+(\\.\\d+)?(ms|h|m|s)(\\d+(\\.\\d+)?(ms|h|m|s))*$")
+
+    /**
+     * 时长格式：数字加时间单位的组合（12s / 1m30s / 2h5m / 450ms / 1.5s）。
+     *
+     * 内核 formatWorkflowRunDuration 的真实输出还有三种形态（#768）：
+     * 双单位用**单空格**分隔（5m 10s）、天单位（3d 2h）、进行中阶段的
+     * " so far" 后缀（12s so far）。少任何一样，≥1 分钟的阶段全丢时长列。
+     * 单位交替里 ms 在 m 前、d 在 h 前，避免前缀吞掉后续数字。
+     */
+    private val DURATION = Regex("^\\d+(\\.\\d+)?(ms|d|h|m|s)( ?\\d+(\\.\\d+)?(ms|d|h|m|s))*( so far)?$")
     private val ADDRESS = Regex("^\\S+@\\d+$")
     private val PHASE_STATES = setOf("done", "current", "ahead", "unfinished")
     private val ACTOR_STATES =
@@ -354,16 +364,20 @@ object ZWorkflowKit {
                     PHASE_STATES.contains(cell) -> {
                         state = cell
                     }
+
                     roundsMatch != null -> {
                         rounds = roundsMatch.groupValues[1].toIntOrNull() ?: 0
                     }
+
                     runningMatch != null -> {
                         settled = runningMatch.groupValues[1].toIntOrNull() ?: 0
                         running = runningMatch.groupValues[2].toIntOrNull() ?: 0
                     }
+
                     settledMatch != null -> {
                         settled = settledMatch.groupValues[1].toIntOrNull() ?: 0
                     }
+
                     // 未知列不再照单全收进 duration：内核格式新增列（token 数、备注）
                     // 会被当成时长渲染成乱码。只收时长格式的单元格。
                     duration.isEmpty() && DURATION.matches(cell) -> {

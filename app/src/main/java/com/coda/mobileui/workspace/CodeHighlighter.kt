@@ -79,11 +79,19 @@ object CodeHighlighter {
     /**
      * 对整段文本重新上色。会先清掉上一次自己加的全部 span，再按扫描结果加新的。
      * 不修改文本内容，因此不会触发输入法或文本监听的回环。
+     *
+     * [editRevision] 是调用方 TextWatcher 维护的单调编辑计数。
+     *
+     * 内容指纹不足以判「变过又变回来」：节流窗口内 A→B→A（粘贴覆盖后撤销、
+     * 敲一字又退格）会让长度与哈希都与上轮相同，但 Editable.replace 已经
+     * 丢掉了替换区内的 span，空 diff 什么都不补，那段永久失去高亮。
+     * 每次 onTextChanged 递增的计数才能区分这两种情况。
      */
     fun apply(
         editable: Editable,
         rules: LanguageRules,
         palette: CodePalette,
+        editRevision: Long,
     ) {
         val n = editable.length
         if (n == 0 || n > MAX_HIGHLIGHT_CHARS) {
@@ -93,12 +101,11 @@ object CodeHighlighter {
 
         // 扫描交给纯逻辑层（有单测覆盖），这里只负责把结果贴成 span。
         val tokens = CodeLexer.scan(editable, rules)
-        // 缓存键必须含缓冲区、规则、配色与长度（#778/#779/#781）：
+        // 缓存键必须含缓冲区、规则、配色、长度与编辑计数（#778/#779/#781）：
         // 少任何一项都会拿不对齐的历史做增量，留下陈旧或错色的 span。
-        // 内容指纹而不是只看长度（#778 复审）：覆盖选区、粘贴替换、撤销回同长度
-        // 都会让长度不变，而 Editable.replace 已经丢掉了替换区内的 span。
-        // 这里对全文取一个便宜的滚动哈希，长度相同但内容变了照样整篇重建。
-        val key = HighlightCache.Key(editable, rules, palette, n, HighlightCache.contentRevision(editable))
+        // 用调用方的单调计数而不是内容哈希：节流窗口内 A→B→A 哈希不变，
+        // 但 replace 已丢 span，必须整篇重建。
+        val key = HighlightCache.Key(editable, rules, palette, n, editRevision)
         val reuse = HighlightCache.reusable(lastKey, key)
         val previous = if (reuse) lastTokens else emptyList()
         val plan = CodeLexer.diff(previous, tokens)

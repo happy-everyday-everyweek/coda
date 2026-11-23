@@ -39,8 +39,95 @@ class ScriptTest(unittest.TestCase):
 
     def test_fingerprint_covers_runtime_inputs(self):
         body = self.text.split("kernel_inputs_fingerprint() {", 1)[1].split("\n}", 1)[0]
-        for extra in ("assets/provider/zcode-builtin.json", "assets/rg", "assets/core/lib"):
+        # #799：路径必须相对 $ASSETS（app/src/main/assets/core/），
+        # 写成 $ROOT/assets/… 会永远 hash 成 missing，指纹形同虚设。
+        for extra in ("provider/zcode-builtin.json", "rg", "lib"):
             self.assertIn(extra, body)
+        self.assertIn('"$ASSETS/$extra"', body)
+        self.assertIn('"$ASSETS/lib"', body)
+        self.assertNotIn('"$ROOT/assets/', body)
+
+    def test_fingerprint_hashes_versioned_sonames(self):
+        # #800：随包库多为版本化 soname（libcrypto.so.3、libicu*.so.78），
+        # `-name '*.so'` 只匹配到一小半，换了库指纹也不变。
+        body = self.text.split("kernel_inputs_fingerprint() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("'*.so*'", body)
+
+    def test_fingerprint_extras_actually_hashed(self):
+        # 真实执行：在临时目录搭一份最小 ROOT，指纹函数必须把 extras 与
+        # 版本化 so 都算进去（而不是 missing），改内容指纹必须变。
+        body = self.text.split("kernel_inputs_fingerprint() {", 1)[1].split("\n}", 1)[0]
+        fn = "kernel_inputs_fingerprint() {" + body + "\n}"
+        digest = self.text.split("file_digest() {", 1)[1].split("\n}", 1)[0]
+        stream = self.text.split("stream_digest() {", 1)[1].split("\n}", 1)[0]
+        harness = (
+            "set -euo pipefail\n"
+            'ROOT="$1"; ASSETS="$ROOT/app/src/main/assets/core"; NODE_BASE="$ASSETS/node"\n'
+            "file_digest() {" + digest + "\n}\n"
+            "stream_digest() {" + stream + "\n}\n"
+            + fn + "\nkernel_inputs_fingerprint\n"
+        )
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            assets = root / "app/src/main/assets/core"
+            (assets / "provider").mkdir(parents=True)
+            (assets / "lib").mkdir()
+            (assets / "node").write_bytes(b"base")
+            (assets / "rg").write_bytes(b"rg-v1")
+            (assets / "provider/zcode-builtin.json").write_text("{}")
+            (assets / "lib/libcrypto.so.3").write_bytes(b"crypto-v1")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+
+            def fp():
+                out = subprocess.run(
+                    ["bash", "-c", harness, "_", str(root)],
+                    capture_output=True, text=True, timeout=60,
+                )
+                self.assertEqual(out.returncode, 0, out.stderr)
+                return out.stdout.strip()
+
+            first = fp()
+            self.assertTrue(first)
+            # 换 rg 内容：指纹必须变（旧实现路径错，永远 missing，不会变）。
+            (assets / "rg").write_bytes(b"rg-v2")
+            self.assertNotEqual(first, fp())
+            second = fp()
+            # 换版本化 so：同样必须变。
+            (assets / "lib/libcrypto.so.3").write_bytes(b"crypto-v2")
+            self.assertNotEqual(second, fp())
+
+    def test_manifest_failure_cleans_tmp(self):
+        # #798：payload_line 用 exit 1，brace group 在当前 shell 执行，
+        # exit 直接终止整个脚本，|| 清理分支永不执行，tmp 残留会被打进 APK。
+        # 真实执行验证：缺文件时 tmp 必须被清掉、旧清单必须保留。
+        body = self.text.split("write_payload_manifest() {", 1)[1].split("\n}", 1)[0]
+        line = self.text.split("payload_line() {", 1)[1].split("\n}", 1)[0]
+        digest = self.text.split("file_digest() {", 1)[1].split("\n}", 1)[0]
+        harness = (
+            "set -uo pipefail\n"
+            'ASSETS="$1"\n'
+            "file_digest() {" + digest + "\n}\n"
+            "payload_line() {" + line + "\n}\n"
+            "write_payload_manifest() {" + body + "\n}\n"
+            "write_payload_manifest\n"
+        )
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            assets = pathlib.Path(td)
+            (assets / "payload.txt").write_text("old manifest\n")
+            # zcode 存在但 zcode.cjs 缺失：payload_line 中途 exit 1。
+            (assets / "zcode").write_bytes(b"x")
+            out = subprocess.run(
+                ["bash", "-c", harness, "_", str(assets)],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertNotEqual(out.returncode, 0)
+            self.assertEqual((assets / "payload.txt").read_text(), "old manifest\n")
+            leftovers = [p.name for p in assets.iterdir() if ".tmp" in p.name]
+            self.assertEqual(leftovers, [], f"tmp 清单残留：{leftovers}")
 
     def test_fingerprint_excludes_mutated_license_files(self):
         body = self.text.split("kernel_inputs_fingerprint() {", 1)[1].split("\n}", 1)[0]

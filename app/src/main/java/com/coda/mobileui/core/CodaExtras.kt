@@ -306,7 +306,13 @@ object CodaExtras {
         if (kotlin.math.abs(v) < safe && v == kotlin.math.floor(v)) {
             return v.toLong().toString()
         }
-        return java.math.BigDecimal(v).stripTrailingZeros().toPlainString()
+// 字符串构造器而不是 double 构造器（#766）：后者捕获精确二进制值，
+        // 0.1 会展开成 55 位小数直接写进配置编辑器。toString 是最短往返表示。
+        // 但 ≥2^53 的整数 Double.toString 走科学计数法（9.223372036854776E18），
+        // 有效位只有 16 位，会把精确值 ...775808 舍成 ...776000（#240 的假值问题）。
+        // 这一段仍用 double 构造器：整数的二进制展开就是精确值本身。
+        val ctor = if (kotlin.math.abs(v) >= safe) java.math.BigDecimal(v) else java.math.BigDecimal(v.toString())
+        return ctor.stripTrailingZeros().toPlainString()
     }
 
     fun findPluginDetail(
@@ -408,6 +414,7 @@ object CodaExtras {
     )
 
     /** 读取工作区级与用户级 settings.json 的 hooks 段（兼容新旧两种结构）。 */
+
     /** 最近一次 readHooks 的读取错误（按来源），供页面区分「空」与「读失败」（#237）。 */
     @Volatile
     var lastReadErrors: List<String> = emptyList()
@@ -454,7 +461,7 @@ object CodaExtras {
             } catch (e: Exception) {
                 // 空 catch 会让「读取失败」与「确实没配钩子」长得一样（#237）。
                 AppLog.w(TAG, "读取钩子配置失败：${f.absolutePath} ${e.javaClass.simpleName}: ${e.message}")
-                readErrors += "${label}：${e.message ?: e.javaClass.simpleName}"
+                readErrors += "$label：${e.message ?: e.javaClass.simpleName}"
             }
         }
         lastReadErrors = readErrors

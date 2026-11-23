@@ -40,7 +40,9 @@ internal object HighlightCache {
          * 弱引用不影响身份比较：回收后 get() 为 null，自然判为不可复用。
          */
         private val bufferRef = java.lang.ref.WeakReference(buffer)
+
         fun sameBuffer(other: Any): Boolean = bufferRef.get() === other
+
         /** 两个键是否指向同一个仍存活的缓冲区；任一侧被回收都判否。 */
         fun sameAs(other: Key): Boolean {
             val mine = bufferRef.get() ?: return false
@@ -61,20 +63,10 @@ internal object HighlightCache {
             previous.revision == current.revision
     }
 
-    /**
-     * 文本内容指纹（#778 复审）。
-     *
-     * 用 31 进制的滚动哈希而不是 SHA-256：这是每次按键都要跑的热路径，
-     * 上限 20 万字符，加密级摘要的开销没有必要。碰撞概率对这个用途足够低，
-     * 而且碰撞的后果只是「多做一次全量重建」或「少做一次」，不会写坏文本。
-     */
-    fun contentRevision(text: CharSequence): Long {
-        var h = 1125899906842597L
-        for (i in 0 until text.length) {
-            h = 31 * h + text[i].code
-        }
-        return h
-    }
+    // 曾用 31 进制内容指纹判「等长编辑」，已废弃：31 在 mod 2^64 下可逆，
+    // "Aa" 与 "BB" 这类相邻差值满足 d2=-31*d1 的文本**必然**碰撞（OCR medium），
+    // 且节流窗口内 A→B→A 指纹不变。正确设计是调用方 TextWatcher 的单调计数，
+    // 由 Key.revision 承载，见 CodeHighlighter.apply 的 editRevision 参数。
 
     /**
      * 从哪个偏移开始移除既有 span。
