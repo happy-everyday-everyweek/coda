@@ -19,6 +19,10 @@ class CodaApp : Application() {
         // 崩溃拦截必须排在所有设置读取之前：SharedPreferences 损坏这类早期失败
         // 也要能落到崩溃页与日志里，否则启动阶段的问题永远查不到
         CrashGuard.install(this)
+        // 进程守卫（#818）：CrashActivity 跑在 :crash 进程，onCreate 每个进程
+        // 都会走。MCP 服务器、扩展二进制释放、更新清理都只能主进程做——
+        // :crash 里再跑一遍会端口冲突、与主进程并发写同一运行目录。
+        if (!isMainProcess()) return
         AppCompatDelegate.setDefaultNightMode(readNightMode())
         // 手机控制：开关开启时恢复本地 MCP 服务器（供内核连接）
         try {
@@ -42,6 +46,26 @@ class CodaApp : Application() {
                 AppLog.e(TAG, "更新包清理失败", e)
             }
         }
+    }
+
+    /**
+     * 是否主进程。API 28+ 用 Application.getProcessName；更低版本读
+     * /proc/self/cmdline（主进程名就是包名，子进程带 :suffix）。
+     * 读不出时按主进程处理：宁可多初始化，不能让主进程漏掉 MCP/扩展。
+     */
+    private fun isMainProcess(): Boolean {
+        val name =
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                getProcessName()
+            } else {
+                runCatching {
+                    java.io
+                        .File("/proc/self/cmdline")
+                        .readText()
+                        .trim('\u0000', ' ', '\n')
+                }.getOrNull()
+            }
+        return name == null || name == packageName
     }
 
     /**

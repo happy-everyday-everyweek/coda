@@ -34,6 +34,7 @@ class ZController private constructor(
 
         /** 轻提示（错误/状态）。 */
         fun onNotice(text: String) {}
+
         /** 权限请求需要 UI 决策。 */
         fun onPermissionRequest(
             requestId: Any,
@@ -54,7 +55,6 @@ class ZController private constructor(
             sessionId: String,
             status: String,
         ) {}
-
 
         /** 用户提问需要 UI 决策。 */
         fun onUserInputRequest(
@@ -100,6 +100,7 @@ class ZController private constructor(
     @Volatile
     var cacheOnly: Boolean = false
         private set
+
     @Volatile
     var running: Boolean = false
         private set
@@ -189,11 +190,13 @@ class ZController private constructor(
     private val toolCallToParentCall = lru<String, String>(CALL_CACHE_LIMIT)
 
     private val listeners = CopyOnWriteArrayList<Listener>()
+
     /** 待应答的权限请求参数（requestId → requestPermission 的原始 params），只保留最近 10 条。 */
     private val pendingPermissionParams = java.util.Collections.synchronizedMap(linkedMapOf<String, JSONObject>())
 
     /** 无监听者时确认请求的最长挂起时间；超时按拒绝收尾并落日志（#464）。 */
     private val DEFERRED_TIMEOUT_MS = 60_000L
+
     /**
      * 会话 id → 模式。
      *
@@ -302,11 +305,12 @@ class ZController private constructor(
     }
 
     private fun replayDeferredInteractions() {
-        val pending = synchronized(deferredInteractions) {
-            val copy = deferredInteractions.toList()
-            deferredInteractions.clear()
-            copy
-        }
+        val pending =
+            synchronized(deferredInteractions) {
+                val copy = deferredInteractions.toList()
+                deferredInteractions.clear()
+                copy
+            }
         for (d in pending) {
             if (d.method == "interaction/requestUserInput") {
                 notif { onUserInputRequest(d.requestId, d.params) }
@@ -345,11 +349,12 @@ class ZController private constructor(
             started = ok
             if (ok) lastStartAt = System.currentTimeMillis()
             post {
-                val ws = synchronized(stateLock) {
-                    val snapshot = startWaiters.toList()
-                    startWaiters.clear()
-                    snapshot
-                }
+                val ws =
+                    synchronized(stateLock) {
+                        val snapshot = startWaiters.toList()
+                        startWaiters.clear()
+                        snapshot
+                    }
                 ws.forEach { it(ok, msg) }
             }
             if (ok) {
@@ -410,11 +415,12 @@ class ZController private constructor(
                 val now = System.currentTimeMillis()
                 val ranFor = if (lastStartAt > 0L) now - lastStartAt else -1L
                 // 自增与重置放在同一把锁里：两个退出回调同时进来时不能各加一次。
-                val attempt = synchronized(stateLock) {
-                    if (ranFor > 120_000L) exitCount = 0
-                    exitCount += 1
-                    exitCount
-                }
+                val attempt =
+                    synchronized(stateLock) {
+                        if (ranFor > 120_000L) exitCount = 0
+                        exitCount += 1
+                        exitCount
+                    }
                 val reason = CoreRuntime.describeExit(code)
                 runtime.log("[core] 退出：$reason，本次运行 ${ranFor}ms，连续第 $attempt 次")
                 // 刚拉起就被信号带走的进程，重启只会把同样的退出再演一遍，几秒里刷出十几次相同记录，
@@ -560,7 +566,14 @@ class ZController private constructor(
             // 显式 null 与「没有这个键」同样处理：内核序列化时会用 null 表示该字段不参与本次更新。
             // null=本次快照没有标题，跳过更新；判定收口在 ZParse.parseTitleFromSnapshot。
             val title = ZParse.parseTitleFromSnapshot(root)
-            val status = if (session != null && session.has("status") && !session.isNull("status")) ZParse.parseStatusFromSnapshot(root) else ""
+            val status =
+                if (session != null && session.has("status") &&
+                    !session.isNull("status")
+                ) {
+                    ZParse.parseStatusFromSnapshot(root)
+                } else {
+                    ""
+                }
             val m = ZParse.parseModeFromSnapshot(root)
             var info = sessions.find { it.id == sid }
             if (info == null) {
@@ -604,6 +617,31 @@ class ZController private constructor(
         // 子代理与工作流运行态是独立查询面（不在会话快照里），打开/恢复会话后各拉一次。
         refreshSubagents()
         refreshWorkflowRuns()
+    }
+
+    /**
+     * 导入会话的快照应用（#816）：只插列表，不切当前会话。
+     *
+     * applySnapshot 会设置 currentSessionId/mode/running、替换 messages、
+     * 写 SessionCache——导入路径一样都不该做。这里只取 id/title/status/mode
+     * 建一条 ZSessionInfo 插到列表头，再通知刷新；消息缓存等用户真正打开
+     * 该会话时由 openSession 落。
+     */
+    private fun applyImportedSession(rawRoot: JSONObject) {
+        val root = rawRoot.optJSONObject("snapshot") ?: rawRoot
+        val sid = ZParse.parseSessionIdFromSnapshot(root) ?: return
+        if (sessions.any { it.id == sid }) return
+        val session = root.optJSONObject("session")
+        val title = ZParse.parseTitleFromSnapshot(root) ?: ""
+        val status =
+            if (session != null && session.has("status") && !session.isNull("status")) {
+                ZParse.parseStatusFromSnapshot(root)
+            } else {
+                ""
+            }
+        val m = ZParse.parseModeFromSnapshot(root)
+        sessions.add(0, ZSessionInfo(sid, title, status, m, System.currentTimeMillis(), null, null))
+        notif { onStateChanged() }
     }
 
     private fun handleStateUpdated(params: JSONObject) {
@@ -1500,7 +1538,11 @@ class ZController private constructor(
     fun sessionSnapshot(): List<ZSessionInfo> = sessions.toList()
 
     /** 向指定会话发送任务，不改变宿主当前打开的会话。 */
-    fun sendTo(sessionId: String, text: String, cb: ((Boolean, String) -> Unit)? = null) {
+    fun sendTo(
+        sessionId: String,
+        text: String,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         if (sessionId.isBlank()) {
             cb?.invoke(false, "会话 id 为空")
             return
@@ -1509,7 +1551,10 @@ class ZController private constructor(
     }
 
     /** 终止指定会话的生成；与 stop 的区别是作用于任意会话。 */
-    fun stopSession(sessionId: String, cb: ((Boolean, String) -> Unit)? = null) {
+    fun stopSession(
+        sessionId: String,
+        cb: ((Boolean, String) -> Unit)? = null,
+    ) {
         if (sessionId.isBlank()) {
             cb?.invoke(false, "会话 id 为空")
             return
@@ -1528,7 +1573,10 @@ class ZController private constructor(
     }
 
     /** 读取指定会话可选的模型；只读，不改动宿主面板当前的模型列表。 */
-    fun modelOptionsFor(sessionId: String, cb: (List<ZModelOption>) -> Unit) {
+    fun modelOptionsFor(
+        sessionId: String,
+        cb: (List<ZModelOption>) -> Unit,
+    ) {
         if (sessionId.isBlank()) {
             cb(emptyList())
             return
@@ -1645,8 +1693,10 @@ class ZController private constructor(
         runtime.call("session/create", params) { success, body ->
             ok = success
             if (success) {
-                // 只更新快照，不 openSession：导入过程中把用户当前会话切走会很突兀。
-                post { applySnapshot(body) }
+                // 只把新会话插进列表，不动 currentSessionId/mode/running/messages
+                // （#816）：applySnapshot 会无条件切当前会话，批量导入后
+                // 用户的「当前会话」变成最后一个导入项，后续发送/刷新全打错地方。
+                post { applyImportedSession(body) }
             } else {
                 AppLog.w("ChatImport", "建导入会话失败：${errMsg(body)}")
             }
@@ -1941,9 +1991,15 @@ class ZController private constructor(
                         val data = out.toByteArray()
                         post { cb(true, data) }
                     }
+
                     // 到上限就是截断。截断的附件解不出来，报成功只会让上层以为拿到了完整内容。
-                    out.size() >= maxBytes -> post { cb(false, null) }
-                    else -> step(next, pages + 1)
+                    out.size() >= maxBytes -> {
+                        post { cb(false, null) }
+                    }
+
+                    else -> {
+                        step(next, pages + 1)
+                    }
                 }
             }
         }
@@ -2254,7 +2310,10 @@ class ZController private constructor(
     }
 
     /** 应答一条交互式权限请求；allow 为 true 放行，false 拒绝。 */
-    fun respondPermission(requestId: Any, allow: Boolean) {
+    fun respondPermission(
+        requestId: Any,
+        allow: Boolean,
+    ) {
         val params = pendingPermissionParams.remove(requestId.toString()) ?: JSONObject()
         val response =
             (if (allow) findAllowResponse(params) else findDenyResponse(params))

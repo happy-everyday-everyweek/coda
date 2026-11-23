@@ -109,6 +109,10 @@ class SettingsDetailActivity :
     @Volatile
     private var chatImportCancelled = false
 
+    /** 导入进行中标志（#813）：入口重入直接拒绝，避免两批交错建会话。 */
+    @Volatile
+    private var chatImportRunning = false
+
     /** Coda Bot 本地图片：选图后写入 Bot 配置。 */
     private val codaBotAvatarLauncher =
         registerForActivityResult(
@@ -224,6 +228,19 @@ class SettingsDetailActivity :
         savedInstanceState?.getString(KEY_PROVIDER_KIND)?.let { name ->
             runCatching { ProviderStore.ProviderKind.valueOf(name) }.getOrNull()?.let { providerKind = it }
         }
+        // 恢复导出勾选（#805）：SAF 对话框开着时旋转/进程死亡会重建 Activity，
+        // 不恢复就退回 DEFAULT 全选，用户明确取消的凭据类被静默导出。
+        // 键缺失（旧版本存的 state）时不导出而是让用户重选：宁可多一步，
+        // 不能把「不知道选了什么」当成「全选」。
+        savedInstanceState?.getStringArrayList(KEY_BACKUP_CATEGORIES)?.let { keys ->
+            val restored = keys.mapNotNull { k -> BackupCategory.entries.firstOrNull { it.key == k } }.toSet()
+            pendingBackupCategories = restored
+            backupSelectionRestored = true
+        }
+        if (savedInstanceState != null && !backupSelectionRestored) {
+            // 重建前可能正停在 SAF 对话框：选择丢了就清空，回调来时拒绝导出。
+            pendingBackupCategories = emptySet()
+        }
 
         findViewById<View>(R.id.detail_root).applySystemBarsInset()
         findViewById<View>(R.id.btn_back).setOnClickListener { goBack() }
@@ -245,6 +262,9 @@ class SettingsDetailActivity :
         outState.putString(KEY_PAGE_TRAIL, SettingsNavStack.encode(nav.trail()))
         // 供应商二级页的类别也要存：否则 ASR 列表旋转后会退回 LLM。
         outState.putString(KEY_PROVIDER_KIND, providerKind.name)
+        // 导出勾选也要存（#805）：SAF 对话框开着时重建，回调落到新实例，
+        // 不存就退回全选，用户取消的凭据类被静默导出。
+        outState.putStringArrayList(KEY_BACKUP_CATEGORIES, ArrayList(pendingBackupCategories.map { it.key }))
         super.onSaveInstanceState(outState)
     }
 
@@ -1723,6 +1743,13 @@ class SettingsDetailActivity :
 
     /** 执行导入：逐会话建会话，进度与结果都落到界面上。 */
     private fun runChatImport(uri: Uri) {
+        // 进行中不得再开一批（#813）：两个线程交错 createImportedSession
+        // 会产出重复会话，第二批还会重置共享的取消标志。
+        if (chatImportRunning) {
+            snack("导入正在进行，请等它结束")
+            return
+        }
+        chatImportRunning = true
         chatImportCancelled = false
         val controller = ZController.get(this)
         snack("正在导入…")
@@ -1743,6 +1770,9 @@ class SettingsDetailActivity :
                     isCancelled = { chatImportCancelled },
                     createSession = { history -> controller.createImportedSession(history) },
                 )
+            // 无论成败都要清进行中标志；Activity 已销毁时也要清（字段随实例走，
+            // 但标志置位与清除必须配对，否则同一实例上再也开不了导入）。
+            chatImportRunning = false
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 controller.refreshSessions(null)
@@ -1762,6 +1792,11 @@ class SettingsDetailActivity :
     }
 
     private fun doExportBackup(uri: Uri) {
+        // 重建后勾选丢失（#805）：不能拿默认全选顶替，拒绝导出让用户重选。
+        if (!backupSelectionRestored || pendingBackupCategories.isEmpty()) {
+            snack("导出选择已失效，请重新发起导出")
+            return
+        }
         snack("导出")
         // 导出同样要先停写入方：网关会往 rootfs 写配置与凭据，内核会写会话数据库。
         // 边写边打包会得到一份「看起来完整、实际半截」的备份。
@@ -1796,6 +1831,9 @@ class SettingsDetailActivity :
 
     /** 本次导出勾选的分类，默认全选（#732）。 */
     private var pendingBackupCategories: Set<BackupCategory> = BackupCategory.DEFAULT
+
+    /** 重建后是否成功恢复了导出勾选（#805）；false 时 doExportBackup 拒绝导出。 */
+    private var backupSelectionRestored = true
 
     /**
      * 导出前勾选分类（#732）。
@@ -1850,6 +1888,8 @@ class SettingsDetailActivity :
                             snack("至少勾选一项")
                         } else {
                             pendingBackupCategories = chosen.toSet()
+                            // 用户刚亲手选过：重建恢复标志复位（#805）。
+                            backupSelectionRestored = true
                             sheet.dismiss()
                             backupExportLauncher.launch(DataBackup.defaultFileName())
                         }
@@ -4869,6 +4909,7 @@ class SettingsDetailActivity :
 
         /** 供应商二级页当前类别（LLM/ASR），配置变更后据此恢复。 */
         const val KEY_PROVIDER_KIND = "settings_provider_kind"
+        const val KEY_BACKUP_CATEGORIES = "settings_backup_categories"
 
         /** ASR 测试申请录音权限的请求码。 */
         const val REQ_ASR_AUDIO = 1002
