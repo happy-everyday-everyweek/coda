@@ -142,6 +142,11 @@ internal object TarListing {
         val sep = if (hard) " link to " else " -> "
         val at = rest.indexOf(sep)
         if (at < 0) return null
+        // 分隔符出现多次时无法无歧义切分：成员名本身可以合法地含 " -> "，
+        // 例如名为 `x -> a/b` 的链接指向 `../../evil`，整行是 `x -> a/b -> ../../evil`。
+        // 按首个切会把目标读成 `a/b -> ../../evil`，规范化后反而"看起来安全"。
+        // 首个和末个都不对，唯一正确做法是拒绝解析，让调用方 fail-closed。
+        if (rest.indexOf(sep, at + sep.length) >= 0) return null
         val name = normalizePath(unescape(rest.substring(0, at)))
         val target = unescape(rest.substring(at + sep.length))
         if (name.isEmpty()) return null

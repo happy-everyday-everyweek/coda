@@ -1111,24 +1111,45 @@ override fun menuItems(): List<String> =
     ): Boolean {
         val listed = host.env.exec(listOf("tar", "-tf", pack.absolutePath), timeoutMs = 60_000L)
         if (!listed.ok) return false
-        val names = listed.output.lineSequence().filter { it.isNotBlank() }.toList()
-        if (names.any { !TarLinkSafety.memberSafe(it.removeSuffix("\r")) }) return false
+        // 必须先还原 GNU tar 的 C 风格转义再校验：`../evil` 可以被列成
+        // `\056\056/evil`，字面上既没有 `..` 组件也没有前导 `/`，直接判会放行。
+        val names =
+            listed.output.lineSequence()
+                .filter { it.isNotBlank() }
+                .map { TarListing.unescape(it.removeSuffix("\r")) }
+                .toList()
+        if (names.any { !TarLinkSafety.memberSafe(it) }) return false
         val detailed = host.env.exec(listOf("tar", "-tvf", pack.absolutePath), timeoutMs = 60_000L)
         // 详细列表拿不到就无从判断链接：必须判不安全（#792）。
         // 旧实现在这里直接跳过整段校验并返回 true，等于 fail-open。
         if (!TarLinkSafety.listingUsable(detailed.ok, detailed.output)) return false
         // 已列举的成员集合：硬链接的目标必须在其中（#792）。
-        val known =
-            names.map { TarListing.normalizePath(it.removeSuffix("\r")).trimEnd('/') }.toSet()
+        val known = names.map { TarListing.normalizePath(it).trimEnd('/') }.toSet()
         val root = target.absolutePath
-        for (line in detailed.output.lineSequence()) {
+        val lines = detailed.output.lineSequence().filter { it.isNotBlank() }.toList()
+        // 第一趟：收集全部符号链接成员。链接链（父路径经过另一条链接）会让
+        // 字面深度与解压时的实际深度不符，必须先知道有哪些链接才能判。
+        val symlinks = HashSet<String>()
+        for (line in lines) {
+            val first = line.firstOrNull()
+            if (first != 'l' && first != 'h') continue
+            val link = TarListing.parseLink(line)
+            if (link == null) {
+                // 是链接行却解析不出（例如名字里含多个 " -> "，无法无歧义切分）：
+                // 不能当成普通文件放行。
+                AppLog.w("FilesPage", "拒绝无法解析的链接行")
+                return false
+            }
+            if (!link.hardLink) symlinks.add(link.path)
+        }
+        for (line in lines) {
             val link = TarListing.parseLink(line) ?: continue
             val ok =
                 if (link.hardLink) {
-                    TarLinkSafety.hardLinkStaysInside(root, link.path, link.target, known)
+                    TarLinkSafety.hardLinkStaysInside(root, link.path, link.target, known, symlinks)
                 } else {
                     // 相对目标按链接自身所在目录解析，不是解压根（#792）。
-                    TarLinkSafety.linkStaysInside(root, link.path, link.target)
+                    TarLinkSafety.linkStaysInside(root, link.path, link.target, symlinks)
                 }
             if (!ok) {
                 AppLog.w("FilesPage", "拒绝越界链接：${link.path} -> ${link.target}")
@@ -2355,7 +2376,9 @@ override fun menuItems(): List<String> =
         // 只读预览（压缩包内文件）没有 editing，但它同样需要行列号：
         // 用 editing 判空会让整个状态栏在预览时完全不刷新（#514）。
         val file = editing
-        if (file == null && !readOnlyPreview) return
+        // detached（文件被删）同样要刷新：否则解除绑定后状态栏整个冻住，
+        // 刚算出的 previewBytes 也永远显示不出来（#793）。
+        if (file == null && !readOnlyPreview && !detachedFile) return
         val text = editorInput.text ?: return
         val caret = editorInput.selectionStart.coerceAtLeast(0)
         val pos = CaretPosition.of(text, caret)
@@ -2885,13 +2908,10 @@ override fun menuItems(): List<String> =
             EditorSavePolicy.Verdict.CONFIRM_OVERWRITE -> {
                 // 兑现提示里承诺的「保存前会再确认」（#789）：此前只写标志不读，
                 // 脏编辑器会静默覆盖外部改动，不可逆。
+                // 标志不在这里清：写盘可能失败（例如 GBK 编码不了），
+                // 清早了下次保存就直接覆盖，确认形同虚设。改由写成功回调清。
                 confirmOverwriteExternal { yes ->
-                    if (yes) {
-                        externalConflict = false
-                        writeEditor(onDone)
-                    } else {
-                        onDone?.invoke(false)
-                    }
+                    if (yes) writeEditor(onDone) else onDone?.invoke(false)
                 }
                 return
             }
@@ -2902,20 +2922,29 @@ override fun menuItems(): List<String> =
 
     /** 覆盖外部改动前的确认（#789）。 */
     private fun confirmOverwriteExternal(onChoice: (Boolean) -> Unit) {
+        // CodaSheet.dismiss() 在退出动画结束时也会派发 onDismiss，
+        // 所以三个出口必须共用一次性守卫：否则「覆盖保存」之后还会再来一次 false，
+        // 把 requestLeaveEditor 里已答应关闭的流程又取消掉。
+        var answered = false
+        fun choose(yes: Boolean) {
+            if (answered) return
+            answered = true
+            onChoice(yes)
+        }
         val sheet =
             sheet().compact()
                 .title("磁盘上的文件已被修改")
                 .subtitle("保存会用当前编辑内容覆盖外部改动，此操作不可撤销")
         sheet.secondaryAction("取消") {
             sheet.dismiss()
-            onChoice(false)
+            choose(false)
         }
         sheet.primaryAction("覆盖保存") {
             sheet.dismiss()
-            onChoice(true)
+            choose(true)
         }
         // 点遮罩或返回键等于取消：不能把「没选」当成同意覆盖。
-        sheet.onDismiss { onChoice(false) }
+        sheet.onDismiss { choose(false) }
         sheet.show()
     }
 
@@ -2939,6 +2968,9 @@ override fun menuItems(): List<String> =
             then = { ok ->
                 if (ok) {
                     originalText = text
+                    // 冲突只在写成功后才算处理完（#789）：写失败时留着标志，
+                    // 下次保存仍会确认，不会因为「试过一次」就静默覆盖外部改动。
+                    externalConflict = false
                     // 写盘之后刷新基线，避免切回来时把自己刚写的内容当成"磁盘被改过"。
                     loadedMtime = runCatching { file.lastModified() }.getOrDefault(loadedMtime)
                     sizeCachePath = null
@@ -2998,6 +3030,8 @@ override fun menuItems(): List<String> =
             return
         }
         var answered = false
+        // 用户是否已经点过某个动作。dismiss 的 onDismiss 迟到，不能覆盖已做的选择。
+        var acted = false
         fun finish(ok: Boolean) {
             if (answered) return
             answered = true
@@ -3015,6 +3049,10 @@ override fun menuItems(): List<String> =
             )
         }
         sheet.primaryAction(if (file == null) "仍然关闭" else "保存并关闭") {
+            // 先标记「已做出选择」再 dismiss：dismiss 会在动画结束时派发 onDismiss，
+            // 那时保存确认框可能还开着，finish(false) 会把 answered 抢先锁死，
+            // 导致保存成功后标签再也关不掉。
+            acted = true
             sheet.dismiss()
             if (file == null) {
                 dirty = false
@@ -3024,26 +3062,39 @@ override fun menuItems(): List<String> =
             }
         }
         sheet.secondaryAction("放弃修改") {
+            acted = true
             sheet.dismiss()
             dirty = false
             finish(true)
         }
-        // 点遮罩或返回键等于取消：不关闭标签。
-        sheet.onDismiss { finish(false) }
+        // 点遮罩或返回键等于取消：不关闭标签。已经选过就不再反悔。
+        sheet.onDismiss { if (!acted) finish(false) }
         sheet.show()
     }
 
     private fun closeEditor() {
         val file = editing
-        if (file != null && editorInput.text.toString() != originalText) {
-            val sheet = sheet().title("未保存的修改").subtitle(file.name)
+        // detached（文件被删）也要问（#793）：这是返回键与菜单关闭走的路径，
+        // 只判 file != null 会让正文被静默丢弃。
+        if ((file != null || detachedFile) && editorInput.text.toString() != originalText) {
+            val sheet = sheet().title("未保存的修改").subtitle(file?.name ?: "已删除的文件")
             sheet.content { column ->
-                column.addView(label("关闭前可以先把修改写回文件。", 13f, onSurfaceVariant))
+                column.addView(
+                    label(
+                        if (file == null) "文件已被删除，正文无法写回；关闭会丢失这些内容。" else "关闭前可以先把修改写回文件。",
+                        13f,
+                        onSurfaceVariant,
+                    ),
+                )
             }
-            sheet.primaryAction("保存并关闭") {
+            sheet.primaryAction(if (file == null) "仍然关闭" else "保存并关闭") {
                 sheet.dismiss()
-                // 写盘成功才关标签：失败时保留编辑状态与光标，用户还能重试。
-                saveEditor { ok -> if (ok) leaveEditor() }
+                if (file == null) {
+                    leaveEditor()
+                } else {
+                    // 写盘成功才关标签：失败时保留编辑状态与光标，用户还能重试。
+                    saveEditor { ok -> if (ok) leaveEditor() }
+                }
             }
             sheet.secondaryAction("放弃修改") {
                 sheet.dismiss()

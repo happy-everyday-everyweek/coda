@@ -80,6 +80,8 @@ internal object ChunkedFetch {
         // 镜像回退循环要拿同一个令牌去试下一个源，在这里 cancel 它会让下一轮
         // 直接返回 CANCELLED，把镜像故障误报成「用户取消」。
         val stopped = AtomicBoolean(false)
+        // 用户是否真的取消过。它与 failure 分开记，最终结果由它优先决定。
+        val cancelled = AtomicBoolean(false)
         val pool = Executors.newFixedThreadPool(chunks.size)
         try {
             val tasks =
@@ -88,8 +90,10 @@ internal object ChunkedFetch {
                         try {
                             fetchChunk(c, raf, writeLock, done, speeds, total, cancel, stopped, progress, open)
                         } catch (e: CancellationException) {
-                            // 取消不是失败：记下来让主线程据此返回 CANCELLED，
-                            // 但不能覆盖已经记下的真实失败原因。
+                            // 用户取消必须压过兄弟块的 IO/HTTP 失败：两者都往同一个
+                            // failure 里 compareAndSet，谁先谁赢会把真实取消报成 IO，
+                            // 而 AssetFetcher 见到 IO 会换镜像继续下——正是 #807 要消除的行为。
+                            cancelled.set(true)
                             failure.compareAndSet(null, Outcome(DownloadOutcome.Kind.CANCELLED, detail = "已取消"))
                         } catch (e: Exception) {
                             val kind =
@@ -120,6 +124,12 @@ internal object ChunkedFetch {
                     // 任务内部已经把原因记进 failure；这里只兜住执行器层面的异常。
                     failure.compareAndSet(null, Outcome(DownloadOutcome.Kind.IO, detail = "${e.javaClass.simpleName}"))
                 }
+            }
+            val gotSoFar = ChunkPlan.totalDone(chunks, (0 until chunks.size).map { done.get(it) })
+            // 取消优先：只要有一块观测到用户取消，整单就是取消，
+            // 不管兄弟块的 IO 失败是否先抢到 failure。
+            if (cancelled.get() || cancel?.isCancelled == true) {
+                return Outcome(DownloadOutcome.Kind.CANCELLED, bytes = gotSoFar, detail = "已取消")
             }
             failure.get()?.let { return it }
             val got = ChunkPlan.totalDone(chunks, (0 until chunks.size).map { done.get(it) })

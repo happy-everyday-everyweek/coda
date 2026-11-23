@@ -1038,8 +1038,17 @@ class ZController private constructor(
         }
     }
 
+    /**
+     * 是否已经应用过内核给的实时会话列表（#775）。
+     *
+     * 不能用 `sessions.isNotEmpty()` 代替：新建的空工作区返回空列表也是合法实时态，
+     * 那时晚到的缓存仍会覆盖它并把 cacheOnly 置真。
+     */
+    @Volatile
+    private var liveSessionsLoaded = false
+
     fun restoreFromCache(): Boolean {
-        if (sessions.isNotEmpty()) return false
+        if (liveSessionsLoaded || sessions.isNotEmpty()) return false
         // 先用 stat 判断有没有缓存，真正的读盘放后台：冷启动时主线程正在赶首帧，
         // 同步读几百条消息会直接把启动拖慢。
         if (!SessionCache.hasSessions(app)) return false
@@ -1051,7 +1060,7 @@ class ZController private constructor(
                 // 入口那次 isNotEmpty 是同步检查，管不到这个窗口：
                 // 晚到的缓存会覆盖实时数据，还把 cacheOnly 置真，
                 // 之后的打开都读缓存而不再订阅内核。
-                if (sessions.isNotEmpty()) return@post
+                if (liveSessionsLoaded || sessions.isNotEmpty()) return@post
                 cacheOnly = true
                 sessions = cached.toMutableList()
                 for (l in listeners) l.onStateChanged()
@@ -1114,6 +1123,8 @@ class ZController private constructor(
                 // 供下次内核没起来时展示。
                 SessionCache.saveSessions(app, list)
                 post {
+                    // 实时数据已到（哪怕是合法的空列表）：晚到的缓存不得再覆盖（#775）。
+                    liveSessionsLoaded = true
                     cacheOnly = false
                     sessions = list.toMutableList()
                     sessionModes.clear()

@@ -35,10 +35,19 @@ internal object ChunkResume {
         if (saved.url != url || saved.total != total || saved.ranges != chunks) return false
         // 文件必须在，且长度正好等于总长：短了说明字节丢了，长了说明这不是本次的文件。
         if (!partExists || partBytes != total) return false
-        val hadValidator = !saved.etag.isNullOrBlank() || !saved.lastModified.isNullOrBlank()
-        val hasValidator = !etag.isNullOrBlank() || !lastModified.isNullOrBlank()
-        if (!hadValidator || !hasValidator) return false
-        // 两边都有的那项必须一致；只有一边有就无从比对，按已知项判断。
+        // 必须有**同一类型**的标识可比，且它一致。
+        //
+        // 只判「两边各自都有标识」是不够的：记录里是 ETag 而本次只拿到 Last-Modified
+        // （或反过来）时，两个相等分支都不会触发，于是无从比对却照样采纳。
+        // 镜像/CDN 各边缘节点返回的头部并不一致，这种错位是现实场景，
+        // 而 sha256 是可选的——错位的字节会被静默拼成成品。
+        val etagMatch =
+            !saved.etag.isNullOrBlank() && !etag.isNullOrBlank() && saved.etag == etag
+        val mtimeMatch =
+            !saved.lastModified.isNullOrBlank() && !lastModified.isNullOrBlank() &&
+                saved.lastModified == lastModified
+        if (!etagMatch && !mtimeMatch) return false
+        // 有可比项但其中某一项明确不一致：远端变过，同样不能续。
         if (!saved.etag.isNullOrBlank() && !etag.isNullOrBlank() && saved.etag != etag) return false
         if (!saved.lastModified.isNullOrBlank() && !lastModified.isNullOrBlank() &&
             saved.lastModified != lastModified

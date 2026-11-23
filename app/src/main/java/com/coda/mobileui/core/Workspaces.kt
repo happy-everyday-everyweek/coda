@@ -73,8 +73,11 @@ object Workspaces {
         // 回退目录也要校验：忽略 mkdirs 失败会返回不存在的路径，
         // 后续写入在随机调用点抛 IOException，错误现场远离根因。
         if (!usable(fallback)) {
-            storageError = "无法创建工作区目录：$fallback（存储不可写或空间不足）"
-            AppLog.e("Workspaces", storageError!!)
+            // 先存进局部变量再用：storageError 是 @Volatile，另一个线程的成功解析
+            // 可能在赋值与读取之间把它置回 null，`!!` 会在「防崩溃」的路径上抛 NPE。
+            val why = "无法创建工作区目录：$fallback（存储不可写或空间不足）"
+            storageError = why
+            AppLog.e("Workspaces", why)
             return null
         }
         storageError = null
@@ -149,8 +152,15 @@ object Workspaces {
                     }
                 }
             }
-            // 判定不带创建副作用（#769）：mkdirs 会凭空造出空目录，抹掉下次重试的机会。
-            if (WorkspaceRoots.existsUsable(brand)) return brand
+            // 有旧目录在等着迁移时，判定不能带创建副作用（#769）：mkdirs 会凭空造出
+            // 空 brand，让下次 root() 认为「已迁移」而把完整的旧数据永久孤立。
+            // 但没有旧目录时（全新安装的常态）必须照常创建，否则品牌目录永远建不出来，
+            // 每台设备都静默落到应用私有目录——那里的内容会随卸载一起清空。
+            if (legacy.exists()) {
+                if (WorkspaceRoots.existsUsable(brand)) return brand
+            } else if (WorkspaceRoots.ensureUsable(brand)) {
+                return brand
+            }
         }
         return null
     }

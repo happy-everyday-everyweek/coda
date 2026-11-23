@@ -71,10 +71,22 @@ object SystemPrompts {
      */
     fun statuses(ctx: Context): Map<String, String> {
         val dir = dir(ctx)
-        val manifest =
-            PromptBaseline.parseManifest(
-                runCatching { File(dir, PromptBaseline.MANIFEST).readText() }.getOrNull(),
-            )
+        val manifestFile = File(dir, PromptBaseline.MANIFEST)
+        // 「文件不存在」是预期的（内核还没跑过），「存在但读不出/解析坏」是故障，
+        // 两者都会落到「待内核初始化」，不留日志就完全无法区分。
+        val manifestText =
+            if (!manifestFile.isFile) {
+                null
+            } else {
+                runCatching { manifestFile.readText() }.getOrElse {
+                    AppLog.w("SystemPrompts", "读取模板基线清单失败：${it.message ?: it.javaClass.simpleName}")
+                    null
+                }
+            }
+        val manifest = PromptBaseline.parseManifest(manifestText)
+        if (manifestText != null && manifest.isEmpty()) {
+            AppLog.w("SystemPrompts", "模板基线清单无法解析，状态暂按未知显示")
+        }
         val out = LinkedHashMap<String, String>()
         all.forEach { item ->
             val file = File(dir, item.file)

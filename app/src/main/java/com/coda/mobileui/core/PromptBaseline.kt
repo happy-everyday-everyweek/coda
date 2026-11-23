@@ -56,14 +56,28 @@ internal object PromptBaseline {
      * 坏 JSON、空对象一律返回空表：调用方据此落到 [Status.UNKNOWN]，
      * 而不是把每一项都当成默认。
      */
-    fun parseManifest(text: String?): Map<String, String> {
+    fun parseManifest(text: String?): Map<String, Set<String>> {
         if (text.isNullOrBlank()) return emptyMap()
         return runCatching {
             val o = JSONObject(text)
-            val out = HashMap<String, String>()
+            val out = HashMap<String, Set<String>>()
             o.keys().forEach { k ->
-                val v = o.optString(k, "")
-                if (k.isNotEmpty() && v.isNotEmpty()) out[k] = v.lowercase()
+                if (k.isEmpty()) return@forEach
+                // 清单记的是「历次默认版本的摘要」：内核只补缺失文件，升级后磁盘上
+                // 仍可能是旧版本释放的默认内容，只比对当前版本会把它们误报成已修改。
+                // 同时兼容早期「文件名 → 单个摘要」的写法。
+                val arr = o.optJSONArray(k)
+                val set = LinkedHashSet<String>()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val v = arr.optString(i, "")
+                        if (v.isNotEmpty()) set.add(v.lowercase())
+                    }
+                } else {
+                    val v = o.optString(k, "")
+                    if (v.isNotEmpty()) set.add(v.lowercase())
+                }
+                if (set.isNotEmpty()) out[k] = set
             }
             out.toMap()
         }.getOrDefault(emptyMap())
@@ -81,12 +95,13 @@ internal object PromptBaseline {
         exists: Boolean,
         text: String?,
         digest: String?,
-        baseline: String?,
+        baselines: Set<String>?,
     ): Status {
         if (!exists) return Status.DEFAULT_ABSENT
         if (text == null) return Status.UNREADABLE
-        if (baseline.isNullOrBlank() || digest.isNullOrBlank()) return Status.UNKNOWN
-        if (digest.equals(baseline, ignoreCase = true)) return Status.DEFAULT
+        if (baselines.isNullOrEmpty() || digest.isNullOrBlank()) return Status.UNKNOWN
+        // 命中任一历史默认版本都算「默认」：文件可能是旧版内核释放后一直没动过。
+        if (baselines.any { it.equals(digest, ignoreCase = true) }) return Status.DEFAULT
         // 纯空白也算改动：用户主动清空与从未编辑是两回事。
         return if (text.isBlank()) Status.CLEARED else Status.MODIFIED
     }

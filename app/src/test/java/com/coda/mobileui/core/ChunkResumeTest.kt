@@ -206,7 +206,7 @@ class ChunkResumeTest {
 
     @Test
     fun `本次多给了一个标识不影响采纳`() {
-        // 上次只记到 ETag，这次服务端还给了 Last-Modified：已知那项一致就够。
+        // 上次只记到 ETag，这次服务端还给了 Last-Modified：同类型的 ETag 一致就够。
         assertTrue(
             ChunkResume.adopt(
                 saved = state(),
@@ -217,6 +217,41 @@ class ChunkResumeTest {
                 partBytes = 1000,
                 etag = "\"e1\"",
                 lastModified = "Tue",
+            ),
+        )
+    }
+
+    @Test
+    fun `标识类型错位时不采纳`() {
+        // 记录里只有 ETag，本次只拿到 Last-Modified：没有任何同类型项可比。
+        // CDN 各边缘节点返回的头部不一致，这种错位是现实场景，
+        // 而 sha256 可选，错位的字节会被静默拼成成品。
+        assertFalse(
+            ChunkResume.adopt(
+                saved = state(etag = "\"e1\"", lastModified = null),
+                url = "https://a/f",
+                total = 1000,
+                chunks = chunks,
+                partExists = true,
+                partBytes = 1000,
+                etag = null,
+                lastModified = "Tue",
+            ),
+        )
+    }
+
+    @Test
+    fun `标识类型反向错位也不采纳`() {
+        assertFalse(
+            ChunkResume.adopt(
+                saved = state(etag = null, lastModified = "Mon"),
+                url = "https://a/f",
+                total = 1000,
+                chunks = chunks,
+                partExists = true,
+                partBytes = 1000,
+                etag = "\"e1\"",
+                lastModified = null,
             ),
         )
     }

@@ -44,8 +44,14 @@ internal object EditorSavePolicy {
     fun decide(s: State): Verdict =
         when {
             s.readOnlyPreview -> Verdict.BLOCKED_ARCHIVE
+
             !s.hasTarget -> Verdict.BLOCKED_DETACHED
-            s.dirty && s.externalConflict -> Verdict.CONFIRM_OVERWRITE
+
+            // 只要有未处理的外部冲突就要确认，不看当前是否脏：
+            // 用户可能改过之后又撤销回原文，dirty 变回 false 而冲突仍在，
+            // 这时保存依然是一次真实写入，会把外部改动覆盖掉。
+            s.externalConflict -> Verdict.CONFIRM_OVERWRITE
+
             else -> Verdict.SAVE
         }
 
@@ -117,6 +123,9 @@ internal object EditorSavePolicy {
         val tmp = File(target.parentFile, target.name + "." + System.nanoTime() + ".save")
         return try {
             tmp.writeBytes(bytes)
+            // 临时文件是默认权限：直接改名会把可执行脚本的执行位抹掉、
+            // 把 0600 的私有文件放宽。先把原文件的权限位搬过去。
+            copyMode(target, tmp)
             if (tmp.renameTo(target)) {
                 true
             } else {
@@ -127,6 +136,20 @@ internal object EditorSavePolicy {
             false
         } finally {
             if (tmp.exists()) runCatching { tmp.delete() }
+        }
+    }
+
+    /** 把 [from] 的读写执行位复制到 [to]；文件不存在时什么都不做。 */
+    private fun copyMode(
+        from: File,
+        to: File,
+    ) {
+        if (!from.isFile) return
+        runCatching {
+            to.setReadable(from.canRead(), false)
+            to.setWritable(from.canWrite(), false)
+            // 执行位单独判：普通文本文件没有它，脚本有。
+            if (from.canExecute()) to.setExecutable(true, false)
         }
     }
 }

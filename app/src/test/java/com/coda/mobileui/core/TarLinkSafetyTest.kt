@@ -107,6 +107,49 @@ class TarLinkSafetyTest {
     }
 
     @Test
+    fun `名字含多个箭头时拒绝解析`() {
+        // 成员名可以合法含 " -> "：`x -> a/b` 指向 `../../evil` 时整行有两个箭头，
+        // 按首个切会把目标读成 `a/b -> ../../evil`，规范化后反而"看起来安全"。
+        assertNull(TarListing.parseLink("lrwxrwxrwx 0/0 0 2024-05-06 07:08 x -> a/b -> ../../evil"))
+    }
+
+    @Test
+    fun `父路径经过符号链接时拒绝`() {
+        // d/s -> ../a 让 d/s 实际落在 root/a；
+        // 于是 d/s/x -> ../../evil 实际解析成 root/../evil，越界。
+        val links = setOf("d/s")
+        assertTrue(TarLinkSafety.linkStaysInside("/tmp/out", "d/s", "../a", links))
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "d/s/x", "../../evil", links))
+    }
+
+    @Test
+    fun `父路径不经过符号链接时照常判定`() {
+        val links = setOf("other/s")
+        assertTrue(TarLinkSafety.linkStaysInside("/tmp/out", "d/x", "y", links))
+    }
+
+    @Test
+    fun `硬链接指向符号链接成员时拒绝`() {
+        assertFalse(
+            TarLinkSafety.hardLinkStaysInside(
+                root = "/tmp/out",
+                member = "dup",
+                target = "d/s",
+                knownMembers = setOf("dup", "d/s"),
+                symlinkMembers = setOf("d/s"),
+            ),
+        )
+    }
+
+    @Test
+    fun `转义后的越界名字还原后仍被拒`() {
+        // GNU tar 把 `../evil` 列成 `\056\056/evil`，字面上没有 `..` 组件。
+        val raw = "\\056\\056/evil"
+        assertTrue(TarLinkSafety.memberSafe(raw))
+        assertFalse(TarLinkSafety.memberSafe(TarListing.unescape(raw)))
+    }
+
+    @Test
     fun `硬链接指向归档内成员是安全的`() {
         assertTrue(
             TarLinkSafety.hardLinkStaysInside(

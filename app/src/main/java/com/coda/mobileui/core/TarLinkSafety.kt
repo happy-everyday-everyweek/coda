@@ -42,16 +42,37 @@ internal object TarLinkSafety {
         root: String,
         member: String,
         target: String,
+        symlinkMembers: Set<String> = emptySet(),
     ): Boolean {
         if (target.isEmpty() || target.startsWith("/")) return false
         if (!memberSafe(member)) return false
         // 关键：基准是链接自身的父目录，不是解压根。
         val parent = TarListing.normalizePath(member).substringBeforeLast('/', "")
+        // 父路径经过任何符号链接成员时，字面深度与解压时的实际深度不一致：
+        // `d/s -> ../a` 之后 `d/s/x -> ../../evil` 字面规范化成 `evil`（看似安全），
+        // 实际却落在 root/a/x 上，`../../evil` 解析成 root/../evil，越界。
+        // 无法在这里可靠地传递解析，直接 fail-closed。
+        if (parent.isNotEmpty() && traversesSymlink(parent, symlinkMembers)) return false
         val joined = if (parent.isEmpty()) target else "$parent/$target"
         val normalized = normalize(joined) ?: return false
         // 规范化后为空表示落在根本身：链接指向目录自身没有意义，也不安全。
         if (normalized.isEmpty()) return false
         return !normalized.startsWith("/") && normalized.split('/').none { it == ".." }
+    }
+
+    /** [path] 的任一前缀是否是已知的符号链接成员。 */
+    internal fun traversesSymlink(
+        path: String,
+        symlinkMembers: Set<String>,
+    ): Boolean {
+        if (symlinkMembers.isEmpty()) return false
+        val segs = path.split('/').filter { it.isNotEmpty() }
+        var prefix = ""
+        for (s in segs) {
+            prefix = if (prefix.isEmpty()) s else "$prefix/$s"
+            if (prefix in symlinkMembers) return true
+        }
+        return false
     }
 
     /**
@@ -65,10 +86,15 @@ internal object TarLinkSafety {
         member: String,
         target: String,
         knownMembers: Set<String>,
+        symlinkMembers: Set<String> = emptySet(),
     ): Boolean {
         if (!memberSafe(member) || !memberSafe(target)) return false
         val t = TarListing.normalizePath(target).trimEnd('/')
-        return t in knownMembers
+        if (t !in knownMembers) return false
+        // 目标本身是符号链接成员时，它的落点无法在这里核实：
+        // 硬链接会跟着那条链接跑到归档外，等于绕过符号链接校验。
+        if (t in symlinkMembers) return false
+        return !traversesSymlink(t.substringBeforeLast('/', ""), symlinkMembers)
     }
 
     /**

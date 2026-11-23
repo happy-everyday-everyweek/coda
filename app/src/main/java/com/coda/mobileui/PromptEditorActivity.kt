@@ -37,6 +37,21 @@ class PromptEditorActivity : BaseActivity() {
      */
     private val gate = com.coda.mobileui.core.PromptLoadGate()
 
+    /**
+     * 用户是否真的动过输入框。
+     *
+     * 不能用「输入框非空」代替：旋转或进程重建时 Android 会先恢复 EditText 的内容，
+     * 异步读盘还没回来，那份恢复内容会被误判成「加载期间的输入」，
+     * 于是磁盘正文不套用、保存闸门永久关闭——用户其实什么都没改。
+     */
+    private var userEdited = false
+
+    /** 保存进行中：避免连点提交两次写盘，把基线记账弄乱。 */
+    private var saving = false
+
+    /** 正在用代码回填正文：这段时间的文本变化不算用户编辑。 */
+    private var applyingText = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val scope = intent.getStringExtra(EXTRA_SCOPE) ?: SCOPE_GLOBAL
@@ -74,19 +89,30 @@ class PromptEditorActivity : BaseActivity() {
     private fun loadFromDisk() {
         AgentPrompt.readAsync(file) { read ->
             if (isFinishing || isDestroyed) return@readAsync
-            val d = gate.onLoaded(read, typed = input.text.toString())
-            d.error?.let {
-                Toast.makeText(this, "读取失败：$it，请重试后再编辑", Toast.LENGTH_LONG).show()
-            }
-            if (d.needsReload) {
-                // 不自动合并：磁盘内容与用户输入谁在前谁在后无法判断，
-                // 猜错就是丢数据。让用户自己决定保留哪一份。
-                Toast.makeText(this, "加载期间已输入内容，未套用磁盘正文；保存已暂停，请返回重进", Toast.LENGTH_LONG).show()
-            }
+            // 只看真实输入标志：旋转/进程重建恢复的正文不算「加载期间输入」。
+            val typed = if (userEdited) input.text.toString() else ""
+            val d = gate.onLoaded(read, typed = typed)
             d.applyText?.let {
-                input.setText(it)
-                input.setSelection(input.text.length)
+                applyingText = true
+                try {
+                    input.setText(it)
+                    input.setSelection(input.text.length)
+                } finally {
+                    applyingText = false
+                }
+                userEdited = false
             }
+            // 两种问题合成一条提示：两条 LENGTH_LONG 会互相顶掉，
+            // 真正的失败原因反而看不见。
+            val msg =
+                when {
+                    d.error != null && d.needsReload ->
+                        "读取失败：${d.error}；你在加载期间的输入已保留，可点「重新加载」取回磁盘正文"
+                    d.error != null -> "读取失败：${d.error}；可点「重新加载」重试"
+                    d.needsReload -> "加载期间已输入内容，未套用磁盘正文；可点「重新加载」用磁盘内容替换，或先复制你的输入"
+                    else -> null
+                }
+            msg?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
             updateMeta()
         }
     }
@@ -128,6 +154,18 @@ class PromptEditorActivity : BaseActivity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        // 重新加载入口：读失败或加载期间输入后闸门会关闭，没有它就只剩「返回重进」
+        // 这条死路，而用户刚打的字只能靠放弃修改丢掉——正是本次要防的丢数据。
+        bar.addView(
+            TextView(this).apply {
+                text = "重新加载"
+                textSize = 15f
+                setTextColor(onSurfaceVariant)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                setOnClickListener { confirmReload() }
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
         )
         bar.addView(
             TextView(this).apply {
@@ -190,7 +228,12 @@ class PromptEditorActivity : BaseActivity() {
                     count: Int,
                 ) = Unit
 
-                override fun afterTextChanged(s: android.text.Editable?) = updateMeta()
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    // 只有真实输入才置位；setText 回填与视图状态恢复都会先把
+                    // userEdited 置回 false，避免把它们当成用户编辑。
+                    if (!applyingText) userEdited = true
+                    updateMeta()
+                }
             },
         )
         root.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -210,15 +253,50 @@ class PromptEditorActivity : BaseActivity() {
         meta.text = "${input.text.length} 字"
     }
 
-    private fun saveAndFinish() {
-        // 正文还没可信地读进来就保存，会把磁盘上的内容覆盖成几个字或空（#739、#741）。
-        if (!gate.canSave) {
-            Toast.makeText(this, "正文尚未就绪，暂不能保存；请返回重进本页", Toast.LENGTH_LONG).show()
+    /**
+     * 重新加载磁盘正文。
+     *
+     * 有未保存输入时先确认：重新加载会用磁盘内容替换编辑框，
+     * 不能悄悄把用户刚打的字冲掉。
+     */
+    private fun confirmReload() {
+        if (!userEdited || input.text.isEmpty()) {
+            userEdited = false
+            loadFromDisk()
             return
         }
+        CodaSheet(this)
+            .compact()
+            .title("重新加载")
+            .subtitle("将用磁盘上的正文替换当前编辑内容，未保存的输入会丢失")
+            .secondaryAction("取消") { it.dismiss() }
+            .primaryAction("替换并重载") { sheet ->
+                sheet.dismiss()
+                applyingText = true
+                try {
+                    input.setText("")
+                } finally {
+                    applyingText = false
+                }
+                userEdited = false
+                loadFromDisk()
+            }
+            .show()
+    }
+
+    private fun saveAndFinish() {
+        // 连点保护：单线程执行器上排两次写盘会让基线记账竞态。
+        if (saving) return
+        // 正文还没可信地读进来就保存，会把磁盘上的内容覆盖成几个字或空（#739、#741）。
+        if (!gate.canSave) {
+            Toast.makeText(this, "正文尚未就绪，暂不能保存；可点「重新加载」重试", Toast.LENGTH_LONG).show()
+            return
+        }
+        saving = true
         val body = input.text.toString()
         // 写盘也走 IO 线程（#173）；失败时保持页面打开，让用户能重试。
         AgentPrompt.saveAsync(file, body) { err ->
+            saving = false
             if (isFinishing || isDestroyed) return@saveAsync
             if (err != null) {
                 gate.onSaveFailed()
@@ -226,6 +304,7 @@ class PromptEditorActivity : BaseActivity() {
                 return@saveAsync
             }
             gate.onSaved(body)
+            userEdited = false
             Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
             setResult(RESULT_OK)
             finish()

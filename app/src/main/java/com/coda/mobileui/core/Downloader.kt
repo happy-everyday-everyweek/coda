@@ -391,6 +391,9 @@ if (req.resume) {
         onProgress: Progress?,
         cancel: Cancel?,
     ): Result {
+        // 走到这里时用户可能已经取消（分块的 200 抢在取消观测之前赢了 CAS）。
+        // 不先判就会在死镜像上白等一个 connectTimeout。
+        if (cancel?.isCancelled == true) return Result(DownloadOutcome.Kind.CANCELLED, detail = "已取消")
         var conn: HttpURLConnection? = null
         try {
             conn = open(req, 0)
@@ -421,7 +424,18 @@ if (req.resume) {
             if (req.resume) {
                 runCatching {
                     if (tmp.isFile) {
-                        ResumeState.save(sidecar, ResumeState(req.url, tmp.length(), total, null, null))
+                        ResumeState.save(
+                            sidecar,
+                            ResumeState(
+                                req.url,
+                                tmp.length(),
+                                total,
+                                // 标识必须带上：没有它的记录下次会被判 DISCARD_NO_VALIDATOR，
+                                // 保留的字节等于白留，续传意图落空。
+                                conn?.getHeaderField("ETag"),
+                                conn?.getHeaderField("Last-Modified"),
+                            ),
+                        )
                     }
                 }
             } else {
@@ -433,7 +447,18 @@ if (req.resume) {
             if (req.resume) {
                 runCatching {
                     if (tmp.isFile) {
-                        ResumeState.save(sidecar, ResumeState(req.url, tmp.length(), total, null, null))
+                        ResumeState.save(
+                            sidecar,
+                            ResumeState(
+                                req.url,
+                                tmp.length(),
+                                total,
+                                // 标识必须带上：没有它的记录下次会被判 DISCARD_NO_VALIDATOR，
+                                // 保留的字节等于白留，续传意图落空。
+                                conn?.getHeaderField("ETag"),
+                                conn?.getHeaderField("Last-Modified"),
+                            ),
+                        )
                     }
                 }
             } else {

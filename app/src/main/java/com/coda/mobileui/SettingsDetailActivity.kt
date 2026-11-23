@@ -77,6 +77,9 @@ class SettingsDetailActivity :
         ) { result ->
             if (pendingPromptRestart && result.resultCode == RESULT_OK) restartCoreForPrompts()
             pendingPromptRestart = false
+            // 保存/恢复默认后必须作废状态快照：TTL 内 ensureSnapshot 会短路，
+            // 行里会一直显示旧状态（刚改成「已修改」却仍写「默认」）。
+            if (result.resultCode == RESULT_OK) SettingsData.invalidateSnapshots("sysprompts")
             renderPage()
         }
 

@@ -18,8 +18,27 @@ class PromptBaselineTest {
     fun `内容与清单一致是默认`() {
         assertEquals(
             PromptBaseline.Status.DEFAULT,
-            PromptBaseline.statusOf(exists = true, text = body, digest = digest, baseline = digest),
+            PromptBaseline.statusOf(exists = true, text = body, digest = digest, baselines = setOf(digest)),
         )
+    }
+
+    @Test
+    fun `命中旧版本默认摘要仍算默认`() {
+        // 内核只补缺失文件，升级后磁盘上仍是旧版释放的默认内容。
+        // 只比对当前版本会把这些从未被碰过的文件误报成「已修改」。
+        val old = PromptBaseline.sha256("旧版默认模板\n")
+        assertEquals(
+            PromptBaseline.Status.DEFAULT,
+            PromptBaseline.statusOf(exists = true, text = "旧版默认模板\n", digest = old, baselines = setOf(old, digest)),
+        )
+    }
+
+    @Test
+    fun `清单兼容单摘要与摘要数组两种写法`() {
+        val single = PromptBaseline.parseManifest("""{"a.md":"ABCD"}""")
+        assertEquals(setOf("abcd"), single["a.md"])
+        val multi = PromptBaseline.parseManifest("""{"a.md":["ABCD","EF01"]}""")
+        assertEquals(setOf("abcd", "ef01"), multi["a.md"])
     }
 
     @Test
@@ -27,7 +46,7 @@ class PromptBaselineTest {
         // 这正是 #742 的核心：无从判断时不能宣称默认。
         assertEquals(
             PromptBaseline.Status.UNKNOWN,
-            PromptBaseline.statusOf(exists = true, text = body, digest = digest, baseline = null),
+            PromptBaseline.statusOf(exists = true, text = body, digest = digest, baselines = null),
         )
         assertEquals("待内核初始化", PromptBaseline.label(PromptBaseline.Status.UNKNOWN))
     }
@@ -41,7 +60,7 @@ class PromptBaselineTest {
                 exists = true,
                 text = custom,
                 digest = PromptBaseline.sha256(custom),
-                baseline = digest,
+                baselines = setOf(digest),
             ),
         )
     }
@@ -50,7 +69,7 @@ class PromptBaselineTest {
     fun `文件不存在是默认`() {
         assertEquals(
             PromptBaseline.Status.DEFAULT_ABSENT,
-            PromptBaseline.statusOf(exists = false, text = null, digest = null, baseline = digest),
+            PromptBaseline.statusOf(exists = false, text = null, digest = null, baselines = setOf(digest)),
         )
         assertEquals("默认", PromptBaseline.label(PromptBaseline.Status.DEFAULT_ABSENT))
     }
@@ -59,7 +78,7 @@ class PromptBaselineTest {
     fun `文件在但读失败单独成一态`() {
         assertEquals(
             PromptBaseline.Status.UNREADABLE,
-            PromptBaseline.statusOf(exists = true, text = null, digest = null, baseline = digest),
+            PromptBaseline.statusOf(exists = true, text = null, digest = null, baselines = setOf(digest)),
         )
         assertEquals("读取失败", PromptBaseline.label(PromptBaseline.Status.UNREADABLE))
     }
@@ -73,7 +92,7 @@ class PromptBaselineTest {
                 exists = true,
                 text = blank,
                 digest = PromptBaseline.sha256(blank),
-                baseline = digest,
+                baselines = setOf(digest),
             ),
         )
     }
@@ -82,7 +101,7 @@ class PromptBaselineTest {
     fun `摘要大小写不影响比对`() {
         assertEquals(
             PromptBaseline.Status.DEFAULT,
-            PromptBaseline.statusOf(exists = true, text = body, digest = digest, baseline = digest.uppercase()),
+            PromptBaseline.statusOf(exists = true, text = body, digest = digest, baselines = setOf(digest.uppercase())),
         )
     }
 
@@ -90,8 +109,8 @@ class PromptBaselineTest {
     fun `清单解析出全部条目并统一小写`() {
         val m = PromptBaseline.parseManifest("""{"a.md":"ABCDEF","b.md":"123456"}""")
         assertEquals(2, m.size)
-        assertEquals("abcdef", m["a.md"])
-        assertEquals("123456", m["b.md"])
+        assertEquals(setOf("abcdef"), m["a.md"])
+        assertEquals(setOf("123456"), m["b.md"])
     }
 
     @Test
@@ -107,7 +126,7 @@ class PromptBaselineTest {
         // 空摘要不能参与比对，否则任何内容都会被判成已修改。
         val m = PromptBaseline.parseManifest("""{"a.md":"","b.md":"aa"}""")
         assertEquals(1, m.size)
-        assertEquals("aa", m["b.md"])
+        assertEquals(setOf("aa"), m["b.md"])
     }
 
     @Test

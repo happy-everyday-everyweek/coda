@@ -47,12 +47,14 @@ class EditorSavePolicyTest {
     }
 
     @Test
-    fun `外部改过但本地干净也直接保存`() {
+    fun `撤销回原文后仍要确认覆盖`() {
+        // 用户改过又撤销回原文：dirty 回到 false，但外部冲突还没处理。
+        // 这时保存依然是一次真实写入，会把外部改动覆盖掉。
         val d =
             EditorSavePolicy.decide(
                 EditorSavePolicy.State(hasTarget = true, dirty = false, externalConflict = true),
             )
-        assertEquals(EditorSavePolicy.Verdict.SAVE, d)
+        assertEquals(EditorSavePolicy.Verdict.CONFIRM_OVERWRITE, d)
     }
 
     @Test
