@@ -54,8 +54,37 @@ class HighlightCacheTest {
     }
 
     @Test
+    fun `等长但内容变了必须整篇重建`() {
+        // 覆盖选区、粘贴替换、撤销回同长度：四个字段全同，
+        // 但 Editable.replace 已丢掉替换区内的 span，必须重建。
+        val a = HighlightCache.Key("buf", rulesA, palA, 3, HighlightCache.contentRevision("abc"))
+        val b = HighlightCache.Key("buf", rulesA, palA, 3, HighlightCache.contentRevision("abd"))
+        assertFalse(HighlightCache.reusable(a, b))
+    }
+
+    @Test
+    fun `内容指纹对同文本稳定对不同文本敏感`() {
+        assertEquals(HighlightCache.contentRevision("hello"), HighlightCache.contentRevision("hello"))
+        assertTrue(HighlightCache.contentRevision("abc") != HighlightCache.contentRevision("abd"))
+        assertTrue(HighlightCache.contentRevision("") != HighlightCache.contentRevision("a"))
+    }
+
+    @Test
     fun `没有历史时不复用`() {
         assertFalse(HighlightCache.reusable(null, key()))
+    }
+
+    @Test
+    fun `弱引用不改变身份比较`() {
+        // Key 改为 WeakReference 持有缓冲区（单例不再钉住最后一个编辑器的全文），
+        // 同一实例仍须判为可复用，不同实例仍须拒绝。
+        val buffer = StringBuilder("same")
+        val a = HighlightCache.Key(buffer, rulesA, palA, 4)
+        val b = HighlightCache.Key(buffer, rulesA, palA, 4)
+        assertTrue(HighlightCache.reusable(a, b))
+        assertFalse(HighlightCache.reusable(a, HighlightCache.Key(StringBuilder("same"), rulesA, palA, 4)))
+        assertTrue(a.sameBuffer(buffer))
+        assertFalse(a.sameBuffer(StringBuilder("same")))
     }
 
     @Test

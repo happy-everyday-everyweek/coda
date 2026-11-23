@@ -53,6 +53,24 @@ object Git {
         for (extra in discoveredRoots(env, root)) {
             out += listOf("-c", "safe.directory=$extra")
         }
+        if (out.size > 2) {
+            // 放开的是**父仓库/主仓库**的属主校验，后续 status/diff 会执行那个仓库
+            // 自己的配置（OCR medium）：core.fsmonitor 是索引刷新时运行的外部命令，
+            // core.hooksPath 指向仓库内的钩子目录，别名可以 `!sh` 起 shell。
+            // 探测命令带的 hooksPath=/dev/null 只保护探测这一条，保护不了后续调用。
+            // 这里对每条后续命令统一压制：hooksPath 置空目录，fsmonitor 关掉，
+            // pager 关掉（pager 也可能被配置成任意命令）。alias 无法用 -c 逐个清除，
+            // 但本模块只调用固定的内置子命令名，git 对内置命令不查 alias，风险可控。
+            out +=
+                listOf(
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-c",
+                    "core.pager=cat",
+                )
+        }
         return out
     }
 
@@ -73,31 +91,31 @@ object Git {
         val key = root.absolutePath
         discovered[key]?.let { return it }
         val guest = env.guestPath(key)
-        val probe =
-            env.exec(
-                listOf(
-                    "git",
-                    "-c",
-                    "safe.directory=*",
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "-C",
-                    guest,
-                    "rev-parse",
-                    "--path-format=absolute",
-                    "--show-toplevel",
-                    "--git-common-dir",
-                ),
-                timeoutMs = 15_000L,
-            )
-        val paths =
-            if (probe.ok) {
-                probe.output.lines().map { it.trim() }.filter { it.startsWith("/") }.distinct()
-            } else {
-                emptyList()
-            }
-        // 只保留与当前工作区确有关联的路径：探测失败或输出异常时宁可什么都不加。
-        val kept = paths.filter { it == guest || guest.startsWith("$it/") || it.startsWith("$guest/") }
+        // 探测命令本身也可能因为 git 太老（--path-format 需要 2.31+）而失败，
+        // 所以失败时**不缓存**（#782）：缓存空表会让后续所有调用永远拿不到
+        // 真实 toplevel，即使用户随后 git init 了也不会重试。
+        val base = listOf("git", "-c", "safe.directory=*", "-c", "core.hooksPath=/dev/null", "-C", guest, "rev-parse")
+        // --path-format=absolute 需要 git 2.31+；老版本上先试带它的，
+        // 失败再退回不带（输出可能是相对路径，下面按 guest 拼绝对）。
+        var probe = env.exec(base + listOf("--path-format=absolute", "--show-toplevel", "--git-common-dir"), 15_000L)
+        if (!probe.ok) {
+            probe = env.exec(base + listOf("--show-toplevel", "--git-common-dir"), 15_000L)
+        }
+        if (!probe.ok) {
+            // 不是仓库、或 git 不可用：不缓存，下次调用还会重试。
+            return emptyList()
+        }
+        val kept =
+            probe.output
+                .lines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("fatal") }
+                .map { if (it.startsWith("/")) it else "$guest/$it" }
+                .distinct()
+        // 不再按「与 guest 有前缀关系」过滤：那恰好会丢掉本次要修的两种情况——
+        // 符号链接解析后的 toplevel（/sdcard → /storage/self/primary）与
+        // linked worktree 的 commondir（指向主仓库，是工作区的兄弟目录）。
+        // 这些路径都是 git 自己报出来的、与当前仓库确有关联，放开它们是安全的。
         discovered[key] = kept
         return kept
     }
@@ -174,17 +192,34 @@ object Git {
     fun init(
         env: LinuxEnv,
         root: File,
-    ): Result = run(env, root, listOf("init", "-b", "main")).let { if (it.ok) it else run(env, root, listOf("init")) }
+    ): Result =
+        run(env, root, listOf("init", "-b", "main"))
+            .let { if (it.ok) it else run(env, root, listOf("init")) }
+            .also {
+                // 新建仓库后必须重探 toplevel：之前「不是仓库」的探测结果不能继续用。
+                discovered.remove(root.absolutePath)
+            }
 
     /** 当前分支名；游离头指针时给出短哈希。 */
     fun branch(
         env: LinuxEnv,
         root: File,
     ): String {
-        val head = run(env, root, listOf("symbolic-ref", "--short", "-q", "HEAD")).data().trim()
-        if (head.isNotEmpty()) return head
+        branchOrNull(env, root)?.let { return it }
         return run(env, root, listOf("rev-parse", "--short", "HEAD")).data().trim()
     }
+
+    /**
+     * 具名分支名；detached HEAD 时返回 null。
+     *
+     * [branch] 在 detached 时退回短 hash，展示没问题，但推送决策不能拿
+     * 字符串形状去猜「这是不是 hash」——`deadbeef` 也是合法分支名。
+     * symbolic-ref 的成败就是事实本身，直接把它交给调用方。
+     */
+    fun branchOrNull(
+        env: LinuxEnv,
+        root: File,
+    ): String? = run(env, root, listOf("symbolic-ref", "--short", "-q", "HEAD")).data().trim().ifEmpty { null }
 
     /**
      * 工作区所在仓库的根目录。
@@ -365,7 +400,15 @@ object Git {
         root: File,
     ): String {
         val result = run(env, root, listOf("rev-parse", "HEAD"))
-        return if (result.ok) result.output.trim().lineSequence().firstOrNull().orEmpty() else ""
+        return if (result.ok) {
+            result.output
+                .trim()
+                .lineSequence()
+                .firstOrNull()
+                .orEmpty()
+        } else {
+            ""
+        }
     }
 
     /**
@@ -442,7 +485,7 @@ object Git {
             GitPushPolicy.decide(
                 firstError = first.output,
                 remotes = run(env, root, listOf("remote")).data().lines(),
-                branch = branch(env, root),
+                branch = branchOrNull(env, root),
             )
         val remote = decision.remote ?: return Result(false, first.output + "\n" + decision.reason)
         return run(

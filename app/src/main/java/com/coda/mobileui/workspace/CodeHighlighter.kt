@@ -95,7 +95,10 @@ object CodeHighlighter {
         val tokens = CodeLexer.scan(editable, rules)
         // 缓存键必须含缓冲区、规则、配色与长度（#778/#779/#781）：
         // 少任何一项都会拿不对齐的历史做增量，留下陈旧或错色的 span。
-        val key = HighlightCache.Key(editable, rules, palette, n)
+        // 内容指纹而不是只看长度（#778 复审）：覆盖选区、粘贴替换、撤销回同长度
+        // 都会让长度不变，而 Editable.replace 已经丢掉了替换区内的 span。
+        // 这里对全文取一个便宜的滚动哈希，长度相同但内容变了照样整篇重建。
+        val key = HighlightCache.Key(editable, rules, palette, n, HighlightCache.contentRevision(editable))
         val reuse = HighlightCache.reusable(lastKey, key)
         val previous = if (reuse) lastTokens else emptyList()
         val plan = CodeLexer.diff(previous, tokens)

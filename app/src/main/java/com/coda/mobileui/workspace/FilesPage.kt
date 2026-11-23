@@ -275,12 +275,20 @@ open class FilesPage(
     fun detachDeletedFile(path: String) {
         val current = editing ?: return
         if (current.absolutePath != path) return
+        // detach 时就把文件名留下：普通编辑器标签的 state 只有 path/markdown，
+        // 构造时的 saved 里没有 name；解除绑定后 path 也没了，不记这一笔
+        // 标签栏就退回通用的「编辑器」，用户分不清保留的是哪个文件（OCR medium）。
+        detachedName = current.name
         editing = null
         // 用独立的 detached 状态而不是 readOnlyPreview（#793）：
         // 后者会强清 dirty 并让 hasUnsavedEditor 失效，未保存编辑被静默丢弃。
         detachedFile = true
         // 解除绑定后状态栏改走只读分支：字节数按当前正文算，并清掉旧路径的大小缓存。
-        previewBytes = editorInput.text?.toString()?.toByteArray(editorCharset)?.size?.toLong() ?: 0L
+        previewBytes = editorInput.text
+            ?.toString()
+            ?.toByteArray(editorCharset)
+            ?.size
+            ?.toLong() ?: 0L
         sizeCachePath = null
         refreshEditorTitle()
         refreshCursorStatus()
@@ -445,7 +453,9 @@ open class FilesPage(
             state.remove("path")
             state
                 .put("detached", true)
-                .put("name", saved.optString("name"))
+                // 优先用 detach 时记下的文件名；saved 里的 name 只在恢复出来的
+                // detached 标签上有，普通编辑器标签构造时没有这个键。
+                .put("name", detachedName.ifEmpty { saved.optString("name") })
                 .put("markdown", markdownMode)
         } else if (file != null && (editorOnly || editorVisible)) {
             state.put("path", file.absolutePath).put("markdown", markdownMode)
@@ -458,7 +468,8 @@ open class FilesPage(
         }
         return state
     }
-override fun menuItems(): List<String> =
+
+    override fun menuItems(): List<String> =
         if (::editor.isInitialized && editor.visibility == View.VISIBLE) {
             // 编辑器页不该出现「新建文件」这类与当前内容无关的动作。
             listOf("保存", "关闭编辑器", "刷新")
@@ -592,7 +603,10 @@ override fun menuItems(): List<String> =
         )
 
     /** 与聊天页同一套 Markdown 插件：表格/删除线/任务列表在预览里也要生效。 */
-    private val markwon by lazy { com.coda.mobileui.MarkdownRender.create(host) }
+    private val markwon by lazy {
+        com.coda.mobileui.MarkdownRender
+            .create(host)
+    }
 
     /** 压缩包内预览：不可写，保存与关闭都不该走正常文件流程。 */
     private var readOnlyPreview = false
@@ -610,7 +624,10 @@ override fun menuItems(): List<String> =
      */
     private var detachedFile = false
 
-    /** 当前选中的文件（用于复制/移动到另一栏）。 */
+    /** detach 时的文件名：持久化与标签栏都靠它，见 [detachDeletedFile]。 */
+    private var detachedName = ""
+
+/** 当前选中的文件（用于复制/移动到另一栏）。 */
     private var selectedFile: File? = null
 
     private fun pickFile(file: File) {
@@ -661,9 +678,18 @@ override fun menuItems(): List<String> =
                         host.onFilesMoved(file.absolutePath, target.absolutePath)
                         toast("已移动到 ${dir.name}")
                     }
-                    "exists" -> toast("目标目录已有同名条目")
-                    "copied-not-removed" -> toast("已复制，但原文件删除失败，两处都还在")
-                    else -> toast("移动失败，已清理未完成的目标")
+
+                    "exists" -> {
+                        toast("目标目录已有同名条目")
+                    }
+
+                    "copied-not-removed" -> {
+                        toast("已复制，但原文件删除失败，两处都还在")
+                    }
+
+                    else -> {
+                        toast("移动失败，已清理未完成的目标")
+                    }
                 }
                 renderList()
                 renderRightPane()
@@ -1125,7 +1151,8 @@ override fun menuItems(): List<String> =
         // 必须先还原 GNU tar 的 C 风格转义再校验：`../evil` 可以被列成
         // `\056\056/evil`，字面上既没有 `..` 组件也没有前导 `/`，直接判会放行。
         val names =
-            listed.output.lineSequence()
+            listed.output
+                .lineSequence()
                 .filter { it.isNotBlank() }
                 .map { TarListing.unescape(it.removeSuffix("\r")) }
                 .toList()
@@ -1137,7 +1164,11 @@ override fun menuItems(): List<String> =
         // 已列举的成员集合：硬链接的目标必须在其中（#792）。
         val known = names.map { TarListing.normalizePath(it).trimEnd('/') }.toSet()
         val root = target.absolutePath
-        val lines = detailed.output.lineSequence().filter { it.isNotBlank() }.toList()
+        val lines =
+            detailed.output
+                .lineSequence()
+                .filter { it.isNotBlank() }
+                .toList()
         // 第一趟：收集全部符号链接成员。链接链（父路径经过另一条链接）会让
         // 字面深度与解压时的实际深度不符，必须先知道有哪些链接才能判。
         val symlinks = HashSet<String>()
@@ -1534,13 +1565,16 @@ override fun menuItems(): List<String> =
             path == rootPath -> {
                 "工作区根目录不能删除或移动"
             }
+
             // 工作区的祖先目录同样不能动：删掉 /sdcard/Coda 会连带删掉工作区与 .coda 配置。
             rootPath.startsWith(path.trimEnd('/') + "/") -> {
                 "工作区所在的上级目录不能删除或移动"
             }
+
             path in blockedRoots -> {
                 "系统目录不能删除或移动"
             }
+
             path.startsWith("/system") || path.startsWith("/data") || path.startsWith("/vendor") -> {
                 "系统目录不能删除或移动"
             }
@@ -1553,7 +1587,10 @@ override fun menuItems(): List<String> =
 
     /** 符号链接本身不能当目录展开，否则删除会顺着链接清掉目标内容。 */
     private fun isSymlink(file: File): Boolean =
-        runCatching { java.nio.file.Files.isSymbolicLink(file.toPath()) }.getOrDefault(false)
+        runCatching {
+            java.nio.file.Files
+                .isSymbolicLink(file.toPath())
+        }.getOrDefault(false)
 
     private fun deleteRecursive(file: File): Boolean {
         if (file.isDirectory && !isSymlink(file)) {
@@ -1651,7 +1688,9 @@ override fun menuItems(): List<String> =
 
     private fun buildEditor(): View {
         // 外观页的代码显示设置之前只写不读：字号、行号、换行在这里真正生效。
-        val codeStore = com.coda.mobileui.SettingsStore.get(host)
+        val codeStore =
+            com.coda.mobileui.SettingsStore
+                .get(host)
         wrapEnabled = codeStore.wrapLongLines
         val codeSizeSp =
             com.coda.mobileui.SettingsStore.CODE_FONT_SIZES[
@@ -2292,7 +2331,9 @@ override fun menuItems(): List<String> =
      * 0 默认用主题属性（跟随深浅与主色），其余四套是固定色板，按当前深浅模式各取一套。
      */
     private fun palette(): CodePalette {
-        val store = com.coda.mobileui.SettingsStore.get(host)
+        val store =
+            com.coda.mobileui.SettingsStore
+                .get(host)
         val dark =
             (
                 host.resources.configuration.uiMode and
@@ -2301,7 +2342,7 @@ override fun menuItems(): List<String> =
         val index = if (dark) store.codeThemeDarkIndex else store.codeThemeLightIndex
         return when (index) {
             // GitHub
-            1 ->
+            1 -> {
                 if (dark) {
                     CodePalette(
                         0xFF8B949E.toInt(),
@@ -2321,8 +2362,10 @@ override fun menuItems(): List<String> =
                         0xFF6F42C1.toInt(),
                     )
                 }
+            }
+
             // Monokai
-            2 ->
+            2 -> {
                 CodePalette(
                     0xFF75715E.toInt(),
                     0xFFF92672.toInt(),
@@ -2331,8 +2374,10 @@ override fun menuItems(): List<String> =
                     0xFFAE81FF.toInt(),
                     0xFFA6E22E.toInt(),
                 )
+            }
+
             // Solarized
-            3 ->
+            3 -> {
                 CodePalette(
                     if (dark) 0xFF586E75.toInt() else 0xFF93A1A1.toInt(),
                     0xFF859900.toInt(),
@@ -2341,8 +2386,10 @@ override fun menuItems(): List<String> =
                     0xFFD33682.toInt(),
                     0xFF268BD2.toInt(),
                 )
+            }
+
             // One Dark
-            4 ->
+            4 -> {
                 CodePalette(
                     0xFF5C6370.toInt(),
                     0xFFC678DD.toInt(),
@@ -2351,7 +2398,11 @@ override fun menuItems(): List<String> =
                     0xFFD19A66.toInt(),
                     0xFF61AFEF.toInt(),
                 )
-            else -> themePalette()
+            }
+
+            else -> {
+                themePalette()
+            }
         }
     }
 
@@ -2486,7 +2537,9 @@ override fun menuItems(): List<String> =
     /** 把外观页的代码显示设置应用到当前编辑器；从设置页返回时也会走这里。 */
     private fun applyCodeDisplaySettings() {
         if (!::editorInput.isInitialized) return
-        val store = com.coda.mobileui.SettingsStore.get(host)
+        val store =
+            com.coda.mobileui.SettingsStore
+                .get(host)
         val sp =
             com.coda.mobileui.SettingsStore.CODE_FONT_SIZES[
                 store.codeFontSizeIndex.coerceIn(com.coda.mobileui.SettingsStore.CODE_FONT_SIZES.indices),
@@ -2731,12 +2784,18 @@ override fun menuItems(): List<String> =
         // Provider 配置错误则所有文件都会失败，必须留下明确线索（#554）。
         val uri =
             when (val r = runCatching { WorkspaceFiles.explain(host, file) }.getOrNull()) {
-                is WorkspaceFiles.Result.Ok -> r.uri
+                is WorkspaceFiles.Result.Ok -> {
+                    r.uri
+                }
+
                 is WorkspaceFiles.Result.ProviderError -> {
                     toast("文件共享组件异常：${r.reason}")
                     return false
                 }
-                else -> return false
+
+                else -> {
+                    return false
+                }
             }
         val mime = mimeOf(file)
         val view =
@@ -2828,7 +2887,11 @@ override fun menuItems(): List<String> =
             return String(bytes, 3, bytes.size - 3, Charsets.UTF_8) to Charsets.UTF_8
         }
         strictlyDecode(bytes, Charsets.UTF_8)?.let { return it to Charsets.UTF_8 }
-        val gbk = runCatching { java.nio.charset.Charset.forName("GBK") }.getOrNull()
+        val gbk =
+            runCatching {
+                java.nio.charset.Charset
+                    .forName("GBK")
+            }.getOrNull()
         if (gbk != null) {
             strictlyDecode(bytes, gbk)?.let { return it to gbk }
         }
@@ -2859,6 +2922,7 @@ override fun menuItems(): List<String> =
         markdownMode = markdown
         readOnlyPreview = false
         detachedFile = false
+        detachedName = ""
         externalConflict = false
         editorCharset = charset
         originalText = content
@@ -2909,6 +2973,7 @@ override fun menuItems(): List<String> =
                 onDone?.invoke(false)
                 return
             }
+
             EditorSavePolicy.Verdict.BLOCKED_DETACHED -> {
                 // 与压缩包只读分开（#793）：这里是「文件被删了」，正文还在，
                 // 用压缩包的文案会把用户引向完全错误的方向。
@@ -2916,6 +2981,7 @@ override fun menuItems(): List<String> =
                 onDone?.invoke(false)
                 return
             }
+
             EditorSavePolicy.Verdict.CONFIRM_OVERWRITE -> {
                 // 兑现提示里承诺的「保存前会再确认」（#789）：此前只写标志不读，
                 // 脏编辑器会静默覆盖外部改动，不可逆。
@@ -2926,7 +2992,10 @@ override fun menuItems(): List<String> =
                 }
                 return
             }
-            EditorSavePolicy.Verdict.SAVE -> Unit
+
+            EditorSavePolicy.Verdict.SAVE -> {
+                Unit
+            }
         }
         writeEditor(onDone)
     }
@@ -2937,13 +3006,15 @@ override fun menuItems(): List<String> =
         // 所以三个出口必须共用一次性守卫：否则「覆盖保存」之后还会再来一次 false，
         // 把 requestLeaveEditor 里已答应关闭的流程又取消掉。
         var answered = false
+
         fun choose(yes: Boolean) {
             if (answered) return
             answered = true
             onChoice(yes)
         }
         val sheet =
-            sheet().compact()
+            sheet()
+                .compact()
                 .title("磁盘上的文件已被修改")
                 .subtitle("保存会用当前编辑内容覆盖外部改动，此操作不可撤销")
         sheet.secondaryAction("取消") {
@@ -2961,7 +3032,11 @@ override fun menuItems(): List<String> =
 
     /** 真正落盘：编码 REPORT + 原子写（#790）。 */
     private fun writeEditor(onDone: ((Boolean) -> Unit)?) {
-        val file = editing ?: run { onDone?.invoke(false); return }
+        val file =
+            editing ?: run {
+                onDone?.invoke(false)
+                return
+            }
         val text = editorInput.text.toString()
         val charset = editorCharset
         // 编码在主线程做：编辑器上限 MAX_EDIT_BYTES，转字节的开销远小于写盘，
@@ -3043,6 +3118,7 @@ override fun menuItems(): List<String> =
         var answered = false
         // 用户是否已经点过某个动作。dismiss 的 onDismiss 迟到，不能覆盖已做的选择。
         var acted = false
+
         fun finish(ok: Boolean) {
             if (answered) return
             answered = true
@@ -3121,6 +3197,7 @@ override fun menuItems(): List<String> =
         editing = null
         readOnlyPreview = false
         detachedFile = false
+        detachedName = ""
         externalConflict = false
         originalText = ""
         editorRules = null

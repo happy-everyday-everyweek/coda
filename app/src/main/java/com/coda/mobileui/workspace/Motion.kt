@@ -74,7 +74,9 @@ internal fun View.pressFeedback(
                 if (!isInsideBounds(v, ev)) releasePress(v)
             }
 
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> releasePress(v)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                releasePress(v)
+            }
         }
         // 返回 false 让点击与长按继续派发；宿主已 isClickable，事件链不会断。
         false
@@ -114,7 +116,12 @@ private fun fadeContent(
     duration: Long,
 ) {
     if (v !is ViewGroup) {
-        v.animate().alpha(alpha).setDuration(duration).setInterpolator(Motion.standard).start()
+        v
+            .animate()
+            .alpha(alpha)
+            .setDuration(duration)
+            .setInterpolator(Motion.standard)
+            .start()
         return
     }
     for (i in 0 until v.childCount) {
@@ -132,7 +139,12 @@ private fun fadeTarget(
         for (i in 0 until v.childCount) fadeTarget(v.getChildAt(i), alpha, duration)
         return
     }
-    v.animate().alpha(alpha).setDuration(duration).setInterpolator(Motion.standard).start()
+    v
+        .animate()
+        .alpha(alpha)
+        .setDuration(duration)
+        .setInterpolator(Motion.standard)
+        .start()
 }
 
 /**
@@ -186,9 +198,15 @@ internal fun TextView.crossFadeText(
         .setInterpolator(Motion.standard)
         .setListener(
             object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) = applyNow(true)
+                override fun onAnimationEnd(animation: Animator) {
+                    clearAnimatorListener()
+                    applyNow(true)
+                }
 
-                override fun onAnimationCancel(animation: Animator) = applyNow(false)
+                override fun onAnimationCancel(animation: Animator) {
+                    clearAnimatorListener()
+                    applyNow(false)
+                }
             },
         ).start()
 }

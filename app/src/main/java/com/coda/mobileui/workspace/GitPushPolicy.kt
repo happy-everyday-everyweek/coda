@@ -20,41 +20,38 @@ internal object GitPushPolicy {
         val reason: String,
     )
 
+    /**
+     * [branch] 为 null 表示 detached HEAD。这个事实由调用方从
+     * `symbolic-ref --short -q HEAD` 的成败直接得知（[Git.branchOrNull]），
+     * 不再按「像不像十六进制 hash」猜：`deadbeef`、`cafe123` 都是合法分支名，
+     * 旧的 hex 启发式会把这些分支的推送误杀（OCR medium）。
+     */
     fun decide(
         firstError: String,
         remotes: List<String>,
-        branch: String,
+        branch: String?,
     ): Decision {
+        val shown = branch ?: ""
         if (!firstError.contains("no upstream branch")) {
-            return Decision(null, branch, "不是缺少上游分支的错误")
+            return Decision(null, shown, "不是缺少上游分支的错误")
         }
         val names = remotes.map { it.trim() }.filter { it.isNotEmpty() }
-        if (names.isEmpty()) return Decision(null, branch, "没有配置远端")
+        if (names.isEmpty()) return Decision(null, shown, "没有配置远端")
         if (names.size > 1) {
-            return Decision(null, branch, "配置了多个远端（${names.joinToString("、")}），请自行选择推送目标")
+            return Decision(null, shown, "配置了多个远端（${names.joinToString("、")}），请自行选择推送目标")
         }
         val remote = names[0]
-        if (!safeRef(remote)) return Decision(null, branch, "远端名不合法：$remote")
-        if (!symbolicBranch(branch)) return Decision(null, branch, "当前不在具名分支上（可能是 detached HEAD）")
-        if (!safeRef(branch)) return Decision(null, branch, "分支名不合法：$branch")
+        if (!safeRef(remote)) return Decision(null, shown, "远端名不合法：$remote")
+        if (branch.isNullOrEmpty()) return Decision(null, shown, "当前不在具名分支上（detached HEAD）")
+        if (!safeRef(branch)) return Decision(null, shown, "分支名不合法：$branch")
         return Decision(remote, branch, "")
     }
 
     /**
-     * 是否是具名分支而不是 detached HEAD 的短 hash。
+     * 直接复用 [Git.isSafeRef]，不另写一份。
      *
-     * git 的短 hash 是 7 位以上的纯十六进制；分支名允许字母数字与 `/_-.`，
-     * 但一个纯十六进制且长度像 hash 的名字无法与 detached 状态区分，宁可拒绝。
+     * 这里曾自维护一套更弱的规则，漏掉了 `..`、`//` 与控制字符（\u0000、\u001f），
+     * 而重构前的 push 路径用的就是 isSafeRef——那是一次校验退化。
      */
-    internal fun symbolicBranch(name: String): Boolean {
-        if (name.isEmpty()) return false
-        val looksLikeHash = name.length in 7..40 && name.all { it in "0123456789abcdef" }
-        return !looksLikeHash
-    }
-
-    /** 引用名不得以 `-` 开头（会被 git 当选项），也不得含空白或 shell 元字符。 */
-    private fun safeRef(name: String): Boolean {
-        if (name.isEmpty() || name.startsWith("-")) return false
-        return name.none { it.isWhitespace() || it in ";|&$`\\\"'<>()*?[]{}~^:" }
-    }
+    private fun safeRef(name: String): Boolean = Git.isSafeRef(name)
 }

@@ -45,9 +45,22 @@ class GitPushPolicyTest {
     }
 
     @Test
-    fun `detached HEAD 的短 hash 不当分支名`() {
-        val d = GitPushPolicy.decide(firstError = "no upstream branch", remotes = listOf("origin"), branch = "a1b2c3d")
+    fun `detached HEAD 时不自动推送`() {
+        // detached 由调用方从 symbolic-ref 的成败得知（branchOrNull 返回 null），
+        // 不再靠字符串猜。
+        val d = GitPushPolicy.decide(firstError = "no upstream branch", remotes = listOf("origin"), branch = null)
         assertNull("detached HEAD 不能拼 refspec", d.remote)
+        assertTrue(d.reason.contains("detached") || d.reason.contains("具名分支"))
+    }
+
+    @Test
+    fun `纯十六进制的合法分支名不被误杀`() {
+        // deadbeef、cafe123 都是合法分支名；旧实现按 hex 形状猜 detached，
+        // 把这些分支的推送直接挡死（OCR medium）。
+        val d = GitPushPolicy.decide("no upstream branch", listOf("origin"), "deadbeef")
+        assertEquals("origin", d.remote)
+        assertEquals("deadbeef", d.branch)
+        assertEquals("origin", GitPushPolicy.decide("no upstream branch", listOf("origin"), "cafe123").remote)
     }
 
     @Test

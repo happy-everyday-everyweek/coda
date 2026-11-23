@@ -156,7 +156,9 @@ class WorkspaceActivity : BaseActivity() {
         // 存储彻底不可写时给出可见说明而不是崩溃（#764）：root() 不再硬抛，
         // 但用户必须知道文件读写会失败，否则看到的是「操作没反应」。
         Workspaces.storageError?.let {
-            android.widget.Toast.makeText(this, it, android.widget.Toast.LENGTH_LONG).show()
+            android.widget.Toast
+                .makeText(this, it, android.widget.Toast.LENGTH_LONG)
+                .show()
         }
         setContentView(buildContainer())
         restoreTabs()
@@ -518,17 +520,30 @@ class WorkspaceActivity : BaseActivity() {
         // 冷启动后用户立刻切后台/锁屏会触发 onPause → persist，
         // 把占位页无条件写进 workspace.json，真实标签不可逆丢失。
         restorePending = true
+        // 代际号：切根目录会再跑一次 restoreTabs，旧根的回调可能后到。
+        // 不带代际就清标志，会在新根仍在恢复、tabs 只有占位页时放开写盘闸门，
+        // 一次 onPause 就把新工作区的 workspace.json 覆盖成占位页（#786 复发）。
+        val myRestore = ++restoreGeneration
         // 标签状态是阻塞磁盘读，不能压在 Activity 创建的主线程上（#572）。
         val target = root
         background(
             work = { WorkspaceTabs.load(target) },
             then = then@{ restored ->
-                // 无论是否回填，恢复流程都已结束，写盘闸门可以放开。
-                restorePending = false
+                // 只有本次恢复的回调才能放开写盘闸门；旧根的迟到回调不算。
+                val currentRestore = myRestore == restoreGeneration
+                if (currentRestore) restorePending = false
                 val saved = restored.first
                 val savedActive = restored.second
                 // 期间用户可能已切换根目录或手动开过标签：那就不再回填，避免覆盖。
-                if (target != root || tabs.size > 1 || tabs.firstOrNull()?.data?.id != fallback.id) return@then
+                if (target != root || tabs.size > 1 || tabs.firstOrNull()?.data?.id != fallback.id) {
+                    // 恢复期间用户的真实操作（开/关标签）触发的 persist 全被闸门丢弃，
+                    // 不回填时内存里的 tabs 已是唯一事实，必须补写一次，
+                    // 否则冷启动后立刻开的标签会在切后台时丢失（OCR medium）。
+                    if (currentRestore && persistDroppedDuringRestore && target == root) persist()
+                    persistDroppedDuringRestore = false
+                    return@then
+                }
+                persistDroppedDuringRestore = false
                 if (saved.isEmpty()) return@then
                 if (saved.none { it.kind == WorkspaceTabs.OVERVIEW }) {
                     saved.add(0, WorkspaceTab(WorkspaceTabs.newId(), WorkspaceTabs.OVERVIEW, JSONObject()))
@@ -543,8 +558,14 @@ class WorkspaceActivity : BaseActivity() {
                 updateBar()
             },
             onError = {
-                restorePending = false
-                com.coda.mobileui.core.AppLog.w("WorkspaceTabs", "恢复标签失败，保留概览页")
+                if (myRestore == restoreGeneration) {
+                    restorePending = false
+                    // 读失败时同样可能已有用户操作被丢弃；tabs 里的现状就是事实，补写。
+                    if (persistDroppedDuringRestore && target == root) persist()
+                }
+                persistDroppedDuringRestore = false
+                com.coda.mobileui.core.AppLog
+                    .w("WorkspaceTabs", "恢复标签失败，保留概览页")
             },
         )
     }
@@ -993,9 +1014,20 @@ class WorkspaceActivity : BaseActivity() {
      */
     private var restorePending = false
 
+    /** 恢复代际：切根目录时递增，旧回调不得放开新恢复的写盘闸门。 */
+    private var restoreGeneration = 0
+
+    /** 恢复期间是否有 persist 被闸门丢弃：不回填时要在恢复结束后补写一次。 */
+    private var persistDroppedDuringRestore = false
+
     private fun persist() {
         // 恢复未完成时一律不写：宁可丢这一次状态更新，也不能覆盖真实标签。
-        if (restorePending) return
+        // 但要记下「丢过」：如果恢复结果最终不回填（用户已手动开标签），
+        // 这些被丢弃的更新就是唯一事实，恢复结束时要补写。
+        if (restorePending) {
+            persistDroppedDuringRestore = true
+            return
+        }
         // saveState() 要读当前页面的 UI 状态，只能在主线程收；
         // 序列化与写盘挪到后台，切标签、开新标签都会走到这里，
         // 主线程同步写文件没必要。

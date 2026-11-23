@@ -23,11 +23,11 @@ def test_missing_api_type_falls_back_to_openai():
 
 
 def test_anthropic_messages():
-    assert _client_type({"api_type": "anthropic-messages"}) == "anthropic"
-
-
+    # #796：client_registry 只注册 openai/openai_responses/gemini，没有 anthropic。
+    # 映射成 "anthropic" 会在运行期抛 KeyError；早标 unsupported 让上层给出可读失败。
+    assert _client_type({"api_type": "anthropic-messages"}) == "unsupported"
 def test_anthropic_alias():
-    assert _client_type({"api_type": "anthropic"}) == "anthropic"
+    assert _client_type({"api_type": "anthropic"}) == "unsupported"
 
 
 def test_gemini():
