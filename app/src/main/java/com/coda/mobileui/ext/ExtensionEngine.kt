@@ -512,6 +512,15 @@ class ExtensionEngine private constructor(
             if (!deleteRecursive(userDir)) return false
             prefs.edit().remove(KEY_ENABLED + id).apply()
             scan()
+            // 运行目录按 manifest id 键控，用户包与内置包共享（#761）：
+            // 用户包的二进制此前覆盖了内置包的，删掉用户包目录后幸存内置
+            // 条目的 shellPath/PATH 仍指向旧内容。重扫后从内置包目录重新
+            // 释放一遍，内置终端才不会静默损坏。
+            entries[id]?.takeIf { it.builtin && it.enabled }?.let { survivor ->
+                if (!releaseBinaries(survivor)) {
+                    AppLog.w("ExtensionEngine", "卸载遮蔽包后重释放内置二进制失败：$id")
+                }
+            }
             notifyChanged()
             return true
         }

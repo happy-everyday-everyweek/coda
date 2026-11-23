@@ -201,9 +201,20 @@ object MirrorScoreboard {
                 val root =
                     if (f.isFile) {
                         runCatching { JSONObject(f.readText()) }.getOrElse { e ->
-                            backupCorrupt(f)
-                            AppLog.w(TAG, "镜像账本解析失败，本次不记账：${e.message}")
-                            return@synchronized
+                            // 备份成功后清掉损坏原件并用空表继续（#762）：
+                            // 只备份不清理的话，此后每次 record 都在同一份坏文件上
+                            // 解析失败→备份已存在变 no-op→跳过写，账本永久停摆。
+                            // 原件已留 .corrupt 副本，从空表重新积累是安全的。
+                            val backed = backupCorrupt(f)
+                            if (backed) {
+                                runCatching { f.delete() }
+                                AppLog.w(TAG, "镜像账本解析失败，已备份原件并从空账本重新记账：${e.message}")
+                                JSONObject()
+                            } else {
+                                // 备份失败不能动原件：跳过本次写，保留手工抢救机会。
+                                AppLog.w(TAG, "镜像账本解析失败且备份未成功，本次不记账：${e.message}")
+                                return@synchronized
+                            }
                         }
                     } else {
                         JSONObject()
@@ -258,12 +269,18 @@ object MirrorScoreboard {
     }
 
     /** 备份一份解析失败的账本；已有备份时保留最早那份。 */
-    private fun backupCorrupt(f: File) {
+    /** 备份损坏原件；返回是否已有可用副本（新拷成功或副本已存在）。 */
+    private fun backupCorrupt(f: File): Boolean =
         runCatching {
             val backup = File(f.parentFile, f.name + ".corrupt")
-            if (f.isFile && !backup.exists()) f.copyTo(backup, overwrite = false)
-        }
-    }
+            if (backup.exists()) return@runCatching true
+            if (f.isFile) {
+                f.copyTo(backup, overwrite = false)
+                true
+            } else {
+                false
+            }
+        }.getOrDefault(false)
 
     /**
      * 先写临时文件再改名。

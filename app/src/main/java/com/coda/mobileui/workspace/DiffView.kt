@@ -58,9 +58,17 @@ internal class DiffView(
         val lines = trimmed.text.split('\n')
         if (mode == Mode.DIFF) addView(statLine(lines))
         val grouped = groupFiles(lines)
+        // preamble（提交头等非 diff 组）不占文件卡预算（#777）：total 只数
+        // diff --git 头，groups 却可能多一个前导组，按 take(visible) 切会
+        // 静默丢掉最后一个真实文件组且 omitted=0 不提示。
+        val hasPreamble = grouped.groups.size > grouped.total
+        val preamble = if (hasPreamble) grouped.groups.first() else null
+        val fileGroups = if (hasPreamble) grouped.groups.drop(1) else grouped.groups
         val visible = DiffBudget.visibleFiles(grouped.total)
-        for (group in grouped.groups.take(visible.visible)) addView(fileCard(group, mode))
-        if (visible.omitted > 0) addView(hint("还有 ${visible.omitted} 个文件未渲染，先用文件列表查看"))
+        preamble?.let { addView(fileCard(it, mode)) }
+        for (group in fileGroups.take(visible.visible)) addView(fileCard(group, mode))
+        val omitted = grouped.total - minOf(visible.visible, fileGroups.size)
+        if (omitted > 0) addView(hint("还有 $omitted 个文件未渲染，先用文件列表查看"))
         if (trimmed.truncated) addView(hint("diff 过长，已截断显示"))
     }
 
@@ -107,7 +115,9 @@ internal class DiffView(
                 // "diff --git a/lib/x.kt b/lib/x.kt" 取后半段，路径更好读。
                 name = parseDiffName(line.removePrefix("diff --git ").trim())
                 // 卡片数到上限后不再累积内容：后面的文件只计数，不保存行，也不建视图。
-                current = if (groups.size < DiffBudget.MAX_FILES) mutableListOf() else null
+                // 预算按文件组数（total）算，preamble 不占额（#777）：按 groups.size
+                // 判会在有前导组时提前一个文件停止收集。
+                current = if (total <= DiffBudget.MAX_FILES) mutableListOf() else null
             }
             current?.add(line)
         }

@@ -264,7 +264,10 @@ object MirrorSpeedTester {
         if (error != null) return Result(mirror, false, error = error)
         if (total <= 0) return Result(mirror, false, error = "无数据")
         // 样本太少或时间窗口过短时无法判断持续速度，不能靠一次突发算出“极速”。
-        if (samples.size < 3 || elapsedMs < 500) {
+        // 但完整跑完 PROBE_BYTES 本身就是持续速度的强证据（#763）：>24MB/s 的
+        // 最快镜像恰好在 500ms 内完成、样本不足 3 个，旧闸门把它们全拒掉，
+        // rank 反而把最快源排到慢源后面。探测未完成才适用短响应闸门。
+        if (total < PROBE_BYTES && (samples.size < 3 || elapsedMs < 500)) {
             return Result(mirror, false, error = "响应过短，无法评估")
         }
         val elapsed = elapsedMs.coerceAtLeast(1)

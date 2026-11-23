@@ -116,7 +116,8 @@ object ShizukuShell {
             }
         val merged = if (list.contains(service)) list else list + service
         return exec(
-            "settings put secure enabled_accessibility_services '${merged.joinToString(":")}'; " +
+            // && 串联（#760）：分号只查末条退出码，服务列表写失败仍报成功。
+            "settings put secure enabled_accessibility_services '${merged.joinToString(":")}' && " +
                 "settings put secure accessibility_enabled 1",
         )
     }
@@ -138,7 +139,7 @@ object ShizukuShell {
         val rest = current.filter { it != service }
         val command =
             if (rest.isEmpty()) {
-                "settings put secure enabled_accessibility_services null; " +
+                "settings put secure enabled_accessibility_services null && " +
                     "settings put secure accessibility_enabled 0"
             } else {
                 "settings put secure enabled_accessibility_services '${rest.joinToString(":")}'"

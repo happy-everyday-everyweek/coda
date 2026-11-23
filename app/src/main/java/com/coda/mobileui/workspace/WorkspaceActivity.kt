@@ -139,6 +139,8 @@ class WorkspaceActivity : BaseActivity() {
     private var swipeStartX = 0f
     private var swipeStartY = 0f
     private var swipeArmed = false
+    /** 返回手势已在 MOVE 阶段接管（发过 CANCEL），UP 时直接 slideOut（#788）。 */
+    private var swipeTaken = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -1552,25 +1554,44 @@ class WorkspaceActivity : BaseActivity() {
                 swipeStartX = ev.x
                 swipeStartY = ev.y
                 swipeArmed = ev.x <= dp(28f).toFloat()
+                swipeTaken = false
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                // MOVE 阶段过阈值即接管（#788）：UP 的返回值只说明有子视图
+                // 消费过 DOWN——ScrollView/可点击行/终端几乎恒真，靠它判
+                // 「没人要这个手势」等于返回手势永不触发。横向位移明确压过
+                // 纵向时给子视图发 CANCEL 收回序列，自己接管；纵向滚动先过
+                // 阈值则解除武装，列表滚动不受影响（#557 语义保留）。
+                if (swipeArmed && !swipeTaken) {
+                    val dx = ev.x - swipeStartX
+                    val dy = kotlin.math.abs(ev.y - swipeStartY)
+                    if (dy > dp(12f) && dy > dx) {
+                        swipeArmed = false
+                    } else if (dx > dp(72f) && dx > dy * 2) {
+                        swipeTaken = true
+                        val cancel =
+                            MotionEvent.obtain(ev).apply { action = MotionEvent.ACTION_CANCEL }
+                        super.dispatchTouchEvent(cancel)
+                        cancel.recycle()
+                    }
+                }
             }
 
             MotionEvent.ACTION_UP -> {
-                // 先把事件交给子视图，拿到消费结果再判断（#557）。
-                // dispatchTouchEvent 先于子视图分发，之前不看返回值，
-                // 于是列表横向滚动、终端文本选区只要起点靠左就被当成返回手势。
-                val handled = super.dispatchTouchEvent(ev)
-                if (swipeArmed && !handled) {
-                    val dx = ev.x - swipeStartX
-                    val dy = kotlin.math.abs(ev.y - swipeStartY)
-                    if (dx > dp(72f) && dx > dy * 2) slideOut()
+                if (swipeTaken) {
+                    swipeArmed = false
+                    swipeTaken = false
+                    slideOut()
+                    // 序列已被 CANCEL 收走，UP 不再发给子视图。
+                    return true
                 }
                 swipeArmed = false
-                // 这一支已经分发过了，不能再走末尾的 super，否则 UP 会派发两次。
-                return handled
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 swipeArmed = false
+                swipeTaken = false
             }
         }
         return super.dispatchTouchEvent(ev)

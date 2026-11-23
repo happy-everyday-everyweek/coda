@@ -149,8 +149,14 @@ class CodaBotPage(
         runtime = CodaBotRuntime(host, profile) { message ->
             host.runOnUiThread {
                 if (generation != runtimeGeneration) return@runOnUiThread
+                // 持久化先于 attach 守卫（#780）：addBubble 是回复唯一的落盘点，
+                // 页面暂离（对话框/别的 Activity 盖住、relayout 瞬时 detach）时
+                // 连守卫一起跳过会把消息整个丢掉——既不渲染也不进历史。
+                // 代际守卫已挡住旧运行时的迟到回复，落盘不依赖视图在不在窗口上。
+                if (!CodaBotStore.appendMessage(host, message)) toast("回复未能保存到本地历史")
                 if (!::messages.isInitialized || !isAttachedToWindow) return@runOnUiThread
-                addBubble(message)
+                // 已单独落盘，addBubble 不再重复写。
+                addBubble(message, persist = false)
                 // 皮肤里没有 done 这个 clip，用 celebrate 播一次庆祝再回 idle。
                 pet?.petView()?.setActivity("celebrate")
                 pet?.postDelayed({
