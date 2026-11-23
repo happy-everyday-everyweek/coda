@@ -436,7 +436,17 @@ open class FilesPage(
         // 「文件已不存在」，用户的标签直接消失。
         val editorVisible = ::editor.isInitialized && editor.visibility == View.VISIBLE
         val file = editing
-        if (file != null && (editorOnly || editorVisible)) {
+        if (detachedFile) {
+            // 文件已被删除但正文还在（#787）：必须把 detached 一起持久化。
+            // 否则下一次 persist 会把 path 写成工作区根目录，重启后
+            // loadFileFromState 发现「不是文件」就提示文件不存在并关掉标签，
+            // 「保留正文并说明删除」的意图完全落空。
+            state
+                .remove("path")
+                .put("detached", true)
+                .put("name", saved.optString("name"))
+                .put("markdown", markdownMode)
+        } else if (file != null && (editorOnly || editorVisible)) {
             state.put("path", file.absolutePath).put("markdown", markdownMode)
         } else if (editorOnly && saved.optBoolean("readonly")) {
             // 只读预览没有磁盘路径，沿用原来的 bufferKey，别把状态覆盖成根目录。

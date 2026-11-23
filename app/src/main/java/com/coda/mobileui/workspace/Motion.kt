@@ -136,6 +136,19 @@ private fun fadeTarget(
 }
 
 /**
+ * 摘掉本视图 ViewPropertyAnimator 上的监听器（#784）。
+ *
+ * `animate()` 返回的是**每视图常驻**的 ViewPropertyAnimator，`setListener` 设上去
+ * 不会自动清除。不摘的话，之后任何一次 `animate()`（包括别的动画开头的 cancel）
+ * 都会重跑这个旧闭包：enterFrom 的 settle 会把 alpha 拉回 1 让退场失效，
+ * crossFadeText 的 applyNow 会把文本改回上一次的 newText。
+ * 每个回调进来第一件事就是摘掉自己，保证只作用于本次动画。
+ */
+private fun View.clearAnimatorListener() {
+    animate().setListener(null)
+}
+
+/**
  * 让一行文字换新内容时有一点反馈：先淡下去、改字、再淡回来。
  *
  * 用于底栏的标签数量、状态提示这类"数字变了但没有动画"的位置。
@@ -205,9 +218,15 @@ internal fun View.enterFrom(
         .setInterpolator(Motion.standard)
         .setListener(
             object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) = settle()
+                override fun onAnimationEnd(animation: Animator) {
+                    clearAnimatorListener()
+                    settle()
+                }
 
-                override fun onAnimationCancel(animation: Animator) = settle()
+                override fun onAnimationCancel(animation: Animator) {
+                    clearAnimatorListener()
+                    settle()
+                }
             },
         ).start()
 }
@@ -235,9 +254,15 @@ internal fun View.exitTo(
         .setInterpolator(Motion.standard)
         .setListener(
             object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) = fire()
+                override fun onAnimationEnd(animation: Animator) {
+                    clearAnimatorListener()
+                    fire()
+                }
 
-                override fun onAnimationCancel(animation: Animator) = fire()
+                override fun onAnimationCancel(animation: Animator) {
+                    clearAnimatorListener()
+                    fire()
+                }
             },
         ).start()
 }
@@ -254,7 +279,14 @@ internal fun View.animateHeightTo(
     val params = layoutParams ?: return
     // 反复点击时上一个动画还在跑：不取消就会有两个 updateListener 同时写 height，
     // 视图停在中间高度，且后一个动画的 start 取自被打断的瞬时值（#540）。
-    (getTag(R.id.coda_height_animator) as? ValueAnimator)?.cancel()
+    //
+    // 必须**先清 tag 再 cancel**（#785）：ValueAnimator.cancel() 同步派发
+    // onAnimationCancel + onAnimationEnd，旧监听器里的 `getTag(...) !== animation`
+    // 守卫如果此刻还读到旧 animator 就会通过，于是被取消的动画把自己的陈旧终态
+    // （height=0 / visibility=GONE）写回去，快速收起→展开后面板反而是隐藏的。
+    val old = getTag(R.id.coda_height_animator) as? ValueAnimator
+    setTag(R.id.coda_height_animator, null)
+    old?.cancel()
 
     // 宽度为 0（还没布局、或处于 GONE）时 EXACTLY(0) 会量出 0 高度，
     // 展开后内容完全不显示（#537）。退回父容器可用宽度，再不行用 UNSPECIFIED。

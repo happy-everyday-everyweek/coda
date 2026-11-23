@@ -88,23 +88,37 @@ object CodeHighlighter {
         val n = editable.length
         if (n == 0 || n > MAX_HIGHLIGHT_CHARS) {
             clear(editable)
-            lastTokens = emptyList()
-            lastRules = null
             return
         }
 
         // 扫描交给纯逻辑层（有单测覆盖），这里只负责把结果贴成 span。
         val tokens = CodeLexer.scan(editable, rules)
-        // 语言换了就必须整篇重来：同一个区间的 kind 含义已经不同。
-        val previous = if (lastRules === rules) lastTokens else emptyList()
+        // 缓存键必须含缓冲区、规则、配色与长度（#778/#779/#781）：
+        // 少任何一项都会拿不对齐的历史做增量，留下陈旧或错色的 span。
+        val key = HighlightCache.Key(editable, rules, palette, n)
+        val reuse = HighlightCache.reusable(lastKey, key)
+        val previous = if (reuse) lastTokens else emptyList()
         val plan = CodeLexer.diff(previous, tokens)
 
         // 只移除尾部失效的 span，公共前缀原样保留（#495）。
         // 原先每次清空全部再重建，接近上限的文件每敲一次键就要新建数千个 span。
         val existing = editable.getSpans(0, n, TokenMarker::class.java)
         val firstChanged = if (plan.remove.isEmpty()) n else plan.remove[0].start
+        // 长度变过时 span 已被 Editable 平移，旧 token 坐标不能当阈值（#778）。
+        val from =
+            HighlightCache.removeFrom(
+                previousLength = lastKey?.length ?: n,
+                currentLength = n,
+                firstChanged = firstChanged,
+                reusable = reuse,
+            )
         for (span in existing) {
-            if (editable.getSpanStart(span) >= firstChanged) editable.removeSpan(span)
+            if (editable.getSpanStart(span) >= from) editable.removeSpan(span)
+        }
+        // 整篇重建时把残留的前缀 span 也清掉：它们不在本次 add 的范围里，
+        // 留着会与新 span 叠加。
+        if (from == 0) {
+            for (span in editable.getSpans(0, n, TokenMarker::class.java)) editable.removeSpan(span)
         }
 
         for (token in plan.add) {
@@ -121,12 +135,12 @@ object CodeHighlighter {
             }
         }
         lastTokens = tokens
-        lastRules = rules
+        lastKey = key
     }
 
-    /** 上一轮的扫描结果，用于增量复用；语言变化时作废。 */
+    /** 上一轮的扫描结果与它的身份；键不完整时会拿错历史做增量（#778/#779/#781）。 */
     private var lastTokens: List<CodeLexer.Token> = emptyList()
-    private var lastRules: LanguageRules? = null
+    private var lastKey: HighlightCache.Key? = null
 
     private fun colorOf(
         kind: TokenKind,
@@ -149,7 +163,7 @@ object CodeHighlighter {
             editable.removeSpan(span)
         }
         lastTokens = emptyList()
-        lastRules = null
+        lastKey = null
     }
 
     /** 标记接口：只用来把自己加的 span 与其它样式区分开。 */

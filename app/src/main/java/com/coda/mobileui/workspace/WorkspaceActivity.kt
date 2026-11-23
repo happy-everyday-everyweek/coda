@@ -514,11 +514,17 @@ class WorkspaceActivity : BaseActivity() {
         tabs += attach(fallback)
         setActive(fallback.id)
         updateBar()
+        // 恢复完成前禁止写盘（#786）：此刻 tabs 里只有占位页，
+        // 冷启动后用户立刻切后台/锁屏会触发 onPause → persist，
+        // 把占位页无条件写进 workspace.json，真实标签不可逆丢失。
+        restorePending = true
         // 标签状态是阻塞磁盘读，不能压在 Activity 创建的主线程上（#572）。
         val target = root
         background(
             work = { WorkspaceTabs.load(target) },
             then = then@{ restored ->
+                // 无论是否回填，恢复流程都已结束，写盘闸门可以放开。
+                restorePending = false
                 val saved = restored.first
                 val savedActive = restored.second
                 // 期间用户可能已切换根目录或手动开过标签：那就不再回填，避免覆盖。
@@ -537,6 +543,7 @@ class WorkspaceActivity : BaseActivity() {
                 updateBar()
             },
             onError = {
+                restorePending = false
                 com.coda.mobileui.core.AppLog.w("WorkspaceTabs", "恢复标签失败，保留概览页")
             },
         )
@@ -978,7 +985,17 @@ class WorkspaceActivity : BaseActivity() {
             Thread(r, "coda-workspace-state").apply { isDaemon = true }
         }
 
+    /**
+     * 异步恢复是否还在进行（#786）。
+     *
+     * 期间 tabs 里只有占位概览页，任何 persist 都会把它写进 workspace.json，
+     * 覆盖掉用户真实的标签集合，且不可逆。
+     */
+    private var restorePending = false
+
     private fun persist() {
+        // 恢复未完成时一律不写：宁可丢这一次状态更新，也不能覆盖真实标签。
+        if (restorePending) return
         // saveState() 要读当前页面的 UI 状态，只能在主线程收；
         // 序列化与写盘挪到后台，切标签、开新标签都会走到这里，
         // 主线程同步写文件没必要。

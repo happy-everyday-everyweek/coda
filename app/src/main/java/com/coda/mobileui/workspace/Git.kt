@@ -44,7 +44,63 @@ object Git {
     private fun safeDirectory(
         env: LinuxEnv,
         root: File,
-    ): List<String> = listOf("-c", "safe.directory=" + env.guestPath(root.absolutePath))
+    ): List<String> {
+        val out = mutableListOf("-c", "safe.directory=" + env.guestPath(root.absolutePath))
+        // git 校验的是仓库 **toplevel**（worktree 还要 commondir），不是 -C 目录（#782）。
+        // 工作区是父仓库的子目录、或路径含符号链接（/sdcard → /storage/self/primary）时，
+        // 只放开工作区路径仍会 dubious ownership，isRepo 返回 false，界面提示「不是仓库」
+        // 并引导用户在已有仓库里 init。这里把探测到的真实路径一并放开。
+        for (extra in discoveredRoots(env, root)) {
+            out += listOf("-c", "safe.directory=$extra")
+        }
+        return out
+    }
+
+    /** 已探测到的 toplevel/commondir，按工作区路径缓存：每次 git 调用都探一遍太贵。 */
+    private val discovered = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+
+    /**
+     * 探测真实仓库根。
+     *
+     * 探测本身也要过属主校验，所以先用 `safe.directory=*` **只跑这一条只读命令**
+     * 拿到路径，之后的所有调用仍只放开具体路径。这里不接受任何写操作，
+     * 也不执行 hooks/pager/fsmonitor（rev-parse 不触发它们）。
+     */
+    private fun discoveredRoots(
+        env: LinuxEnv,
+        root: File,
+    ): List<String> {
+        val key = root.absolutePath
+        discovered[key]?.let { return it }
+        val guest = env.guestPath(key)
+        val probe =
+            env.exec(
+                listOf(
+                    "git",
+                    "-c",
+                    "safe.directory=*",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-C",
+                    guest,
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--show-toplevel",
+                    "--git-common-dir",
+                ),
+                timeoutMs = 15_000L,
+            )
+        val paths =
+            if (probe.ok) {
+                probe.output.lines().map { it.trim() }.filter { it.startsWith("/") }.distinct()
+            } else {
+                emptyList()
+            }
+        // 只保留与当前工作区确有关联的路径：探测失败或输出异常时宁可什么都不加。
+        val kept = paths.filter { it == guest || guest.startsWith("$it/") || it.startsWith("$guest/") }
+        discovered[key] = kept
+        return kept
+    }
 
     /** 网络操作超时：移动网络下推送/拉取大仓库远超默认的 60 秒。 */
     private const val NETWORK_TIMEOUT_MS = 300_000L
@@ -380,19 +436,19 @@ object Git {
     ): Result {
         val first = run(env, root, listOf("push"), timeoutMs = NETWORK_TIMEOUT_MS)
         if (first.ok || !first.output.contains("no upstream branch")) return first
-        val current = branch(env, root)
-        if (current.isEmpty()) return first
-        val remote =
-            run(env, root, listOf("remote"))
-                .data()
-                .lines()
-                .firstOrNull { it.isNotBlank() }
-                ?: "origin"
-        if (!isSafeRef(remote) || !isSafeRef(current)) return first
+        // 只有恰好一个远端时才自动设上游（#783）：多远端下取第一个会把提交
+        // 推到恰好排在前面的那个远端，属于不可逆的数据外泄。
+        val decision =
+            GitPushPolicy.decide(
+                firstError = first.output,
+                remotes = run(env, root, listOf("remote")).data().lines(),
+                branch = branch(env, root),
+            )
+        val remote = decision.remote ?: return Result(false, first.output + "\n" + decision.reason)
         return run(
             env,
             root,
-            listOf("push", "--set-upstream", remote, current),
+            listOf("push", "--set-upstream", remote, decision.branch),
             timeoutMs = NETWORK_TIMEOUT_MS,
         )
     }
