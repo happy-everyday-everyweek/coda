@@ -804,6 +804,10 @@ class MainActivity : BaseActivity() {
         val activity = this
         // 取消接线（#776）：关掉卡片或销毁 Activity 都要停掉镜像循环，
         // 否则用户退出后几十 MB 的下载还在后台继续跑。
+        // 二次点击先把上一轮取消（OCR r9 medium）：字段被覆盖后旧循环
+        // 就再也没人能停。onDismiss 是叠加链，闭包只认自己那轮的 cancel，
+        // 且幂等——旧链残留触发时不会误伤新一轮。
+        updateDownloadCancel?.cancel()
         val cancel = com.coda.mobileui.core.Downloader.Cancel()
         updateDownloadCancel = cancel
         sheet.onDismiss { cancel.cancel() }
@@ -1773,10 +1777,11 @@ class MainActivity : BaseActivity() {
         // 定时调度器是进程级单例（ZController.ensureStarted 启动）：旋转重建
         // 也走 onDestroy，无条件 stop 后 ensureStarted 因 started&&isRunning
         // 短路，谁也不会再 start，定时任务静默停摆到内核重启（#746）。
-        // finishing 时停；系统回收（非 finishing）时若 WebUi 服务还在跑就
-        // 保留但转后台节奏，否则也停——没有任何宿主时不能留 30s 空转
-        // （OCR r8 medium）。onResume 的幂等 start 负责回到前台后重启。
-        if (isFinishing || !WebUiHost.isRunning()) {
+        // 非 finishing 一律只转后台节奏（OCR r9 high）：配置变更时新实例的
+        // onResume 先于旧实例 onDestroy 执行，按 WebUi 是否在跑判停会把
+        // 刚重启的调度立刻停掉（WebUi 默认关闭）。后台 5min 节奏已兼顾
+        // 无宿主时的空转成本；finishing 时才真正停。
+        if (isFinishing) {
             com.coda.mobileui.core.AutomationScheduler
                 .stop()
         } else {
@@ -3981,7 +3986,13 @@ class MainActivity : BaseActivity() {
         }
         // 已有一条在显示就不再叠：onResume/胶囊点击/处理完都会走到这里，
         // 叠多条会让旧提示的「继续处理」答掉与对话框不对应的请求。
-        deferredSnackbar?.let { if (it.isShown) return }
+        // 但计数要原地刷新（OCR r9 medium）：否则队列变化后一直显示旧 N。
+        deferredSnackbar?.let {
+            if (it.isShown) {
+                it.setText(getString(R.string.deferred_requests_snackbar, deferredRequests.size))
+                return
+            }
+        }
         val root = findViewById<View>(android.R.id.content) ?: return
         deferredSnackbar?.dismiss()
         val bar =

@@ -300,4 +300,30 @@ class TarLinkSafetyTest {
             ),
         )
     }
+
+    @Test
+    fun `物理别名传递可达时越界链接拒绝`() {
+        // OCR r9 high：A/B 的物理父 d/B 本身是 C/B 注册出来的别名，
+        // 别名构建必须迭代到不动点，否则 d/e/z 被当普通目录漏放。
+        val targets = mapOf("A" to "d", "C" to "d", "C/B" to "e", "A/B/z" to "../w")
+        assertFalse(
+            TarLinkSafety.linkStaysInside(
+                root = "/tmp/out",
+                member = "y",
+                target = "d/e/z/../../../evil",
+                symlinkMembers = targets.keys,
+                symlinkTargets = targets,
+            ),
+        )
+        // 成员自身的 ../w 目标（d/w）仍在根内，不受影响。
+        assertTrue(
+            TarLinkSafety.linkStaysInside(
+                root = "/tmp/out",
+                member = "A/B/z",
+                target = "../w",
+                symlinkMembers = targets.keys,
+                symlinkTargets = targets,
+            ),
+        )
+    }
 }

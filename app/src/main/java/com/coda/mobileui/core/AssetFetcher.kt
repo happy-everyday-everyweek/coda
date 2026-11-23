@@ -74,7 +74,7 @@ internal object AssetFetcher {
     ): Boolean =
         // 同一目标串行（#806）：续传用的是确定性 `.part` 与共享 sidecar，
         // 启动补资源与设置页同时获取同一资产会互写字节、互删断点。
-        AssetLocks.withLock(target) { ensureLocked(ctx, target, spec, onProgress, onLog, cancel) }
+        AssetLocks.withLock(target, cancel) { ensureLocked(ctx, target, spec, onProgress, onLog, cancel) }
 
     private fun ensureLocked(
         ctx: Context,
@@ -133,6 +133,8 @@ internal object AssetFetcher {
 // 合并统计会互相污染，所以按当前网络取对应那本账。
         val net = MirrorScoreboard.currentNet(ctx)
         val history = MirrorScoreboard.load(ctx, net)
+        // 排序是最长的阻塞段（OCR r9 medium）：ping + 测速可达分钟级，
+        // cancel 必须穿透进 rank，否则退出页面后探测还在跑。
         val ranked =
             GhMirrors.rank(
                 probeUrl = spec.remoteUrl,
@@ -142,6 +144,7 @@ internal object AssetFetcher {
                 bytes = spec.size,
                 history = history,
                 onLog = onLog,
+                cancel = cancel,
             )
         onLog("网络环境：${netLabel(net)}")
         val errors = StringBuilder()

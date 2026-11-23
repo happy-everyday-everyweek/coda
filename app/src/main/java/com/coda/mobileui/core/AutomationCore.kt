@@ -560,19 +560,25 @@ class AutomationStore(
                 // 死行——failed_to_dispatch 且 enabled=1/active/无重试时刻。
                 // claimed（内核在途）与 retry（退避中）都是内核管理的活状态，
                 // 一律不碰：重置它们会绕过重试上限并让热失败任务紧循环。
-                // 用 PRAGMA user_version 门控，只在首次升级时执行一次，
-                // 不再挂在每次 open() 的热路径上。
+                // 门控用私有标记表（OCR r9 medium）：user_version 是整库头字段，
+                // 这个 sqlite 与内核共用，app 私有回填占住 1 会让内核未来的
+                // 合法迁移被 ver<1 闸门跳过，内核先升位也会永久跳过本回填。
                 runCatching {
-                    val ver = d.rawQuery("PRAGMA user_version", null).use { c ->
-                        if (c.moveToNext()) c.getInt(0) else 0
-                    }
-                    if (ver < 1) {
+                    d.execSQL("CREATE TABLE IF NOT EXISTS _app_migrations (name TEXT PRIMARY KEY, applied_at INTEGER)")
+                    val done =
+                        d
+                            .rawQuery("SELECT 1 FROM _app_migrations WHERE name = 'dispatch_backfill_v1'", null)
+                            .use { c -> c.count > 0 }
+                    if (!done) {
                         d.execSQL(
                             "UPDATE automations SET dispatch_status = 'idle', dispatch_attempts = 0 " +
                                 "WHERE dispatch_status = 'failed_to_dispatch' AND enabled = 1 " +
                                 "AND lifecycle_status = 'active' AND running = 0 AND retry_at IS NULL",
                         )
-                        d.execSQL("PRAGMA user_version = 1")
+                        d.execSQL(
+                            "INSERT OR REPLACE INTO _app_migrations (name, applied_at) " +
+                                "VALUES ('dispatch_backfill_v1', ${System.currentTimeMillis()})",
+                        )
                     }
                 }.onFailure { AppLog.w(tag, "dispatch_status 回填失败：${it.message}") }
                 db = d
@@ -1078,10 +1084,18 @@ object AutomationHost {
         val next = AutomationSchedule.computeNext(newCron, rule, now)
         // 是否动了计划本身（#759）：只有改 cronExpr/interval/recurring 或显式
         // 传 enabled 才允许复活；改标题/prompt 不得把用户暂停的任务重新拉起。
-        // maxRuns 也是计划形状（OCR r7 medium）：提高已完成有限任务的上限
-        // 必须能复活它，与内核 reachedMax 重算口径一致。
+        // maxRuns 只在新上限**超过已执行次数**时才算计划变化（OCR r9 medium）：
+        // 内核 automationService.update 重算 reachedMax，完成 5 次后回存
+        // maxRuns=3 或原样回存 5 都保持 completed，不能见 has 就复活。
+        val nextRecurring = if (has("recurring")) params.optBoolean("recurring", true) else cur.optInt("recurring", 1) == 1
+        val maxRunsRevives =
+            if (has("maxRuns") && !nextRecurring) {
+                params.optInt("maxRuns") > cur.optInt("scheduled_run_count", 0)
+            } else {
+                false
+            }
         val scheduleChanged =
-            has("cronExpr") || has("interval") || has("recurring") || has("enabled") || has("maxRuns")
+            has("cronExpr") || has("interval") || has("recurring") || has("enabled") || maxRunsRevives
         val curEnabled = cur.optInt("enabled", 1) == 1
         // optBoolean 对数字 0 会落到默认 true，把用户要暂停的任务悄悄拉起
         // （OCR r7 low）：非布尔形状一律拒绝，fail-closed。

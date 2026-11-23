@@ -526,6 +526,9 @@ object DataBackup {
         // 只有包里真的带了供应商配置才重载：部分包（比如只含提示词）不该触发
         // 供应商重载，更不该删掉 Linux 环境的 resolv.conf。
         if (BackupCategory.PROVIDERS in present) {
+            // 上面是不持 writeLock 的直接 writeText（OCR r9 medium）：同 mtime
+            // tick 内等长重写时磁盘签名不变，必须先作废读缓存再 load。
+            ProviderStore.invalidateReadCache()
             runCatching { ProviderStore.load(ctx) }
         }
         if (BackupCategory.ROOTFS in present) {

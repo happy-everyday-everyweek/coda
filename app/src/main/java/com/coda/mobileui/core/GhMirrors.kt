@@ -130,15 +130,19 @@ object GhMirrors {
      * @return 原始清单的一个排列，不会丢源。全部 ping 不通时按清单原顺序返回
      *   ——有些镜像在 TCP 握手阶段就拒，实际 GET 却能过，不能因为 ping 失败就放弃它。
      */
-    fun rank(
+    internal fun rank(
         probeUrl: String,
         mirrors: List<GhMirror> = DEFAULT,
         bytes: Long = 0,
         /** 历史账本（按当前网络类型取出）。传空表示没有历史。 */
         history: Map<String, MirrorScoreboard.Stat> = emptyMap(),
         onLog: (String) -> Unit = {},
+        cancel: Downloader.Cancel? = null,
     ): List<GhMirror> {
         require(probeUrl.isNotBlank()) { "rank() 必须给出真实链接用于测速" }
+        // 取消检查点（OCR r9 medium）：ping 与测速各是一段长阻塞，
+        // 段间查一次让退出页面的调用方尽快解脱。
+        if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("镜像排序已取消")
         // 主线程调到这里时不做任何网络探测：ping 与测速都是阻塞 IO，
         // 几十条镜像挨个握手足以把界面卡到 ANR。退化成「历史成绩 + 清单顺序」，
         // 并留下日志说明调用点该挪到后台线程。
@@ -188,6 +192,7 @@ object GhMirrors {
         }
 
         onLog("测速挑选镜像…")
+        if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("镜像排序已取消")
         val usable =
             MirrorSpeedTester
                 .testAll(alive, probeUrl)

@@ -61,14 +61,21 @@ internal object UpdateInstaller {
         // 这里不再重复实现一遍缓存判断（两处各写一份必然漂移），spec 也只构造一次。
         val spec = specFor(result)
         val ok =
-            AssetFetcher.ensure(
-                ctx = ctx,
-                target = target,
-                spec = spec,
-                onProgress = onProgress?.let { AssetFetcher.Progress { d, t -> it.onBytes(d, t) } },
-                onLog = onLog,
-                cancel = cancel,
-            )
+            try {
+                AssetFetcher.ensure(
+                    ctx = ctx,
+                    target = target,
+                    spec = spec,
+                    onProgress = onProgress?.let { AssetFetcher.Progress { d, t -> it.onBytes(d, t) } },
+                    onLog = onLog,
+                    cancel = cancel,
+                )
+            } catch (e: java.util.concurrent.CancellationException) {
+                // 取消是正常退出路径（OCR r9 medium）：不能让异常炸掉整个
+                // Bg.run 块，否则 UI 完成回调被跳过，面板永远停在「下载中」。
+                onLog("下载已取消")
+                return null
+            }
         if (!ok) return null
 
         // 从清单拿到的更新包一定带哈希；没有哈希说明走的是 API 兜底。

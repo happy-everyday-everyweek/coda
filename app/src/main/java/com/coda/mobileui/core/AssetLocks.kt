@@ -26,9 +26,28 @@ internal object AssetLocks {
     fun <T> withLock(
         target: File,
         block: () -> T,
+    ): T = withLock(target, null, block)
+
+    /**
+     * 可取消的等锁（OCR r9 medium）：lock.lock() 不可中断，启动补资源
+     * 占锁下载几分钟时，已取消的设置页 worker 会一直泊在锁上。
+     * tryLock 轮询让 cancel 立即释放等待方。
+     */
+    fun <T> withLock(
+        target: File,
+        cancel: Downloader.Cancel?,
+        block: () -> T,
     ): T {
         val lock = locks.computeIfAbsent(keyOf(target)) { ReentrantLock() }
-        lock.lock()
+        if (cancel == null) {
+            lock.lock()
+        } else {
+            while (!lock.tryLock(200, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                if (cancel.isCancelled) {
+                    throw java.util.concurrent.CancellationException("等待资产锁时已取消：${target.name}")
+                }
+            }
+        }
         try {
             return block()
         } finally {

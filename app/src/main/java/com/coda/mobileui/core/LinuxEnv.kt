@@ -142,6 +142,33 @@ class LinuxEnv(
                 }
             return resolved == base || resolved.startsWith("$base/")
         }
+
+        /**
+         * 绝对目标的宿主安全落盘形式（OCR r9 high）。
+         *
+         * [symlinkStaysInside] 校验的是重定位到 guest 根后的路径，但直接
+         * `Os.symlink(原始绝对目标)` 在宿主侧指向真实 `/data` 等目录：后续
+         * 普通成员经这条链接写出会穿透到宿主机。这里把绝对目标改写成
+         * 「相对链接自身父目录」的相对路径，宿主与 proot 两侧解析到同一落点。
+         * 相对目标原样返回；重定位后越界（含 `x -> /`）返回 null，拒绝创建。
+         */
+        internal fun rebasedLinkTarget(
+            dest: File,
+            relative: String,
+            linkName: String,
+        ): String? {
+            if (linkName.isEmpty()) return null
+            if (!linkName.startsWith("/")) return linkName
+            val base = dest.absolutePath.trimEnd('/')
+            val rebased =
+                java.nio.file.Paths
+                    .get(base, linkName.trimStart('/'))
+                    .normalize()
+                    .toString()
+            if (rebased == base || !rebased.startsWith("$base/")) return null
+            val parent = File(dest, relative).parentFile?.toPath() ?: java.nio.file.Paths.get(base)
+            return parent.relativize(java.nio.file.Paths.get(rebased)).toString()
+        }
     }
 
     val home: File = File(ctx.filesDir, "linux")
@@ -667,10 +694,14 @@ class LinuxEnv(
                     type == '2' -> {
                         // 链接指向归档外就等于给容器留了一条写到宿主机的通道，
                         // 装上去之后 rm -rf / 之类的操作会穿透到真机目录。
-                        if (symlinkStaysInside(dest, relative, linkName)) {
+                        // 绝对目标必须按重定位后的相对形式落盘（OCR r9 high）：
+                        // 校验的是 guest 根下的落点，原样 symlink 在宿主侧却指向
+                        // 真实 /data，后续成员经它写出会穿透宿主机。
+                        val hostSafe = rebasedLinkTarget(dest, relative, linkName)
+                        if (hostSafe != null && symlinkStaysInside(dest, relative, linkName)) {
                             target.parentFile?.mkdirs()
                             target.delete()
-                            runCatching { Os.symlink(linkName, target.absolutePath) }
+                            runCatching { Os.symlink(hostSafe, target.absolutePath) }
                         } else {
                             AppLog.w("LinuxEnv", "跳过越界的符号链接：$relative -> $linkName")
                         }

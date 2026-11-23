@@ -58,4 +58,25 @@ class LinuxEnvPathTest {
     fun rejectsEmptyTarget() {
         assertFalse(LinuxEnv.symlinkStaysInside(dest, "etc/link", ""))
     }
+
+    @Test
+    fun `绝对目标重定基为相对链接`() {
+        val dest = java.io.File("/tmp/rootfs")
+        // OCR r9 high：宿主侧不再指向真实 /data。
+        org.junit.Assert.assertEquals(
+            "data",
+            LinuxEnv.rebasedLinkTarget(dest, "x", "/data"),
+        )
+        org.junit.Assert.assertEquals(
+            "busybox",
+            LinuxEnv.rebasedLinkTarget(dest, "bin/sh", "/bin/busybox"),
+        )
+        // 指向 guest 根本身在宿主侧等于指向整个 rootfs，拒绝。
+        org.junit.Assert.assertNull(LinuxEnv.rebasedLinkTarget(dest, "x", "/"))
+        // 相对目标原样保留。
+        org.junit.Assert.assertEquals(
+            "libc.so.6",
+            LinuxEnv.rebasedLinkTarget(dest, "usr/lib/libc.so", "libc.so.6"),
+        )
+    }
 }

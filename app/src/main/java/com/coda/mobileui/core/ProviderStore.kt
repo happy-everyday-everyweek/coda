@@ -151,9 +151,13 @@ object ProviderStore {
                 return deepCopy(inner.providers)
             }
             val loaded = loadLocked(ctx)
-            // 损坏时不建缓存：下一轮 load 必须重新读盘，用户修复才能被看见。
-            if (!anyCorrupt()) {
-                readCache = ReadCache(diskSignature(ctx), deepCopy(loaded))
+            // 签名必须在读取前后一致才可缓存（OCR r9 high）：DataBackup.restore
+            // 与内核不持 writeLock 直接写文件，读取与取签名之间被改写时，
+            // 旧内容会挂在新签名下，之后每次快路径都返回陈旧数据。
+            // 损坏时同样不建缓存：下一轮 load 必须重新读盘，用户修复才能被看见。
+            val sigAfter = diskSignature(ctx)
+            if (!anyCorrupt() && sigAfter == sigNow) {
+                readCache = ReadCache(sigAfter, deepCopy(loaded))
             } else {
                 readCache = null
             }
@@ -168,6 +172,15 @@ object ProviderStore {
 
     @Volatile
     private var readCache: ReadCache? = null
+
+    /**
+     * 外部写者作废旧缓存（OCR r9 medium）：DataBackup.restore 等不持
+     * writeLock 直接写这三份文件，同 mtime tick 内等长重写时签名不变，
+     * 快路径会继续端出写前数据。绕过本类写盘的路径完成后必须调用这里。
+     */
+    fun invalidateReadCache() {
+        readCache = null
+    }
 
     /** 三份文件的 (存在, mtime, size) 签名；任一变化都让缓存失效。 */
     private fun diskSignature(ctx: Context): String {
@@ -783,6 +796,9 @@ object ProviderStore {
         // 先写旁路文件，最后替换内核配置：内核文件是提交点。
         // 反过来做的话，迁移时从内核文件裁掉的 ASR 条目会有一段时间既不在内核文件、
         // 也没写进 sidecar，中间崩溃它们就彻底没了。
+        // 触碰任何文件之前先作废缓存（OCR r9 medium）：下面任一分支失败早退时
+        // 盘上状态已经变过，同 mtime tick 内等长重写会让快路径命中陈旧签名。
+        readCache = null
         if (!writeAsr(ctx, asr)) {
             AppLog.w("ProviderStore", "写 ASR 供应商失败，保留原内核配置")
             return false

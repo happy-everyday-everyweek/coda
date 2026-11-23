@@ -87,30 +87,8 @@ internal object TarLinkSafety {
         symlinkTargets: Map<String, String>,
     ): String? {
         if (symlinkTargets.isEmpty()) return normalize(path)
-        // 键按组件规范化（去 . 与空段）：成员名可以合法含 `a/./s`、`a//s`。
-        val targets = HashMap<String, String>()
-        for ((k, v) in symlinkTargets) {
-            val key = k.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
-            if (key.isNotEmpty()) targets[key] = v
-        }
-        val budget = (path.length + targets.values.sumOf { it.length }) * 4 + 64
-        // 物理别名索引（OCR r7 medium）：成员 L/t 经 L -> t/u 实际落在 t/u/t，
-        // 只按字面键索引会让 y -> t/u/t/../../../evil 把 t/u/t 当普通目录漏放。
-        // 对每个多级键先解析其字面父路径，把「物理父 + 末段」也索引进来。
-        val indexed = HashMap(targets)
-        for (k in targets.keys) {
-            val segs = k.split('/')
-            if (segs.size < 2) continue
-            val parentSegs = ArrayList<Pair<String, String?>>()
-            val acc = ArrayList<String>()
-            for (s in segs.dropLast(1)) {
-                parentSegs.add(s to acc.joinToString("/"))
-                acc.add(s)
-            }
-            val pp = walk(parentSegs, targets, budget) ?: continue
-            val alias = if (pp.isEmpty()) segs.last() else "$pp/${segs.last()}"
-            if (alias != k && alias !in indexed) indexed[alias] = targets.getValue(k)
-        }
+        val prepared = preparedFor(symlinkTargets) ?: return null
+        val index = prepared.indexed ?: return null
         val segs = path.split('/').filter { it.isNotEmpty() && it != "." }
         val pending = ArrayList<Pair<String, String?>>()
         val acc = ArrayList<String>()
@@ -118,7 +96,86 @@ internal object TarLinkSafety {
             pending.add(seg to acc.joinToString("/"))
             acc.add(seg)
         }
-        return walk(pending, indexed, budget)
+        return walk(pending, index, prepared.budgetFor(path))
+    }
+
+    /**
+     * 归档级预构建索引（OCR r9 medium）：linkStaysInside 对每个链接成员都会
+     * 调一次 resolve，同一份 targets 反复重建别名索引是 O(m²)。按 map 身份
+     * 缓存一份，链接多的归档（node_modules）不再逐成员重建。
+     */
+    private class Prepared(
+        val indexed: Map<String, String>?,
+        val baseBudget: Int,
+    ) {
+        fun budgetFor(path: String): Int = baseBudget + path.length * 4
+    }
+
+    @Volatile
+    private var preparedSource: Map<String, String>? = null
+
+    @Volatile
+    private var preparedValue: Prepared? = null
+
+    private fun preparedFor(symlinkTargets: Map<String, String>): Prepared? {
+        preparedValue?.let {
+            if (preparedSource === symlinkTargets) return if (it.indexed != null) it else null
+        }
+        // 失败结果同样缓存（indexed=null）：歧义归档不能每个成员都重建一遍。
+        val built = buildPrepared(symlinkTargets) ?: Prepared(null, 0)
+        preparedSource = symlinkTargets
+        preparedValue = built
+        return if (built.indexed != null) built else null
+    }
+
+    private fun buildPrepared(symlinkTargets: Map<String, String>): Prepared? {
+        // 键按组件规范化（去 . 与空段）：成员名可以合法含 `a/./s`、`a//s`。
+        val targets = HashMap<String, String>()
+        for ((k, v) in symlinkTargets) {
+            val key = k.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
+            if (key.isNotEmpty()) targets[key] = v
+        }
+        val budget = targets.values.sumOf { it.length } * 4 + 64
+        // 物理别名索引（OCR r7 medium）：成员 L/t 经 L -> t/u 实际落在 t/u/t，
+        // 只按字面键索引会让 y -> t/u/t/../../../evil 把 t/u/t 当普通目录漏放。
+        // 对每个多级键先解析其字面父路径，把「物理父 + 末段」也索引进来。
+        // 必须迭代到不动点（OCR r9 high）：父路径本身可能经**另一成员的
+        // 物理别名**才到达（A→d、C/B→e 时 A/B 的物理父是 d/B，而 d/B→e
+        // 是上一轮才注册的别名）。只解析一轮会漏注册 A/B→e，
+        // y -> d/e/z/../../../evil 按字面深度误判在根内。
+        val indexed = HashMap(targets)
+        var aliasChanged = true
+        var aliasRounds = 0
+        val aliasCap = targets.size * 4 + 8
+        while (aliasChanged) {
+            if (++aliasRounds > aliasCap) return null
+            aliasChanged = false
+            for (k in targets.keys) {
+                val segs = k.split('/')
+                if (segs.size < 2) continue
+                val parentSegs = ArrayList<Pair<String, String?>>()
+                val acc = ArrayList<String>()
+                for (s in segs.dropLast(1)) {
+                    parentSegs.add(s to acc.joinToString("/"))
+                    acc.add(s)
+                }
+                // 按不断增长的 indexed 解析：别名可达的父路径也要展开。
+                val pp = walk(parentSegs, indexed, budget) ?: continue
+                val alias = if (pp.isEmpty()) segs.last() else "$pp/${segs.last()}"
+                if (alias == k) continue
+                val existing = indexed[alias]
+                if (existing == null) {
+                    indexed[alias] = targets.getValue(k)
+                    aliasChanged = true
+                } else if (existing != targets.getValue(k)) {
+                    // 两条链接别名到同一物理路径且目标不同（OCR r9 medium）：
+                    // 谁生效取决于解压顺序，first-wins 让判定随 HashMap 迭代序
+                    // 漂移，可能恰好掩盖越界的那条。歧义归档直接 fail-closed。
+                    return null
+                }
+            }
+        }
+        return Prepared(indexed, budget)
     }
 
     /**

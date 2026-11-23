@@ -122,24 +122,42 @@ internal object UpdateChecker {
         val net = ctx?.let { MirrorScoreboard.currentNet(it) } ?: MirrorScoreboard.Net.OTHER
         val history = ctx?.let { MirrorScoreboard.load(it, net) } ?: emptyMap()
         val ranked =
-            GhMirrors.rank(
-                probeUrl = DEV_MANIFEST_URL,
-                // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速。
-                // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
-                bytes = 1,
-                history = history,
-                onLog = { msg ->
-                    AppLog.i(TAG, msg)
-                    onLog(msg)
-                },
-            )
+            try {
+                GhMirrors.rank(
+                    probeUrl = DEV_MANIFEST_URL,
+                    // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速。
+                    // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
+                    bytes = 1,
+                    history = history,
+                    cancel = cancel,
+                    onLog = { msg ->
+                        AppLog.i(TAG, msg)
+                        onLog(msg)
+                    },
+                )
+            } catch (e: java.util.concurrent.CancellationException) {
+                return Result(false, error = "检查已取消")
+            }
 
         // 两个渠道都取。任一拿不到都不影响另一个——单渠道坏掉时仍能更新。
+        // 取消是正常退出（OCR r9 medium）：归一成失败结果，不让异常炸掉调用方 Bg 块。
         onLog("查询版本清单（dev 与 release 两个渠道）")
-        val dev = httpGet(ctx, DEV_MANIFEST_URL, headers, ranked, net, onLog, cancel)?.let { parseManifest(it, "dev") }
+        fun fetchCancellable(
+            url: String,
+            channel: String,
+        ): Result? =
+            try {
+                httpGet(ctx, url, headers, ranked, net, onLog, cancel)?.let { parseManifest(it, channel) }
+            } catch (e: java.util.concurrent.CancellationException) {
+                null
+            }
+        val dev = fetchCancellable(DEV_MANIFEST_URL, "dev")
         onLog(if (dev != null) "dev 清单：${dev.versionCode}" else "dev 清单不可用")
-        val rel = httpGet(ctx, RELEASE_MANIFEST_URL, headers, ranked, net, onLog, cancel)?.let { parseManifest(it, "release") }
+        val rel = fetchCancellable(RELEASE_MANIFEST_URL, "release")
         onLog(if (rel != null) "release 清单：${rel.versionCode}" else "release 清单不可用")
+        if (cancel?.isCancelled == true) {
+            return Result(false, error = "检查已取消")
+        }
         val candidates = listOfNotNull(dev, rel)
         if (candidates.isEmpty()) {
             onLog("两个渠道都没取到清单")
@@ -271,9 +289,13 @@ internal object UpdateChecker {
             }
             AppLog.i(TAG, "官方直连失败，试排名里的可信兜底源")
         }
+        // 官方直连已试过：排名里的规范 github 条目是同一 URL、同一参数，
+        // 再试必败还要白烧 20s 预算并重复记一次 FAILED（OCR r9 medium）。
+        val directTried = UpdateTrust.trustedManifestUrl(url)
         for (mirror in ranked) {
             // 取消传播（#776）：退出页面后不再试剩余镜像。
             if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("取清单已取消")
+            if (directTried && mirror.id == "github") continue
             if (System.currentTimeMillis() > deadline) {
                 AppLog.w(TAG, "取清单超出总时限 ${MANIFEST_TOTAL_BUDGET_MS / 1000}s，放弃剩余源：$url")
                 break

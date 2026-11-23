@@ -349,9 +349,11 @@ class SettingsDetailActivity :
     }
 
     override fun onDestroy() {
-        // 在途更新下载随页面终止（#776）。
+        // 在途更新下载与检查随页面终止（#776，OCR r9 medium）。
         updateDownloadCancel?.cancel()
         updateDownloadCancel = null
+        updateCheckCancel?.cancel()
+        updateCheckCancel = null
         // ASR 测试可能还在录音或挂着实时会话，页面退出时必须收干净，
         // 否则麦克风会一直被占用。取消 scope 会连带触发
         // transcribeStream 的 awaitClose，那里负责停录音与关会话。
@@ -2718,12 +2720,17 @@ class SettingsDetailActivity :
             col.addView(panel.view)
         }
         sheet?.show()
-
+        // 检查阶段的取消接线（OCR r9 medium）：check 里的 ping 排名 + 最长 90s
+        // 清单预算也是后台长任务，关卡片/销毁页面必须能停，与下载同口径。
+        val checkCancel = com.coda.mobileui.core.Downloader.Cancel()
+        updateCheckCancel = checkCancel
+        sheet?.onDismiss { checkCancel.cancel() }
         Bg.run {
             val r =
                 checker.check(
                     applicationContext,
                     onLog = { msg -> runOnUiThread { panel?.append(msg) } },
+                    cancel = checkCancel,
                 )
             runOnUiThread {
                 // 静默检查（启动时）只在新版本时打扰用户，其余情况一概不出现。
@@ -2812,12 +2819,18 @@ class SettingsDetailActivity :
     /** 下载更新包并拉起系统安装器。下载走 AssetFetcher，带镜像测速与哈希校验。 */
     /** 在途更新下载的取消句柄（#776）：onDestroy 与卡片 dismiss 都会触发。 */
     private var updateDownloadCancel: com.coda.mobileui.core.Downloader.Cancel? = null
+
+    /** 检查更新阶段的取消（OCR r9 medium）：与下载分开，互不误伤。 */
+    private var updateCheckCancel: com.coda.mobileui.core.Downloader.Cancel? = null
+
     private fun startUpdateDownload(
         sheet: CodaSheet,
         r: com.coda.mobileui.core.UpdateChecker.Result,
     ) {
         val activity = this
         // 取消接线（#776）：关卡片/销毁页面都停掉镜像循环。
+        // 二次点击先取消上一轮（OCR r9 medium）：字段覆盖后旧循环无人能停。
+        updateDownloadCancel?.cancel()
         val cancel = com.coda.mobileui.core.Downloader.Cancel()
         updateDownloadCancel = cancel
         sheet.onDismiss { cancel.cancel() }

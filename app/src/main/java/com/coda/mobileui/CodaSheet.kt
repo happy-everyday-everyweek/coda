@@ -1164,6 +1164,13 @@ class CodaSheet(
             }
         detachHook = hook
         rootView.addOnAttachStateChangeListener(hook)
+        // 已经脱离窗口的视图不会再有 detach 事件（OCR r9 medium）：动画只会
+        // 排进 HandlerActionQueue 等下次 attach，finishExit 永远不跑，
+        // pendingDismissBlock 里的 cancel/executor 清理全部漏掉。直接收尾。
+        if (!rootView.isAttachedToWindow) {
+            finishExit()
+            return
+        }
         panelView
             ?.animate()
             ?.translationY(exit)

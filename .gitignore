@@ -27,3 +27,6 @@ captures/
 # tools 下的 Python 测试运行产物
 __pycache__/
 *.pyc
+
+# 内核运行时自动生成的配置备份（OCR r9）：逐部署状态，不入库
+kernel/maibot-lite/config/old/

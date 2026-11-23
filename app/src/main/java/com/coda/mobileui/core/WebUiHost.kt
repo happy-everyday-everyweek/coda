@@ -62,6 +62,21 @@ object WebUiHost {
     /** 连接处理池：固定 worker + 有界队列，拒绝时回 503，避免局域网把线程打爆。 */
     private var connPool: ThreadPoolExecutor? = null
 
+    /** /api/send 的共享超时调度器：单线程守护，取消即出队（OCR r9 medium）。 */
+    private var sendTimeout: java.util.concurrent.ScheduledThreadPoolExecutor? = null
+
+    @Synchronized
+    private fun sendTimeoutScheduler(): java.util.concurrent.ScheduledThreadPoolExecutor {
+        sendTimeout?.takeIf { !it.isShutdown }?.let { return it }
+        return java.util.concurrent
+            .ScheduledThreadPoolExecutor(1) { r ->
+                Thread(r, "coda-webui-send-timeout").apply { isDaemon = true }
+            }.also {
+                it.removeOnCancelPolicy = true
+                sendTimeout = it
+            }
+    }
+
     /**
      * 本次运行的访问凭据：32 字节随机值的十六进制。
      *
@@ -294,6 +309,8 @@ object WebUiHost {
 
     @Synchronized
     fun stop() {
+        sendTimeout?.shutdownNow()
+        sendTimeout = null
         running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
@@ -478,9 +495,10 @@ object WebUiHost {
                 }
 
                 method == "POST" && path == "/api/send" -> {
-                    // 异步响应接管 socket：use 块不得在 handler 返回时关闭连接，
+                    // 异步响应接管 socket：finally 不得在 handler 返回时关闭连接，
                     // 否则回调写回必然落在已关闭的流上（#774）。
-                    deferredSocket = true
+                    // 旗标只在所有权真正移交时置位（见下）：校验早退路径
+                    // 仍由 finally 统一关闭，否则每个被拒请求都泄漏 fd（OCR r9）。
                     val zc = ZController.get(appCtx)
                     val msg = runCatching { JSONObject(body).optString("text") }.getOrDefault("")
                     if (msg.isBlank()) {
@@ -506,24 +524,37 @@ object WebUiHost {
                     // 超时由独立定时器兜底，同样不占 worker。respondOnce 保证
                     // 超时与回调竞态时只写一次响应。
                     val responded = java.util.concurrent.atomic.AtomicBoolean(false)
-                    val timeout =
-                        java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
-                            Thread(r, "coda-webui-send-timeout").apply { isDaemon = true }
-                        }
+                    // 共享超时调度器（OCR r9 medium）：每请求新建 executor 且只
+                    // shutdown 的话，已排定的 30s 任务仍会跑完，突发发送时线程
+                    // 堆积。共享单线程 + removeOnCancel，完成即取消未到期任务。
+                    val timeout = sendTimeoutScheduler()
+                    var timeoutFuture: java.util.concurrent.ScheduledFuture<*>? = null
                     fun respondOnce(block: () -> Unit) {
                         if (responded.compareAndSet(false, true)) {
-                            runCatching(block).onFailure {
-                                AppLog.w("WebUi", "发送响应写回失败：${it.message}")
+                            timeoutFuture?.cancel(false)
+                            // 发送回调经 mainHandler.post 派发（OCR r9 critical）：
+                            // 直接写 socket 会抛 NetworkOnMainThreadException，
+                            // 客户端只见断连不见响应。写回一律回连接池执行；
+                            // 池满/已停时退到独立线程，保证响应必达。
+                            val write = Runnable {
+                                runCatching(block).onFailure {
+                                    AppLog.w("WebUi", "发送响应写回失败：${it.message}")
+                                }
+                                runCatching { s.close() }
                             }
-                            timeout.shutdown()
-                            runCatching { s.close() }
+                            val dispatched =
+                                runCatching { connPool?.execute(write) ?: throw IllegalStateException("no pool") }
+                            if (dispatched.isFailure) Thread(write, "coda-webui-send-write").start()
                         }
                     }
-                    timeout.schedule(
-                        { respondOnce { respondJson(output, JSONObject().put("error", "发送超时"), 504) } },
-                        30,
-                        TimeUnit.SECONDS,
-                    )
+                    // 校验全部通过，所有权此刻移交给回调/定时器。
+                    deferredSocket = true
+                    timeoutFuture =
+                        timeout.schedule(
+                            { respondOnce { respondJson(output, JSONObject().put("error", "发送超时"), 504) } },
+                            30,
+                            TimeUnit.SECONDS,
+                        )
                     try {
                         zc.send(msg) { ok, err ->
                             respondOnce {
