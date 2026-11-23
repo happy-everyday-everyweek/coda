@@ -171,8 +171,17 @@ def _readonly_violation(command: str) -> Optional[str]:
             return f"只读检查不允许使用 {flag}"
     # 命令经 /bin/bash -lc 执行：bash 会剥掉引号与反斜杠后才把参数交给程序。
     # 按原始空白切分会把 `'--pre=evil'`、`--p're'` 当成无害 token 放行（OCR high）。
-    # 用 shlex 按 POSIX 规则分词，校验的就是 bash 实际交付的 token；
-    # 引号不闭合等分词失败一律拒绝（fail-closed）。
+    # 用 shlex 按 POSIX 规则分词；引号不闭合等分词失败一律拒绝（fail-closed）。
+    # 但 shlex 不建模 brace expansion 与变量词拆分（OCR 复审 high）：
+    # `--list {victim,-d}` 分词后是一个无害模式，bash 展开后却是删分支。
+    # 只读检查用不到这些展开，出现花括号/美元符一律拒绝。
+    # 波浪号只在 token 开头才是家目录展开：`HEAD~1` 是合法 revision，不能误杀。
+    for ch in ("{", "}", "$"):
+        if ch in text:
+            return f"只读检查不允许出现 {ch}（brace/变量展开无法在守卫侧核实）"
+    import re
+    if re.search(r"(^|\s)~", text):
+        return "只读检查不允许以 ~ 开头的路径（家目录展开无法在守卫侧核实）"
     import shlex
     try:
         parts = shlex.split(text, comments=False, posix=True)

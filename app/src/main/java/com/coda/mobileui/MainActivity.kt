@@ -961,6 +961,9 @@ class MainActivity : BaseActivity() {
     /** 重建时会话列表可能还没到：记住待恢复的 id，等下一次状态刷新再补上。 */
     private var pendingRestoreConversationId: String? = null
 
+    /** 恢复路径上真正 open 成功过的会话 id：防止状态回调里重复 open（OCR medium）。 */
+    private var restoredSessionId: String? = null
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_SHOWING_SETTINGS, showingSettings)
@@ -993,7 +996,7 @@ class MainActivity : BaseActivity() {
                 // 抽屉里的会话列表来自内核快照，重建时可能还没到：记下来等状态刷新再补，
                 // 不要拿演示数据去顶替，也不要静默什么都不做。
                 pendingRestoreConversationId = id
-                runCatching { zc.openSession(id, null) }
+                runCatching { zc.openSession(id) { ok -> if (ok) restoredSessionId = id } }
             }
         }
     }
@@ -1794,13 +1797,16 @@ class MainActivity : BaseActivity() {
                         if (live != null) {
                             pendingRestoreConversationId = null
                             currentConversationId = live.id
-                            // 会话出现在 zc.sessions 通常正是因为 onRestoreInstanceState
-                            // 里那次 openSession 已成功（applySnapshot 插入后触发本回调）。
-                            // 再 open 一次会推进 switchGuard、作废第一次在途的消息刷新，
-                            // 并把 subscribe/messages 等 RPC 全部重发（OCR medium）。
-                            // 只有当前会话不是它时才需要真正打开。
-                            if (zc.currentSessionId != live.id) {
-                                runCatching { zc.openSession(live.id, null) }
+                            // 不能拿 currentSessionId 当「上次 open 已成功」的代理
+                            // （OCR medium）：session/create 等无关响应也会设置它。
+                            // 用 openSession 自身的幂等判定：ZController 对同一会话
+                            // 的重复 open 有 switchGuard 代际，这里补一个显式的
+                            // 「已打开且消息已加载」检查——restoredSessionId 由
+                            // openSession 成功回调记录，只有它才代表真正打开过。
+                            if (restoredSessionId != live.id) {
+                                runCatching {
+                                    zc.openSession(live.id) { ok -> if (ok) restoredSessionId = live.id }
+                                }
                             }
                             renderFromController()
                             return

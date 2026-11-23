@@ -115,6 +115,20 @@ class ReadonlyGuardTest(unittest.TestCase):
         self.allow('git show "--pretty=format:%H" HEAD')
     def test_unbalanced_quotes_denied(self):
         self.deny("rg 'unterminated x .")
+    # ---------------------------------------------------------- OCR 复审：bash 展开
+    def test_brace_expansion_denied(self):
+        # shlex 不建模 brace expansion：`--list {victim,-d}` 被当成一个
+        # 模式 token 放行，bash 展开后却是 `--list victim -d`（删分支）。
+        # 只读检查用不到花括号展开，出现即拒绝（fail-closed）。
+        self.deny("git branch --list {victim,-d}")
+        self.deny("git tag {v1,-d}")
+        self.deny("ls {a,b}")
+    def test_variable_expansion_denied(self):
+        # 未加引号的 $VAR 会做词拆分，shlex 同样不建模：
+        # `git branch $X` 里 X='-d victim' 时守卫看到的是无害单 token。
+        self.deny("git branch $X")
+        self.deny('git tag "$TAGS"')
+        self.deny("ls ~/x")
     # ---------------------------------------------------------- OCR 复审：白名单吞值
     def test_list_flag_does_not_swallow_write_flag(self):
         # --list/-l 是布尔模式开关，不吃值；盲目 skip_next 会把

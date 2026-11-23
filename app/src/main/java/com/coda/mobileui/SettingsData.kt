@@ -399,20 +399,17 @@ object SettingsData {
         val all = cachedProviders(ctx) ?: return loadingPage("模型设置", "providers")
         // 读失败落的空快照与「真的没配置」不可区分（OCR medium）：
         // 先渲染错误行，避免用户以为配置丢了、在坏文件上重建。
-        SnapshotFallback.reasonFor("providers")?.let {
-            return SettingsPage(
-                "模型设置",
-                listOf(
-                    SettingRow.Header("读取失败"),
-                    SettingRow.Value("配置文件读取失败", it),
-                    SettingRow.Value("重新读取", "修复文件后点这里重试", "settings_reload:providers"),
-                ),
-            )
-        }
+        // 失败原因作为**头部行**而不是整页替换：早退会把添加/编辑入口全丢掉，
+        // 持续性失败时用户被锁死在模型设置外（OCR medium）。
+        val providerError = SnapshotFallback.reasonFor("providers")
         val llm = all.filter { it.kind == ProviderStore.ProviderKind.LLM }
         val asr = all.filter { it.kind == ProviderStore.ProviderKind.ASR }
         val rows = mutableListOf<SettingRow>()
-
+        providerError?.let {
+            rows += SettingRow.Header("读取失败")
+            rows += SettingRow.Value("配置文件读取失败", it)
+            rows += SettingRow.Value("重新读取", "修复文件后点这里重试", "settings_reload:providers")
+        }
         // 第一层只放两类模型的入口。以后再加模型类型（图像、向量、重排…）
         // 就在这一层加一行，点进去是同一个「某类模型的供应商列表」页。
         rows +=
@@ -534,11 +531,13 @@ object SettingsData {
     ): SettingsPage {
         val items = cachedAssets(ctx, kind) ?: return loadingPage(title, "assets:${kind.name}")
         val rows = mutableListOf<SettingRow>()
-        // 读失败的空快照要先说明，不能装作「暂无」（OCR medium）。
+        // 读失败的空快照要先说明，且**不再渲染「暂无/新建」**（OCR medium）：
+        // 目录读不出来时引导新建，可能覆盖存在但读不出的定义。
         SnapshotFallback.reasonFor("assets:${kind.name}")?.let {
             rows += SettingRow.Header("读取失败")
             rows += SettingRow.Value("目录读取失败", it)
             rows += SettingRow.Value("重新读取", "修复后点这里重试", "settings_reload:assets:${kind.name}")
+            return SettingsPage(title, rows)
         }
         rows += SettingRow.Header("已保存")
         if (items.isEmpty()) {

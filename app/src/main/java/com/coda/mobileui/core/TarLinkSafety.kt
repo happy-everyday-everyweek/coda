@@ -55,9 +55,15 @@ internal object TarLinkSafety {
         // 组件也可能是链接（OCR high）：`d/s -> ../a` 之后 `y -> d/s/../../evil`
         // 字面规范化成 `evil`（看似安全），实际 root/a/../../evil 越界。
         // 拿不到目标表时退回 fail-closed：经过链接就拒绝。
+        // 成员集合里有、目标表里却没有的链接：表不完整时不能装作它是普通目录
+        // （OCR medium fail-open）。把缺目标的成员按「指向根外」处理，直接拒绝。
+        if (symlinkMembers.any { it !in symlinkTargets }) {
+            val cleaned = joined.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
+            val missing = symlinkMembers.filter { it !in symlinkTargets }.toSet()
+            if (traversesSymlink(cleaned, missing)) return false
+        }
         val normalized =
-            if (symlinkTargets.isEmpty() && symlinkMembers.isNotEmpty()) {
-                if (traversesSymlink(joined, symlinkMembers)) return false
+            if (symlinkTargets.isEmpty()) {
                 normalize(joined) ?: return false
             } else {
                 resolve(joined, symlinkTargets) ?: return false
@@ -70,7 +76,10 @@ internal object TarLinkSafety {
     /**
      * 逐组件解析相对路径，遇到符号链接成员就按目标展开。
      *
-     * [symlinkTargets] 的键是成员在归档里的路径，值是链接目标（相对链接自身目录）。
+     * [symlinkTargets] 的键是成员的**字面**归档路径（可能经另一条链接才到达），
+     * 值是链接目标（相对链接自身目录）。因此除了按已解析前缀查，还要按
+     * 「字面路径」查：`a -> b` 之后 `a/s -> ../evil` 的键是 `a/s`，
+     * 解析到 `b/s` 时按已解析前缀查不到它，必须靠字面跟踪补上（OCR 复审 high）。
      * 展开有步数上限：链接成环或恶意长链时直接判 null（fail-closed）。
      */
     internal fun resolve(
@@ -78,27 +87,66 @@ internal object TarLinkSafety {
         symlinkTargets: Map<String, String>,
     ): String? {
         if (symlinkTargets.isEmpty()) return normalize(path)
-        // 待处理组件栈（逆序存放，栈顶在末尾）。
-        val pending = ArrayDeque<String>()
-        path.split('/').asReversed().forEach { if (it.isNotEmpty() && it != ".") pending.addLast(it) }
+        // 键按组件规范化（去 . 与空段）：成员名可以合法含 `a/./s`、`a//s`。
+        val targets = HashMap<String, String>()
+        for ((k, v) in symlinkTargets) {
+            val key = k.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
+            if (key.isNotEmpty()) targets[key] = v
+        }
+        // 每个待处理段携带它在归档里的**字面父路径**：经另一条链接到达的成员
+        // （a -> b 后的 a/s）只有字面键能对上，且目标相对字面父目录解析。
+        // 只跟踪已解析前缀会把它当普通目录，`..` 按错误深度消掉（OCR 复审 high）。
+        val pending = ArrayDeque<Pair<String, String>>()
+        val segs = path.split('/').filter { it.isNotEmpty() && it != "." }
+        val acc = ArrayList<String>()
+        for (seg in segs) {
+            pending.addLast(seg to acc.joinToString("/"))
+            acc.add(seg)
+        }
+        // 队尾是下一个要处理的：初始段整体反转，removeLast 先取第一段。
+        pending.reverse()
         val out = ArrayList<String>()
         var steps = 0
-        val budget = (path.length + symlinkTargets.values.sumOf { it.length }) * 2 + 64
+        val budget = (path.length + targets.values.sumOf { it.length }) * 4 + 64
         while (pending.isNotEmpty()) {
             if (++steps > budget) return null
-            val seg = pending.removeLast()
+            val (seg, literalBase) = pending.removeLast()
             if (seg == "..") {
                 if (out.isEmpty()) return null
                 out.removeAt(out.size - 1)
                 continue
             }
             out.add(seg)
-            val prefix = out.joinToString("/")
-            val linkTarget = symlinkTargets[prefix] ?: continue
-            // 当前前缀是符号链接：弹掉它，把链接目标（相对其父目录）压回栈顶。
-            out.removeAt(out.size - 1)
+            val literalPrefix = if (literalBase.isEmpty()) seg else "$literalBase/$seg"
+            val resolvedPrefix = out.joinToString("/")
+            // 字面键优先：命中时目标相对字面父目录展开，out 回退到字面深度。
+            val viaLiteral = targets[literalPrefix] != null
+            val linkTarget = targets[literalPrefix] ?: targets[resolvedPrefix]
+            if (linkTarget == null) continue
+            val parent = if (viaLiteral) literalBase else resolvedPrefix.substringBeforeLast('/', "")
+            if (viaLiteral) {
+                out.clear()
+                literalBase.split('/').filter { it.isNotEmpty() }.forEach { out.add(it) }
+            } else {
+                out.removeAt(out.size - 1)
+            }
             if (linkTarget.isEmpty() || linkTarget.startsWith("/")) return null
-            linkTarget.split('/').asReversed().forEach { if (it.isNotEmpty() && it != ".") pending.addLast(it) }
+            // 目标各段带上各自的字面父路径（parent + 已展开前缀）。
+            val tSegs = linkTarget.split('/').filter { it.isNotEmpty() && it != "." }
+            val tAcc = ArrayList<String>()
+            val newItems = ArrayList<Pair<String, String>>()
+            for (tSeg in tSegs) {
+                val tBase =
+                    if (parent.isEmpty()) {
+                        tAcc.joinToString("/")
+                    } else {
+                        parent + (if (tAcc.isEmpty()) "" else "/" + tAcc.joinToString("/"))
+                    }
+                newItems.add(tSeg to tBase)
+                tAcc.add(tSeg)
+            }
+            // 队尾是下一个要处理的：新段反序压到队尾，先于剩余段消费。
+            for (item in newItems.asReversed()) pending.addLast(item)
         }
         return out.joinToString("/")
     }

@@ -225,12 +225,14 @@ class CodaSheet(
     /** 显示半屏卡片（常规模式默认停靠卡片态；紧凑模式自适应内容高度）。 */
     fun show() {
         if (isShowing) return
+        // dismiss 回调链跨 show 保留：调用方普遍是 `.onDismiss { … }.show()`
+        // 的流式写法，回调注册在 show 之前、属于新生命周期，show 里清链
+        // 会把它们全丢掉（OCR critical）。重复 show 同一实例时调用方会再注册
+        // 一遍，链可能叠层——但清理回调（shutdown/removeCallbacks）幂等，
+        // 叠层的代价远小于丢回调的泄漏。上一轮的在途关闭由 abandonClosingSheet
+        // 派发旧链收尾。
         abandonClosingSheet()
         generation += 1
-        // 重开是新一轮生命周期：上一轮的 dismiss 回调已在 abandonClosingSheet
-        // 里执行过，链不清空的话每次 show 都再叠一层，注册方（OAuthSheet 等
-        // 每次 show 都重新 onDismiss）会越积越多、清理逻辑重复执行（OCR medium）。
-        onDismissBlock = null
         val decor = activity.window.decorView as ViewGroup
         val screenH = activity.resources.displayMetrics.heightPixels
         statusBarH = statusBarHeightPx()
@@ -1041,9 +1043,10 @@ class CodaSheet(
         secondaryText = null
         secondaryBlock = null
         contentBlock = null
-        // dismiss 回调也属于「这一页」：翻页后旧页的清理不该跟着新页走，
-        // 新页要用就在自己的 block 里重新注册（OCR medium）。
-        onDismissBlock = null
+        // 注意：dismiss 回调**不**随翻页清空（OCR 复审 high）。
+        // OAuthSheet.show 只注册一次 teardown，之后每步 navigate 都不再注册；
+        // 按页清会让第一次「继续」之后关卡片不再 teardown，轮询/WebView 全泄漏。
+        // 回调是卡片级清理；重复叠加由 show() 的清空兜住。
         // 在同一个实例上应用新一页
         block()
 

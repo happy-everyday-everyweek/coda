@@ -1187,8 +1187,21 @@ open class FilesPage(
                 return false
             }
             if (!link.hardLink) {
-                symlinks.add(link.path)
-                symlinkTargets[TarListing.normalizePath(link.path).trimEnd('/')] = link.target
+                // 键按组件规范化（去 . 与空段）：成员名可以合法含 `a/./s`、`a//s`，
+                // 只去尾部斜杠会让解析前缀永远对不上（OCR 复审 high）。
+                val key =
+                    link.path
+                        .split('/')
+                        .filter { it.isNotEmpty() && it != "." }
+                        .joinToString("/")
+                // 同名链接成员出现两次：解压器按顺序逐个物化，中间的成员
+                // 会经过**前一个**目标解析，而校验只看最后一个是绕过（OCR medium）。
+                // 无法按出现顺序逐段核实，直接拒绝整个归档（fail-closed）。
+                if (!symlinks.add(key)) {
+                    AppLog.w("FilesPage", "拒绝重复的符号链接成员：$key")
+                    return false
+                }
+                symlinkTargets[key] = link.target
             }
         }
         for (line in lines) {

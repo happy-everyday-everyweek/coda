@@ -161,6 +161,31 @@ class TarLinkSafetyTest {
     }
 
     @Test
+    fun `经另一条链接到达的成员也要按字面键展开`() {
+        // OCR 复审 high：a -> b 之后 a/s -> ../../evil 的键是字面 a/s，
+        // 它的目标相对**字面**父目录 a 解析：a/../../evil 上跳两层出根。
+        // 只按已解析前缀（b/s）查会漏掉这条链接，字面规范化成 b/evil 误放行。
+        val links = setOf("a", "a/s")
+        val targets = mapOf("a" to "b", "a/s" to "../../evil")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "y", "a/s/x", links, targets))
+    }
+
+    @Test
+    fun `成员名含点段或空段时键仍对得上`() {
+        // OCR 复审 high：a/b/./s 与 a/b/s 是同一个成员，字面键必须规范化。
+        val links = setOf("a/b/s")
+        val targets = mapOf("a/b/./s" to "../x")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "y", "a/b/s/../../../evil", links, targets))
+    }
+
+    @Test
+    fun `fail-closed 回退不被点段绕过`() {
+        // OCR 复审 high：无目标表时按前缀查链接，a/./s 必须先消点段再查。
+        val links = setOf("a/s")
+        assertFalse(TarLinkSafety.linkStaysInside("/tmp/out", "y", "a/./s/../../evil", links))
+    }
+
+    @Test
     fun `硬链接指向符号链接成员时拒绝`() {
         assertFalse(
             TarLinkSafety.hardLinkStaysInside(

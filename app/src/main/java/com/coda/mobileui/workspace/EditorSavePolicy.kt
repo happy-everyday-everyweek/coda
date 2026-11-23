@@ -151,7 +151,12 @@ internal object EditorSavePolicy {
      * 复制失败必须让整次保存失败：宁可保存不了，也不能以放宽的权限落盘。
      */
 
-    /** stat/chmod 的注入点：Android 上是 Os，JVM 单测里换成 NIO 的 POSIX 权限。 */
+    /**
+     * stat/chmod 的注入点：Android 上是 Os，JVM 单测里换成 NIO 的 POSIX 权限。
+     *
+     * 默认实现先试 Os，失败（JVM stub 抛 RuntimeException）退回 NIO：
+     * 单测不必显式注入也能真实校验权限位，而不是走「读不到就放弃」分支。
+     */
     internal var modeOps: ModeOps = AndroidModeOps
 
     internal interface ModeOps {
@@ -170,12 +175,48 @@ internal object EditorSavePolicy {
                 android.system.Os
                     .stat(path)
                     .st_mode and 0xFFF
-            }.getOrNull()
+            }.recoverCatching { nioMode(path) ?: throw IllegalStateException("no posix") }
+                .getOrNull()
 
         override fun apply(
             path: String,
             mode: Int,
-        ): Boolean = runCatching { android.system.Os.chmod(path, mode) }.isSuccess
+        ): Boolean =
+            runCatching { android.system.Os.chmod(path, mode) }
+                .recoverCatching { if (!nioApply(path, mode)) throw IllegalStateException("chmod failed") }
+                .isSuccess
+
+        private fun nioMode(path: String): Int? =
+            runCatching {
+                val ps =
+                    java.nio.file.Files
+                        .getPosixFilePermissions(
+                            java.nio.file.Paths
+                                .get(path),
+                        )
+                var m = 0
+                java.nio.file.attribute.PosixFilePermission.values().forEachIndexed { i, perm ->
+                    if (perm in ps) m = m or (1 shl (8 - i))
+                }
+                m
+            }.getOrNull()
+
+        private fun nioApply(
+            path: String,
+            mode: Int,
+        ): Boolean =
+            runCatching {
+                val all =
+                    java.nio.file.attribute.PosixFilePermission
+                        .values()
+                val ps = all.filterIndexed { i, _ -> mode and (1 shl (8 - i)) != 0 }.toSet()
+                java.nio.file.Files
+                    .setPosixFilePermissions(
+                        java.nio.file.Paths
+                            .get(path),
+                        ps,
+                    )
+            }.isSuccess
     }
 
     private fun copyMode(
@@ -185,13 +226,16 @@ internal object EditorSavePolicy {
         if (!from.isFile) return true
         val mode = modeOps.mode(from.absolutePath)
         if (mode == null) {
-            // 读不到原权限（非 POSIX 文件系统）：保持临时文件默认权限继续，
-            // 与旧行为一致；能读到就必须原样搬运。
+            // isFile 刚成功、stat 却失败：异常状态，不能按默认权限落盘
+            // （那正是本次要防的放宽）。宁可保存失败让用户重试（OCR medium）。
             com.coda.mobileui.core.AppLog
-                .w("EditorSave", "读不到原文件权限位，按默认权限落盘：${from.name}")
-            return true
+                .w("EditorSave", "读不到原文件权限位，放弃原子写：${from.name}")
+            return false
         }
-        if (!modeOps.apply(to.absolutePath, mode)) {
+        // 只搬 rwx（0777）：setuid/setgid/sticky 不复制——特权进程下保存
+        // 带 setuid-root 的文件会把该位重新种到新内容上，等于编辑器可被
+        // 用来(重)植 setuid 二进制（OCR medium）。普通编辑不需要这些位。
+        if (!modeOps.apply(to.absolutePath, mode and 0x1FF)) {
             com.coda.mobileui.core.AppLog
                 .w("EditorSave", "复制权限位失败，放弃原子写：${from.name}")
             return false

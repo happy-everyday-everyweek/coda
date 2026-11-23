@@ -26,18 +26,18 @@ import com.coda.mobileui.core.AsrClient
 import com.coda.mobileui.core.AsrTester
 import com.coda.mobileui.core.AutomationSchedule
 import com.coda.mobileui.core.AutomationStore
+import com.coda.mobileui.core.BackupCategory
 import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.BuiltinMarketplaces
 import com.coda.mobileui.core.CodaExtras
-import com.coda.mobileui.core.BackupCategory
 import com.coda.mobileui.core.DataBackup
 import com.coda.mobileui.core.HooksCore
 import com.coda.mobileui.core.OAuthProviders
 import com.coda.mobileui.core.PhoneControl
 import com.coda.mobileui.core.ProviderStore
-import com.coda.mobileui.core.SystemPrompts
 import com.coda.mobileui.core.SilentUpdater
+import com.coda.mobileui.core.SystemPrompts
 import com.coda.mobileui.core.WebUiHost
 import com.coda.mobileui.core.ZController
 import com.google.android.material.color.MaterialColors
@@ -73,7 +73,8 @@ class SettingsDetailActivity :
 
     private val promptEditorLauncher =
         registerForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+            androidx.activity.result.contract.ActivityResultContracts
+                .StartActivityForResult(),
         ) { result ->
             if (pendingPromptRestart && result.resultCode == RESULT_OK) restartCoreForPrompts()
             pendingPromptRestart = false
@@ -86,19 +87,22 @@ class SettingsDetailActivity :
     /** 导出备份：由系统文件选择器给出目标 zip。 */
     private val backupExportLauncher =
         registerForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/zip"),
+            androidx.activity.result.contract.ActivityResultContracts
+                .CreateDocument("application/zip"),
         ) { uri: Uri? -> if (uri != null) doExportBackup(uri) }
 
     /** 导入备份：选一个 zip 文件。 */
     private val backupImportLauncher =
         registerForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+            androidx.activity.result.contract.ActivityResultContracts
+                .OpenDocument(),
         ) { uri: Uri? -> if (uri != null) confirmImportCategories(uri) }
 
     /** 从 DeepSeek 导出包导入聊天记录（#733）。 */
     private val chatImportLauncher =
         registerForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+            androidx.activity.result.contract.ActivityResultContracts
+                .OpenDocument(),
         ) { uri: Uri? -> if (uri != null) confirmChatImport(uri) }
 
     /** 导入是否被用户取消：逐会话循环每轮看一次，已写入的会话保留。 */
@@ -108,14 +112,18 @@ class SettingsDetailActivity :
     /** Coda Bot 本地图片：选图后写入 Bot 配置。 */
     private val codaBotAvatarLauncher =
         registerForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+            androidx.activity.result.contract.ActivityResultContracts
+                .OpenDocument(),
         ) { uri: Uri? ->
             if (uri != null) {
                 runCatching {
                     contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
-                com.coda.mobileui.personal.CodaBotStore.setAvatar(this, profile.avatarSkinId, uri)
+                val profile =
+                    com.coda.mobileui.personal.CodaBotStore
+                        .profile(this)
+                com.coda.mobileui.personal.CodaBotStore
+                    .setAvatar(this, profile.avatarSkinId, uri)
                 renderPage()
             }
         }
@@ -415,9 +423,11 @@ class SettingsDetailActivity :
             PAGE_HOOKS -> {
                 SettingsData.hooks(this, ZController.get(this).workspacePath())
             }
+
             PAGE_SYSTEM_PROMPT -> {
                 SettingsData.systemPrompt(this)
             }
+
             PAGE_BACKUP -> {
                 SettingsData.backup(this)
             }
@@ -425,6 +435,7 @@ class SettingsDetailActivity :
             PAGE_PET -> {
                 SettingsData.pet(store, this)
             }
+
             PAGE_CODA_BOT_APPEARANCE -> {
                 SettingsData.codaBotAppearance(this)
             }
@@ -492,7 +503,14 @@ class SettingsDetailActivity :
      */
     private fun ensureSnapshot() {
         val key = SettingsData.snapshotKeyFor(pageKey) ?: return
-        val wp = if (key == "hooks") ZController.get(this).workspacePath() else null
+        // 解析本身可能抛（ZController 未就绪）：不能让它把整个渲染炸掉，
+        // 也不能拿 null 去 hasSnapshot——hooks 对 null 判 false，会无退避循环。
+        val wp =
+            if (key == "hooks") {
+                runCatching { ZController.get(this).workspacePath() }.getOrNull() ?: return
+            } else {
+                null
+            }
         if (SettingsData.hasSnapshot(this, key, wp)) return
         if (!snapshotLoading.add(key)) return
         SettingsData.prewarm(this, key, wp) {
@@ -524,6 +542,7 @@ class SettingsDetailActivity :
                     providerKind = ProviderStore.ProviderKind.ASR
                     pushPage(PAGE_PROVIDERS_OF_KIND)
                 }
+
                 else -> {
                     Unit
                 }
@@ -533,14 +552,18 @@ class SettingsDetailActivity :
 
     override fun onRadioSelect(key: String) {
         if (key.startsWith("coda_bot_skin=")) {
-            com.coda.mobileui.personal.CodaBotStore.setAvatar(this, key.removePrefix("coda_bot_skin="))
+            com.coda.mobileui.personal.CodaBotStore
+                .setAvatar(this, key.removePrefix("coda_bot_skin="))
             renderPage()
             return
         }
         if (key.startsWith("coda_bot_bubble=")) {
-            val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+            val profile =
+                com.coda.mobileui.personal.CodaBotStore
+                    .profile(this)
             profile.bubbleStyle = key.removePrefix("coda_bot_bubble=").toIntOrNull() ?: 0
-            com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+            com.coda.mobileui.personal.CodaBotStore
+                .saveProfile(this, profile)
             renderPage()
             return
         }
@@ -593,14 +616,18 @@ class SettingsDetailActivity :
             return
         }
         if (key == "coda_bot_pet_animation") {
-            val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+            val profile =
+                com.coda.mobileui.personal.CodaBotStore
+                    .profile(this)
             profile.petAnimation = checked
-            com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+            com.coda.mobileui.personal.CodaBotStore
+                .saveProfile(this, profile)
             renderPage()
             return
         }
         if (key == "coda_bot_forward_events") {
-            com.coda.mobileui.personal.CodaBotStore.setForwardsCodingEvents(this, checked)
+            com.coda.mobileui.personal.CodaBotStore
+                .setForwardsCodingEvents(this, checked)
             renderPage()
             return
         }
@@ -683,6 +710,7 @@ class SettingsDetailActivity :
             key.startsWith("coda_bot_") -> {
                 handleCodaBotKey(key)
             }
+
             key == "backup_export" -> {
                 // 先勾选分类再选文件（#732）：默认全选，与旧版全量行为一致。
                 pickBackupCategories()
@@ -1463,11 +1491,12 @@ class SettingsDetailActivity :
         snack("重启内核")
         ZController.get(this).restartCore { ok, msg ->
             runOnUiThread {
-                android.widget.Toast.makeText(
-                    this,
-                    if (ok) "内核已重启" else "重启失败：$msg",
-                    android.widget.Toast.LENGTH_LONG,
-                ).show()
+                android.widget.Toast
+                    .makeText(
+                        this,
+                        if (ok) "内核已重启" else "重启失败：$msg",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
             }
         }
     }
@@ -1592,7 +1621,9 @@ class SettingsDetailActivity :
                     TextView(this).apply {
                         text =
                             "仅预留未实现：" +
-                                com.coda.mobileui.core.ChatImportRegistry.reserved().joinToString("、")
+                            com.coda.mobileui.core.ChatImportRegistry
+                                .reserved()
+                                .joinToString("、")
                         textSize = 13f
                         setTextColor(neutral)
                         setPadding(0, dp(10), 0, 0)
@@ -1610,10 +1641,13 @@ class SettingsDetailActivity :
     private fun confirmChatImport(uri: Uri) {
         snack("正在识别导出包…")
         Thread {
-            val source = com.coda.mobileui.core.ChatImportRunner.detect(this, uri)
+            val source =
+                com.coda.mobileui.core.ChatImportRunner
+                    .detect(this, uri)
             val count =
                 if (source == com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK) {
-                    com.coda.mobileui.core.ChatImportRunner.countSessions(this, uri)
+                    com.coda.mobileui.core.ChatImportRunner
+                        .countSessions(this, uri)
                 } else {
                     0
                 }
@@ -1629,13 +1663,26 @@ class SettingsDetailActivity :
                 if (source != com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK) {
                     val hint =
                         when (source) {
-                            com.coda.mobileui.core.ChatImportRunner.Source.CODA_BACKUP ->
+                            com.coda.mobileui.core.ChatImportRunner.Source.CODA_BACKUP -> {
                                 "这是 Coda 自己的备份包，请用上面的「导入数据」。"
-                            else -> "没能识别为 DeepSeek v3 导出包（需要 manifest.json 与 chat_session_index.json）。"
+                            }
+
+                            else -> {
+                                "没能识别为 DeepSeek v3 导出包（需要 manifest.json 与 chat_session_index.json）。"
+                            }
                         }
-                    CodaSheet(this).title("无法导入").content { col ->
-                        col.addView(TextView(this).apply { text = hint; textSize = 14f; setTextColor(neutral) })
-                    }.primaryAction("知道了") { it.dismiss() }.show()
+                    CodaSheet(this)
+                        .title("无法导入")
+                        .content { col ->
+                            col.addView(
+                                TextView(this).apply {
+                                    text = hint
+                                    textSize = 14f
+                                    setTextColor(neutral)
+                                },
+                            )
+                        }.primaryAction("知道了") { it.dismiss() }
+                        .show()
                     return@runOnUiThread
                 }
                 CodaSheet(this)
@@ -1699,14 +1746,17 @@ class SettingsDetailActivity :
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 controller.refreshSessions(null)
-                CodaSheet(this).title("导入结果").content { col ->
-                    col.addView(
-                        TextView(this).apply {
-                            text = report.summary()
-                            textSize = 14f
-                        },
-                    )
-                }.primaryAction("知道了") { it.dismiss() }.show()
+                CodaSheet(this)
+                    .title("导入结果")
+                    .content { col ->
+                        col.addView(
+                            TextView(this).apply {
+                                text = report.summary()
+                                textSize = 14f
+                            },
+                        )
+                    }.primaryAction("知道了") { it.dismiss() }
+                    .show()
             }
         }.start()
     }
@@ -1715,8 +1765,14 @@ class SettingsDetailActivity :
         snack("导出")
         // 导出同样要先停写入方：网关会往 rootfs 写配置与凭据，内核会写会话数据库。
         // 边写边打包会得到一份「看起来完整、实际半截」的备份。
-        runCatching { com.coda.mobileui.core.WorkBuddyGateway.stop() }
-        runCatching { com.coda.mobileui.core.ProxyHost.stop() }
+        runCatching {
+            com.coda.mobileui.core.WorkBuddyGateway
+                .stop()
+        }
+        runCatching {
+            com.coda.mobileui.core.ProxyHost
+                .stop()
+        }
         val controller = ZController.get(this)
         runCatching { controller.runtime.stopCore() }
         val selected = pendingBackupCategories
@@ -1807,16 +1863,26 @@ class SettingsDetailActivity :
         snack("导入")
         // 先在后台做预检：一个损坏或不受支持的包，不该先把核心停下来。
         Thread {
-            val precheckFailure = com.coda.mobileui.core.DataBackup.validate(this, uri)
+            val precheckFailure =
+                com.coda.mobileui.core.DataBackup
+                    .validate(this, uri)
             runOnUiThread {
-                if (!com.coda.mobileui.core.BackupImportFlow.shouldStopRuntime(precheckFailure)) {
+                if (!com.coda.mobileui.core.BackupImportFlow
+                        .shouldStopRuntime(precheckFailure)
+                ) {
                     snack("导入失败：${precheckFailure ?: "备份不可用"}（未改动任何数据）")
                     return@runOnUiThread
                 }
                 // 预检通过才收运行环境：进程还在跑时写 rootfs 与数据库，既可能写坏配置，
                 // 也可能让旧网关继续占着端口与凭据。
-                runCatching { com.coda.mobileui.core.WorkBuddyGateway.stop() }
-                runCatching { com.coda.mobileui.core.ProxyHost.stop() }
+                runCatching {
+                    com.coda.mobileui.core.WorkBuddyGateway
+                        .stop()
+                }
+                runCatching {
+                    com.coda.mobileui.core.ProxyHost
+                        .stop()
+                }
                 runCatching { ZController.get(this).runtime.stopCore() }
                 Thread {
                     val result = runCatching { DataBackup.import(this, uri) }
@@ -1826,14 +1892,18 @@ class SettingsDetailActivity :
                         // 成功要重启才能完全生效；失败同样要重启——失败往往发生在已写入若干条目之后，
                         // 停在半途的进程里核心是停的、界面还按旧 SharedPreferences 显示。
                         // 走到这里说明预检已通过、运行环境已经被停过。
-                        val relaunch = com.coda.mobileui.core.BackupImportFlow.mustRelaunch(runtimeStopped = true)
+                        val relaunch =
+                            com.coda.mobileui.core.BackupImportFlow
+                                .mustRelaunch(runtimeStopped = true)
                         val message =
                             if (count != null && count > 0) {
                                 "已导入，应用将重启以完全生效"
                             } else {
                                 "导入失败：${err ?: "文件里没有可恢复的数据"}，应用将重启以恢复一致状态"
                             }
-                        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+                        android.widget.Toast
+                            .makeText(this, message, android.widget.Toast.LENGTH_LONG)
+                            .show()
                         if (relaunch) window.decorView.postDelayed({ relaunchApp() }, 900)
                     }
                 }.start()
@@ -3186,12 +3256,31 @@ class SettingsDetailActivity :
                 setText((existing?.contextWindow ?: 200000).toString())
                 inputType = InputType.TYPE_CLASS_NUMBER
             }
-        val imageBox = android.widget.CheckBox(this).apply { text = "支持图片输入"; isChecked = existing?.supportsImage ?: true }
-        val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = existing?.supportsVideo ?: false }
-        val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = existing?.supportsAudio ?: false }
-        val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = existing?.supportsPdf ?: true }
-        val toolBox = android.widget.CheckBox(this).apply { text = "支持工具调用"; isChecked = existing?.supportsToolCall ?: true }
-
+        val imageBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持图片输入"
+                isChecked = existing?.supportsImage ?: true
+            }
+        val videoBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持视频输入"
+                isChecked = existing?.supportsVideo ?: false
+            }
+        val audioBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持音频输入"
+                isChecked = existing?.supportsAudio ?: false
+            }
+        val pdfBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持 PDF 输入"
+                isChecked = existing?.supportsPdf ?: true
+            }
+        val toolBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持工具调用"
+                isChecked = existing?.supportsToolCall ?: true
+            }
 
         val typeSelector = apiTypeSelector(typeOfRecord) { typeOfRecord = it }
 
@@ -3217,7 +3306,7 @@ class SettingsDetailActivity :
                 if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(videoBox)
                 if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(audioBox)
                 if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(pdfBox)
-            if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(toolBox)
+                if (kindOfRecord == ProviderStore.ProviderKind.LLM) col.addView(toolBox)
             }
             primaryAction("保存") { s ->
                 val id = idInput.text.toString().trim()
@@ -3388,11 +3477,31 @@ class SettingsDetailActivity :
     private fun editProviderCapabilities(id: String) {
         val list = ProviderStore.load(this)
         val provider = list.firstOrNull { it.id == id } ?: return
-        val imageBox = android.widget.CheckBox(this).apply { text = "支持图片输入"; isChecked = provider.supportsImage }
-        val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = provider.supportsVideo }
-        val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = provider.supportsAudio }
-        val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = provider.supportsPdf }
-        val toolBox = android.widget.CheckBox(this).apply { text = "支持工具调用"; isChecked = provider.supportsToolCall }
+        val imageBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持图片输入"
+                isChecked = provider.supportsImage
+            }
+        val videoBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持视频输入"
+                isChecked = provider.supportsVideo
+            }
+        val audioBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持音频输入"
+                isChecked = provider.supportsAudio
+            }
+        val pdfBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持 PDF 输入"
+                isChecked = provider.supportsPdf
+            }
+        val toolBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持工具调用"
+                isChecked = provider.supportsToolCall
+            }
         CodaSheet(this)
             .title("${provider.name} 的输入能力")
             .subtitle("按模型实际支持的类型勾选")
@@ -3471,11 +3580,31 @@ class SettingsDetailActivity :
                 setText((existing?.contextWindow ?: 200000).toString())
                 inputType = InputType.TYPE_CLASS_NUMBER
             }
-        val imageBox = android.widget.CheckBox(this).apply { text = "支持图片输入"; isChecked = existing?.supportsImage ?: true }
-        val videoBox = android.widget.CheckBox(this).apply { text = "支持视频输入"; isChecked = existing?.supportsVideo ?: false }
-        val audioBox = android.widget.CheckBox(this).apply { text = "支持音频输入"; isChecked = existing?.supportsAudio ?: false }
-        val pdfBox = android.widget.CheckBox(this).apply { text = "支持 PDF 输入"; isChecked = existing?.supportsPdf ?: true }
-        val toolBox = android.widget.CheckBox(this).apply { text = "支持工具调用"; isChecked = existing?.supportsToolCall ?: true }
+        val imageBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持图片输入"
+                isChecked = existing?.supportsImage ?: true
+            }
+        val videoBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持视频输入"
+                isChecked = existing?.supportsVideo ?: false
+            }
+        val audioBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持音频输入"
+                isChecked = existing?.supportsAudio ?: false
+            }
+        val pdfBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持 PDF 输入"
+                isChecked = existing?.supportsPdf ?: true
+            }
+        val toolBox =
+            android.widget.CheckBox(this).apply {
+                text = "支持工具调用"
+                isChecked = existing?.supportsToolCall ?: true
+            }
 
         // 接口类型不再让用户手填：路由已经按类型决定了，多一个输入框只会被填错。
         // 仍然留一行只读展示，方便排查。
@@ -3633,7 +3762,7 @@ class SettingsDetailActivity :
                         supportsVideo = videoBox.isChecked,
                         supportsAudio = audioBox.isChecked,
                         supportsPdf = pdfBox.isChecked,
-                            supportsToolCall = toolBox.isChecked,
+                        supportsToolCall = toolBox.isChecked,
                         kind = kindOfRecord,
                         // 手填的一律是 MANUAL；OAuth 的那条由 OAuthLogin 落库时自己标 OAUTH，
                         // 这里覆盖掉会把它降级成普通供应商，所以保留原值。
@@ -4492,19 +4621,25 @@ class SettingsDetailActivity :
 
     /** Coda Bot 分区的行点击。 */
     private fun handleCodaBotKey(key: String) {
-        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        val profile =
+            com.coda.mobileui.personal.CodaBotStore
+                .profile(this)
         when (key) {
-            "coda_bot_avatar_pick" -> codaBotAvatarLauncher.launch(arrayOf("image/*"))
+            "coda_bot_avatar_pick" -> {
+                codaBotAvatarLauncher.launch(arrayOf("image/*"))
+            }
 
             "coda_bot_avatar_clear" -> {
-                com.coda.mobileui.personal.CodaBotStore.setAvatar(this, profile.avatarSkinId)
+                com.coda.mobileui.personal.CodaBotStore
+                    .setAvatar(this, profile.avatarSkinId)
                 renderPage()
             }
 
             "coda_bot_name" -> {
                 codaBotTextSheet("显示名称", "聊天页与聊天记录里显示的名字", profile.name, multiline = false) {
                     profile.name = it
-                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    com.coda.mobileui.personal.CodaBotStore
+                        .saveProfile(this, profile)
                     renderPage()
                 }
             }
@@ -4512,15 +4647,20 @@ class SettingsDetailActivity :
             "coda_bot_persona_edit" -> {
                 codaBotTextSheet("人设", "描述它是谁、性格如何、如何和你说话", profile.persona, multiline = true) {
                     profile.persona = it
-                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    com.coda.mobileui.personal.CodaBotStore
+                        .saveProfile(this, profile)
                     renderPage()
                 }
             }
 
             "coda_bot_persona_reset" -> {
                 sheetConfirm("恢复默认人设？", "当前人设会被内置描述替换", "恢复") {
-                    profile.persona = com.coda.mobileui.personal.CodaBotProfile().persona
-                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    profile.persona =
+                        com.coda.mobileui.personal
+                            .CodaBotProfile()
+                            .persona
+                    com.coda.mobileui.personal.CodaBotStore
+                        .saveProfile(this, profile)
                     renderPage()
                 }
             }
@@ -4528,7 +4668,8 @@ class SettingsDetailActivity :
             "coda_bot_prompt_edit" -> {
                 codaBotTextSheet("系统提示词", "与人设一起注入规划与回复模型", profile.systemPrompt, multiline = true) {
                     profile.systemPrompt = it
-                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    com.coda.mobileui.personal.CodaBotStore
+                        .saveProfile(this, profile)
                     renderPage()
                 }
             }
@@ -4536,7 +4677,8 @@ class SettingsDetailActivity :
             "coda_bot_user_name" -> {
                 codaBotTextSheet("你的称呼", "Bot 在对话里怎么称呼你", profile.userName, multiline = false) {
                     profile.userName = it
-                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    com.coda.mobileui.personal.CodaBotStore
+                        .saveProfile(this, profile)
                     renderPage()
                 }
             }
@@ -4544,20 +4686,27 @@ class SettingsDetailActivity :
             "coda_bot_user_about" -> {
                 codaBotTextSheet("关于你", "偏好、习惯和重要背景，会注入对话", profile.userAbout, multiline = true) {
                     profile.userAbout = it
-                    com.coda.mobileui.personal.CodaBotStore.saveProfile(this, profile)
+                    com.coda.mobileui.personal.CodaBotStore
+                        .saveProfile(this, profile)
                     renderPage()
                 }
             }
 
-            "coda_bot_planner" -> pickCodaBotModel(planner = true)
+            "coda_bot_planner" -> {
+                pickCodaBotModel(planner = true)
+            }
 
-            "coda_bot_reply" -> pickCodaBotModel(planner = false)
+            "coda_bot_reply" -> {
+                pickCodaBotModel(planner = false)
+            }
 
             "coda_bot_open_providers" -> {
                 pushPage(PAGE_PROVIDERS)
             }
 
-            "coda_bot_export" -> exportCodaBotMessages()
+            "coda_bot_export" -> {
+                exportCodaBotMessages()
+            }
 
             "coda_bot_clear" -> {
                 // 内核侧的会话与记忆库还没有 clear 接口（#29），这里只删本机显示。
@@ -4567,7 +4716,8 @@ class SettingsDetailActivity :
                     "只清除本机显示的聊天记录，不影响 Coding Agent。\n\n注意：模型侧的上下文与记忆仍保留，之后的回复可能仍会提到之前的内容。",
                     "清除本机记录",
                 ) {
-                    com.coda.mobileui.personal.CodaBotStore.clearMessages(this)
+                    com.coda.mobileui.personal.CodaBotStore
+                        .clearMessages(this)
                     snack("已清除本机记录；模型仍保留上下文")
                     renderPage()
                 }
@@ -4628,13 +4778,17 @@ class SettingsDetailActivity :
             snack("还没有可用的 LLM 供应商，请先到模型设置添加")
             return
         }
-        val profile = com.coda.mobileui.personal.CodaBotStore.profile(this)
+        val profile =
+            com.coda.mobileui.personal.CodaBotStore
+                .profile(this)
         val currentProvider = if (planner) profile.plannerProviderId else profile.replyProviderId
         val currentModel = if (planner) profile.plannerModel else profile.replyModel
         val current = targets.indexOfFirst { it.first == currentProvider && it.second == currentModel }.coerceAtLeast(0)
         sheetPickList(if (planner) "规划模型" else "回复模型", options, current) { which ->
             val target = targets[which]
-            val fresh = com.coda.mobileui.personal.CodaBotStore.profile(this)
+            val fresh =
+                com.coda.mobileui.personal.CodaBotStore
+                    .profile(this)
             if (planner) {
                 fresh.plannerProviderId = target.first
                 fresh.plannerModel = target.second
@@ -4642,13 +4796,16 @@ class SettingsDetailActivity :
                 fresh.replyProviderId = target.first
                 fresh.replyModel = target.second
             }
-            com.coda.mobileui.personal.CodaBotStore.saveProfile(this, fresh)
+            com.coda.mobileui.personal.CodaBotStore
+                .saveProfile(this, fresh)
             renderPage()
         }
     }
 
     private fun exportCodaBotMessages() {
-        val text = com.coda.mobileui.personal.CodaBotStore.exportMessages(this)
+        val text =
+            com.coda.mobileui.personal.CodaBotStore
+                .exportMessages(this)
         // Binder 事务上限约 1MB：历史很长时直接塞 EXTRA_TEXT 会抛
         // TransactionTooLargeException，而且崩在 startActivity 上很难归因。
         if (text.length <= 64 * 1024) {
@@ -4668,7 +4825,8 @@ class SettingsDetailActivity :
         }
         val uri =
             runCatching {
-                androidx.core.content.FileProvider.getUriForFile(this, "$packageName.workspacefiles", file)
+                androidx.core.content.FileProvider
+                    .getUriForFile(this, "$packageName.workspacefiles", file)
             }.getOrNull()
         if (uri == null) {
             snack("导出失败：无法共享文件")
@@ -4708,6 +4866,7 @@ class SettingsDetailActivity :
 
         /** 日志卡最多展示的行数（#611）。 */
         private const val LOG_TAIL_LINES = 2000
+
         /** 供应商二级页当前类别（LLM/ASR），配置变更后据此恢复。 */
         const val KEY_PROVIDER_KIND = "settings_provider_kind"
 
