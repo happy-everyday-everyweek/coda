@@ -246,6 +246,12 @@ data class PetSkin(
     val declaredInteractionClips: Map<String, String> = emptyMap(),
     /** manifest 里显式声明的 interactions pose 引用（path -> name）。 */
     val declaredInteractionPoses: Map<String, String> = emptyMap(),
+    /** manifest 里显式声明的 sleep 字段引用（path -> name）；默认名不参与校验（OCR #820）。 */
+    val declaredSleepClips: Map<String, String> = emptyMap(),
+    /** manifest 里显式声明的 sleep pose 引用（path -> name）。 */
+    val declaredSleepPoses: Map<String, String> = emptyMap(),
+    /** manifest 里显式声明的 state.still pose 引用（path -> name）。 */
+    val declaredStatePoses: Map<String, String> = emptyMap(),
 ) {
     fun clip(name: String?): List<PetFrame> = if (name == null) emptyList() else clips[name] ?: emptyList()
     fun state(mood: PetMood): PetStateSpec = states[mood.key] ?: states.values.firstOrNull() ?: DEFAULT_STATE
@@ -272,17 +278,13 @@ data class PetSkin(
             needClip("states.$sname.enter", st.enter)
             needClip("states.$sname.loop", st.loop)
             needClip("states.$sname.seen", st.seen)
-            needPose("states.$sname.still", st.still)
+            // still/sleep 的默认名是解析器兜底，不是作者声明（OCR #820）：
+            // 只校验显式声明的引用，与 interactions 同一套口径，
+            // 否则只写 {"sleep":{"after":100}} 的旧皮肤会被加载期误杀。
             st.variants.forEach { (vname, v) ->
                 needClip("states.$sname.variants.$vname.loop", v.loop)
                 needClip("states.$sname.variants.$vname.enter", v.enter)
                 needClip("states.$sname.variants.$vname.exit", v.exit)
-            }
-            st.sleep?.let { s ->
-                needClip("states.$sname.sleep.doze", s.doze)
-                needClip("states.$sname.sleep.loop", s.loop)
-                needClip("states.$sname.sleep.wake", s.wake)
-                needPose("states.$sname.sleep.still", s.still)
             }
             st.impatient?.let { needClip("states.$sname.impatient.loop", it.loop) }
             st.fidget?.pick?.forEachIndexed { i, w -> needClip("states.$sname.fidget.pick[$i]", w.clip) }
@@ -292,6 +294,9 @@ data class PetSkin(
         // 运行期由 clip() 的空列表兜底。把默认名也当硬引用会误杀合法皮肤。
         declaredInteractionClips.forEach { (path, name) -> needClip(path, name) }
         declaredInteractionPoses.forEach { (path, name) -> needPose(path, name) }
+        declaredSleepClips.forEach { (path, name) -> needClip(path, name) }
+        declaredSleepPoses.forEach { (path, name) -> needPose(path, name) }
+        declaredStatePoses.forEach { (path, name) -> needPose(path, name) }
         if (problems.isNotEmpty()) {
             throw IllegalArgumentException("皮肤 '$id' 引用缺失：${problems.joinToString("; ")}")
         }
@@ -499,6 +504,10 @@ data class PetSkin(
                 }
             }
             val states = LinkedHashMap<String, PetStateSpec>()
+            // 只登记作者显式声明的 still/sleep 引用（OCR #820）：默认名不参与校验。
+            val declaredSleepClips = LinkedHashMap<String, String>()
+            val declaredSleepPoses = LinkedHashMap<String, String>()
+            val declaredStatePoses = LinkedHashMap<String, String>()
             root.optJSONObject("states")?.let { o ->
                 o.keys().forEach { k ->
                     val item = o.optJSONObject(k) ?: return@forEach
@@ -531,7 +540,18 @@ data class PetSkin(
                         fidget = FidgetSpec(minOf(lo, hi), maxOf(lo, hi), picks)
                     }
                     var sleep: SleepSpec? = null
+                    item.optString("still").takeIf { it.isNotEmpty() }?.let {
+                        declaredStatePoses["states.$k.still"] = it
+                    }
                     item.optJSONObject("sleep")?.let { s ->
+                        listOf("doze", "loop", "wake").forEach { f ->
+                            s.optString(f).takeIf { it.isNotEmpty() }?.let {
+                                declaredSleepClips["states.$k.sleep.$f"] = it
+                            }
+                        }
+                        s.optString("still").takeIf { it.isNotEmpty() }?.let {
+                            declaredSleepPoses["states.$k.sleep.still"] = it
+                        }
                         sleep =
                             SleepSpec(
                                 after = s.optInt("after", 2000).coerceAtLeast(1),
@@ -671,6 +691,9 @@ data class PetSkin(
                 props = props,
                 declaredInteractionClips = declaredClips,
                 declaredInteractionPoses = declaredPoses,
+                declaredSleepClips = declaredSleepClips,
+                declaredSleepPoses = declaredSleepPoses,
+                declaredStatePoses = declaredStatePoses,
             )
             skin.validateReferences()
             return skin

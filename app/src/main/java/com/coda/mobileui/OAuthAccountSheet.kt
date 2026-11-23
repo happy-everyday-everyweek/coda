@@ -184,7 +184,25 @@ class OAuthAccountSheet(
         val col = column ?: return
         col.removeAllViews()
         col.addView(hint(OAuthSheetErrors.reloadMessage(e)))
-        col.addView(hint("可以关闭这张卡片后重新打开再试。"))
+        // 失败不能是死路（OCR #820）：caps 停在 null 时签到只会一直提示
+        // 「正在读取平台能力」，必须给重试入口；主按钮也换成重试。
+        col.addView(
+            android.widget.TextView(host).apply {
+                text = "重试"
+                textSize = 15f
+                setTextColor(primary)
+                setPadding(0, dp(12f), 0, dp(12f))
+                isClickable = true
+                setOnClickListener {
+                    renderLoading()
+                    reload()
+                }
+            },
+        )
+        hostSheet.primaryAction("重试") {
+            renderLoading()
+            reload()
+        }
     }
 
     private fun renderLoading() {
@@ -558,7 +576,9 @@ class OAuthAccountSheet(
     /** 删除单独一节，颜色用错误的红，明确它是不可逆的。 */
     private fun deleteRow(): View {
         val box = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
-        if (caps?.panel == true) {
+        // 与 OAuthActions.available 同一判据（OCR #820）：只看 panel 会让
+        // 没实现 /delete 的插件也显示不可逆的「删除」，点了必然 404。
+        if (caps?.routes?.contains("/delete") == true) {
             box.addView(actionItem("删除账号", "同时删掉本地凭据，需要重新授权", 0xFFC62828.toInt()) { confirmDelete() })
         } else {
             box.addView(hint("该平台的账号需要在插件的管理面板里删除。"))

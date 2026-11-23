@@ -255,7 +255,7 @@ object OAuthAccounts {
         // panel 现在由 routes 推导，漏掉它会让「面板不提到 accounts 但接口存在」的平台被判成无面板。
         if (!panelRoutes.contains("/accounts") && exists("/accounts")) routes += "/accounts"
         // 面板外的关键路由逐个确认，确认到才加入能力集。
-        for (path in listOf("/keepalive", "/enable", "/disable", "/claim", "/claim-pro", "/clear-cooldown", "/unfreeze")) {
+        for (path in listOf("/keepalive", "/enable", "/disable", "/claim", "/claim-pro", "/clear-cooldown", "/unfreeze", "/delete")) {
             if (exists(path)) routes += path
         }
 
@@ -312,7 +312,11 @@ object OAuthAccounts {
             if (array != null) {
                 val out = mutableListOf<Account>()
                 for (i in 0 until array.length()) {
-                    array.optJSONObject(i)?.let { out += parseAccount(it) }
+                    array.optJSONObject(i)?.let { item ->
+                        // 空 auth_index 的行不能进列表（OCR #820）：签到会拿它直接调
+                        // checkin，插件把空索引理解为「整个平台」，一键扇出全部账号。
+                        if (item.optString("auth_index").isNotBlank()) out += parseAccount(item)
+                    }
                 }
                 return out
             }
@@ -411,7 +415,7 @@ object OAuthAccounts {
             coolUntil = o.optLong("cool_until"),
             success = o.optLong("success"),
             failed = o.optLong("failed"),
-            error = o.optString("error"),
+            error = if (o.isNull("error")) "" else o.optString("error"),
         )
     }
 
@@ -449,14 +453,14 @@ object OAuthAccounts {
 
     private fun readCheckinOutcome(res: JSONObject): Outcome {
         val payload = res.optJSONObject("data") ?: res
-        payload.optString("error").takeIf { it.isNotEmpty() }?.let { return Outcome(false, describeError(it)) }
+        if (!payload.isNull("error")) payload.optString("error").takeIf { it.isNotEmpty() }?.let { return Outcome(false, describeError(it)) }
         val results = payload.optJSONArray("results") ?: return Outcome(true, "已签到")
         if (results.length() == 0) return Outcome(true, "没有可签到的账号")
 
         // 单账号时把插件原话带出来，用户最关心"到底签上没有"。
         if (results.length() == 1) {
             val item = results.optJSONObject(0) ?: return Outcome(true, "已签到")
-            item.optString("error").takeIf { it.isNotEmpty() }?.let { return Outcome(false, describeError(it)) }
+            if (!item.isNull("error")) item.optString("error").takeIf { it.isNotEmpty() }?.let { return Outcome(false, describeError(it)) }
             val reason = item.optString("reason")
             val message = item.optString("message")
             return when (reason) {
@@ -503,7 +507,7 @@ object OAuthAccounts {
         for (i in 0 until results.length()) {
             val item = results.optJSONObject(i) ?: continue
             val reason = item.optString("reason")
-            if (item.optString("error").isNotEmpty()) {
+            if (!item.isNull("error") && item.optString("error").isNotEmpty()) {
                 failed++
             } else if (item.optBoolean("success")) {
                 ok++

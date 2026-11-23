@@ -276,8 +276,9 @@ object OAuthLogin {
             val body =
                 runCatching { org.json.JSONObject(raw) }.getOrNull()
                     ?: return Result.Failed("网关返回无法解析")
-            // 先判 error：失败响应也可能带 done=true，先判 done 会把失败当成功落库
-            val err = body.optString("error")
+            // 先判 error：失败响应也可能带 done=true，先判 done 会把失败当成功落库。
+            // 显式 JSON null 时 optString 返回字面 "null"（OCR #820），先 isNull。
+            val err = if (body.isNull("error")) "" else body.optString("error")
             if (err.isNotEmpty()) return Result.Failed(err)
             if (body.optBoolean("done", false)) return Result.Ready
             // 设备流通常要用户在浏览器里点确认，未完成时正常返回 pending。
@@ -582,12 +583,39 @@ object OAuthLogin {
         stored: List<String>,
         live: List<String>,
         prefix: String,
+    ): Boolean = needsModelRefresh(stored, live, prefix, emptyList())
+
+    /**
+     * 带全部前缀的归属判定（OCR #820）：前缀有嵌套（workbuddy- 是
+     * workbuddy-ai- 的前缀），只判 startsWith 会让被别家污染的清单
+     * 全部「看似匹配」，串号永远修不掉。与 modelsFor 同一套最长前缀归属。
+     */
+    fun needsModelRefresh(
+        stored: List<String>,
+        live: List<String>,
+        prefix: String,
+        allPrefixes: List<Pair<String, String>>,
     ): Boolean {
         if (live.isEmpty()) return false
         if (stored.isEmpty()) return true
-        val mismatched = prefix.isNotEmpty() && stored.any { !it.startsWith(prefix) }
+        val mismatched =
+            prefix.isNotEmpty() &&
+                stored.any { m ->
+                    if (allPrefixes.isEmpty()) {
+                        !m.startsWith(prefix)
+                    } else {
+                        val owner = OAuthProviders.ownerOf(m, allPrefixes)
+                        // 无主模型按字面前缀判：保持旧行为，不因未知前缀漏修。
+                        if (owner == null) !m.startsWith(prefix) else ownerPrefix(owner, allPrefixes) != prefix
+                    }
+                }
         return mismatched && stored.toSet() != live.toSet()
     }
+
+    private fun ownerPrefix(
+        owner: String,
+        prefixes: List<Pair<String, String>>,
+    ): String? = prefixes.firstOrNull { it.first == owner }?.second
 
     /** 只把 models 合并进最新列表，返回改动条数（同 #318 的理由）。 */
     fun mergeModels(
@@ -629,7 +657,10 @@ object OAuthLogin {
             // 两种要修：空清单；以及历史串号留下的「别家前缀」清单。
             // 后者是真实踩过的坑：两个网关同时在跑时，旧 models() 永远问 CodeBuddy，
             // 于是 Cursor/ZCode 的配置里存了一批 cb- 开头的模型，内核一条也注册不上。
-            if (needsModelRefresh(p.models, models, prefix)) {
+            // 传入全部前缀按最长归属判（OCR #820）：嵌套前缀（workbuddy- 与
+            // workbuddy-ai-）互相污染时 startsWith 全部误判为匹配。
+            val allPrefixes = OAuthProviders.all.map { it.id to OAuthProviders.modelPrefix(it) }
+            if (needsModelRefresh(p.models, models, prefix, allPrefixes)) {
                 live[p.id] = models.distinct()
             }
         }

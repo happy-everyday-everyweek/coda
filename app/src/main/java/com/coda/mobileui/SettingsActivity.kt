@@ -60,19 +60,37 @@ class SettingsActivity : BaseActivity() {
             MotionEvent.ACTION_DOWN -> {
                 swipeStartX = ev.x
                 swipeStartY = ev.y
+                swipeArmed = true
             }
+
+            // 多指/取消会让起点与抬手属于不同手指，dx 全是乱值（OCR #820）：
+            // 一律解除本次判定，宁可漏一次返回也不误触。
+            MotionEvent.ACTION_POINTER_DOWN,
+            MotionEvent.ACTION_POINTER_UP,
+            MotionEvent.ACTION_CANCEL,
+            -> swipeArmed = false
 
             MotionEvent.ACTION_UP -> {
                 val dx = ev.x - swipeStartX
                 val dy = kotlin.math.abs(ev.y - swipeStartY)
-                if (isRightBackSwipe(dx, dy, dp(36).toFloat())) {
+                if (swipeArmed && isRightBackSwipe(dx, dy, dp(36).toFloat())) {
+                    // 消费 UP 前先给子控件发 CANCEL（OCR #820）：直接吞掉 UP
+                    // 会让收到 DOWN 的按钮/列表项永远停在按压态、涟漪不消散。
+                    val cancel = MotionEvent.obtain(ev)
+                    cancel.action = MotionEvent.ACTION_CANCEL
+                    super.dispatchTouchEvent(cancel)
+                    cancel.recycle()
+                    swipeArmed = false
                     backToDrawer()
                     return true
                 }
+                swipeArmed = false
             }
         }
         return super.dispatchTouchEvent(ev)
     }
+
+    private var swipeArmed = false
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 

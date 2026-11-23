@@ -31,15 +31,25 @@ class OAuthActionsGuardTest {
 
     @Test
     fun `clear cooldown alone is reachable`() {
-        val result = ids(caps(clearCooldown = true))
+        // 真实探测结果里旗标由路由推导（OCR #820）：入口按路由判。
+        val result = ids(caps(routes = setOf("/clear-cooldown"), clearCooldown = true))
         assertTrue(result.contains("clear-cooldown"))
         assertFalse(result.contains("unfreeze"))
     }
 
     @Test
     fun `both cooldown actions appear when both are supported`() {
-        val result = ids(caps(clearCooldown = true, unfreeze = true))
+        val result = ids(caps(routes = setOf("/clear-cooldown", "/unfreeze"), clearCooldown = true, unfreeze = true))
         assertTrue(result.contains("clear-cooldown"))
+        assertTrue(result.contains("unfreeze"))
+    }
+
+    @Test
+    fun `unfreeze only plugin does not get a clear-cooldown entry`() {
+        // caps.clearCooldown 含 "|| /unfreeze"：按旗标放入口会 POST 一条
+        // 从未确认存在的 /clear-cooldown，必然 404（OCR #820）。
+        val result = ids(caps(routes = setOf("/unfreeze"), clearCooldown = true, unfreeze = true))
+        assertFalse(result.contains("clear-cooldown"))
         assertTrue(result.contains("unfreeze"))
     }
 

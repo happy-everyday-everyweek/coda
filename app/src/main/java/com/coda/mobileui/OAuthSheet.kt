@@ -55,6 +55,9 @@ class OAuthSheet(
     private var authorized = false
     private var webView: WebView? = null
     private var statusText: TextView? = null
+
+    /** onCreateWindow 产生的弹窗：teardown 时统一销毁（OCR #820）。 */
+    private val popupWebViews = mutableListOf<WebView>()
     @Volatile
     private var closed = false
     private var pollTick: Runnable? = null
@@ -239,6 +242,9 @@ class OAuthSheet(
 
     /** 第二步：装宿主与插件、发起登录，然后按插件给的形态呈现。 */
     private fun renderAuthorize(column: LinearLayout) {
+        // 重试先清列（OCR #820）：只追加会让每次重试都叠一块进度面板和一个
+        // 「重新准备网关」按钮，失败输出越堆越高。
+        column.removeAllViews()
         // 网关准备过程会连续报很多步（装配环境 → 释放二进制 → 校验 → 启动 → 探活），
         // 之前只用一个 TextView 覆盖显示最新一行，用户看不到前面发生过什么——
         // 出问题时最需要的恰恰是「它到底走到哪一步、前一步说了什么」。
@@ -311,6 +317,10 @@ class OAuthSheet(
                             p?.finish()
                             column.removeView(panel.view)
                             progressPanel = null
+                            // 重试成功后把主按钮从「重试」恢复成「继续」（OCR #820）：
+                            // 否则授权进行中点底栏会再跑一轮 prepare/begin，
+                            // 换掉 session，用户正在完成的授权页随之作废。
+                            hostSheet.primaryAction("继续") { self -> onPrimary(self) }
                             showAuthorize(column, started)
                             startPolling()
                         }
@@ -387,11 +397,27 @@ class OAuthSheet(
         // 必须等清理回调再加载页面，否则第一次请求可能还带着上一个账号的 Cookie。
         cookies.removeAllCookies {
             runCatching { WebStorage.getInstance().deleteAllData() }
-            main.post { build() }
+            main.post {
+                cookiesCleared = true
+                cookieFallback?.let { main.removeCallbacks(it) }
+                build()
+            }
         }
-        // 极端情况下系统不回调：留一个兜底，避免界面永远空白。
-        main.postDelayed({ build() }, 1_500)
+        // 极端情况下系统不回调（OCR #820）：兜底只提示重试，不能带着旧 Cookie
+        // 直接建页加载——那正是这次重写要防的串号。Runnable 记下来供 teardown 摘除。
+        val fallback =
+            Runnable {
+                if (closed || cookiesCleared || built) return@Runnable
+                column.removeAllViews()
+                column.addView(hint("清理浏览器数据超时，为避免登录到上一个账号，未加载授权页。"))
+                column.addView(button("重试") { openInWebView(column, url) })
+            }
+        cookieFallback = fallback
+        main.postDelayed(fallback, 1_500)
     }
+
+    private var cookiesCleared = false
+    private var cookieFallback: Runnable? = null
 
     private fun buildWebView(
         column: LinearLayout,
@@ -471,10 +497,14 @@ class OAuthSheet(
                                     webChromeClient =
                                         object : WebChromeClient() {
                                             override fun onCloseWindow(window: WebView?) {
+                                                window?.let { popupWebViews.remove(it) }
                                                 runCatching { window?.destroy() }
                                             }
                                         }
                                 }
+                            // 弹窗登记（OCR #820）：页面不调 window.close 时 onCloseWindow
+                            // 永远不来，卡片关闭后弹窗 WebView 连着 Activity 一起泄漏。
+                            popupWebViews.add(popup)
                             transport.webView = popup
                             resultMsg?.sendToTarget()
                             AppLog.i("OAuthSheet", "已接管新窗口，导航将转交主 WebView 处理")
@@ -712,7 +742,9 @@ class OAuthSheet(
                     // 客户端必须自己收口，否则界面会永远停在"等待授权"。
                     if (System.currentTimeMillis() - startedAt > SESSION_TIMEOUT_MS) {
                         polling = false
-                        statusText?.text = "授权超时，请重新发起登录"
+                        // statusText 只在确认步创建，授权步写它是空操作（OCR #820）：
+                        // 走与 onPrimary 同一套可见性兜底，并给重新发起的入口。
+                        showAuthNotice("授权超时，请重新发起登录")
                         return
                     }
                     Thread {
@@ -730,7 +762,7 @@ class OAuthSheet(
 
                                 is OAuthLogin.Result.Failed -> {
                                     polling = false
-                                    statusText?.text = result.message
+                                    showAuthNotice(result.message)
                                 }
 
                                 is OAuthLogin.Result.Pending -> {
@@ -743,6 +775,20 @@ class OAuthSheet(
             }
         pollTick = tick
         main.postDelayed(tick, POLL_INTERVAL_MS)
+    }
+
+    /**
+     * 授权步的失败/超时提示（OCR #820）：statusText 只在确认步存在，
+     * 授权期间必须写进度面板或 Toast，否则轮询静默停摆、界面永远「等待授权」。
+     */
+    private fun showAuthNotice(text: String) {
+        when {
+            statusText != null -> statusText?.text = text
+            progressPanel != null -> progressPanel?.append(text, emphasis = true)
+            else -> Toast.makeText(host, text, Toast.LENGTH_LONG).show()
+        }
+        // 给重新发起的入口：主按钮变「重试」，重跑 prepare/begin。
+        hostSheet.primaryAction("重试") { hostSheet.navigate { content { col -> renderAuthorize(col) } } }
     }
 
     /** 收尾：把账号落成一条普通 provider（baseUrl 指向本机网关）。 */
@@ -788,6 +834,8 @@ class OAuthSheet(
         polling = false
         pollTick?.let { main.removeCallbacks(it) }
         pollTick = null
+        cookieFallback?.let { main.removeCallbacks(it) }
+        cookieFallback = null
         session = null
         progressPanel = null
         webView?.let { view ->
@@ -797,6 +845,14 @@ class OAuthSheet(
             }
         }
         webView = null
+        // 弹窗与主 WebView 同生命周期（OCR #820）。
+        for (popup in popupWebViews) {
+            runCatching {
+                popup.stopLoading()
+                popup.destroy()
+            }
+        }
+        popupWebViews.clear()
     }
 
     // ---------------------------------------------------------------- 小部件

@@ -164,6 +164,9 @@ class SettingsDetailActivity :
         when (pageKey) {
             PAGE_USAGE -> "usage"
             PAGE_PLUGINS -> "plugins"
+            // 市场页同样吃 plugins 数据源（OCR #820）：漏了它时拉取失败
+            // 只会永远停在「正在读取…」，没有错误页与重试。
+            PAGE_PLUGIN_MARKET -> "plugins"
             PAGE_MCP -> "mcp"
             else -> null
         }
@@ -189,7 +192,17 @@ class SettingsDetailActivity :
 
     /** 首次进入异步页时拉取数据；成功后缓存并重渲染。 */
     private fun ensureExtrasLoaded(kind: String) {
+        // automations/hooks 的刷新走快照作废（OCR #820）：它们没有 extras 拉取
+        // 分支，落进下面的 when 会白占 extrasLoading 且永不移除（永久泄漏），
+        // 「刷新」行也毫无效果。
+        if (kind == "automations" || kind == "hooks") {
+            SettingsData.invalidateSnapshots(kind)
+            renderPage()
+            return
+        }
         if (extrasCache.containsKey(kind) || extrasLoading.contains(kind)) return
+        // 未知类别在触碰 extrasLoading 之前拒绝，防止泄漏卡住后续拉取。
+        if (kind != "usage" && kind != "plugins" && kind != "mcp") return
         extrasLoading.add(kind)
         extrasError.remove(kind)
         val zc = ZController.get(this)
@@ -354,6 +367,9 @@ class SettingsDetailActivity :
         updateDownloadCancel = null
         updateCheckCancel?.cancel()
         updateCheckCancel = null
+        // 聊天导入最长可跑 1000×30s（OCR #820）：页面销毁必须能停，
+        // 已写入的会话保留，runner 会在报告里如实说明剩余未导入。
+        chatImportCancelled = true
         // ASR 测试可能还在录音或挂着实时会话，页面退出时必须收干净，
         // 否则麦克风会一直被占用。取消 scope 会连带触发
         // transcribeStream 的 awaitClose，那里负责停录音与关会话。
@@ -1352,7 +1368,11 @@ class SettingsDetailActivity :
                 }.primaryAction("导出") { self -> exportLogs(self) }
         sheet.show()
         // 读取放后台：日志大时全量 readLines 会卡住主线程（#611）。
+        // 请求代际（OCR #820）：快速切换级别时慢的旧请求可能最后回来，
+        // 把新级别的内容盖掉。每张卡片一个代际计数，迟到快照直接丢弃。
+        val gen = nextLogsGeneration(sheet)
         loadLogsThen { snapshot ->
+            if (gen != logsGeneration[sheet]) return@loadLogsThen
             sheet.subtitle(logSubtitle(minLevel, snapshot))
             sheet.refreshContent { col ->
                 // 统计行放正文首行：subtitle() 只改字段，已显示的卡片不会因此重画。
@@ -1360,6 +1380,15 @@ class SettingsDetailActivity :
                 col.addView(logBodyFor(minLevel, snapshot))
             }
         }
+    }
+
+    /** 日志卡片的请求代际：按卡片身份计数，切一次级别递增一次。 */
+    private val logsGeneration = java.util.IdentityHashMap<CodaSheet, Int>()
+
+    private fun nextLogsGeneration(sheet: CodaSheet): Int {
+        val next = (logsGeneration[sheet] ?: 0) + 1
+        logsGeneration[sheet] = next
+        return next
     }
 
     /** 已打开卡片里的级别切换：只重画内容与副标题。 */
@@ -1374,7 +1403,9 @@ class SettingsDetailActivity :
             secondaryAction("切换级别") { again -> switchLogLevelInPlace(again, nextLogLevel(next)) }
             primaryAction("导出") { s -> exportLogs(s) }
         }
+        val gen = nextLogsGeneration(sheet)
         loadLogsThen { snapshot ->
+            if (gen != logsGeneration[sheet]) return@loadLogsThen
             sheet.subtitle(logSubtitle(next, snapshot))
             sheet.refreshContent { col ->
                 col.addView(sheetBodyText(logSubtitle(next, snapshot)))
@@ -1545,7 +1576,7 @@ class SettingsDetailActivity :
     private fun confirmImportCategories(uri: Uri) {
         snack("正在读取包内容…")
         Thread {
-            val present = DataBackup.categoriesIn(this, uri)
+            val present = DataBackup.categoriesInStreaming(applicationContext, uri)
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 if (present.isEmpty()) {
@@ -1666,16 +1697,19 @@ class SettingsDetailActivity :
     private fun confirmChatImport(uri: Uri) {
         snack("正在识别导出包…")
         Thread {
-            val source =
-                com.coda.mobileui.core.ChatImportRunner
-                    .detect(this, uri)
-            val count =
-                if (source == com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK) {
-                    com.coda.mobileui.core.ChatImportRunner
-                        .countSessions(this, uri)
+            // 一次物化（OCR #820）：detect/count/import 原先各拷一遍整包。
+            // 包文件保留给导入用；非 DeepSeek 或用户取消时删除。
+            val prepared = com.coda.mobileui.core.ChatImportRunner.materialize(applicationContext, uri)
+            val probe =
+                if (prepared != null) {
+                    com.coda.mobileui.core.ChatImportRunner.probePrepared(prepared)
                 } else {
-                    0
+                    com.coda.mobileui.core.ChatImportRunner.Probe(
+                        com.coda.mobileui.core.ChatImportRunner.Source.UNKNOWN, 0, 0,
+                    )
                 }
+            val source = probe.source
+            val count = probe.count
             val wp = ZController.get(this).workspacePath()
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
@@ -1685,11 +1719,19 @@ class SettingsDetailActivity :
                         com.google.android.material.R.attr.colorOnSurfaceVariant,
                         android.graphics.Color.GRAY,
                     )
-                if (source != com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK) {
+                if (source != com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK || count == 0) {
+                    // 不可导入的包不留临时文件（OCR #820）。
+                    prepared?.delete()
                     val hint =
-                        when (source) {
-                            com.coda.mobileui.core.ChatImportRunner.Source.CODA_BACKUP -> {
+                        when {
+                            source == com.coda.mobileui.core.ChatImportRunner.Source.CODA_BACKUP -> {
                                 "这是 Coda 自己的备份包，请用上面的「导入数据」。"
+                            }
+
+                            source == com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK -> {
+                                // count==0 是错误态而不是可导入包（OCR #820）：
+                                // 索引读不出/没有会话，点开始只会报 MISSING_INDEX。
+                                "包里没有可导入的会话（索引缺失、为空或无法读取）。"
                             }
 
                             else -> {
@@ -1710,12 +1752,18 @@ class SettingsDetailActivity :
                         .show()
                     return@runOnUiThread
                 }
+                var handedOff = false
                 CodaSheet(this)
                     .title("导入 DeepSeek 聊天记录")
                     .content { col ->
                         col.addView(
                             TextView(this).apply {
-                                text = "识别到 DeepSeek 导出包，共 $count 个会话可导入。"
+                                text =
+                                    if (probe.totalInIndex > count) {
+                                        "识别到 DeepSeek 导出包，共 ${probe.totalInIndex} 个会话；仅导入最近更新的 $count 个。"
+                                    } else {
+                                        "识别到 DeepSeek 导出包，共 $count 个会话可导入。"
+                                    }
                                 textSize = 14f
                                 setPadding(0, 0, 0, dp(4))
                             },
@@ -1738,43 +1786,71 @@ class SettingsDetailActivity :
                             },
                         )
                     }.primaryAction("开始导入") { sheet ->
+                        // 所有权移交导入线程后 dismiss 不得删包（OCR #820）。
+                        handedOff = true
                         sheet.dismiss()
-                        runChatImport(uri)
+                        runChatImport(prepared)
                     }.secondaryAction("取消") { it.dismiss() }
+                    .onDismiss { if (!handedOff) prepared?.delete() }
                     .show()
             }
         }.start()
     }
 
-    /** 执行导入：逐会话建会话，进度与结果都落到界面上。 */
-    private fun runChatImport(uri: Uri) {
+    /** 执行导入：逐会话建会话，进度与结果都落到界面上。包由确认页物化并移交。 */
+    private fun runChatImport(prepared: File?) {
         // 进行中不得再开一批（#813）：两个线程交错 createImportedSession
         // 会产出重复会话，第二批还会重置共享的取消标志。
         if (chatImportRunning) {
             snack("导入正在进行，请等它结束")
+            prepared?.delete()
+            return
+        }
+        if (prepared == null) {
+            snack("导入包已失效，请重新选择文件")
             return
         }
         chatImportRunning = true
         chatImportCancelled = false
         val controller = ZController.get(this)
-        snack("正在导入…")
+        // 进度用一张可反复 refresh 的卡片（OCR #820）：每会话一条 Toast 会把
+        // 系统队列灌满，导入结束几分钟后还在弹「正在导入 x/y」。卡片同时提供
+        // 取消入口——chatImportCancelled 原先没有任何置 true 的路径，纯死代码。
+        val progressSheet =
+            CodaSheet(this)
+                .title("导入聊天记录")
+                .content { col -> col.addView(sheetBodyText("正在导入…")) }
+                .secondaryAction("取消导入") {
+                    chatImportCancelled = true
+                    it.dismiss()
+                }
+        progressSheet.show()
+        var lastProgressAt = 0L
         Thread {
             val report =
-                com.coda.mobileui.core.ChatImportRunner.importDeepSeek(
-                    ctx = this,
-                    uri = uri,
+                com.coda.mobileui.core.ChatImportRunner.importPrepared(
+                    prepared = prepared,
                     onProgress = { done, total ->
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
-                                android.widget.Toast
-                                    .makeText(this, "正在导入 $done/$total", android.widget.Toast.LENGTH_SHORT)
-                                    .show()
+                        // 节流：≥500ms 或最后一条才刷卡片。
+                        val now = System.currentTimeMillis()
+                        if (done == total || now - lastProgressAt >= 500L) {
+                            lastProgressAt = now
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed && !chatImportCancelled) {
+                                    progressSheet.subtitle("$done/$total")
+                                    progressSheet.refreshContent { col ->
+                                        col.addView(sheetBodyText("正在导入 $done/$total"))
+                                    }
+                                }
                             }
                         }
                     },
                     isCancelled = { chatImportCancelled },
                     createSession = { history -> controller.createImportedSession(history) },
                 )
+            // 包用完即删（所有权在本线程）。
+            runCatching { prepared.delete() }
+            runOnUiThread { progressSheet.dismiss() }
             // 无论成败都要清进行中标志；Activity 已销毁时也要清（字段随实例走，
             // 但标志置位与清除必须配对，否则同一实例上再也开不了导入）。
             chatImportRunning = false
@@ -3059,19 +3135,22 @@ class SettingsDetailActivity :
                     .toString()
                     .trim()
                     .removePrefix("#")
+            // 3 位缩写要逐位加倍展开（OCR #820）："#FFF" 是白色，按 0xFFF 解析
+            // 再 padStart 会存成 #000FFF（蓝色）。4/5 位不是合法颜色，直接拒绝。
+            val expanded = if (hex.length == 3) hex.map { "$it$it" }.joinToString("") else hex
             val parsed =
-                if (hex.length in 3..6 && hex.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
-                    hex.toLongOrNull(16)
+                if (expanded.length == 6 && expanded.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+                    expanded.toLongOrNull(16)
                 } else {
                     null
                 }
             if (parsed == null) {
                 // 非法值之前被静默吞掉：用户以为已生效，实际主题没变。
-                input.error = "请输入 3–6 位十六进制颜色，例如 #6750A4"
+                input.error = "请输入 3 或 6 位十六进制颜色，例如 #6750A4 或 #FFF"
                 return
             }
             val color = parsed.toInt() or 0xFF000000.toInt()
-            store.customAccentHex = "#" + hex.uppercase().padStart(6, '0')
+            store.customAccentHex = "#" + expanded.uppercase()
             store.accentIndex = SettingsStore.nearestAccentIndex(color)
             store.autoColor = false
             s.dismiss()
@@ -4397,6 +4476,8 @@ class SettingsDetailActivity :
             val ok = store.setEnabled(id, enable, next, System.currentTimeMillis())
             runOnUiThread {
                 snack(if (ok) (if (enable) "已启用" else "已停用") else "操作失败")
+                // 写后必须作废快照（OCR #820）：否则 5s TTL 内页面仍渲染旧状态。
+                if (ok) SettingsData.invalidateSnapshots("automations")
                 renderPage()
             }
         }
@@ -4412,6 +4493,7 @@ class SettingsDetailActivity :
                 val ok = AutomationStore(applicationContext).delete(id)
                 runOnUiThread {
                     snack(if (ok) "已删除" else "删除失败")
+                    if (ok) SettingsData.invalidateSnapshots("automations")
                     renderPage()
                 }
             }
@@ -4513,6 +4595,8 @@ class SettingsDetailActivity :
                         entry.hookIndex,
                     )
                 snack(err ?: "已删除")
+                // 写后作废快照（OCR #820）：否则 TTL 内列表仍显示已删钩子。
+                if (err == null) SettingsData.invalidateSnapshots("hooks")
                 renderPage()
             }
         }
@@ -4534,6 +4618,7 @@ class SettingsDetailActivity :
                         "未授予: ${reason ?: "未知原因"}，可尝试重新打开本页后重试"
                     },
                 )
+                if (ok) SettingsData.invalidateSnapshots("hooks")
                 renderPage()
             }
         }
@@ -4593,6 +4678,7 @@ class SettingsDetailActivity :
                 )
             snack(err ?: "已保存；未信任的钩子需要在本页授予信任后才会执行")
             s.dismiss()
+            if (err == null) SettingsData.invalidateSnapshots("hooks")
             renderPage()
         }
         sheet.show()

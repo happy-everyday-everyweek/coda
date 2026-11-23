@@ -125,14 +125,47 @@ internal object ChatImportRunner {
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
         isCancelled: () -> Boolean = { false },
         createSession: (JSONObject) -> Boolean,
+    ): Report =
+        // 确认页已物化过一次包（OCR #820）：复用同一份临时文件，不再整包重拷。
+        withTempPackage(ctx, uri) { file ->
+            importPrepared(file, limit, onProgress, isCancelled, createSession)
+        }
+
+    /** 一次物化后的探测结果（OCR #820）：detect 与计数共用同一份临时文件。 */
+    class Probe(
+        val source: Source,
+        /** 按 limit 截断后可导入的会话数；索引读不出为 0。 */
+        val count: Int,
+        /** 索引里的会话总数：大于 count 说明发生了截断，确认页必须如实披露。 */
+        val totalInIndex: Int,
+    )
+
+    /** detect + countSessions 合并为一次落盘（原先各拷一遍整包，共三次 IO）。 */
+    fun probe(
+        ctx: Context,
+        uri: Uri,
+        limit: Int = DeepSeekImport.DEFAULT_SESSION_LIMIT,
+    ): Probe =
+        runCatching {
+            withTempPackage(ctx, uri) { file -> probePrepared(file, limit) }
+        }.getOrDefault(Probe(Source.UNKNOWN, 0, 0))
+
+    /** 对已物化的包执行导入；[prepared] 由调用方负责删除。 */
+    fun importPrepared(
+        prepared: File,
+        limit: Int = DeepSeekImport.DEFAULT_SESSION_LIMIT,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+        isCancelled: () -> Boolean = { false },
+        createSession: (JSONObject) -> Boolean,
     ): Report {
         val reasons = mutableListOf<String>()
         var imported = 0
         var skipped = 0
         return runCatching {
-            withTempPackage(ctx, uri) { file ->
+            run {
+                val file = prepared
                 if (file.length() > DeepSeekImport.MAX_TOTAL_BYTES) {
-                    return@withTempPackage Report(0, 0, emptyList(), DeepSeekImport.Reject.TOO_LARGE)
+                    return@run Report(0, 0, emptyList(), DeepSeekImport.Reject.TOO_LARGE)
                 }
                 ZipFile(file).use { zip ->
                     val entries = zip.entries().asSequence().toList()
@@ -321,6 +354,54 @@ internal object ChatImportRunner {
             }
         }
     }
+
+    /**
+     * 物化一份可复用的包文件（OCR #820）：确认页探测一次、导入直接用同一份，
+     * 不再 detect/count/import 各拷一遍。调用方用完必须 [File.delete]。
+     * 失败返回 null（半成品已删）。
+     */
+    fun materialize(
+        ctx: Context,
+        uri: Uri,
+    ): File? =
+        runCatching {
+            val tmp = File(ctx.cacheDir, "chat-import-${System.nanoTime()}.zip")
+            try {
+                ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    copyBounded(input, tmp, DeepSeekImport.MAX_TOTAL_BYTES)
+                } ?: throw IllegalStateException("无法读取所选文件")
+                tmp
+            } catch (t: Throwable) {
+                runCatching { tmp.delete() }
+                throw t
+            }
+        }.getOrNull()
+
+    /** 对已物化的包探测来源与计数；不删除 [prepared]。 */
+    fun probePrepared(
+        prepared: File,
+        limit: Int = DeepSeekImport.DEFAULT_SESSION_LIMIT,
+    ): Probe =
+        runCatching {
+            ZipFile(prepared).use { zip ->
+                if (zip.size() > DeepSeekImport.MAX_ENTRIES) return@use Probe(Source.UNKNOWN, 0, 0)
+                val names = zip.entries().asSequence().map { it.name }.toList()
+                val manifestEntry = zip.getEntry("manifest.json") ?: return@use Probe(Source.UNKNOWN, 0, 0)
+                val manifest =
+                    runCatching {
+                        JSONObject(zip.readMetaLimited(manifestEntry) ?: return@use Probe(Source.UNKNOWN, 0, 0))
+                    }.getOrNull() ?: return@use Probe(Source.UNKNOWN, 0, 0)
+                val source =
+                    when {
+                        manifest.optString("app") == "coda" -> Source.CODA_BACKUP
+                        DeepSeekImport.looksLikeDeepSeek(names, manifest) -> Source.DEEPSEEK
+                        else -> Source.UNKNOWN
+                    }
+                if (source != Source.DEEPSEEK) return@use Probe(source, 0, 0)
+                val index = readIndex(zip) ?: return@use Probe(source, 0, 0)
+                Probe(source, DeepSeekImport.pickRecent(index, limit).size, index.length())
+            }
+        }.getOrDefault(Probe(Source.UNKNOWN, 0, 0))
 
     /** 把 Uri 落到私有临时文件后交给 [block]，结束时一定删掉。 */
     private fun <T> withTempPackage(

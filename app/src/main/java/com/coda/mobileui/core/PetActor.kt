@@ -390,7 +390,9 @@ class PetActor(
         // hidden 的语义是「隐藏即冻结」：不绘制、也不让情绪自行演化。
         // 旧实现只挡住了小动作，idleTicks/waitTicks 仍在推进，于是后台一段时间后
         // 宠物自己睡着甚至变得不耐烦，重新显示时用户看到一个情绪变差的家伙（#332）。
-        if (hidden) return
+        // held 模式同样冻结（OCR #820）：拎着时 doze/fidget 会打断 held 循环，
+        // 甚至拎着拎着被标记 asleep，松手再播 drop 就成「睡着落地」。
+        if (hidden || modeClip != null) return
         val st = skin.state(mood)
         if (mood == PetMood.IDLE && !asleep) {
             val sleep = st.sleep

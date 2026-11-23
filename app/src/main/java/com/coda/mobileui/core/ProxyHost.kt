@@ -1202,18 +1202,24 @@ object ProxyHost {
         target.delete()
 
         // 包内没有再走网络：只对将来新增、尚未打进包里的平台有意义。
+        // 长度校验挡不住等长的恶意替换（OCR #820）：zip 会被解成 .so 加载执行，
+        // 必须连 SHA-256 一起验。统一走 Downloader（与网关二进制同一套校验）。
         onProgress("下载 ${provider.name} 插件…")
         val zip = File(dirFor(ctx), "${provider.pluginId}.zip")
-        if (!download(ctx, OAuthProviders.downloadUrl(provider), zip)) {
-            lastError = "获取 ${provider.name} 插件失败：安装包内没有该插件，联网下载也未成功"
-            return false
-        }
-        // 注册表里记了附件的确切字节数，这里真的按它校验：只看「大于 500KB」的话，
-        // 一个被截断或被替换但仍超过阈值的 zip 照样会被解包并加载执行。
-        if (provider.size > 0 && zip.length() != provider.size) {
-            lastError = "${provider.name} 插件大小与预期不符（期望 ${provider.size}B，实际 ${zip.length()}B），已拒绝安装"
+        val fetched =
+            Downloader.fetch(
+                Downloader.Request(
+                    url = OAuthProviders.downloadUrl(provider),
+                    out = zip,
+                    expectedSize = provider.size,
+                    expectedSha256 = provider.sha256,
+                    readTimeoutMs = 180_000,
+                ),
+            )
+        if (!fetched.ok) {
+            lastError = "获取 ${provider.name} 插件失败：${fetched.detail ?: "下载或校验未通过"}"
             AppLog.w("ProxyHost", lastError ?: "")
-            zip.delete()
+            runCatching { zip.delete() }
             return false
         }
 

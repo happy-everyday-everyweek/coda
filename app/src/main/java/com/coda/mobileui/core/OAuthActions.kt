@@ -204,8 +204,9 @@ object OAuthActions {
         if (caps.routes.contains("/test-active")) all.firstOrNull { it.id == "test-active" }?.let { out += it }
         if (caps.keepalive) all.firstOrNull { it.id == "keepalive" }?.let { out += it }
         if (caps.unfreeze) all.firstOrNull { it.id == "unfreeze" }?.let { out += it }
-        // clear-cooldown 之前声明了却没有分支，只支持这条路由的插件完全拿不到入口。
-        if (caps.clearCooldown) all.firstOrNull { it.id == "clear-cooldown" }?.let { out += it }
+        // clear-cooldown 按真实路由判断（OCR #820）：caps.clearCooldown 含
+        // "|| /unfreeze"，只实现 unfreeze 的插件会拿到一个必然 404 的入口。
+        if (caps.routes.contains("/clear-cooldown")) all.firstOrNull { it.id == "clear-cooldown" }?.let { out += it }
         if (caps.enableDisable) {
             all.firstOrNull { it.id == "enable" }?.let { out += it }
             all.firstOrNull { it.id == "disable" }?.let { out += it }

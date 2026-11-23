@@ -305,6 +305,15 @@ class PetView(
         super.onDetachedFromWindow()
         removeCallbacks(ticker)
         bitmapCache.clear()
+        // 触摸流可能没有 UP/CANCEL 就断（父容器拦截、窗口拆除，OCR #820）：
+        // holding 卡 true 会让下次长按被幂等闸门吞掉，held 循环也停不下来。
+        if (holding) hold(false)
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        // 窗口整体不可见（Activity 停止）同样收不到 UP：拎着的状态就地放下。
+        if (visibility != VISIBLE && holding) hold(false)
     }
 
     override fun onVisibilityChanged(

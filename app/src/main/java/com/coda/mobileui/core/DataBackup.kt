@@ -722,6 +722,30 @@ object DataBackup {
             }
         }.getOrDefault(emptySet())
 
+    /**
+     * 流式读分类（OCR #820）：确认页只需要条目名，不必把几百 MB 的包
+     * 先落到临时文件再删掉、确认后又落一遍。ZipInputStream 直接过
+     * contentResolver 的流；条目数设闸门，畸形包不能无限枚举。
+     */
+    fun categoriesInStreaming(
+        ctx: Context,
+        uri: Uri,
+    ): Set<BackupCategory> =
+        runCatching {
+            val present = mutableSetOf<BackupCategory>()
+            ctx.contentResolver.openInputStream(uri)?.use { input ->
+                java.util.zip.ZipInputStream(input.buffered()).use { zin ->
+                    var count = 0
+                    while (true) {
+                        val e = zin.nextEntry ?: break
+                        if (++count > 200_000) break
+                        if (!e.isDirectory) BackupCategory.of(e.name)?.let { present.add(it) }
+                    }
+                }
+            }
+            present
+        }.getOrDefault(emptySet())
+
     /** 人类可读的字节数，用于勾选界面。 */
     fun formatBytes(bytes: Long): String =
         when {

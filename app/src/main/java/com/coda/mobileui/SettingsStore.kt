@@ -242,8 +242,11 @@ class SettingsStore private constructor(
             val editor = prefs.edit()
             editor.putLong(KEY_SESSION_SEEN + sessionId, at)
             val seenKeys = prefs.all.keys.filter { it.startsWith(KEY_SESSION_SEEN) }
-            if (liveSessionIds != null) {
-                val live = liveSessionIds.toHashSet()
+            // 空列表当「未知」处理（OCR #820）：内核刚重启时 zc.sessions 还没
+            // 回填，按空集修剪会把所有现存会话的已读标记一次清光，
+            // 未读/已完成徽标全部复活。退化为按数量修剪。
+            val live = liveSessionIds?.takeIf { it.isNotEmpty() }?.toHashSet()
+            if (live != null) {
                 seenKeys.forEach { k ->
                     if (k.removePrefix(KEY_SESSION_SEEN) !in live) editor.remove(k)
                 }

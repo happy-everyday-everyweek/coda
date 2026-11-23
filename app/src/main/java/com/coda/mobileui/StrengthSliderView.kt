@@ -273,23 +273,35 @@ class StrengthSliderView
             }
         }
 
+        // 手势起点与起始档位（OCR #820）：横向过 slop 才锁父容器，
+        // CANCEL 回滚到按下时的档位——拖到一半被抢走不能把未确认值持久化。
+        private var dragDownX = 0f
+        private var dragDownY = 0f
+        private var dragStartLevel = 0
+        private var dragLocked = false
+
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (width == 0) return false
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                    // 横向拖动期间禁止父容器拦截：滑杆在 BottomSheet/NestedScrollView
-                    // 里时手势会被父容器中途抢走，滑块跳动或卡住。
-                    parent?.requestDisallowInterceptTouchEvent(true)
-                    val left = knobRadius
-                    val right = width - knobRadius
-                    val raw = ((event.x - left) / (right - left)).coerceIn(0f, 1f)
-                    val snapped = Math.round(raw * (LEVELS.size - 1))
-                    if (snapped != level) {
-                        setLevel(snapped, animate = false)
-                    } else {
-                        fraction = raw
-                        invalidate()
+                MotionEvent.ACTION_DOWN -> {
+                    dragDownX = event.x
+                    dragDownY = event.y
+                    dragStartLevel = level
+                    dragLocked = false
+                    applyDrag(event.x)
+                    return true
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = kotlin.math.abs(event.x - dragDownX)
+                    val dy = kotlin.math.abs(event.y - dragDownY)
+                    // 标准滑杆行为：横向位移过 touchSlop 且压过纵向才禁拦截。
+                    // DOWN 就无条件锁会让从滑杆起步的纵向滚动/下拉全部失效。
+                    if (!dragLocked && dx > android.view.ViewConfiguration.get(context).scaledTouchSlop && dx > dy) {
+                        dragLocked = true
+                        parent?.requestDisallowInterceptTouchEvent(true)
                     }
+                    if (dragLocked) applyDrag(event.x)
                     return true
                 }
 
@@ -300,13 +312,28 @@ class StrengthSliderView
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    // 取消不是点击：不上报 performClick，只复位与释放拦截。
+                    // 取消不是确认：回滚到按下时的档位（OCR #820）。
+                    // MOVE 阶段 setLevel 已把中间值报给监听器并持久化，
+                    // 不回滚的话被父容器抢走的手势会留下未确认的档位。
                     parent?.requestDisallowInterceptTouchEvent(false)
-                    setLevel(level, animate = true)
+                    setLevel(dragStartLevel, animate = true)
                     return true
                 }
             }
             return super.onTouchEvent(event)
+        }
+
+        private fun applyDrag(x: Float) {
+            val left = knobRadius
+            val right = width - knobRadius
+            val raw = ((x - left) / (right - left)).coerceIn(0f, 1f)
+            val snapped = Math.round(raw * (LEVELS.size - 1))
+            if (snapped != level) {
+                setLevel(snapped, animate = false)
+            } else {
+                fraction = raw
+                invalidate()
+            }
         }
 
 

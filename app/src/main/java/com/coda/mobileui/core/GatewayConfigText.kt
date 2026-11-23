@@ -16,9 +16,20 @@ object GatewayConfigText {
      * 按子串打码会把正常配置也糊掉，反而降低日志的排障价值。
      */
     private fun isSecretName(name: String): Boolean {
-        val n = name.lowercase().trim('"', '\'', ' ')
-        if (n == "token" || n == "secret" || n == "password" || n == "authorization") return true
-        return n.endsWith("_key") || n.endsWith("_token") || n.endsWith("_secret") || n.endsWith("_password")
+        // 归一化（OCR #820）：camelCase 先拆词再 lowercase（顺序反了分不出
+        // 词界），连字符转下划线；secret-key / api-keys / apiKey / accessToken
+        // 都要能命中。复数只剥一个尾部 s。
+        val f =
+            name
+                .trim('"', '\'', ' ')
+                .replace(Regex("([a-z0-9])([A-Z])"), "$1_$2")
+                .lowercase()
+                .replace('-', '_')
+        val bare = f.removeSuffix("s")
+        return listOf(f, bare).any { n ->
+            n == "token" || n == "secret" || n == "password" || n == "authorization" ||
+                n.endsWith("_key") || n.endsWith("_token") || n.endsWith("_secret") || n.endsWith("_password")
+        }
     }
 
     /**
@@ -29,7 +40,22 @@ object GatewayConfigText {
      */
     private fun redactJson(text: String): String? {
         val root = runCatching { JSONObject(text) }.getOrNull() ?: return null
-        val secrets = root.keys().asSequence().filter { isSecretName(it) }.toList()
+        // 嵌套对象/数组里的凭证同样要脱敏（OCR #820）：配置形状由上游二进制
+        // 生成，secret 完全可能在二层三层。递归收集全部命中键名。
+        val secrets = LinkedHashSet<String>()
+        fun collect(obj: JSONObject) {
+            for (k in obj.keys()) {
+                if (isSecretName(k)) secrets.add(k)
+                when (val v = obj.opt(k)) {
+                    is JSONObject -> collect(v)
+                    is org.json.JSONArray ->
+                        for (i in 0 until v.length()) {
+                            (v.opt(i) as? JSONObject)?.let { collect(it) }
+                        }
+                }
+            }
+        }
+        collect(root)
         if (secrets.isEmpty()) return text
         var out = text
         for (key in secrets) {

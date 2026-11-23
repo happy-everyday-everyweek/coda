@@ -100,6 +100,8 @@ class OAuthAccountsSheet(
             .headerAction("＋") { openAdd() }
             .content { col ->
                 column = col
+                // 列表页重新显示：解除子页接管标记（OCR #820）。
+                takenOver = false
                 render(col)
             }.primaryAction("全部签到") { checkinAll() }
             .secondaryAction("关闭") { self -> self.dismiss() }
@@ -272,6 +274,7 @@ class OAuthAccountsSheet(
                 isClickable = true
                 setOnClickListener {
                     // 不再"关列表 → 弹详情"：直接把同一个卡片换成该账号的面板
+                    takenOver = true
                     OAuthAccountSheet(host, p, a) { refreshList() }.attachTo(sheet)
                 }
             }
@@ -332,12 +335,16 @@ class OAuthAccountsSheet(
 
     /** 子面板改动后回到这里重新拉数据。 */
     private fun refreshList() {
-        // 卡片已关闭、或被子页 attachTo 接管后，这个列已经脱离视图树：
-        // 再走一遍完整 IO 往返只是白跑，还可能往 detached hierarchy 里塞内容（#595）。
+        // navigate/rebuildPage 复用同一个 liveContentCol（OCR #820）：被子页
+        // attachTo 接管后 col.parent 仍非空，按附着状态判会把账号页刷成列表，
+        // 与子页自己的异步 reload 竞态。用显式接管旗标判。
         val col = column ?: return
-        if (closed || col.parent == null) return
+        if (closed || takenOver || col.parent == null) return
         render(col)
     }
+
+    /** 卡片内容被子页接管：置位后列表渲染一律让路，重新显示列表页时复位。 */
+    private var takenOver = false
 
     /** 打开某个平台的授权流程；不指定平台就先让用户选。 */
     private fun openAdd(provider: OAuthProviders.Provider? = null) {
