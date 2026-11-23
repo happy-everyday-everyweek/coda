@@ -1398,6 +1398,8 @@ class ZController private constructor(
                 .put("pluginName", pluginName)
                 .put("marketplace", marketplace)
         runtime.call("plugins/install", params) { ok, body ->
+            // 插件装/卸后能力可能变化，探测缓存立即失效（#748）。
+            if (ok) OAuthAccounts.invalidateCapabilities()
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
@@ -1413,6 +1415,8 @@ class ZController private constructor(
                 .put("workspace", JSONObject().put("workspacePath", wp).put("workspaceKey", wp))
                 .put("pluginId", pluginId)
         runtime.call("plugins/uninstall", params) { ok, body ->
+            // 插件装/卸后能力可能变化，探测缓存立即失效（#748）。
+            if (ok) OAuthAccounts.invalidateCapabilities()
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }
@@ -1430,6 +1434,8 @@ class ZController private constructor(
         pluginId?.let { params.put("pluginId", it) }
         marketplace?.let { params.put("marketplace", it) }
         runtime.call("plugins/update", params) { ok, body ->
+            // 插件更新后能力可能变化，探测缓存立即失效（#748）。
+            if (ok) OAuthAccounts.invalidateCapabilities()
             cb(ok, if (ok) "ok" else errMsg(body))
         }
     }

@@ -76,7 +76,9 @@ object UpdateInstaller {
             val sizeOk = result.apkSize <= 0L || target.length() == result.apkSize
             val zipOk =
                 runCatching {
-                    java.util.zip.ZipFile(target).use { z -> z.getEntry("AndroidManifest.xml") != null }
+                    java.util.zip
+                        .ZipFile(target)
+                        .use { z -> z.getEntry("AndroidManifest.xml") != null }
                 }.getOrDefault(false)
             if (!sizeOk || !zipOk) {
                 onLog("更新包校验失败：缺少哈希，且大小或包结构不符")
@@ -164,12 +166,29 @@ object UpdateInstaller {
      */
     private fun ownSigner(ctx: Context): String? =
         runCatching {
-            val info =
-                ctx.packageManager.getPackageInfo(
-                    ctx.packageName,
-                    android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
-                )
-            signerOf(info.signingInfo)
+            // GET_SIGNING_CERTIFICATES/signingInfo 仅 API 28+（#754）：
+            // minSdk 26，Android 8.x 上标志被忽略、signingInfo 为 null，
+            // 两个指纹都取不到 → 所有更新被拒。低版本退回 GET_SIGNATURES。
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                val info =
+                    ctx.packageManager.getPackageInfo(
+                        ctx.packageName,
+                        android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
+                    )
+                signerOf(info.signingInfo)
+            } else {
+                @Suppress("DEPRECATION")
+                val info =
+                    ctx.packageManager.getPackageInfo(
+                        ctx.packageName,
+                        android.content.pm.PackageManager.GET_SIGNATURES,
+                    )
+                @Suppress("DEPRECATION")
+                info.signatures
+                    ?.firstOrNull()
+                    ?.toByteArray()
+                    ?.let { sha256Hex(it) }
+            }
         }.getOrNull()
 
     /** 待安装 APK 的签名证书 SHA-256。 */
@@ -178,13 +197,33 @@ object UpdateInstaller {
         apk: File,
     ): String? =
         runCatching {
-            val info =
-                ctx.packageManager.getPackageArchiveInfo(
-                    apk.absolutePath,
-                    android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
-                ) ?: return null
-            signerOf(info.signingInfo)
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                val info =
+                    ctx.packageManager.getPackageArchiveInfo(
+                        apk.absolutePath,
+                        android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
+                    ) ?: return null
+                signerOf(info.signingInfo)
+            } else {
+                @Suppress("DEPRECATION")
+                val info =
+                    ctx.packageManager.getPackageArchiveInfo(
+                        apk.absolutePath,
+                        android.content.pm.PackageManager.GET_SIGNATURES,
+                    ) ?: return null
+                @Suppress("DEPRECATION")
+                info.signatures
+                    ?.firstOrNull()
+                    ?.toByteArray()
+                    ?.let { sha256Hex(it) }
+            }
         }.getOrNull()
+
+    private fun sha256Hex(cert: ByteArray): String =
+        java.security.MessageDigest
+            .getInstance("SHA-256")
+            .digest(cert)
+            .joinToString("") { "%02X".format(it) }
 
     /** 从 signingInfo 取第一个签名者的证书指纹；多签名者时只认第一个（本应用单签名）。 */
     private fun signerOf(signingInfo: android.content.pm.SigningInfo?): String? {

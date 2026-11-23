@@ -242,6 +242,27 @@ object UpdateChecker {
         net: MirrorScoreboard.Net,
         onLog: (String) -> Unit = {},
     ): JSONObject? {
+        // 清单 URL 是编译期常量且在信任白名单上（#755）：先直连官方源，
+        // 不依赖 ping 排名——受限网络下直连 ping 失败会让 ranked 里一个
+        // 可信候选都不剩，更新检测整段失效。直连失败再走排名兜底。
+        if (UpdateTrust.trustedManifestUrl(url)) {
+            val t0 = System.currentTimeMillis()
+            val direct = fetchJson(url, headers)
+            if (direct != null) {
+                ctx?.let {
+                    MirrorScoreboard.record(
+                        it,
+                        net,
+                        "github-direct",
+                        MirrorScoreboard.Outcome.VERIFIED,
+                        elapsedMs = System.currentTimeMillis() - t0,
+                    )
+                }
+                AppLog.i(TAG, "清单取自官方直连")
+                return direct
+            }
+            AppLog.i(TAG, "官方直连失败，试排名里的可信兜底源")
+        }
         // 总截止时间：单连接 8s+12s 超时叠上几十个源，弱网下一次检查可能拖数分钟。
         // 90 秒后不再试剩余源，快速失败留给下一次检查。
         val deadline = System.currentTimeMillis() + MANIFEST_TOTAL_BUDGET_MS

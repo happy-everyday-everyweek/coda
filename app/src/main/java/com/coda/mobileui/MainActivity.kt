@@ -627,8 +627,15 @@ class MainActivity : BaseActivity() {
         }
 
         findViewById<LinearLayout>(R.id.header_pill).setOnClickListener {
-            // 运行位置固定是本机，胶囊只负责模型选择。
-            toggleModelPanel()
+            // 有暂缓请求时胶囊先当「继续处理」入口（#745）：Snackbar 可被
+            // 滑走/顶掉，宠物条已迁去 Personal Agent 页，这里是不依赖
+            // 提示条存活的持久入口。队列空才走模型选择。
+            if (deferredRequests.isNotEmpty()) {
+                showDeferredSnackbar()
+            } else {
+                // 运行位置固定是本机，胶囊只负责模型选择。
+                toggleModelPanel()
+            }
         }
         findViewById<LinearLayout>(R.id.header_pill).setOnLongClickListener {
             // 模型面板始终有入口：运行位置态时长按也能改模型。
@@ -1748,9 +1755,14 @@ class MainActivity : BaseActivity() {
             runCatching { rikka.shizuku.Shizuku.removeRequestPermissionResultListener(l) }
         }
         shizukuPermissionListener = null
-        // 定时调度器不能比 Activity 活得久：它每 30 秒自我重投递（#222）。
-        com.coda.mobileui.core.AutomationScheduler
-            .stop()
+        // 定时调度器是进程级单例（ZController.ensureStarted 启动，还服务
+        // WebUiHost/Bot）：旋转重建也走 onDestroy，无条件 stop 后
+        // ensureStarted 因 started&&isRunning 短路，谁也不会再 start，
+        // 定时任务静默停摆到内核重启（#746）。只在真正 finishing 时停。
+        if (isFinishing) {
+            com.coda.mobileui.core.AutomationScheduler
+                .stop()
+        }
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }
         zListener = null
@@ -2080,6 +2092,9 @@ class MainActivity : BaseActivity() {
      */
     private fun waitingTool(): String? {
         pendingPermissionName?.let { return it }
+        // 暂缓队列也是「等你确认」（#745）：Snackbar 被滑走后宠物栏仍显示
+        // 等待态，点宠物栏能重新唤起提示，队列不会无声消失。
+        if (deferredRequests.isNotEmpty()) return "已暂缓的请求"
         val last = zc.messages.lastOrNull() ?: return null
         val asking =
             last.parts
@@ -3900,7 +3915,14 @@ class MainActivity : BaseActivity() {
         deferredRequests.clear()
         pending.forEach { req ->
             runCatching {
-                zc.runtime.respond(req.id, org.json.JSONObject().put("action", "decline"))
+                // 协议形状按请求类型分叉（#744）：elicitation 用 action=decline，
+                // 权限请求必须走 respondPermission 的 decision/findDenyResponse，
+                // 回错形状内核解不了，照样阻塞在死 Activity 上。
+                if (req.question) {
+                    zc.runtime.respond(req.id, org.json.JSONObject().put("action", "decline"))
+                } else {
+                    zc.respondPermission(req.id, false)
+                }
             }.onFailure {
                 com.coda.mobileui.core.AppLog
                     .w("Chat", "销毁时拒绝暂缓请求失败：${it.message}")
@@ -3912,6 +3934,8 @@ class MainActivity : BaseActivity() {
 
     /** 暂缓提示：一次只显示队首，处理完自动弹出下一个。 */
     private fun showDeferredSnackbar() {
+        // 队列变化同步胶囊指示（#745）：空了恢复模型名，非空显示待处理数。
+        syncHeaderPill()
         if (deferredRequests.isEmpty()) return
         val root = findViewById<View>(android.R.id.content) ?: return
         Snackbar
@@ -4950,9 +4974,16 @@ class MainActivity : BaseActivity() {
             com.coda.mobileui.personal.CodaBotStore
                 .profile(this)
                 .name
-        // 回前台恢复定时轮询节奏（#222）。
+        // 回前台恢复定时轮询节奏（#222）。start 幂等（ensureRunning 已跑就返回）：
+        // 兜住「上一个实例 finishing 停掉调度、内核仍活着」的窗口，
+        // 以及任何原因导致的停摆——setForeground 只调间隔，不会重启（#746）。
+        com.coda.mobileui.core.AutomationScheduler
+            .start(zc)
         com.coda.mobileui.core.AutomationScheduler
             .setForeground(true)
+        // 暂缓队列非空时重挂提示（#745）：Snackbar 可被滑走/被其他提示顶掉，
+        // 消失后队列没有任何 UI 入口，内核无限等待。回前台就重新展示。
+        if (deferredRequests.isNotEmpty()) showDeferredSnackbar()
         // 浏览器控制引擎需要 Activity 承载隐藏 WebView。
         BrowserControl.attachActivity(this)
         // 从设置页回来时，宠物形象与三项开关可能已经改过，这里重新套一遍。
@@ -5919,6 +5950,12 @@ class MainActivity : BaseActivity() {
     /** 按当前状态刷新胶囊文案：运行位置固定为本机，胶囊始终显示模型。 */
     private fun syncHeaderPill() {
         val label = findViewById<TextView>(R.id.tv_header_pill) ?: return
+        // 有暂缓请求时胶囊显示待处理数（#745）：这是Snackbar 之外的持久可见
+        // 指示，点它就重新弹出继续处理入口。
+        if (deferredRequests.isNotEmpty()) {
+            label.text = "待确认 ${deferredRequests.size} 个请求"
+            return
+        }
         label.text = modelPillLabel.ifEmpty { getString(R.string.default_model) }
     }
 

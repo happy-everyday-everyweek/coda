@@ -55,8 +55,10 @@ object WorkBuddyGateway {
     private const val SIZE = 8_388_760L
 
     private var process: Process? = null
+
     @Volatile
     private var booting = false
+
     @Volatile
     private var activePort = DEFAULT_PORT
 
@@ -268,6 +270,8 @@ object WorkBuddyGateway {
             stopRequested = false
             lastError = null
         }
+        // 网关（重）启动后插件加载状态可能变化，能力探测缓存失效（#748）。
+        OAuthAccounts.invalidateCapabilities()
         try {
             if (!ensureInstalled(ctx, onProgress)) return false
             // 安装/配置期间用户可能已经点了停止：这里必须放弃启动。
@@ -296,14 +300,16 @@ object WorkBuddyGateway {
             AppLog.i(
                 "WorkBuddyGateway",
                 "启动前 argv=$argv port=$port " +
-                    "bin=${binaryFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()},exec=${it.canExecute()})" }} " +
+                    "bin=${binaryFor(
+                        ctx,
+                    ).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()},exec=${it.canExecute()})" }} " +
                     "cfg=${configFor(ctx).let { "${it.absolutePath}(exists=${it.exists()},len=${it.length()})" }} " +
                     "rootfs=${LinuxEnv(ctx).rootfs.absolutePath}",
             )
             configFor(ctx).takeIf { it.isFile }?.let {
-            // 配置里有 api_key，直接打印等于把凭证写进 logcat（#436）。先脱敏再截断。
-            AppLog.i("WorkBuddyGateway", "config=${GatewayConfigText.preview(runCatching { it.readText() }.getOrDefault(""), 600)}")
-        }
+                // 配置里有 api_key，直接打印等于把凭证写进 logcat（#436）。先脱敏再截断。
+                AppLog.i("WorkBuddyGateway", "config=${GatewayConfigText.preview(runCatching { it.readText() }.getOrDefault(""), 600)}")
+            }
             val log = logFor(ctx)
             log.parentFile?.mkdirs()
             log.writeText("")

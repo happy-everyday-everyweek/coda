@@ -18,8 +18,27 @@ import org.json.JSONObject
  * 其余家只能列出凭据文件。所以能力要按插件探测，界面据此决定显示哪些按钮。
  */
 object OAuthAccounts {
-    /** 能力探测缓存：按 provider 缓存，避免每次刷新都串行发 7 次探测请求。 */
-    private val capabilityCache = java.util.concurrent.ConcurrentHashMap<String, Capabilities>()
+    /**
+     * 能力探测缓存：按 provider 缓存，避免每次刷新都串行发 7 次探测请求。
+     *
+     * 只缓存**完整且至少有一项能力**的正结果（#748）：404（插件还没装/没加载）
+     * 与超时短路得到的全 false 是负结果/部分结果，缓存它们会把「暂不支持」
+     * 钉死到重启。负结果每次都重探，插件装好后下一次刷新就能拿到真值。
+     * 正结果带 TTL：插件更新/网关重启后能力可能变化，10 分钟后重探。
+     */
+    private val capabilityCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Capabilities>>()
+    private const val CAPABILITY_TTL_MS = 10 * 60_000L
+
+    /** 插件安装/更新、网关重启时调用：全部能力缓存立即失效（#748）。 */
+    fun invalidateCapabilities() {
+        capabilityCache.clear()
+    }
+
+    /** 只有完整探测出的正结果才值得缓存。 */
+    internal fun cacheable(
+        reachable: Boolean,
+        caps: Capabilities,
+    ): Boolean = reachable && (caps.panel || caps.checkin || caps.growth || caps.refresh || caps.keepalive)
 
     /** 一个已登录账号。字段取自插件 dashboard，缺失的一律给默认值。 */
     data class Account(
@@ -188,7 +207,10 @@ object OAuthAccounts {
         provider: OAuthProviders.Provider,
     ): Capabilities {
         val cacheKey = "${provider.id}:${provider.pluginId}"
-        capabilityCache[cacheKey]?.let { return it }
+        capabilityCache[cacheKey]?.let { (at, caps) ->
+            if (System.currentTimeMillis() - at < CAPABILITY_TTL_MS) return caps
+            capabilityCache.remove(cacheKey)
+        }
         val html = ProxyHost.resourceText(ctx, "/v0/resource/plugins/${provider.pluginId}/panel")
         val panelRoutes = if (html == null) emptySet() else parseRoutes(html)
 
@@ -215,7 +237,7 @@ object OAuthAccounts {
                 growth = false,
                 refresh = false,
                 keepalive = false,
-            ).also { if (reachable) capabilityCache[cacheKey] = it }
+            ).also { if (cacheable(reachable, it)) capabilityCache[cacheKey] = System.currentTimeMillis() to it }
         }
 
         val routes = mutableSetOf<String>()
@@ -228,7 +250,9 @@ object OAuthAccounts {
             if (exists(path)) routes += path
         }
 
-        return capabilitiesFrom(routes).also { if (reachable) capabilityCache[cacheKey] = it }
+        return capabilitiesFrom(routes).also {
+            if (cacheable(reachable, it)) capabilityCache[cacheKey] = System.currentTimeMillis() to it
+        }
     }
 
     /**
