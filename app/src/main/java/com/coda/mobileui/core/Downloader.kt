@@ -43,8 +43,19 @@ internal object Downloader {
         @Volatile
         private var flag = false
 
+        // 阻塞 read 只靠循环边界查取消会等满 readTimeout（默认 120s，OCR #819）：
+        // 登记在途连接，cancel 时直接 disconnect 让 read 立刻抛错退出。
+        @Volatile
+        private var connection: HttpURLConnection? = null
+
+        fun attach(conn: HttpURLConnection?) {
+            connection = conn
+            if (flag) runCatching { conn?.disconnect() }
+        }
+
         fun cancel() {
             flag = true
+            runCatching { connection?.disconnect() }
         }
 
         val isCancelled: Boolean get() = flag
@@ -111,7 +122,13 @@ internal object Downloader {
     ): Result {
         val target = req.out ?: return Result(DownloadOutcome.Kind.IO, detail = "未指定目标文件")
         if (cancel?.isCancelled == true) return Result(DownloadOutcome.Kind.CANCELLED)
-        target.parentFile?.mkdirs()
+        // 本地目录问题不能归成可换源的 IO（OCR #819）：mkdirs 失败后每个镜像
+        // 都会在 FileOutputStream 上撞同一堵墙，白扫全部源。
+        target.parentFile?.let {
+            if (!it.isDirectory && !it.mkdirs()) {
+                return Result(DownloadOutcome.Kind.PLACE_FAILED, detail = "无法创建下载目录：$it")
+            }
+        }
         // 续传开启时用确定性临时名（#730）：进程重启后要能定位上次的半成品。
         // 关闭续传时仍带纳秒后缀——启动补资源与设置页可能同时获取同一资产，
         // 共用一个 `.part` 会让一个线程把另一个还没写完的文件上线。
@@ -132,9 +149,18 @@ internal object Downloader {
             val saved = if (req.resume) ResumeState.load(sidecar) else null
             var resumeFrom = 0L
             if (saved != null && tmp.isFile) {
+                // 上次总长未知（total==0）但字节已追平 done：check 会判 RESUME，
+                // Range: bytes=<total>- 得 416 后整份重下（OCR #819）。先按已知
+                // 字节数补全 total 再判。
+                val effective =
+                    if (saved.total == 0L && saved.done > 0 && tmp.length() >= saved.done) {
+                        saved.copy(total = saved.done)
+                    } else {
+                        saved
+                    }
                 val verdict =
                     ResumeState.check(
-                        state = saved,
+                        state = effective,
                         url = req.url,
                         fileBytes = tmp.length(),
                         etag = saved.etag,
@@ -142,7 +168,24 @@ internal object Downloader {
                     )
                 when (verdict) {
                     ResumeState.Verdict.RESUME -> resumeFrom = tmp.length()
-                    ResumeState.Verdict.ALREADY_COMPLETE -> resumeFrom = tmp.length()
+                    ResumeState.Verdict.ALREADY_COMPLETE -> {
+                        // 字节已够就不必再连网（OCR #819）：按 total 发 Range 会得到
+                        // 416 → INVALID_RANGE → 整份重下，几十 MB 白烧。本地全量
+                        // 校验通过直接上线；不过才作废重下。
+                        val sha = if (req.expectedSha256.isNullOrBlank()) null else sha256Of(tmp)
+                        val local =
+                            DownloadOutcome.verify(
+                                actualSize = tmp.length(),
+                                expectedSize = req.expectedSize,
+                                actualSha256 = sha,
+                                expectedSha256 = req.expectedSha256,
+                            )
+                        if (local == DownloadOutcome.Kind.OK) {
+                            return finishSingle(req, target, tmp, sidecar, Pumped(tmp.length(), sha))
+                        }
+                        AppLog.i(TAG, "断点字节已够但校验不过，作废重下：${target.name}")
+                        ResumeState.discard(tmp, sidecar)
+                    }
                     else -> {
                         AppLog.i(TAG, "断点作废（$verdict）：${target.name}")
                         ResumeState.discard(tmp, sidecar)
@@ -154,6 +197,7 @@ internal object Downloader {
             }
 
             conn = open(req, resumeFrom, saved?.etag ?: saved?.lastModified)
+            cancel?.attach(conn)
             val code = conn.responseCode
             if (resumeFrom > 0) {
                 val probe =
@@ -171,6 +215,7 @@ internal object Downloader {
                         resumeFrom = 0
                         runCatching { conn.disconnect() }
                         conn = open(req, 0)
+                        cancel?.attach(conn)
                         val again = DownloadOutcome.ofHttp(conn.responseCode)
                         if (again != DownloadOutcome.Kind.OK) {
                             runCatching { conn.errorStream?.close() }
@@ -209,6 +254,7 @@ internal object Downloader {
                 resumeFrom = 0
                 runCatching { conn.disconnect() }
                 conn = open(req, 0)
+                cancel?.attach(conn)
                 val again = DownloadOutcome.ofHttp(conn.responseCode)
                 if (again != DownloadOutcome.Kind.OK) {
                     runCatching { conn.errorStream?.close() }
@@ -230,6 +276,10 @@ internal object Downloader {
             // 与分块的「各块独立进度」表达不兼容，混用会拼出坏文件。
             val canChunk =
                 resumeFrom == 0L &&
+                    // resume=false 不进分块（OCR #819）：分块失败/取消会持久化
+                    // 每块状态，而纳秒临时名让下次根本找不到它，纯孤儿；契约也
+                    // 要求非续传调用方失败即清半成品。
+                    req.resume &&
                     ChunkPlan.shouldSplit(
                         total = total,
                         concurrency = req.concurrency,
@@ -317,6 +367,38 @@ if (req.resume) {
             return Result(DownloadOutcome.Kind.IO, detail = "${e.javaClass.simpleName}: ${e.message}")
         } finally {
             runCatching { conn?.disconnect() }
+        }
+    }
+
+    /** 整文件 SHA-256（小写十六进制）：ALREADY_COMPLETE 本地校验用。 */
+    private fun sha256Of(file: File): String? =
+        runCatching {
+            val md = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buf = ByteArray(256 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    md.update(buf, 0, n)
+                }
+            }
+            md.digest().joinToString("") { "%02x".format(it) }
+        }.getOrNull()
+
+    /**
+     * 清扫陈旧临时文件（OCR #819）：纳秒后缀 .part 进程被杀后没人删也没人
+     * 复用，多 GB 孤儿会一直占着数据分区。只清 24h 前的，避开在途下载。
+     */
+    fun sweepStaleParts(dir: File) {
+        val cutoff = System.currentTimeMillis() - 24L * 3600 * 1000
+        runCatching {
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.name.endsWith(".part") && f.lastModified() < cutoff) {
+                    val sidecar = ResumeState.sidecarFor(f)
+                    runCatching { f.delete() }
+                    runCatching { sidecar.delete() }
+                }
+            }
         }
     }
 
@@ -547,7 +629,9 @@ if (req.resume) {
                 progress = onProgress,
                 open = open@{ from, to ->
                     val c = open(req, 0)
-                    c.setRequestProperty("Range", "bytes=$from-$to")
+                    // OCR #819：Range 头统一走 Chunk.rangeHeader()，与单测覆盖的
+                    // 闭区间算术保持同一实现，不再内联拼字符串。
+                    c.setRequestProperty("Range", ChunkPlan.Chunk(index = -1, from = from, to = to).rangeHeader())
                     (etag ?: lastModified)?.let { c.setRequestProperty("If-Range", it) }
                     return@open c
                 },

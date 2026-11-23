@@ -34,7 +34,8 @@ class LogSinkTest {
     @Test
     fun `lines are written in order`() {
         val file = target()
-        val sink = LogSink(file)
+        // OCR #819：构造期不再发布 this，写线程由调用方显式 start。
+        val sink = LogSink(file).also { it.start() }
         for (i in 1..50) sink.offer("line$i")
         val lines = awaitContent(file, 50)
         sink.close()
@@ -46,7 +47,7 @@ class LogSinkTest {
     @Test
     fun `offering never blocks the caller`() {
         val file = target()
-        val sink = LogSink(file)
+        val sink = LogSink(file).also { it.start() }
         val started = System.currentTimeMillis()
         // 远超队列容量：满了要丢最旧的，而不是把调用线程挂住。
         for (i in 1..20_000) sink.offer("burst$i")
@@ -58,7 +59,7 @@ class LogSinkTest {
     @Test
     fun `close flushes what is still queued`() {
         val file = target()
-        val sink = LogSink(file)
+        val sink = LogSink(file).also { it.start() }
         sink.offer("tail-a")
         sink.offer("tail-b")
         sink.close()

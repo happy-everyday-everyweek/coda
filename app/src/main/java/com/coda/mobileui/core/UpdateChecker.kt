@@ -117,27 +117,10 @@ internal object UpdateChecker {
                 "Cache-Control" to "no-cache",
             )
 
-        // 排序只做一次：rank 里的 ping/测速是真实网络探测，两份清单各排一遍
-        // 等于把约 26 个镜像探测两轮。体积与网络环境相同，顺序可共用。
+        // OCR #819：清单只信官方域名（UpdateTrust），排名里最多只有 github 直连
+        // 一条能过 trustedManifestUrl——为一份注定被丢弃的顺序去 TCP-ping 全部
+        // ~26 个镜像纯属每次检查白付几秒延迟。这里不再 rank，官方 URL 直取。
         val net = ctx?.let { MirrorScoreboard.currentNet(it) } ?: MirrorScoreboard.Net.OTHER
-        val history = ctx?.let { MirrorScoreboard.load(it, net) } ?: emptyMap()
-        val ranked =
-            try {
-                GhMirrors.rank(
-                    probeUrl = DEV_MANIFEST_URL,
-                    // 清单只有几 KB，远小于 SPEEDTEST_MIN_BYTES：跳过测速。
-                    // 传 1 而不是 0——0 在 rank 里表示「体积未知，按测速处理」。
-                    bytes = 1,
-                    history = history,
-                    cancel = cancel,
-                    onLog = { msg ->
-                        AppLog.i(TAG, msg)
-                        onLog(msg)
-                    },
-                )
-            } catch (e: java.util.concurrent.CancellationException) {
-                return Result(false, error = "检查已取消")
-            }
 
         // 两个渠道都取。任一拿不到都不影响另一个——单渠道坏掉时仍能更新。
         // 取消是正常退出（OCR r9 medium）：归一成失败结果，不让异常炸掉调用方 Bg 块。
@@ -147,7 +130,7 @@ internal object UpdateChecker {
             channel: String,
         ): Result? =
             try {
-                httpGet(ctx, url, headers, ranked, net, onLog, cancel)?.let { parseManifest(it, channel) }
+                httpGet(ctx, url, headers, net, onLog, cancel)?.let { parseManifest(it, channel) }
             } catch (e: java.util.concurrent.CancellationException) {
                 null
             }
@@ -246,95 +229,43 @@ internal object UpdateChecker {
      * 「检查更新永远失败」。项目里本来就有镜像清单（GhMirrors），
      * 资产下载一直用着，只有这个类漏了。
      *
-     * 挑源的策略全部复用 GhMirrors.rank（ping 筛活 → 测速排序），
-     * 与资产下载共用同一份实现，不再各写一遍。
-     *
-     * github.com 那条直连在清单末尾兜底，镜像全挂时它仍可能成功。
-     * 判成功用「能解析成 JSONObject」而不是 HTTP 200：有些镜像对不存在的
+     * OCR #819：信任策略收紧后清单只能来自官方域名，镜像候选永远过不了
+     * trustedManifestUrl——rank 的 ping/测速对这条路径是纯开销，已整个去掉。
+     * 这里只打官方 URL，仍在总时限内；镜像只用于搬 APK 大文件。
+     * 判成功用「能解析成 JSONObject」而不是 HTTP 200：有些源对不存在的
      * 文件也返回 200，内容是一段 HTML 错误页。
      */
     private fun httpGet(
         ctx: Context?,
         url: String,
         headers: Map<String, String>,
-        ranked: List<GhMirror>,
         net: MirrorScoreboard.Net,
         onLog: (String) -> Unit = {},
         cancel: Downloader.Cancel? = null,
     ): JSONObject? {
-        // 总截止时间先算（OCR r8 medium）：直连的 8s+12s 超时也计入预算，
-        // 否则直连慢时 90s 之外再叠 20s，弱网检查拖得更久。
-        val deadline = System.currentTimeMillis() + MANIFEST_TOTAL_BUDGET_MS
-        // 清单 URL 是编译期常量且在信任白名单上（#755）：先直连官方源，
-        // 不依赖 ping 排名——受限网络下直连 ping 失败会让 ranked 里一个
-        // 可信候选都不剩，更新检测整段失效。直连失败再走排名兜底。
-        if (UpdateTrust.trustedManifestUrl(url)) {
-            val t0 = System.currentTimeMillis()
-            val direct = fetchJson(url, headers, cancel)
-            // 记账用镜像清单里的规范 id "github"（OCR r8 low）：自造
-            // "github-direct" 键永远影响不了 rank 对直连条目的排序。
-            // 失败也要记 FAILED，与排名候选同一口径，直连的持续劣化才可见。
-            ctx?.let {
-                MirrorScoreboard.record(
-                    it,
-                    net,
-                    "github",
-                    if (direct != null) MirrorScoreboard.Outcome.VERIFIED else MirrorScoreboard.Outcome.FAILED,
-                    elapsedMs = System.currentTimeMillis() - t0,
-                )
-            }
-            if (direct != null) {
-                AppLog.i(TAG, "清单取自官方直连")
-                return direct
-            }
-            AppLog.i(TAG, "官方直连失败，试排名里的可信兜底源")
+        if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("取清单已取消")
+        if (!UpdateTrust.trustedManifestUrl(url)) {
+            AppLog.w(TAG, "拒绝非官方清单源：$url")
+            return null
         }
-        // 官方直连已试过：排名里的规范 github 条目是同一 URL、同一参数，
-        // 再试必败还要白烧 20s 预算并重复记一次 FAILED（OCR r9 medium）。
-        val directTried = UpdateTrust.trustedManifestUrl(url)
-        for (mirror in ranked) {
-            // 取消传播（#776）：退出页面后不再试剩余镜像。
-            if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("取清单已取消")
-            if (directTried && mirror.id == "github") continue
-            if (System.currentTimeMillis() > deadline) {
-                AppLog.w(TAG, "取清单超出总时限 ${MANIFEST_TOTAL_BUDGET_MS / 1000}s，放弃剩余源：$url")
-                break
-            }
-            // 清单是信任根：它同时决定 apkUrl 与 sha256，第三方镜像能一起改写，
-            // 「校验自洽」照样通过。所以清单只走官方直连，镜像只用于搬 APK 大文件。
-            val candidate = GhMirrors.wrap(mirror.prefix, url)
-            if (!UpdateTrust.trustedManifestUrl(candidate)) {
-                AppLog.i(TAG, "跳过非官方清单源 ${mirror.id}")
-                continue
-            }
-            val t0 = System.currentTimeMillis()
-            val json = fetchJson(candidate, headers, cancel)
-            val cost = System.currentTimeMillis() - t0
-            if (json != null) {
-                ctx?.let {
-                    MirrorScoreboard.record(
-                        it,
-                        net,
-                        mirror.id,
-                        MirrorScoreboard.Outcome.VERIFIED,
-                        elapsedMs = cost,
-                    )
-                }
-                AppLog.i(TAG, "清单取自 ${mirror.id}")
-                return json
-            }
-            ctx?.let {
-                MirrorScoreboard.record(
-                    it,
-                    net,
-                    mirror.id,
-                    MirrorScoreboard.Outcome.FAILED,
-                    elapsedMs = cost,
-                )
-            }
-            AppLog.i(TAG, "源 ${mirror.id} 失败，试下一个")
+        val t0 = System.currentTimeMillis()
+        val direct = fetchJson(url, headers, cancel)
+        // 记账用镜像清单里的规范 id "github"：失败也记 FAILED，
+        // 直连的持续劣化在记分板里可见。
+        ctx?.let {
+            MirrorScoreboard.record(
+                it,
+                net,
+                "github",
+                if (direct != null) MirrorScoreboard.Outcome.VERIFIED else MirrorScoreboard.Outcome.FAILED,
+                elapsedMs = System.currentTimeMillis() - t0,
+            )
         }
-        AppLog.w(TAG, "全部 ${ranked.size} 个源都未能取到清单：$url")
+        if (direct != null) {
+            AppLog.i(TAG, "清单取自官方直连")
+            return direct
+        }
+        AppLog.w(TAG, "官方清单获取失败：$url")
         return null
     }
 

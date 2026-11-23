@@ -137,9 +137,17 @@ run_lint() {
     ( cd "$ROOT" && ./gradlew :app:lintDebug --console=plain ) > "$log" 2>&1
     local rc=$?
     grep -E 'Lint found|BUILD' "$log" | head -4 || true
-    if [ "$rc" -ne 0 ]; then
+    # OCR #819：AGP abortOnError 默认 true——「Lint found N errors」也会非 0 退出。
+    # 本脚本的契约是发现问题不算失败（与 ktlint/detekt 同规）：报告已产出且日志
+    # 是 findings 摘要时按成功继续计数；只有真正的执行失败才置 FAILED。
+    if [ "$rc" -ne 0 ] && ! grep -q 'Lint found' "$log"; then
         echo "!! Android Lint 执行失败（退出码 $rc），详见 $log" >&2
         tail -5 "$log" >&2
+        FAILED=1
+        return 1
+    fi
+    if [ "$rc" -ne 0 ] && [ ! -f "$out" ]; then
+        echo "!! Android Lint 退出码 $rc 且无报告，按执行失败处理，详见 $log" >&2
         FAILED=1
         return 1
     fi

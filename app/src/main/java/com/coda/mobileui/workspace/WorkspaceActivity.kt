@@ -296,9 +296,16 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun switchRootNow(file: File) {
         val target = file.absolutePath
+        // OCR #819：ensureState 会抛异常；只读挂载/满盘时不能崩在切换中途，
+        // 更不能在 select 已改设置后才失败——先建状态目录，成功才落设置。
+        try {
+            Workspaces.ensureState(file)
+        } catch (e: Exception) {
+            toast("无法切换到该目录：${e.message ?: "状态目录创建失败"}")
+            return
+        }
         persist()
         Workspaces.select(this, target)
-        Workspaces.ensureState(file)
         for (entry in tabs) {
             pageHost.removeView(entry.page.view)
             entry.page.onClosed()

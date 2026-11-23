@@ -44,7 +44,11 @@
         style 里显式声明，不留给推断。
     -->
     <style name="Theme.Coda.SettingsDetail" parent="Theme.Coda">
-        <item name="android:windowBackground">?attr/colorSurface</item>
+        <!-- OCR #819：窗口背景必须是具体不透明色，不能用 ?attr/colorSurface——
+             部分 API/OEM 的起始预览窗解析不了应用主题属性，会退回透明/黑，
+             正是本 style 要防的黑边。@color/md3_surface 有 values-night 变体，
+             日夜模式下由资源系统选色，无需主题推断。 -->
+        <item name="android:windowBackground">@color/md3_surface</item>
         <item name="android:windowIsTranslucent">false</item>
     </style>
 </resources>

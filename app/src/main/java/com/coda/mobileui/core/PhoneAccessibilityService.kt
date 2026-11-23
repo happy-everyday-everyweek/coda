@@ -100,9 +100,12 @@ class PhoneAccessibilityService : AccessibilityService() {
         val out = JSONObject()
         out.put("package", root.packageName?.toString() ?: "")
         val counter = intArrayOf(0)
+        // OCR #819：被过滤的容器也会整棵递归，必须另设访问预算，
+        // 否则 includeInvisible=false 时 maxNodes 约束不住遍历规模。
+        val visited = intArrayOf(0)
         val nodes = JSONArray()
         try {
-            appendChildren(root, nodes, 0, maxDepth, counter, maxNodes, includeInvisible)
+            appendChildren(root, nodes, 0, maxDepth, counter, visited, maxNodes, includeInvisible)
         } catch (e: Exception) {
             // 异常降级必须可见：部分结果与完整结果不能长得一样。
             AppLog.w("PhoneAccessibility", "dumpUi 遍历中断，返回部分结果：${e.message}")
@@ -123,19 +126,21 @@ class PhoneAccessibilityService : AccessibilityService() {
         depth: Int,
         maxDepth: Int,
         counter: IntArray,
+        visited: IntArray,
         maxNodes: Int,
         includeInvisible: Boolean,
     ) {
-        if (depth > maxDepth || counter[0] >= maxNodes) return
+        if (depth > maxDepth || counter[0] >= maxNodes || visited[0] >= maxNodes) return
         for (i in 0 until node.childCount) {
-            if (counter[0] >= maxNodes) return
+            if (counter[0] >= maxNodes || visited[0] >= maxNodes) return
             val child = node.getChild(i) ?: continue
+            visited[0]++
             try {
                 val obj = nodeToJson(child, includeInvisible)
                 if (obj != null) counter[0]++
                 // 即使当前节点被过滤，也必须继续遍历它的后代：布局容器本身通常没有文本。
                 val kids = JSONArray()
-                appendChildren(child, kids, depth + 1, maxDepth, counter, maxNodes, includeInvisible)
+                appendChildren(child, kids, depth + 1, maxDepth, counter, visited, maxNodes, includeInvisible)
                 if (obj != null) {
                     if (kids.length() > 0) obj.put("children", kids)
                     into.put(obj)
@@ -235,9 +240,13 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     /** 向当前焦点输入框写入文本；无焦点时尝试第一个可编辑节点。 */
     fun setText(text: String): Boolean {
+        // OCR #819：root/target/查找途中拿到的节点都要回收，
+        // 与 dumpUi/appendChildren 的回收纪律保持一致（API 26–32 上有实际意义）。
+        var root: AccessibilityNodeInfo? = null
+        var target: AccessibilityNodeInfo? = null
         return try {
-            val root = rootInActiveWindow ?: return false
-            val target = findFocusedEditable(root) ?: findFirstEditable(root) ?: return false
+            root = rootInActiveWindow ?: return false
+            target = findFocusedEditable(root) ?: findFirstEditable(root) ?: return false
             val args =
                 Bundle().apply {
                     putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
@@ -246,6 +255,9 @@ class PhoneAccessibilityService : AccessibilityService() {
         } catch (e: Throwable) {
             // 包括 StackOverflowError 在内的任何失败都按 false 返回，不能让进程崩溃。
             false
+        } finally {
+            runCatching { target?.recycle() }
+            runCatching { root?.recycle() }
         }
     }
 
@@ -254,27 +266,43 @@ class PhoneAccessibilityService : AccessibilityService() {
         var n: AccessibilityNodeInfo? = focused
         while (n != null) {
             if (n.isEditable) return n
-            n = n.parent
+            // 沿 parent 上行拿到的每个节点都是新实例，走过的要回收（OCR #819）。
+            val parent = n.parent
+            runCatching { n.recycle() }
+            n = parent
         }
         return null
     }
 
     private fun findFirstEditable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         // 迭代 + 预算：无障碍树异常深或成环时，递归会 StackOverflow 直接把进程打崩。
+        // OCR #819：getChild 拿到的实例必须回收——命中时清掉栈里剩余节点，
+        // 未命中/预算耗尽时也要把整栈清空；root 归调用方持有，不在这里回收。
         val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         stack.addLast(root to 0)
         var visited = 0
+        var found: AccessibilityNodeInfo? = null
         while (stack.isNotEmpty() && visited < 900) {
             val (node, depth) = stack.removeLast()
             visited++
-            if (node.isEditable && node.isVisibleToUser) return node
-            if (depth >= 50) continue
-            for (i in 0 until node.childCount) {
-                val child = node.getChild(i) ?: continue
-                stack.addLast(child to depth + 1)
+            if (node.isEditable && node.isVisibleToUser) {
+                found = node
+                break
             }
+            val canDescend = depth < 50
+            if (canDescend) {
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    stack.addLast(child to depth + 1)
+                }
+            }
+            if (node !== root) runCatching { node.recycle() }
         }
-        return null
+        while (stack.isNotEmpty()) {
+            val (node, _) = stack.removeLast()
+            if (node !== root) runCatching { node.recycle() }
+        }
+        return found
     }
 
     /** 全局动作：back / home / recents / notifications。 */
@@ -305,16 +333,31 @@ class PhoneAccessibilityService : AccessibilityService() {
             return null
         }
         val latch = CountDownLatch(1)
-        var result: Bitmap? = null
+        // OCR #819：结果经原子引用建立 happens-before；超时后迟到的截图
+        // 没人接手，必须在回调里就地回收，不能泄漏 bitmap。
+        val result = java.util.concurrent.atomic.AtomicReference<Bitmap?>(null)
+        val abandoned = java.util.concurrent.atomic.AtomicBoolean(false)
         val callback =
             object : TakeScreenshotCallback {
                 override fun onSuccess(screenshot: ScreenshotResult) {
                     val buffer = screenshot.hardwareBuffer
                     try {
-                        result =
+                        val bmp =
                             Bitmap
                                 .wrapHardwareBuffer(buffer, screenshot.colorSpace)
                                 ?.copy(Bitmap.Config.ARGB_8888, false)
+                        if (bmp != null) {
+                            if (abandoned.get()) {
+                                runCatching { bmp.recycle() }
+                            } else {
+                                result.set(bmp)
+                                // set 与超时侧 getAndSet 之间存在窗口：写入后复查旗标，
+                                // 双方都用 getAndSet 认领，保证恰好一方回收。
+                                if (abandoned.get()) {
+                                    result.getAndSet(null)?.let { runCatching { it.recycle() } }
+                                }
+                            }
+                        }
                     } catch (_: Throwable) {
                     } finally {
                         // 系统级图形缓冲无论成功失败都要释放。
@@ -329,13 +372,20 @@ class PhoneAccessibilityService : AccessibilityService() {
             }
         return try {
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, callback)
-            try {
-                latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                null
-            } ?: return null
-            result
+            val done =
+                try {
+                    latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    false
+                }
+            if (!done) {
+                // 竞态兜底：置旗标后若结果恰好已写入，取走并回收，避免两头都没人管。
+                abandoned.set(true)
+                result.getAndSet(null)?.let { runCatching { it.recycle() } }
+                return null
+            }
+            result.get()
         } catch (_: Throwable) {
             null
         }

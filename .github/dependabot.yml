@@ -28,3 +28,13 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
+
+  # OCR #819：内核 payload 来自 kernel/zcode 的 pnpm workspace，
+  # 这是仓库最大的依赖面，npm ecosystem 原生支持 pnpm-lock.yaml。
+  - package-ecosystem: npm
+    directory: /kernel/zcode
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"

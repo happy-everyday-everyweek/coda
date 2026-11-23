@@ -367,15 +367,28 @@ object CodaExtras {
                 // 声明了却不出现在详情页里，用户根本没法配（#239）。
                 val o = cfg.optJSONObject(key)
                 val scalar = if (o == null) cfg.get(key) else null
+                // OCR #819：标量简写不能一律当 string/false——数字会被写成字符串、
+                // 布尔失去开关、密钥明文展示。类型按 JSON 实际类型推导；
+                // 键名含 key/token/secret/password 的字符串按敏感处理。
+                val scalarType =
+                    when (scalar) {
+                        is Boolean -> "boolean"
+                        is Number -> "number"
+                        else -> "string"
+                    }
+                val keyLooksSecret =
+                    listOf("apikey", "api_key", "token", "secret", "password", "passwd").any {
+                        key.lowercase().replace("-", "").contains(it)
+                    }
                 options +=
                     PluginConfigOption(
                         key = key,
                         title = o?.optString("title")?.takeIf { it.isNotEmpty() },
                         description = o?.optString("description")?.takeIf { it.isNotEmpty() },
-                        type = o?.optString("type", "string")?.ifEmpty { "string" } ?: "string",
+                        type = o?.optString("type", "string")?.ifEmpty { "string" } ?: scalarType,
                         default = if (o != null && o.has("default")) jsonValueOrNull(o.get("default")) else null,
                         required = o?.optBoolean("required", false) ?: false,
-                        sensitive = o?.optBoolean("sensitive", false) ?: false,
+                        sensitive = o?.optBoolean("sensitive", false) ?: (scalar is String && keyLooksSecret),
                         // 标量简写时，那个值本身就是当前值。
                         current =
                             when {
@@ -415,15 +428,21 @@ object CodaExtras {
 
     /** 读取工作区级与用户级 settings.json 的 hooks 段（兼容新旧两种结构）。 */
 
-    /** 最近一次 readHooks 的读取错误（按来源），供页面区分「空」与「读失败」（#237）。 */
-    @Volatile
-    var lastReadErrors: List<String> = emptyList()
-        private set
+    /**
+     * 一次钩子读取的结果：条目与错误一起交出（#237）。
+     *
+     * OCR #819：以前错误存全局 lastReadErrors——没有任何消费方，且两个工作区
+     * 交错读取会互相覆盖错误。改成随结果返回，调用方按次拿到自己的失败信息。
+     */
+    data class HooksReadResult(
+        val items: List<HookItem>,
+        val errors: List<String>,
+    )
 
     fun readHooks(
         workspacePath: String?,
         homeDir: File,
-    ): List<HookItem> {
+    ): HooksReadResult {
         val out = mutableListOf<HookItem>()
         val readErrors = mutableListOf<String>()
         val files = mutableListOf<Pair<String, File>>()
@@ -464,8 +483,7 @@ object CodaExtras {
                 readErrors += "$label：${e.message ?: e.javaClass.simpleName}"
             }
         }
-        lastReadErrors = readErrors
-        return out
+        return HooksReadResult(out, readErrors)
     }
 
     // ---------------------------------------------------------------- 定时任务

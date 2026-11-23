@@ -2525,10 +2525,12 @@ class SettingsDetailActivity :
     /** 退出 GitHub 登录（清除本机令牌）。 */
     private fun confirmGitHubLogout() {
         sheetConfirm("退出登录", "确定断开 GitHub 连接？本机保存的访问令牌将被清除。", "退出") {
-            com.coda.mobileui.core.GitHub
-                .logout(this)
-            snack("已断开 GitHub 连接")
-            renderPage()
+            // OCR #819：磁盘清除在后台做，结果如实提示；失败时不能谎称已断开。
+            com.coda.mobileui.core.GitHub.logout(this) { cleared ->
+                if (isFinishing || isDestroyed) return@logout
+                snack(if (cleared) "已断开 GitHub 连接" else "清除令牌失败，请重试")
+                renderPage()
+            }
         }
     }
 
@@ -4507,11 +4509,14 @@ class SettingsDetailActivity :
     /** 手机控制开关：启停本地 MCP 服务器、同步内核配置，并重启核心使配置生效。 */
     private fun applyPhoneControl(enable: Boolean) {
         val err = PhoneControl.applyEnabled(this, enable)
-        if (err != null) {
-            snack(err)
+        // OCR #819：开关是否达成以持久化状态为准；配置同步失败只是附加警告，
+        // 停用已生效时仍要重启核心，不能当成整体失败回滚界面。
+        if (PhoneControl.isEnabled(this) != enable) {
+            snack(err ?: "切换失败")
             renderPage()
             return
         }
+        if (err != null) snack(err)
         if (enable) {
             snack("已启用手机控制；正在重启核心使配置生效")
             ZController.get(this).restartCore { ok, msg ->

@@ -474,6 +474,17 @@ class CoreRuntime(
         // 进程已停，所有在途请求都不会再有响应；不失败它们，调用方的
         // refreshing/loading 标志会永久停在 true。
         failAllPending("核心已停止")
+        // OCR #819：LogSink 的 worker 只在 close() 时退出——不关就每个实例漏一条
+        // 常驻线程，且缓冲里最后几千行（正是崩溃诊断）随进程死掉丢失。
+        // stopCore 必须关旧 sink；logFile 一并复位，重启后能开新文件。
+        closeLogSink()
+    }
+
+    private fun closeLogSink() {
+        val sink = logWriter
+        logWriter = null
+        logFile = null
+        runCatching { sink?.close() }
     }
 
     /** 把全部在途请求以失败回调结束并清空，避免 UI 永久等待。 */
@@ -648,20 +659,30 @@ class CoreRuntime(
         }
         val result = java.util.concurrent.atomic.AtomicBoolean(false)
         val latch = java.util.concurrent.CountDownLatch(1)
-        mainHandler.post {
-            try {
-                result.set(handler.onInteractiveReverse(id, method, params))
-            } catch (t: Throwable) {
-                log("!! 交互式反向回调异常: $t")
-            } finally {
-                latch.countDown()
+        // OCR #819：超时后默认应答已经发出，迟到的 runnable 不能再调宿主——
+        // 否则会对同一 id 再弹一次权限框/再缓存一份 pending，用户决策变成第二帧应答。
+        val expired = java.util.concurrent.atomic.AtomicBoolean(false)
+        val task =
+            Runnable {
+                if (expired.get()) return@Runnable
+                try {
+                    result.set(handler.onInteractiveReverse(id, method, params))
+                } catch (t: Throwable) {
+                    log("!! 交互式反向回调异常: $t")
+                } finally {
+                    latch.countDown()
+                }
             }
-        }
+        mainHandler.post(task)
         val settled =
             runCatching {
                 latch.await(interactiveDelegateTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             }.getOrDefault(false)
-        if (!settled) log("[proto] 交互式反向请求 $method 等待宿主决策超时，按默认应答")
+        if (!settled) {
+            expired.set(true)
+            mainHandler.removeCallbacks(task)
+            log("[proto] 交互式反向请求 $method 等待宿主决策超时，按默认应答")
+        }
         return settled && result.get()
     }
 
@@ -769,7 +790,9 @@ class CoreRuntime(
             } ?: File(localLogDir, "core-latest.log")
         f.parentFile?.mkdirs()
         logFile = f
-        logWriter = LogSink(f)
+        // 换新 sink 前先关旧的（OCR #819）：否则替换路径也漏线程。
+        runCatching { logWriter?.close() }
+        logWriter = LogSink(f).also { it.start() }
         // 建文件之前写过的行只在内存里，这里先补写进文件。启动来源、解包结论都发生在建文件之前，
         // 只落盘之后的行会让日志正好缺掉最关键的开头一段，事后只能靠猜。
         val backlog = synchronized(logLock) { logBuf.toString() }

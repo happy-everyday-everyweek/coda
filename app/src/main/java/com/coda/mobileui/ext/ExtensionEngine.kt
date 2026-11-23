@@ -75,11 +75,12 @@ class ExtensionEngine private constructor(
         categories[category.id] = category
         // 分类晚于扫描注册时，扫描阶段拿它判断不了契约的包会停在「分类未开放」；
         // 这里补一次装载，否则它们在本进程里永远不可用。
-        if (isNew && loaded) loadDeferred(category.id)
+        if (isNew && loaded && loadDeferred(category.id)) notifyChanged()
     }
 
-    /** 补装载某个分类下尚未装载的包。只在扫描已完成、分类后注册时调用。 */
-    private fun loadDeferred(categoryId: String) {
+    /** 补装载某个分类下尚未装载的包；有状态变化返回 true（OCR #819）。 */
+    private fun loadDeferred(categoryId: String): Boolean {
+        var changed = false
         for (entry in entries.values) {
             if (entry.manifest.category != categoryId) continue
             if (!entry.enabled || entry.provider != null) continue
@@ -89,7 +90,10 @@ class ExtensionEngine private constructor(
                 entry.error = e.message ?: e.toString()
                 AppLog.e("ExtensionEngine", "补装载扩展失败：${entry.manifest.id}", e)
             }
+            // 装载成功或错误变化都要让 UI 刷新：否则「分类未开放」永远停在界面上。
+            changed = true
         }
+        return changed
     }
 
     @Synchronized
@@ -157,7 +161,10 @@ class ExtensionEngine private constructor(
         root: File,
         builtin: Boolean,
     ) {
-        val dirs = root.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name } ?: return
+        // 跳过点前缀目录（OCR #819）：进程被杀留下的 .id.partial-* 含同 id
+        // 清单且排序在前，会抢注半截包并跳过真正安装的包。
+        val dirs =
+            root.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }?.sortedBy { it.name } ?: return
         for (dir in dirs) {
             val manifestFile = File(dir, "manifest.json")
             if (!manifestFile.isFile) continue
@@ -393,9 +400,15 @@ class ExtensionEngine private constructor(
                 null
             }
         if (children.isNullOrEmpty()) {
+            // list 对文件与空目录都返回空数组（OCR #819）：open 失败按空目录
+            // 建目录返回成功，否则含空目录的内置包永远装不上、每次启动重拷。
+            val opened = runCatching { ctx.assets.open(assetPath) }.getOrNull()
+            if (opened == null) {
+                return dest.isDirectory || dest.mkdirs()
+            }
             dest.parentFile?.mkdirs()
             return try {
-                ctx.assets.open(assetPath).use { input ->
+                opened.use { input ->
                     FileOutputStream(dest).use { out -> input.copyTo(out, 256 * 1024) }
                 }
                 true
@@ -448,11 +461,21 @@ class ExtensionEngine private constructor(
     ): Boolean {
         ensureLoaded()
         val entry = entries[id] ?: return false
-        // 幂等：状态没变就不重复装载，避免叠出未释放的 provider。
-        if (entry.enabled == enabled) return true
+        // 幂等但允许重试（OCR #819）：enabled 却没装载成功（provider==null）
+        // 的条目必须能经 setEnabled(true) 重装载，否则瞬时失败永远无法恢复。
+        if (entry.enabled == enabled && (!enabled || entry.provider != null)) return true
         prefs.edit().putBoolean(KEY_ENABLED + id, enabled).apply()
         entry.enabled = enabled
-        if (enabled) loadEntry(entry) else unloadEntry(entry)
+        // 与 scan/loadDeferred 同一套兜底（OCR #819）：release 抛异常不能让
+        // 持久化与内存状态分叉、跳过 notifyChanged。
+        try {
+            if (enabled) loadEntry(entry) else unloadEntry(entry)
+        } catch (e: Throwable) {
+            entry.error = e.message ?: e.toString()
+            runCatching { entry.provider?.release() }
+            entry.provider = null
+            AppLog.e("ExtensionEngine", "启停扩展失败：$id", e)
+        }
         notifyChanged()
         return true
     }
@@ -476,6 +499,9 @@ class ExtensionEngine private constructor(
         val destPath = runCatching { dest.canonicalPath }.getOrElse { dest.absolutePath }
         // 从已安装目录重装时，先删 dest 会把源目录本身删掉。
         if (sourcePath == destPath || sourcePath.startsWith(destPath + File.separator)) return null
+        // 反向包含也要拒（OCR #819）：source 是 packageRoot 的祖先时 staging
+        // 落在 source 里，copyDir 会递归拷自己直到磁盘/栈耗尽。
+        if (destPath.startsWith(sourcePath + File.separator)) return null
         packageRoot.mkdirs()
         // 先拷到临时目录，成功后再替换：失败不会留下半截包，也不会破坏旧版本。
         val staging = File(packageRoot, ".${manifest.id}.partial-${System.nanoTime()}")
@@ -510,7 +536,8 @@ class ExtensionEngine private constructor(
         if (entry.builtin) {
             if (!userDir.isDirectory) return false
             if (!deleteRecursive(userDir)) return false
-            prefs.edit().remove(KEY_ENABLED + id).apply()
+            // 不清 enabled 偏好（OCR #819）：同 id 的内置包共享这个键，
+            // 清掉会把用户明确停用过的内置包静默重新启用。
             scan()
             // 运行目录按 manifest id 键控，用户包与内置包共享（#761）：
             // 用户包的二进制此前覆盖了内置包的，删掉用户包目录后幸存内置
@@ -577,12 +604,15 @@ class ExtensionEngine private constructor(
         source: File,
         dest: File,
     ) {
+        // 每一步失败都必须抛（OCR #819）：静默跳过会让「拷贝成功」的假象
+        // 删掉旧版本再把半截 staging 换上线。
         if (source.isDirectory) {
-            dest.mkdirs()
-            source.listFiles()?.forEach { copyDir(it, File(dest, it.name)) }
+            if (!dest.isDirectory && !dest.mkdirs()) throw java.io.IOException("建目录失败：$dest")
+            val children = source.listFiles() ?: throw java.io.IOException("列目录失败：$source")
+            for (child in children) copyDir(child, File(dest, child.name))
             return
         }
-        dest.parentFile?.mkdirs()
+        dest.parentFile?.let { if (!it.isDirectory && !it.mkdirs()) throw java.io.IOException("建父目录失败：$it") }
         source.inputStream().use { input ->
             FileOutputStream(dest).use { out -> input.copyTo(out, 256 * 1024) }
         }

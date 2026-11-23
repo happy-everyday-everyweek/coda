@@ -463,7 +463,14 @@ class LinuxEnv(
         val target = File(rootfs, "etc/resolv.conf")
         // 这个路径在 rootfs 里常常是指向宿主 /etc/resolv.conf 的链接。isFile 会跟随链接，
         // 直接 writeText 就写穿到宿主机上了；链接一律先删掉，再落成普通文件。
-        if (isSymlink(target) || (target.exists() && !target.isFile)) target.delete()
+        // OCR #819：删除结果必须核实——delete 失败（或 lstat 出错漏判）后继续写
+        // 就是顺着链接写穿宿主。删不掉就放弃本次写入并留痕。
+        if (isSymlink(target) || (target.exists() && !target.isFile)) {
+            if (!target.delete()) {
+                AppLog.w("LinuxEnv", "resolv.conf 是链接且删除失败，跳过写入以免写穿宿主")
+                return
+            }
+        }
         val existing =
             runCatching {
                 if (target.isFile) target.readText() else ""
@@ -478,7 +485,13 @@ class LinuxEnv(
         runCatching {
             target.parentFile?.mkdirs()
             // rootfs 里这份可能是指向宿主路径的符号链接，先删再写，避免写到别处。
-            if (target.exists() && !target.isFile) target.delete()
+            // 同样核实删除结果（OCR #819）：mkdirs 之后可能又被换成链接。
+            if (isSymlink(target) || (target.exists() && !target.isFile)) {
+                if (!target.delete()) {
+                    AppLog.w("LinuxEnv", "resolv.conf 链接删除失败，放弃写入")
+                    return@runCatching
+                }
+            }
             target.writeText(text)
             AppLog.i("LinuxEnv", "写入容器 DNS：${servers.joinToString(", ")}")
         }.onFailure {
@@ -677,6 +690,35 @@ class LinuxEnv(
         return true
     }
 
+    /**
+     * 链接目标路径不得穿过已解出的链接（OCR #819）。
+     *
+     * `sub/inner -> ..` 合法解出后，`x -> sub/inner/../../outside` 词法归一
+     * 仍在 dest 内，但内核逐段解析时先跟随 inner（物理落在 dest），后面的
+     * `..` 就从 dest 而不是词法位置往上走——目标逃出解包根。这里按物理
+     * 解析顺序逐段核查目标路径（不做词法归一），命中已登记链接即拒绝。
+     */
+    internal fun linkTargetTraversalSafe(
+        relative: String,
+        linkName: String,
+        links: Set<String>,
+    ): Boolean {
+        if (links.isEmpty()) return true
+        val parentSegs =
+            if (linkName.startsWith("/")) {
+                emptyList()
+            } else {
+                relative.split('/').filter { it.isNotEmpty() && it != "." }.dropLast(1)
+            }
+        val targetSegs = linkName.trimStart('/').split('/').filter { it.isNotEmpty() && it != "." }
+        var prefix = ""
+        for (s in (parentSegs + targetSegs).dropLast(1)) {
+            prefix = if (prefix.isEmpty()) s else "$prefix/$s"
+            if (prefix in links) return false
+        }
+        return true
+    }
+
     /** 精简 ustar 解包器：归档只含常规文件、目录与符号链接，不带 pax 扩展头。 */
     private fun untar(
         input: InputStream,
@@ -726,7 +768,9 @@ class LinuxEnv(
                         // 校验的是 guest 根下的落点，原样 symlink 在宿主侧却指向
                         // 真实 /data，后续成员经它写出会穿透宿主机。
                         val hostSafe = rebasedLinkTarget(dest, relative, linkName)
-                        if (hostSafe != null && symlinkStaysInside(dest, relative, linkName)) {
+                        if (hostSafe != null && symlinkStaysInside(dest, relative, linkName) &&
+                            linkTargetTraversalSafe(relative, linkName, extractedLinks)
+                        ) {
                             target.parentFile?.mkdirs()
                             target.delete()
                             runCatching { Os.symlink(hostSafe, target.absolutePath) }

@@ -52,8 +52,15 @@ object Workspaces {
     var storageError: String? = null
         private set
 
-    /** 解析根目录；三处候选都不可写时返回 null 并记下 [storageError]。 */
-    fun rootOrNull(ctx: Context): File? {
+    /**
+     * 解析根目录；三处候选都不可写时返回 null 并记下 [storageError]。
+     *
+     * OCR #819：主线程（onCreate）与后台（WorkspaceTabs.save、ZController）会并发进来，
+     * 迁移段必须互斥，否则两个线程同时对同一棵树 rename/copy，产出交错的半份拷贝。
+     */
+    fun rootOrNull(ctx: Context): File? = synchronized(this) { resolveRootLocked(ctx) }
+
+    private fun resolveRootLocked(ctx: Context): File? {
         val chosen = SettingsStore.get(ctx).workspaceRoot
         if (chosen.isNotEmpty() && usable(File(chosen))) {
             fallbackReason = null
@@ -129,14 +136,23 @@ object Workspaces {
     }
 
     private fun brandDir(): File? {
+        // OCR #819：每次解析先归零，失败分支再写入；没有旧目录（或用户已手动
+        // 移走）时不能继续展示上一轮的迁移失败警告。调用方持有 this 锁。
+        migrationWarning = null
         for ((brand, legacy) in brandCandidates()) {
             val step = WorkspaceRoots.migrationStep(brandExists = brand.exists(), legacyExists = legacy.exists())
             if (step == WorkspaceRoots.Migration.MOVE) {
                 // 迁移失败不能静默（#93）：老工作区的标签与文件会留在原地不再被读取，
                 // 用户看到的是「文件全没了」。rename 失败先试拷贝，仍失败就留下可读警告。
                 val renamed = runCatching { legacy.renameTo(brand) }.getOrDefault(false)
+                if (renamed) {
+                    // OCR #819：成功后必须清掉旧警告，否则第一对候选失败、
+                    // 第二对成功后，restoreTabs 仍展示过期的「文件未迁移」。
+                    migrationWarning = null
+                }
                 if (!renamed) {
                     val copied = runCatching { legacy.copyRecursively(brand, overwrite = false) }.getOrDefault(false)
+                    if (copied) migrationWarning = null
                     if (!copied) {
                         // 半份拷贝必须清掉（#765）：留着它，下次 `!brand.exists()` 为假
                         // 就再也不会重试迁移，工作区静默指向不完整的副本。

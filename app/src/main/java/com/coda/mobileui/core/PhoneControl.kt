@@ -92,7 +92,13 @@ object PhoneControl {
         server = null
     }
 
-    /** 开关切换总入口：启停服务器 + 同步内核 MCP 配置。返回 null 表示成功。 */
+    /**
+     * 开关切换总入口：启停服务器 + 同步内核 MCP 配置。
+     *
+     * 返回 null 表示完全成功；非 null 是提示文本。OCR #819：开关状态以 prefs 为准，
+     * 停用路径先落状态再同步配置——服务器已经停了，配置同步失败不能把开关卡在
+     * 「enabled=true 但没有服务」的假状态里。调用方用 [isEnabled] 判断开关是否达成。
+     */
     fun applyEnabled(
         ctx: Context,
         enable: Boolean,
@@ -110,8 +116,8 @@ object PhoneControl {
             return null
         }
         stopServer()
-        if (!syncMcpConfig(ctx, false)) return "移除内核 MCP 配置失败"
         prefs.edit().putBoolean("enabled", false).commit()
+        if (!syncMcpConfig(ctx, false)) return "已停用，但移除内核 MCP 配置失败，可在设置里重写配置"
         return null
     }
 
@@ -129,7 +135,17 @@ object PhoneControl {
             val f = configFile(ctx)
             val root =
                 if (f.exists() && f.length() > 0L) {
-                    JSONObject(f.readText())
+                    try {
+                        JSONObject(f.readText())
+                    } catch (parse: Throwable) {
+                        // OCR #819：损坏的 config.json 以前让开关永远卡死（读写都失败，
+                        // 没有任何恢复路径）。把损坏文件改名留档后从空配置重建：
+                        // 用户其它 MCP 配置仍在 .corrupt 备份里，可手动找回。
+                        val backup = File(f.parentFile, "config.json.corrupt-${System.currentTimeMillis()}")
+                        if (!f.renameTo(backup)) return false
+                        AppLog.w("PhoneControl", "config.json 损坏，已备份到 ${backup.name} 并重建")
+                        JSONObject()
+                    }
                 } else {
                     JSONObject()
                 }

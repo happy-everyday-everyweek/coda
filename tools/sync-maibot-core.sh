@@ -19,6 +19,21 @@ for name in $MODULES; do
     exit 1
   fi
 done
+# OCR #819：rm -rf 之后的每一条 cp 依赖都要先校验——prompts/locales/msgpack/jieba、
+# agent 配置与顶层 lite_*.py 缺任何一个，都不能先毁掉上一次 staging 再裸 cp 报错。
+for extra in prompts locales msgpack jieba; do
+  if [ ! -d "$SRC/$extra" ]; then
+    echo "Expected MaiBot core dir missing: $SRC/$extra" >&2
+    exit 1
+  fi
+done
+for f in src/__init__.py src/lite_runtime.py src/lite_android_bridge.py src/lite_coding_tool.py \
+         src/agent/__init__.py src/agent/config.py; do
+  if [ ! -f "$SRC/$f" ]; then
+    echo "Expected MaiBot core file missing: $SRC/$f" >&2
+    exit 1
+  fi
+done
 OUT="$ROOT/app/build/maibot-core"
 rm -rf "$OUT"
 mkdir -p "$OUT/src"

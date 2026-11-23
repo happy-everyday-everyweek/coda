@@ -48,12 +48,17 @@ enum class BackupCategory(
     val entriesInPackage: Set<String>
         get() =
             when (this) {
-                PROVIDERS -> setOf("provider_config.json", "coda-provider-meta.json", "coda-asr-providers.json")
-                PROMPTS -> setOf("prompts/global-AGENTS.md", "prompts/workspace-AGENTS.md")
-                else -> emptySet()
+                PROVIDERS -> PROVIDER_ENTRIES
+                PROMPTS -> PROMPT_ENTRIES
+                else -> EMPTY_ENTRIES
             }
 
     companion object {
+        // OCR #819：of() 每个 zip 条目/文件都要查一次，恢复与统计可达几十万次；
+        // 计算属性每次访问都新建 setOf 纯属分配浪费。常量集合提升到 companion。
+        private val PROVIDER_ENTRIES = setOf("provider_config.json", "coda-provider-meta.json", "coda-asr-providers.json")
+        private val PROMPT_ENTRIES = setOf("prompts/global-AGENTS.md", "prompts/workspace-AGENTS.md")
+        private val EMPTY_ENTRIES = emptySet<String>()
         /** 默认全选：保持现有全量备份行为不变。 */
         val DEFAULT: Set<BackupCategory> = entries.toSet()
 

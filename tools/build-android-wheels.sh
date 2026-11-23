@@ -61,6 +61,13 @@ mkdir -p "$WORK_DIR/fakelib"
 # 直接赋值会整条覆盖掉。
 export RUSTFLAGS="${RUSTFLAGS:-} -L native=$WORK_DIR/fakelib"
 
+# OCR #819：wheel 文件名带版本，PYDANTIC_VERSION/JITER_VERSION 覆盖或版本升级后，
+# 旧版本轮子会留在 app/wheels 里——Chaquopy 的 --find-links 会让 pip 静默选中
+# 旧轮子而不是刚编出来的。构建前清掉本脚本产出的旧轮子（rpds 垫片随后重建）。
+mkdir -p app/wheels
+rm -f app/wheels/pydantic_core-*-android_26_arm64_v8a.whl \
+      app/wheels/jiter-*-android_26_arm64_v8a.whl
+
 echo "==> pydantic-core $PYDANTIC_VERSION"
 mkdir -p "$WORK_DIR/pc"
 # sdist 会被编译成 .so 打进 APK：必须按 sha256 固定，否则被污染的镜像就能注入原生代码。

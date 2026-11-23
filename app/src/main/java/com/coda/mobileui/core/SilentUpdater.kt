@@ -211,6 +211,10 @@ internal object SilentUpdater {
             AppLog.w(TAG, "已记录的包不存在了（可能被系统清理）：${snapshot.file.absolutePath}")
             // 清掉失效状态：留着它会让后续每次调用都重复打同一条告警。
             ready = null
+            // OCR #819：只清 ready 不复位 started，下次 checkAndFetch 会被闸门
+            // 挡住又发现 ready==null，本进程再也无法重新下载。系统清缓存是
+            // 瞬态原因，必须放行完整流程（下载按版本号命名，天然幂等）。
+            started.set(false)
             return null
         }
         AppLog.i(TAG, "复用已下载的包：${snapshot.file.name}（${fmtSize(snapshot.file.length())}）")

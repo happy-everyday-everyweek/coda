@@ -123,7 +123,9 @@ object AgentAssets {
         if (editingPath != null) {
             // 编辑路径来自外部 Intent/状态：必须落在该 kind 的资产根内，不能写任意文件。
             target = File(editingPath).canonicalFile
-            if (!inside(target, root)) return "路径不在${kind.label}目录内"
+            // OCR #819：inside 对 target==root 也返回 true；根目录还不存在时
+            // rename 会把根路径变成普通文件，list/save/delete 全部报废。与 delete 同规。
+            if (!inside(target, root) || target == root) return "路径不在${kind.label}目录内"
         } else {
             target =
                 when (kind) {
@@ -144,13 +146,19 @@ object AgentAssets {
             sb.append(body)
             if (!body.endsWith("\n")) sb.append("\n")
             // 原子替换：写一半失败不会留下损坏的资产文件。
-            val tmp = File(target.parentFile, "${target.name}.tmp")
-            tmp.writeText(sb.toString())
-            if (!tmp.renameTo(target)) {
-                tmp.delete()
-                return "写入失败: 无法替换 ${target.name}"
+            // OCR #819：临时名带纳秒后缀——固定 `<name>.tmp` 在并发保存同一资产时
+            // 共用一路径，一个写者会把另一个的半截内容 rename 上线。
+            val tmp = File(target.parentFile, "${target.name}.${System.nanoTime()}.tmp")
+            try {
+                tmp.writeText(sb.toString())
+                if (!tmp.renameTo(target)) {
+                    return "写入失败: 无法替换 ${target.name}"
+                }
+                null
+            } finally {
+                // 写失败（满盘）/rename 失败都要清掉残留 tmp，不留孤儿。
+                if (tmp.exists()) runCatching { tmp.delete() }
             }
-            null
         } catch (t: Throwable) {
             "写入失败: ${t.message}"
         }

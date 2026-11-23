@@ -63,6 +63,10 @@ internal object AssetFetcher {
      * 大文件（几十 MB）必须放在后台线程调用。
      *
      * 返回 true 表示「target 现在是内容已校验的完整文件」。
+     *
+     * OCR #819：传入 [cancel] 且被触发时抛 [CancellationException]（#776 取消
+     * 传播）——传 cancel 的调用方必须自行捕获并收尾 UI（见 UpdateInstaller.download）；
+     * 不传 cancel 时本方法不会抛该异常，保持阻塞 Boolean 契约。
      */
     fun ensure(
         ctx: Context,
@@ -99,6 +103,9 @@ internal object AssetFetcher {
         }
 
         target.parentFile?.mkdirs()
+        // 低频清扫陈旧 .part 孤儿（OCR #819）：进程被杀留下的纳秒临时文件
+        // 没人复用也没人删，装配入口顺手清 24h 前的。
+        target.parentFile?.let { Downloader.sweepStaleParts(it) }
         // 临时名带纳秒后缀：启动补资源与设置页同时触发同一资产的获取时，
         // 共用 `<name>.part` 会让一个线程把另一个还没写完的文件 rename 上线。
         val tmp = File(target.parentFile, target.name + "." + System.nanoTime() + ".part")
@@ -115,7 +122,12 @@ internal object AssetFetcher {
                     is AssetPlacement.Result.Failed -> {
                         // 校验已经过了，失败在文件系统这一步。归因到「校验失败」会误导排查。
                         AppLog.w(TAG, "释放资产未能就位 ${target.name}：${placed.reason}")
-                        onLog("释放资产失败（写入）：${target.name}，转下载")
+                        // OCR #819：转下载写的是同一个 target，必然撞上同一个本地
+                        // 写入失败（目录/权限/满盘），白烧几十 MB 带宽。如实报错
+                        // 快速失败，让用户修复存储后重试，不再联网。
+                        onLog("释放资产失败（写入）：${target.name}：${placed.reason}")
+                        runCatching { tmp.delete() }
+                        return false
                     }
                 }
             } else {

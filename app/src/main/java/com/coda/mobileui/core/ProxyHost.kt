@@ -417,16 +417,25 @@ object ProxyHost {
                     readTimeout = 20_000
                     setRequestProperty("Accept", "application/vnd.github+json")
                 }
-            if (conn.responseCode !in 200..299) return null
-            val text = conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-            conn.disconnect()
-            val assets = org.json.JSONObject(text).optJSONArray("assets") ?: return null
-            for (i in 0 until assets.length()) {
-                val asset = assets.optJSONObject(i) ?: continue
-                if (asset.optString("name") != assetName) continue
-                return ArtifactDigest.fromReleaseAsset(asset.optString("digest"))
+            // OCR #819：非 2xx 直接 return、responseCode/readBytes 抛异常都会跳过
+            // disconnect——GitHub 限流 403 时反复重试安装会耗尽 socket/fd。
+            // try/finally 保证释放；非 2xx 把 errorStream 排干，连接才能被复用/回收。
+            try {
+                if (conn.responseCode !in 200..299) {
+                    runCatching { conn.errorStream?.use { it.readBytes() } }
+                    return null
+                }
+                val text = conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+                val assets = org.json.JSONObject(text).optJSONArray("assets") ?: return null
+                for (i in 0 until assets.length()) {
+                    val asset = assets.optJSONObject(i) ?: continue
+                    if (asset.optString("name") != assetName) continue
+                    return ArtifactDigest.fromReleaseAsset(asset.optString("digest"))
+                }
+                null
+            } finally {
+                runCatching { conn.disconnect() }
             }
-            null
         }.getOrNull()
 
     /** 在 tar 流里找到指定文件名并解出；其余条目跳过。 */

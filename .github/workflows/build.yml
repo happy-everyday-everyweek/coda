@@ -56,7 +56,15 @@ jobs:
       - name: 测试 Web 前端逻辑
         run: node --test tools/test_webui_client.mjs
 
+      # OCR #819：构建脚本测试是纯文本级断言（bash -n、脚本内容检查、纯 Python
+      # 模块加载），不需要重建 payload。放在 compile 前段：常规 push/PR 也能拦住
+      # build-core-payload.sh / lint.sh / wheel 脚本的回归，而不是只在手动 apk
+      # job 里、且要等完整重建之后才暴露一个低级脚本错误。
+      - name: 测试构建脚本
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+
       - name: 运行 Kotlin 单元测试
+        id: unit-tests
         run: |
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
           [ -x "$AAPT2" ] || AAPT2="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)"
@@ -65,11 +73,14 @@ jobs:
             -Pandroid.aapt2FromMavenOverride="$AAPT2" \
             --stacktrace
       # 失败时上传测试报告：只有命令行摘要看不到断言消息与堆栈，排查全靠猜。
+      # OCR #819：v4 artifact 同一 run 内不可变，re-run 会 409 撞名，把真正的
+      # 测试失败盖住——名字里带上 run_attempt；且只在单测步骤本身失败时上传，
+      # 更早的编译失败不会去传不存在的报告路径。
       - name: 上传单元测试报告（失败时）
-        if: failure()
+        if: failure() && steps.unit-tests.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-reports-${{ github.sha }}
+          name: unit-test-reports-${{ github.sha }}-attempt${{ github.run_attempt }}
           path: |
             app/build/reports/tests/testDebugUnitTest
             app/build/test-results/testDebugUnitTest
@@ -134,9 +145,6 @@ jobs:
 
       - name: 重建内核二进制载荷
         run: tools/build-core-payload.sh
-
-      - name: 测试构建脚本
-        run: python3 -m unittest discover -s tools -p 'test_*.py'
 
       - name: 核对内核载荷结构
         run: python3 tools/verify-sea-payload.py app/src/main/assets/core/zcode

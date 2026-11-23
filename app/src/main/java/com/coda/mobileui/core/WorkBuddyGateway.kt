@@ -367,13 +367,21 @@ object WorkBuddyGateway {
         if (proc != null) terminate(proc)
     }
 
-    /** 先礼后兵地结束进程：强杀后也要等到真正退出，避免端口仍被占用。 */
+    /**
+     * 先礼后兵地结束进程。
+     *
+     * OCR #819：stop() 会从主线程进来（备份导入导出），destroy 3s + 强杀再等 3s
+     * 最坏 6s，顽固 proot 子进程能把主线程推过 5s ANR 线。SIGTERM 后只等 1.5s；
+     * 强杀后的确认等待放后台线程，主线程最多阻塞 ~1.5s。
+     */
     private fun terminate(proc: Process) {
         runCatching {
             proc.destroy()
-            if (!proc.waitFor(3, TimeUnit.SECONDS)) {
+            if (!proc.waitFor(1500, TimeUnit.MILLISECONDS)) {
                 proc.destroyForcibly()
-                proc.waitFor(3, TimeUnit.SECONDS)
+                Thread({
+                    runCatching { proc.waitFor(3, TimeUnit.SECONDS) }
+                }, "gateway-force-kill-wait").apply { isDaemon = true }.start()
             }
         }
     }

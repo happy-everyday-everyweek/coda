@@ -411,7 +411,9 @@ object AutomationSchedule {
 
                         else -> {
                             val v = range.toIntOrNull() ?: throw AutomationException("无效的 cron 字段: $body")
-                            v to v
+                            // 带步长的裸值是 v..max（OCR #819）：与 parseCron 同口径，
+                            // 否则 5/2 校验成 {5,7,...} 而规则里只剩 {5}。
+                            if ('/' in body) v to max else v to v
                         }
                     }
                 if (lo < min || hi > max || lo > hi) throw AutomationException("cron 字段超出范围: $body")
@@ -444,7 +446,9 @@ object AutomationSchedule {
         val hour = single(1) ?: anchor.hour
         val monthDays = expand(2, 1, 31) ?: listOf(anchor.dayOfMonth)
         val months = expand(3, 1, 12) ?: listOf(anchor.monthValue)
-        val weekdays = expand(4, 0, 7) ?: listOf(1)
+        // 周日 0/7 双写法归一到 0（OCR #819）：内核校验 weekdays 只收 0-6，
+        // 7 会让整条规则被拒；去重防 0-7 展开出双份周日。
+        val weekdays = (expand(4, 0, 7)?.map { if (it == 7) 0 else it }?.distinct()?.sorted()) ?: listOf(1)
         val o = JSONObject().put("interval", interval).put("anchorAt", anchorAt)
         when (unit) {
             "minute" -> {
@@ -504,7 +508,10 @@ class AutomationStore(
     private var db: SQLiteDatabase? = null
 
     /** 认领超时：超过这个时间仍是 running=1，视为孤儿认领，可被回收。 */
-    private val claimTimeoutMs = 10 * 60_000L
+    // 认领超时（OCR #819）：session/create+send 回调在核忙时可远超 10 分钟，
+    // 固定 10 分钟会把合法在途任务回收再派发一遍。放宽到 30 分钟，并且
+    // 回收时只清真死行（见 resetStaleRunning 的 dispatch_status 条件）。
+    private val claimTimeoutMs = 30 * 60_000L
 
     private val tag = "AutomationStore"
 
@@ -839,9 +846,13 @@ class AutomationStore(
     fun resetStaleRunning(now: Long) {
         val d = open() ?: return
         try {
+            // 只回收「认领后一直没进入派发/重试」的行（OCR #819）：
+            // dispatch_status 已是 claimed/retry 的由内核回调链管理，
+            // 按时间一刀切会把慢回调的在途任务重复派发。
             d.execSQL(
                 "UPDATE automations SET running = 0, claimed_at = NULL WHERE running = 1 " +
-                    "AND (claimed_at IS NULL OR claimed_at < ?)",
+                    "AND (claimed_at IS NULL OR claimed_at < ?) " +
+                    "AND (dispatch_status IS NULL OR dispatch_status NOT IN ('claimed', 'retry'))",
                 arrayOf<Any?>(now - claimTimeoutMs),
             )
         } catch (e: Throwable) {

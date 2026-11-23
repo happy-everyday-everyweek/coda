@@ -40,6 +40,9 @@ object ShizukuShell {
     /** 合法的组件名：包名/类名，只允许字母数字下划线与点。 */
     private val COMPONENT = Regex("^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$")
 
+    /** 单条命令输出读取期限：settings/input 正常毫秒级返回，30s 已极宽裕。 */
+    private const val EXEC_TIMEOUT_MS = 30_000L
+
     /** Shizuku.newProcess 的反射句柄；解析一次后复用（#384）。 */
     @Volatile
     private var newProcessCached: java.lang.reflect.Method? = null
@@ -72,7 +75,37 @@ object ShizukuShell {
                     "/",
                 ) as Process
             try {
-                val output = process.inputStream.bufferedReader().use { it.readText() }
+                // OCR #819：readText/waitFor 都可能被挂死的远端命令卡住——tap/swipe/key
+                // 是交互热路径，不能无限等。读输出放独立线程，主调用侧带期限收口；
+                // 超时/中断都 destroy 进程并按失败返回，绝不把调用线程钉死。
+                val outRef = java.util.concurrent.atomic.AtomicReference<String>("")
+                val errRef = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+                val reader =
+                    Thread({
+                        try {
+                            outRef.set(process.inputStream.bufferedReader().use { it.readText() })
+                        } catch (t: Throwable) {
+                            errRef.set(t)
+                        }
+                    }, "shizuku-exec-read").apply { isDaemon = true }
+                reader.start()
+                reader.join(EXEC_TIMEOUT_MS)
+                if (reader.isAlive) {
+                    runCatching { process.destroy() }
+                    reader.join(500)
+                    throw IllegalStateException("命令输出读取超时（${EXEC_TIMEOUT_MS / 1000}s），已终止")
+                }
+                errRef.get()?.let { throw it }
+                val output = outRef.get()
+                // waitFor 同样给期限：stdout EOF 后远端进程仍可能不退出。
+                val waitDeadline = System.currentTimeMillis() + 5_000L
+                while (process.isAlive && System.currentTimeMillis() < waitDeadline) {
+                    Thread.sleep(20)
+                }
+                if (process.isAlive) {
+                    runCatching { process.destroy() }
+                    throw IllegalStateException("命令未在期限内退出，已终止：${output.trim().take(200)}")
+                }
                 val code = process.waitFor()
                 // 退出码必须检查：settings/input 失败时同样是空输出，
                 // 不看退出码就会把「没写进去」当成执行成功。

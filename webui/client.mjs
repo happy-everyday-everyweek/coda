@@ -9,8 +9,10 @@
 //   #686 指示灯恒为 on，断线时仍是绿的。
 
 /**
- * 快照指纹。必须覆盖三种变化：条数变、窗口滑动（条数不变但首条换了）、
- * 末条文本原地增长（流式输出）。只用 length 或只用末条都会漏。
+ * 快照指纹。必须覆盖四种变化：条数变、窗口滑动（条数不变但首条换了）、
+ * 末条文本原地增长（流式输出）、以及任意位置消息的原地更新（OCR #819：
+ * planRender 支持 update 任意下标，早先的工具结果消息补齐时末条可能没变，
+ * 只看首末会让 UI 停在旧内容）。对全部消息的文本长度做一遍廉价折叠摘要。
  */
 export function snapshotSig(msgs) {
   const list = msgs || [];
@@ -18,6 +20,12 @@ export function snapshotSig(msgs) {
   const first = list[0];
   const last = list[list.length - 1];
   const text = last.text || '';
+  let digest = 0;
+  for (let i = 0; i < list.length; i++) {
+    const t = list[i].text || '';
+    // 长度 + 末字符足以捕获绝大多数原地更新，且 O(总条数) 不复制文本。
+    digest = (digest * 31 + t.length + (t.length ? t.charCodeAt(t.length - 1) : 0)) | 0;
+  }
   return [
     list.length,
     first.id ?? '',
@@ -25,6 +33,7 @@ export function snapshotSig(msgs) {
     last.ts ?? '',
     text.length,
     text.slice(-32),
+    digest,
   ].join('|');
 }
 

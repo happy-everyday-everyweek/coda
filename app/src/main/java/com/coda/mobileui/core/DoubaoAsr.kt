@@ -448,12 +448,20 @@ object DoubaoAsr {
         private val onText: (text: String, isFinal: Boolean) -> Unit,
         private val timeoutSec: Long = 20,
     ) {
+        // OCR #819：finish()（AsrClient 的超时协程）与 cancel()（awaitClose）
+        // 在不同线程进来，ws/closed 必须可见且关闭动作互斥，否则双重 close/竞态漏连接。
+        @Volatile
         private var ws: WebSocket? = null
+
         /** onOpen 之前的失败原因；等待方据此立即失败，而不是干等到超时。 */
         @Volatile
         private var openError: AsrError? = null
+
         /** 连接是否已被主动关闭，避免重复 close 与重复发取消帧。 */
+        @Volatile
         private var closed = false
+
+        private val closeLock = Any()
         private var taskId = ""
         private val incoming = LinkedBlockingQueue<Any>()
         private val finals = mutableListOf<String>()
@@ -636,13 +644,26 @@ object DoubaoAsr {
             }
         }
 
-        /** 关闭连接；重复调用安全。 */
+        /**
+         * 关闭连接；重复调用安全（closeLock 互斥 + closed 可见）。
+         *
+         * OCR #819：graceful close 只是排队一个 close 帧，对从未 open 的 socket
+         * 不会强行拆掉进行中的 connect——connect-timeout/connect-failed/start-failed/
+         * cancel 这些失败路径必须 cancel() 立即回收连接与读线程（与 transcribePcm
+         * 同一做法）；只有 finish 的正常收尾保留优雅关闭。
+         */
         private fun closeSocket(reason: String) {
-            if (closed) return
-            closed = true
-            val socket = ws
-            ws = null
-            runCatching { socket?.close(1000, reason) }
+            val socket =
+                synchronized(closeLock) {
+                    if (closed) return
+                    closed = true
+                    val s = ws
+                    ws = null
+                    s
+                }
+            runCatching {
+                if (reason == "finish") socket?.close(1000, reason) else socket?.cancel()
+            }
         }
 
         private fun drain() {

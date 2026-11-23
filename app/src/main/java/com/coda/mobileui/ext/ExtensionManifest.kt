@@ -1,5 +1,6 @@
 package com.coda.mobileui.ext
 
+import com.coda.mobileui.core.AppLog
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -85,8 +86,13 @@ data class ExtensionManifest(
                 try {
                     JSONObject(text)
                 } catch (_: org.json.JSONException) {
-                    // 只吞解析异常：OOM/StackOverflow 这类 Error 不属于「清单无效」，
-                    // 被转成 null 会丢掉崩溃现场（#472）。
+                    return null
+                } catch (e: StackOverflowError) {
+                    // OCR #819：org.json 递归解析，恶意深嵌套清单会抛 StackOverflowError。
+                    // collect() 对 parse 没有逐包保护，放它逃出去会触发 ensureLoaded 的
+                    // catch-all 清空全部扩展（含内置）。按「这份清单无效」处理并留痕；
+                    // OOM 等其它 Error 仍不吞（#472）。
+                    AppLog.w("ExtensionManifest", "清单嵌套过深，按无效处理：${e.javaClass.simpleName}")
                     return null
                 }
             val id = obj.optString("id", "").trim()

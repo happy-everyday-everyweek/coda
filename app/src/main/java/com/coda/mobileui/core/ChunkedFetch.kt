@@ -69,10 +69,10 @@ internal object ChunkedFetch {
         if (chunks.isEmpty()) return Outcome(DownloadOutcome.Kind.IO, detail = "没有可下载的分块")
         // 预分配之前先核对 part 的真实长度（#815）：不符就把各块进度清零。
         prepare(part, total, done)
-        val raf = RandomAccessFile(part, "rw")
-        // 预分配长度：各块写的是文件中间的偏移，不先把长度撑开，
-        // 靠后的块 seek 到超出文件末尾的位置写入会留下空洞（读出来是 0）。
-        raf.setLength(total)
+        // OCR #819：setLength 抛异常（满盘/配额/不支持预分配）时 RAF 必须也被关掉，
+        // 否则 fd 泄漏 + 半截预分配文件残留，移动端反复失败会耗尽 FD。
+        // 构造与预分配都放进 try，finally 统一收口。
+        var raf: RandomAccessFile? = null
         val writeLock = Any()
         val failure = AtomicReference<Outcome?>(null)
         val speeds = AtomicLongArray(chunks.size)
@@ -84,11 +84,16 @@ internal object ChunkedFetch {
         val cancelled = AtomicBoolean(false)
         val pool = Executors.newFixedThreadPool(chunks.size)
         try {
+            val handle = RandomAccessFile(part, "rw")
+            raf = handle
+            // 预分配长度：各块写的是文件中间的偏移，不先把长度撑开，
+            // 靠后的块 seek 到超出文件末尾的位置写入会留下空洞（读出来是 0）。
+            handle.setLength(total)
             val tasks =
                 chunks.map { c ->
                     Runnable {
                         try {
-                            fetchChunk(c, raf, writeLock, done, speeds, total, cancel, stopped, progress, open)
+                            fetchChunk(c, handle, writeLock, done, speeds, total, cancel, stopped, progress, open)
                         } catch (e: CancellationException) {
                             // 用户取消必须压过兄弟块的 IO/HTTP 失败：两者都往同一个
                             // failure 里 compareAndSet，谁先谁赢会把真实取消报成 IO，
@@ -140,7 +145,7 @@ internal object ChunkedFetch {
         } finally {
             pool.shutdownNow()
             runCatching { pool.awaitTermination(2, TimeUnit.SECONDS) }
-            runCatching { raf.close() }
+            runCatching { raf?.close() }
         }
     }
 
@@ -194,7 +199,12 @@ internal object ChunkedFetch {
                 throw ChunkHttpException(code)
             }
             val range = ResumeProbe.parseContentRange(conn.getHeaderField("Content-Range"))
-            if (range == null || range.from != c.resumeFrom(written)) {
+            // OCR #819：只验 from 不够——起点对但终点/对象版本不同的 206 会被静默
+            // 拼接进文件；无校验和的源连 If-Range 都没有。终点必须等于请求终点，
+            // 服务端声明总长时也必须与期望一致。
+            if (range == null || range.from != c.resumeFrom(written) || range.to != c.to ||
+                (range.total != 0L && range.total != total)
+            ) {
                 throw java.io.IOException("块 ${c.index} 的 Content-Range 与请求不符")
             }
             conn.inputStream.use { input ->

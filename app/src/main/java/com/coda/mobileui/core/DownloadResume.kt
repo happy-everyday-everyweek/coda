@@ -32,10 +32,11 @@ internal object ResumeProbe {
     /** `Accept-Ranges: bytes` 才算支持；`none` 与缺失都按不支持处理。 */
     fun acceptsRanges(header: String?): Boolean = header?.trim()?.equals("bytes", ignoreCase = true) == true
 
-    /** 解析出的区间：[total] 为 0 表示服务端用 `*` 表示总长未知。 */
+    /** 解析出的区间：[total] 为 0 表示服务端用 `*` 表示总长未知。[to] 为闭区间终点（OCR #819）。 */
     data class Range(
         val from: Long,
         val total: Long,
+        val to: Long = from,
     )
 
     /**
@@ -58,7 +59,7 @@ internal object ResumeProbe {
         val totalText = body.substring(slash + 1).trim()
         val total = if (totalText == "*") 0L else (totalText.toLongOrNull() ?: return null)
         if (total < 0) return null
-        return Range(from, total)
+        return Range(from, total, to)
     }
 
     /** 按响应码与 Content-Range 判定这次续传请求的结果。 */

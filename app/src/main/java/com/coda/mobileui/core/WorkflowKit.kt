@@ -529,9 +529,11 @@ object ZWorkflowKit {
         val actor = payload?.opt("actor") ?: return ""
         if (actor is String) return actor
         val o = actor as? JSONObject ?: return ""
-        val direct = firstNonEmpty(o.optString("address"), o.optString("ref"), o.optString("key"))
+        // OCR #819：site 系字段同样要防显式 null——optString 会给出字面量 "null"，
+        // {"siteId": null, "ordinal": 2} 拼出 "null@2" 这种假地址。统一走 stringOrNull。
+        val direct = firstNonEmpty(stringOrNull(o, "address"), stringOrNull(o, "ref"), stringOrNull(o, "key"))
         if (direct.isNotEmpty()) return direct
-        val site = firstNonEmpty(o.optString("siteId"), o.optString("site"), o.optString("id"))
+        val site = firstNonEmpty(stringOrNull(o, "siteId"), stringOrNull(o, "site"), stringOrNull(o, "id"))
         if (site.isEmpty()) return ""
         // ordinal 缺省时只报 siteId，宁可匹配不到也不猜一个错地址。
         // 显式 null 也算缺省：has() 只判键存在，optInt 会把它变成 0，拼出 site@0 这种错地址。

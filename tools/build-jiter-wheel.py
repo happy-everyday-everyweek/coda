@@ -21,7 +21,9 @@ src = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build" / "jite
 if not src.is_dir():
     sys.exit(f"jiter 源目录不存在：{src}")
 
-match = re.search(r"jiter-(\d+\.\d+\.\d+)", src.name)
+# OCR #819：与 build-pydantic-wheel 同规——完整捕获 PEP 440 后缀，
+# 0.19.0rc1 不能被截成 0.19.0 产出标错版本的轮子。
+match = re.fullmatch(r"jiter-(\d+\.\d+\.\d+(?:(?:a|b|rc|\.dev|\.post)\d+)*)", src.name)
 if not match:
     raise SystemExit(f"无法从目录名解析版本：{src.name}")
 version = match.group(1)

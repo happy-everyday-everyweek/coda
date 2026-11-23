@@ -59,6 +59,12 @@ internal object UpdateInstaller {
         val target = File(dir, "coda-${result.versionCode}.apk")
         // 「已就位先校验、坏了删掉重下」是 AssetFetcher.ensure 的第 1 步，
         // 这里不再重复实现一遍缓存判断（两处各写一份必然漂移），spec 也只构造一次。
+        // OCR #819：无哈希且大小未知时，ensure 的复用校验退化成「文件非空」，
+        // 上次中断留下的截断包会直接混过复用。先删掉既有文件，强制走完整下载。
+        if (result.sha256 == null && result.apkSize <= 0L && target.exists()) {
+            onLog("既有更新包缺少哈希与大小凭据，删除后重新下载")
+            runCatching { target.delete() }
+        }
         val spec = specFor(result)
         val ok =
             try {
@@ -79,15 +85,21 @@ internal object UpdateInstaller {
         if (!ok) return null
 
         // 从清单拿到的更新包一定带哈希；没有哈希说明走的是 API 兜底。
-        // 这时不能只判「文件非空」就交给安装器：截断的 APK 同样非空，
-        // 至少要核对声明大小与 APK 结构（能打开 zip 且含 AndroidManifest）。
+        // OCR #819：无哈希时 AssetFetcher 的缓存复用会退化成「文件非空」，
+        // 上一次中断留下的截断包能混过复用与这里的大小检查（apkSize<=0 时
+        // sizeOk 恒真）。无哈希 + 大小未知的组合下先删掉既有文件强制重下，
+        // 再核对大小与完整 zip 结构（中央目录可遍历且含 AndroidManifest）。
         if (result.sha256 == null) {
             val sizeOk = result.apkSize <= 0L || target.length() == result.apkSize
             val zipOk =
                 runCatching {
                     java.util.zip
                         .ZipFile(target)
-                        .use { z -> z.getEntry("AndroidManifest.xml") != null }
+                        .use { z ->
+                            // 只查单个 entry 不够：截断 zip 可能仍暴露 Manifest 条目。
+                            // 遍历中央目录确认条目数非零且能完整读出。
+                            z.getEntry("AndroidManifest.xml") != null && z.size() > 0
+                        }
                 }.getOrDefault(false)
             if (!sizeOk || !zipOk) {
                 onLog("更新包校验失败：缺少哈希，且大小或包结构不符")
@@ -253,8 +265,9 @@ internal object UpdateInstaller {
      * 清理旧的更新包。
      *
      * 升级完成后比 [keepVersionCode] 旧的包没用了，但它可能占几十 MB。
-     * 比当前版本新的包必须保留：那是「已下载、待安装」的更新，
-     * 只保留当前版本会把下载缓存整个清空，复用优化永远不生效。
+     * OCR #819：待安装的新包只保留版本号最高的一个——dev 渠道每天出更高
+     * versionCode 的包，用户推迟安装时「>= 当前版本全保留」会让 updates
+     * 目录无限膨胀（每个被推迟的包几十 MB）。当前版本 + 最高版本各留一份。
      */
     fun cleanup(
         ctx: Context,
@@ -262,10 +275,24 @@ internal object UpdateInstaller {
     ) {
         val dir = File(ctx.filesDir, "updates")
         if (!dir.isDirectory) return
-        dir.listFiles()?.forEach { f ->
-            if (!shouldKeepApk(f.name, keepVersionCode)) runCatching { f.delete() }
+        val files = dir.listFiles() ?: return
+        val newest =
+            files
+                .mapNotNull { f -> APK_NAME.matchEntire(f.name)?.groupValues?.get(1)?.toIntOrNull()?.let { it to f } }
+                .filter { it.first >= keepVersionCode }
+                .maxByOrNull { it.first }
+                ?.second
+        files.forEach { f ->
+            if (!shouldKeepApk(f.name, keepVersionCode)) {
+                runCatching { f.delete() }
+            } else if (newest != null && f != newest && apkVersionOf(f.name) != keepVersionCode) {
+                // 高于当前版本但不是最高版本的中间包：永远轮不到安装，删。
+                runCatching { f.delete() }
+            }
         }
     }
+
+    private fun apkVersionOf(name: String): Int? = APK_NAME.matchEntire(name)?.groupValues?.get(1)?.toIntOrNull()
 
     /** 更新包文件名格式；对象级常量只编译一次。 */
     private val APK_NAME = Regex("^coda-(\\d+)\\.apk$")

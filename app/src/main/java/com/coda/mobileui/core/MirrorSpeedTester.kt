@@ -89,10 +89,14 @@ object MirrorSpeedTester {
 
     /** 从 prefix 里取出主机与端口（`https://host:8443/path` → host to 8443）。 */
     private fun hostOf(prefix: String): Pair<String, Int>? {
-        val authority =
-            URL(prefix).authority ?: return null
+        // OCR #819：畸形 prefix 会让 URL() 抛 MalformedURLException——它在 ping 的
+        // try 之外，逃进 executor future 后整条镜像被静默丢弃。这里吞成 null，
+        // 由调用方标成失败结果；默认端口按协议推导，http 镜像不再被探到 443 上。
+        val url = runCatching { URL(prefix) }.getOrNull() ?: return null
+        val authority = url.authority ?: return null
         val host = authority.substringBefore(':')
-        val port = authority.substringAfter(':', "443").toIntOrNull() ?: 443
+        val defaultPort = if (url.protocol.equals("http", ignoreCase = true)) 80 else 443
+        val port = authority.substringAfter(':', defaultPort.toString()).toIntOrNull() ?: defaultPort
         if (host.isBlank()) return null
         return host to port
     }
@@ -206,8 +210,9 @@ object MirrorSpeedTester {
             pickedResult.get()?.let { best -> if (done.none { it.mirror == best.mirror }) done.add(best) }
         } finally {
             pool.shutdownNow()
-            // 给正在阻塞的 read 一点退出时间；超时也继续返回已有结果。
-            runCatching { pool.awaitTermination(10, TimeUnit.SECONDS) }
+            // OCR #819：阻塞 socket read 不响应中断，等 10s 基本烧满到读超时——
+            // 早停路径拿着答案白等 10s。调用方不需要池排空即可用结果，只给 300ms 收尾。
+            runCatching { pool.awaitTermination(300, TimeUnit.MILLISECONDS) }
         }
         return done.sortedByDescending { it.score }
     }

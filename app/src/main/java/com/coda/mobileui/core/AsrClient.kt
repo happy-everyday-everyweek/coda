@@ -10,6 +10,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
@@ -52,13 +53,19 @@ class AsrClient(
             ProviderStore.load(ctx).firstOrNull { it.kind == ProviderStore.ProviderKind.ASR }
     }
 
-    /** 本 client 派生的任务都挂在这个 scope 下，close() 一锅端。 */
-    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * 本 client 派生的任务都挂在这个 scope 下，close() 一锅端。
+     *
+     * OCR #819：close() 是终态，之后所有入口都拒绝——没有必要也不应该再换新
+     * scope（旧写法从 IO 线程重赋值一个无同步的 var，还每次 close 泄漏一个
+     * 永不取消的 SupervisorJob）。固定 val，close 只取消不替换。
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * 已关闭标记。
      *
-     * close() 会取消 scope；虽然随后换了一个新的，但录音器与流会话都已释放，
+     * close() 会取消 scope，录音器与流会话都已释放，
      * 复用同一实例的语义并不明确。入口显式拒绝，比「调用不报错但永远不回调」好排查（#181）。
      */
     @Volatile
@@ -254,7 +261,8 @@ class AsrClient(
                     )
                     val sent = trySend(Chunk(text, isFinal, segment))
                     if (sent.isFailure) {
-                        // 通道满/已关闭时最终文本会丢：至少留下日志，便于定位。
+                        // OCR #819：已配合 .buffer(UNLIMITED)，正常情况下通道不会满；
+                        // 仍失败只剩「流已关闭」一种原因，留日志便于定位。
                         AppLog.w(TAG, "流式片段发送失败：final=$isFinal len=${text.length} ${sent.exceptionOrNull()?.message}")
                     }
                 }
@@ -330,7 +338,11 @@ class AsrClient(
                 if (activeLive === live) activeLive = null
                 release()
             }
-        }.flowOn(Dispatchers.IO)
+        }
+            // OCR #819：callbackFlow 默认 64 元素缓冲，慢 collector 会把 isFinal=true
+            // 的定稿片段挤掉、转写被截断。ASR 片段低频且小，改无限缓冲保证定稿必达。
+            .buffer(kotlinx.coroutines.channels.Channel.UNLIMITED)
+            .flowOn(Dispatchers.IO)
 
     /**
      * 流式识别的收尾：把已录到的内容收干净，返回拼好的全文。
@@ -375,11 +387,10 @@ class AsrClient(
             activeRecorder = null
             runCatching { activeLive?.cancel() }
             activeLive = null
-            // 取消旧 scope 后换一个新的：否则 close() 之后再调 transcribeFor 的计时协程
-            // 会永远 launch 不出去，只能干等完整超时。
-            val old = scope
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-            old.coroutineContext[Job]?.cancelAndJoin()
+            // OCR #819：终态语义下不再换新 scope——closed=true 后 transcribe/
+            // transcribeStream 都先拒绝，transcribeFor 的计时协程没有服务对象；
+            // 取消即可，换新只会留下没人取消的孤儿 Job。
+            scope.coroutineContext[Job]?.cancelAndJoin()
             release()
             Unit
         }

@@ -185,7 +185,13 @@ object WebUiHost {
             zip.delete()
             return "下载不完整：期望 $assetSize 字节，实际 ${zip.length()} 字节"
         }
-        if (assetDigest.startsWith("sha256:")) {
+        // 缺 digest 一律拒绝（OCR #819）：旧 Release/镜像/被裁剪的 API 响应
+        // 都可能不带 digest，放行等于完全不做完整性校验。
+        if (!assetDigest.startsWith("sha256:")) {
+            zip.delete()
+            return "Release 未提供 sha256 digest，无法校验资产完整性，已拒绝安装"
+        }
+        run {
             val expected = assetDigest.removePrefix("sha256:")
             val actual = sha256(zip)
             if (!actual.equals(expected, ignoreCase = true)) {
@@ -219,11 +225,19 @@ object WebUiHost {
             deleteRecursive(staging)
             return if (rolledBack) "更新失败：无法写入 dist，已回滚旧版本" else "更新失败：写入与回滚都失败，需重新下载"
         }
+        // 版本戳先写进新目录（OCR #819）：换入后再写失败会留下
+        // 「报错但新版已上线」的分裂状态。写不进就回滚旧版。
+        val stamped = runCatching { File(finalDir, "version.txt").writeText(tag) }.isSuccess
+        if (!stamped) {
+            deleteRecursive(finalDir)
+            if (backup.exists()) backup.renameTo(finalDir)
+            deleteRecursive(staging)
+            return "更新失败：写入版本号失败，已回滚旧版本"
+        }
+        runCatching { versionFile(ctx).writeText(tag) }
+            .onFailure { AppLog.w("WebUi", "写外层版本戳失败：${it.message}") }
         deleteRecursive(backup)
         deleteRecursive(staging)
-        // 版本戳是“下载完成”的唯一依据：写不进去就不能当成功。
-        val stamped = runCatching { versionFile(ctx).writeText(tag) }.isSuccess
-        if (!stamped) return "更新失败：写入版本号失败"
         onProgress("就绪（$tag）")
         return null
     }
@@ -306,6 +320,10 @@ object WebUiHost {
             serverSocket = null
             connPool?.shutdownNow()
             connPool = null
+            // 凭据与端口一并清（OCR #819）：token() 不能为没起来的服务
+            // 广告一个看似可用的访问凭据。
+            accessToken = ""
+            boundPort = 0
             "端口绑定失败：$lastError"
         }
     }
@@ -371,7 +389,17 @@ object WebUiHost {
                 runCatching { socket.close() }
             }
         }
+        // 退出必须收干净（OCR #819）：accept 瞬时失败而 socket 还开着时，
+        // 只翻 running 会让下次 start 再建一套池与端口，旧的线程/端口全泄漏。
         running.set(false)
+        runCatching { ss.close() }
+        pool.shutdownNow()
+        synchronized(this) {
+            if (serverSocket === ss) serverSocket = null
+            if (connPool === pool) connPool = null
+            boundPort = 0
+            accessToken = ""
+        }
         lastStatus = "已停止"
     }
 

@@ -534,7 +534,9 @@ class ZController private constructor(
      * 不能退回可见会话的 mode —— 那正是跨会话误放行的来源。
      */
     private fun requesterMode(sessionId: String): String {
-        if (sessionId.isEmpty()) return mode
+        // 无归属请求不能借可见会话的 yolo 放行（OCR #819）：旧内核/子代理
+        // 载荷可能不带 sessionId，返回空串让它走用户确认分支。
+        if (sessionId.isEmpty()) return ""
         if (sessionId == currentSessionId) return mode
         return sessionModes[sessionId].orEmpty()
     }
@@ -558,7 +560,24 @@ class ZController private constructor(
         // 统一在这里解包，调用方不必各自记得先取 snapshot 再传进来。
         val root = rawRoot.optJSONObject("snapshot") ?: rawRoot
         val session = root.optJSONObject("session")
-        val sid = ZParse.parseSessionIdFromSnapshot(root) ?: currentSessionId
+        val parsedSid = ZParse.parseSessionIdFromSnapshot(root)
+        // 迟到/别会话快照只更新列表信息（OCR #819）：newSession/setMode 等
+        // 响应可能带着旧会话 id 回来，无条件切 currentSessionId/mode/messages
+        // 会把用户刚切到的会话顶掉。
+        val foreign = parsedSid != null && currentSessionId != null && parsedSid != currentSessionId
+        if (foreign) {
+            val title = ZParse.parseTitleFromSnapshot(root)
+            val m = ZParse.parseModeFromSnapshot(root)
+            sessions.find { it.id == parsedSid }?.let { info ->
+                if (title != null) info.title = title
+                if (m.isNotEmpty()) info.mode = m
+                info.updatedAt = System.currentTimeMillis()
+            }
+            if (m.isNotEmpty()) sessionModes[parsedSid] = m
+            notif { onStateChanged() }
+            return
+        }
+        val sid = parsedSid ?: currentSessionId
         if (sid != null) {
             currentSessionId = sid
             // 缺失字段不能当空值：只切换模式或模型的响应不带 title/status，
@@ -974,19 +993,27 @@ class ZController private constructor(
         }
         // 同一子会话只允许一个在途读取：冷恢复可能耗时数秒，3 秒跟随刷新会重复触发同一会话。
         // 被合并的调用方必须登记回调，否则它永远收不到结果、UI 停在「加载中」（#468）。
-        if (!childLoading.add(childSessionId)) {
-            if (cb != null) {
-                childWaiters
-                    .getOrPut(childSessionId) { java.util.Collections.synchronizedList(mutableListOf()) }
-                    .add(cb)
+        // 登记与排空必须互斥（OCR #819）：后台线程过 add 检查后、真正 add
+        // 回调前，settle 可能已在主线程 remove 掉整组——该回调永远没人调。
+        synchronized(childLoading) {
+            if (!childLoading.add(childSessionId)) {
+                if (cb != null) {
+                    childWaiters
+                        .getOrPut(childSessionId) { java.util.Collections.synchronizedList(mutableListOf()) }
+                        .add(cb)
+                }
+                return
             }
-            return
         }
 
         fun settle(msgs: List<ZMessage>?) {
             post {
-                childLoading.remove(childSessionId)
-                childWaiters.remove(childSessionId)?.let { waiters ->
+                val drained =
+                    synchronized(childLoading) {
+                        childLoading.remove(childSessionId)
+                        childWaiters.remove(childSessionId)
+                    }
+                drained?.let { waiters ->
                     val copy = synchronized(waiters) { waiters.toList() }
                     for (w in copy) runCatching { w(msgs) }
                 }
@@ -1699,7 +1726,14 @@ class ZController private constructor(
         buildModelSelection()?.let { params.put("model", it) }
         val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false
+        // 超时后 RPC 仍在途（OCR #819）：迟到成功不能再 applyImportedSession，
+        // 否则导入已按失败计数继续跑，列表却中途多出一条、快照被改。
+        val settled = java.util.concurrent.atomic.AtomicBoolean(false)
         runtime.call("session/create", params) { success, body ->
+            if (!settled.compareAndSet(false, true)) {
+                if (success) AppLog.w("ChatImport", "导入会话创建迟到成功，已按超时丢弃")
+                return@call
+            }
             ok = success
             if (success) {
                 // 只把新会话插进列表，不动 currentSessionId/mode/running/messages
@@ -1712,9 +1746,12 @@ class ZController private constructor(
             latch.countDown()
         }
         return try {
-            latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) && ok
+            val awaited = latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!awaited) settled.set(true)
+            awaited && ok
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
+            settled.set(true)
             false
         }
     }

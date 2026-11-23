@@ -121,8 +121,10 @@ object CrashGuard {
         intent.putExtra(CrashActivity.EXTRA_PATH, saved)
         try {
             app.startActivity(intent)
-        } catch (e: Exception) {
-            // 崩溃页起不来必须留痕：这是最后一道可见性，不能再静默。
+        } catch (e: Throwable) {
+            // OCR #819：这里是最后防线，必须连 Error 一起接住（CrashActivity
+            // 类加载/校验失败、OEM 上的 NoSuchMethodError 等）；漏出去会被
+            // install 的外层 catch 吞掉并跳过 scheduleKill，进程僵死。
             AppLog.e("Crash", "崩溃页启动失败：${e.javaClass.simpleName}: ${e.message}")
         }
         // 落盘与展示都走完了，现在按正常宽限期结束进程；兜底看门狗仍在跑，
@@ -182,7 +184,20 @@ class CrashActivity : Activity() {
         val log =
             runCatching {
                 val f = File(path)
-                if (f.isFile && f.length() in 1..MAX_CRASH_FILE_BYTES) f.readText() else fallback
+                if (!f.isFile || f.length() <= 0) return@runCatching fallback
+                // OCR #819：整读 8MB 会变成 ~16MB String 喂给可选中的 TextView，
+                // 布局/测量足以让这个「必须活下来」的页面卡死或 OOM。
+                // 超过 UI 安全上限只读尾部（与 tailForIntent 同思路），保留最新现场。
+                if (f.length() <= MAX_CRASH_FILE_BYTES) {
+                    f.readText()
+                } else {
+                    java.io.RandomAccessFile(f, "r").use { raf ->
+                        raf.seek(f.length() - MAX_CRASH_FILE_BYTES)
+                        val tail = ByteArray(MAX_CRASH_FILE_BYTES.toInt())
+                        raf.readFully(tail)
+                        "(日志过大，仅显示最后 256KB)\n" + String(tail, Charsets.UTF_8)
+                    }
+                }
             }.getOrDefault(fallback)
         val pad = (16 * resources.displayMetrics.density).toInt()
 
@@ -230,7 +245,7 @@ class CrashActivity : Activity() {
         const val EXTRA_LOG = "log"
         const val EXTRA_PATH = "path"
 
-        /** 崩溃文件读取上限：正常崩溃日志几十 KB，8MB 已极宽裕。 */
-        private const val MAX_CRASH_FILE_BYTES = 8L * 1024 * 1024
+        /** 崩溃页单屏读取上限：正常日志几十 KB；256KB 对 TextView 布局仍是安全量级。 */
+        private const val MAX_CRASH_FILE_BYTES = 256L * 1024
     }
 }

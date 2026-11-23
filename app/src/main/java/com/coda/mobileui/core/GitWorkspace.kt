@@ -166,8 +166,16 @@ object GitWorkspace {
                     }
                 continue
             }
-            if (remoteName != null && line.startsWith("url")) {
-                val url = line.substringAfter('=', "").trim()
+            // OCR #819：startsWith("url") 会把 urlfoo = … 这类无关键也当成远端。
+            // git config 键大小写不敏感，按 '=' 切开精确比较；值剥掉行内注释与包裹引号。
+            if (remoteName != null && line.substringBefore('=').trim().equals("url", ignoreCase = true)) {
+                val url =
+                    line
+                        .substringAfter('=', "")
+                        .substringBefore('#')
+                        .substringBefore(';')
+                        .trim()
+                        .removeSurrounding("\"")
                 if (url.isEmpty()) continue
                 if (remoteName == "origin" && originUrl == null) originUrl = url
                 if (firstUrl == null) firstUrl = url

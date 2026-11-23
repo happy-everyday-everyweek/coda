@@ -20,32 +20,41 @@ internal class LogSink(
     @Volatile
     private var running = true
 
+    // 构造期不发布 this（OCR #819）：属性初始化里 start() 会让写线程
+    // 在对象构造完成前跑起来。由调用方显式 start。
     private val worker =
         Thread({ drain() }, "coda-log-writer").apply {
             isDaemon = true
             priority = Thread.MIN_PRIORITY
-            start()
         }
+
+    /** 构造后显式启动写线程。 */
+    fun start() {
+        worker.start()
+    }
 
     /** 入队一行；队列满时丢掉最旧的一行腾位置，绝不阻塞调用线程。 */
     fun offer(line: String) {
         if (!running) return
         while (!queue.offer(line)) {
-            queue.poll() ?: break
-            dropped++
+            // poll 为 null 说明别的消费者刚取空：不能 break 后不计数，
+            // 也不能把「腾位失败」记成丢弃（OCR #819）。原子累加防竞态。
+            if (queue.poll() == null) break
+            droppedCount.incrementAndGet()
         }
     }
 
-    /** 停止并把队列里剩下的写完。 */
+    /** 停止并把队列里剩下的写完：有界 join，进程退出不丢尾行（OCR #819）。 */
     fun close() {
         running = false
         worker.interrupt()
+        runCatching { worker.join(2_000) }
     }
 
+    private val droppedCount = java.util.concurrent.atomic.AtomicLong(0)
+
     /** 因为队列满而被丢弃的行数，用于在日志里说明「这里缺了一段」。 */
-    @Volatile
-    var dropped: Long = 0L
-        private set
+    val dropped: Long get() = droppedCount.get()
 
     private fun drain() {
         val batch = ArrayList<String>(BATCH)

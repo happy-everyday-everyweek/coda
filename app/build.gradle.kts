@@ -191,15 +191,22 @@ dependencies {
 
 // release 必须用正式密钥签名：仓库内 keystore/coda-debug.jks 的口令是公开的 "android"，
 // 任何人都能用它签出一个「可覆盖安装」的包，用它发 release 等于没有签名防线。
-// 只拦 release 打包任务本身，debug 构建与单元测试不受影响。
-tasks.matching { it.name == "packageRelease" || it.name == "assembleRelease" }.configureEach {
-    doFirst {
-        if (System.getenv("CODA_KEYSTORE_PATH").isNullOrBlank()) {
-            throw GradleException(
-                "release 构建需要正式签名：请设置 CODA_KEYSTORE_PATH / CODA_KEYSTORE_PASSWORD / " +
-                    "CODA_KEY_ALIAS / CODA_KEY_PASSWORD。仓库内 debug 密钥口令公开，不能用于 release；" +
-                    "本机需要可安装的调试包请用 assembleDebug。",
-            )
+// OCR #819：不能只拦 package/assemble——bundleRelease 等其它 release 产物任务
+// 会绕过检查，用公开口令的 debug 密钥签出 AAB。改为匹配一切 release 打包/
+// 捆绑任务（package*Release / assemble*Release / bundle*Release），debug 与测试不受影响。
+tasks
+    .matching {
+        it.name.startsWith("package") && it.name.endsWith("Release") ||
+            it.name.startsWith("assemble") && it.name.endsWith("Release") ||
+            it.name.startsWith("bundle") && it.name.endsWith("Release")
+    }.configureEach {
+        doFirst {
+            if (System.getenv("CODA_KEYSTORE_PATH").isNullOrBlank()) {
+                throw GradleException(
+                    "release 构建需要正式签名：请设置 CODA_KEYSTORE_PATH / CODA_KEYSTORE_PASSWORD / " +
+                        "CODA_KEY_ALIAS / CODA_KEY_PASSWORD。仓库内 debug 密钥口令公开，不能用于 release；" +
+                        "本机需要可安装的调试包请用 assembleDebug。",
+                )
+            }
         }
     }
-}

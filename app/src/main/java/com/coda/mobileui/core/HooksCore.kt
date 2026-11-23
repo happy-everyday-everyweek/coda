@@ -200,7 +200,13 @@ object HooksCore {
                     "workspace",
                     JSONObject()
                         .put("workspacePath", workspacePath)
-                        .put("workspaceKey", canonicalWorkspace(workspacePath)),
+                        // OCR #819：内核的存储身份取 workspaceIdentity ?: resolve(workspacePath)
+                        // （词法 resolve），不看 workspaceKey；server.ts 又拿 workspaceKey 当
+                        // grantedWorkspaceKey 去通知按词法键登记的会话。canonical key 配 raw
+                        // path 两头都对不上。显式给 workspaceIdentity（schema 支持），
+                        // workspaceKey 保持与 workspacePath 一致，通知不丢。
+                        .put("workspaceIdentity", canonicalWorkspace(workspacePath))
+                        .put("workspaceKey", workspacePath),
                 ).put("bundleDigest", bundleDigest)
                 .put("hookDeclarationDigest", declarationDigest)
         rt.call("workspace/hooks/trustGrant", params) { ok, body ->
@@ -683,7 +689,9 @@ object HooksCore {
         val bd = java.math.BigDecimal(v.toString()).stripTrailingZeros()
         val abs = kotlin.math.abs(v)
         if (abs != 0.0 && (abs < 1e-6 || abs >= 1e21)) {
-            var mantissa = bd.unscaledValue().toString()
+            // OCR #819：unscaledValue 自带负号，直接再拼 "-" 会得到 "--1e-7"，
+            // 多位尾数还会切出 "--.5e-7"。先取绝对值构造尾数，符号最后统一加。
+            var mantissa = bd.unscaledValue().abs().toString()
             val exp = bd.precision() - bd.scale() - 1
             if (mantissa.length > 1) {
                 mantissa = mantissa[0] + "." + mantissa.substring(1).trimEnd('0')

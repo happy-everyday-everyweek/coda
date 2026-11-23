@@ -20,7 +20,9 @@ src = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build" / "pyda
 if not src.is_dir():
     sys.exit(f"pydantic-core 源目录不存在：{src}")
 
-match = re.search(r"pydantic_core-(\d+\.\d+\.\d+)", src.name)
+# OCR #819：不带后缀锚定的 \d+\.\d+\.\d+ 会把 2.50.2rc1 截成 2.50.2，
+# METADATA/dist-info/文件名全标错版本。捕获完整 PEP 440 版本（含 rc/dev/post 后缀）。
+match = re.fullmatch(r"pydantic_core-(\d+\.\d+\.\d+(?:(?:a|b|rc|\.dev|\.post)\d+)*)", src.name)
 if not match:
     raise SystemExit(f"无法从目录名解析版本：{src.name}")
 version = match.group(1)

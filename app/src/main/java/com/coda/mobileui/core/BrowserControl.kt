@@ -233,11 +233,15 @@ object BrowserControl {
                     onMainGet { ensureEngineOn(ctx) }
                         ?: return errorResult(params, "backend_unavailable", "无法创建内置浏览器", started)
                 val latch = CountDownLatch(1)
-                onMain {
-                    pageLoaded = latch
-                    cachedUrl = url
-                    view.loadUrl(url)
-                }
+                val dispatched =
+                    onMain {
+                        pageLoaded = latch
+                        cachedUrl = url
+                        view.loadUrl(url)
+                    }
+                // 派发失败要如实报（OCR #819）：post 超时被撤时 loadUrl 根本没跑，
+                // 再等 20s 报「页面加载超时」掩盖了真实原因。
+                if (!dispatched) return errorResult(params, "execution_error", "主线程派发失败，未能发起加载", started)
                 val loaded = latch.await(20, TimeUnit.SECONDS)
                 if (!loaded) return errorResult(params, "timeout", "页面加载超时", started)
                 val state = onMainGet { pageState(view) } ?: tabSummary()
@@ -249,10 +253,12 @@ object BrowserControl {
                     onMainGet { ensureEngineOn(ctx) }
                         ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)
                 val latch = CountDownLatch(1)
-                onMain {
-                    pageLoaded = latch
-                    view.reload()
-                }
+                val dispatched =
+                    onMain {
+                        pageLoaded = latch
+                        view.reload()
+                    }
+                if (!dispatched) return errorResult(params, "execution_error", "主线程派发失败，未能发起重载", started)
                 val loaded = latch.await(20, TimeUnit.SECONDS)
                 if (!loaded) return errorResult(params, "timeout", "页面重新加载超时", started)
                 val state = onMainGet { pageState(view) } ?: tabSummary()
@@ -620,7 +626,11 @@ object BrowserControl {
             // 改为把触摸事件全部交还给下层——监听器返回 false 且自身不可点击，
             // 事件不会被这个透明层消费。
             view.setOnTouchListener { _, _ -> false }
-            view.isEnabled = false
+            // 不能 isEnabled=false（OCR #819）：dispatchTouchEvent 只对 ENABLED
+            // 视图调 OnTouchListener，禁用后这层监听器根本不执行，是否吞点击
+            // 全看 WebView.onTouchEvent 的实现细节。保持 enabled，靠不可点击 +
+            // 监听器返回 false 把事件交还下层。
+            view.isEnabled = true
             view.webViewClient =
                 object : WebViewClient() {
                     override fun onPageFinished(
@@ -803,18 +813,29 @@ object BrowserControl {
         block: () -> T,
     ): T? {
         if (Looper.myLooper() == Looper.getMainLooper()) return block()
-        var value: T? = null
+        // 与 onMain 同一套硬化（OCR #819）：超时要撤任务并留日志，
+        // 不能把「没跑成」与「合法 null」混为一谈；结果经 latch 建立
+        // happens-before，异常也要可见。
+        val holder = java.util.concurrent.atomic.AtomicReference<T?>(null)
         val latch = CountDownLatch(1)
-        main.post {
-            try {
-                value = block()
-            } catch (_: Throwable) {
-            } finally {
-                latch.countDown()
+        val task =
+            Runnable {
+                try {
+                    holder.set(block())
+                } catch (e: Throwable) {
+                    AppLog.w("BrowserControl", "主线程取值失败：${e.message ?: e.javaClass.simpleName}")
+                } finally {
+                    latch.countDown()
+                }
             }
+        main.post(task)
+        val done = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!done) {
+            main.removeCallbacks(task)
+            AppLog.w("BrowserControl", "主线程取值超时（${timeoutMs}ms）")
+            return null
         }
-        latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-        return value
+        return holder.get()
     }
 
     /**

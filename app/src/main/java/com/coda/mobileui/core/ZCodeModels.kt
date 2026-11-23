@@ -88,6 +88,10 @@ class ZMessage(
 
 /** 协议 JSON 解析（兼容两代字段命名）。 */
 object ZParse {
+    /** OCR #819：合成 id 警告限频，流式刷新不能每条消息每轮都刷一行日志。 */
+    @Volatile
+    private var lastSyntheticWarnAt = 0L
+
     fun parseMessages(result: JSONObject): List<ZMessage> {
         val arr = result.optJSONArray("messages") ?: return emptyList()
         val out = ArrayList<ZMessage>(arr.length())
@@ -95,25 +99,30 @@ object ZParse {
             val m = arr.optJSONObject(i) ?: continue
             val info = m.optJSONObject("info") ?: JSONObject()
             val rawId = info.optString("id").ifEmpty { info.optString("messageId") }
-            // 缺 id 的消息不再整条丢弃（内容会凭空消失）：用内容派生的稳定合成 id。
-            // 同一份数据重复解析得到同一 id，流式刷新时不会每轮都长出"新消息"。
+            // 缺 id 的消息不再整条丢弃（内容会凭空消失）：用不可变字段派生稳定合成 id。
+            // OCR #819：种子不能含 parts 序列化——流式 delta 每轮都变，id 跟着变
+            // 会让下游把每次刷新当成新消息。role + createdAt + 序号在流式期间不变。
+            val createdAt = info.optJSONObject("time")?.optLong("created", 0L) ?: 0L
             val id =
                 rawId.ifEmpty {
-                    val seed = info.optString("role") + "|" + m.optJSONArray("parts")?.toString().orEmpty()
+                    val seed = info.optString("role") + "|" + createdAt + "|" + i
                     "synthetic-" + Integer.toHexString(seed.hashCode()) + "-$i"
                 }
             if (rawId.isEmpty()) {
-                AppLog.w("ZParse", "消息缺少 id/messageId，使用合成 id：$id")
+                val now = System.currentTimeMillis()
+                if (now - lastSyntheticWarnAt >= 30_000L) {
+                    lastSyntheticWarnAt = now
+                    AppLog.w("ZParse", "消息缺少 id/messageId，使用合成 id（示例）：$id")
+                }
             }
             val msg = ZMessage(id, info.optString("role"))
-            val time = info.optJSONObject("time")
-            msg.createdAt = time?.optLong("created", 0L) ?: 0L
-            msg.completedAt = time?.optLong("completed", 0L) ?: 0L
+            msg.createdAt = createdAt
+            msg.completedAt = info.optJSONObject("time")?.optLong("completed", 0L) ?: 0L
             val parts = m.optJSONArray("parts")
             if (parts != null) {
                 for (j in 0 until parts.length()) {
                     val p = parts.optJSONObject(j) ?: continue
-                    parsePart(p)?.let { msg.parts += it }
+                    parsePart(p, id, j)?.let { msg.parts += it }
                 }
             }
             out += msg
@@ -121,7 +130,11 @@ object ZParse {
         return out
     }
 
-    private fun parsePart(o: JSONObject): ZPart? =
+    private fun parsePart(
+        o: JSONObject,
+        messageId: String,
+        partIndex: Int,
+    ): ZPart? =
         when (val t = o.optString("type")) {
             "text" -> {
                 ZPart.Text(o.optString("text"))
@@ -157,11 +170,13 @@ object ZParse {
                     }
                 ZPart.ToolPart(
                     // callId 是下游卡片/diff 的唯一键：缺失时不能都落空串（键冲突
-                    // 会把更新归到错误卡片）。用 part 自身的 id 或内容哈希兜底。
+                    // 会把更新归到错误卡片）。OCR #819：兜底种子改用消息 id + part 序号，
+                    // 不能用整个 part JSON 哈希——status/output/耗时在流式期间每轮都变，
+                    // callId 跟着变会让卡片重复或把更新归错。
                     callId = o.optString("callID")
                         .ifEmpty { o.optString("callId") }
                         .ifEmpty { o.optString("id") }
-                        .ifEmpty { "anon-" + Integer.toHexString(o.toString().hashCode()) },
+                        .ifEmpty { "anon-" + Integer.toHexString((messageId + "|" + partIndex).hashCode()) },
                     tool = o.optString("tool"),
                     status = status,
                     // input 可能是对象、JSON 字符串或数组（协议变体）：
@@ -362,7 +377,12 @@ object ZParse {
     fun parseTodos(root: JSONObject): List<ZTodo> {
         // 根级 todos 存在但为空，说明当前确实没有待办；再回退到 todoGroup 会把
         // 上一轮遗留的旧列表又渲染出来，看起来像「刚清空的待办又回来了」。
-        root.optJSONArray("todos")?.let { return parseTodoArray(it) }
+        // OCR #819：显式 todos:null 与空数组同等对待——optJSONArray 对 JSON null
+        // 也返回 null，直接穿透会把旧列表复活；键存在即参与更新，与 title/status 一致。
+        if (root.has("todos")) {
+            if (root.isNull("todos")) return emptyList()
+            root.optJSONArray("todos")?.let { return parseTodoArray(it) }
+        }
         val groups = root.optJSONArray("todoGroups") ?: return emptyList()
         for (i in groups.length() - 1 downTo 0) {
             val g = groups.optJSONObject(i) ?: continue

@@ -40,16 +40,28 @@ object GitHub {
 
     fun loginName(ctx: Context): String? = prefs(ctx).getString("login", null)?.takeIf { it.isNotEmpty() }
 
-    fun logout(ctx: Context) {
+    /**
+     * 退出登录。OCR #819：commit 是同步磁盘写，不能在主线程点击回调里直接做，
+     * 整体挪到后台；清除失败要如实回调给调用方，不能在令牌还活着时提示「已断开」。
+     * 回调在主线程执行，参数为是否完全清除成功。
+     */
+    fun logout(
+        ctx: Context,
+        done: ((Boolean) -> Unit)? = null,
+    ) {
         // 先作废 PR 缓存：否则换号后抽屉里还会显示上一个账号的 PR。
         invalidatePullCache()
-        // 用 commit 而不是 apply：清不掉令牌必须能被发现，否则用户以为已退出，
-        // 实际推送仍带着旧 token。失败要留下日志。
-        val cleared = prefs(ctx).edit().clear().commit()
-        if (!cleared) AppLog.w("GitHub", "清除本地 GitHub 令牌失败，退出登录未完全生效")
-        // 容器里的 hosts.yml/.gitconfig 必须同步清理，否则旧令牌留在 rootfs 里，
-        // git push 仍会带着它去认证。文件写放在后台，不阻塞界面。
-        Bg.run { runCatching { LinuxEnv(ctx).syncGitHubCredentials() } }
+        val appCtx = ctx.applicationContext
+        Bg.run {
+            // 用 commit 而不是 apply：清不掉令牌必须能被发现，否则用户以为已退出，
+            // 实际推送仍带着旧 token。
+            val cleared = prefs(appCtx).edit().clear().commit()
+            if (!cleared) AppLog.w("GitHub", "清除本地 GitHub 令牌失败，退出登录未完全生效")
+            // 容器里的 hosts.yml/.gitconfig 必须同步清理，否则旧令牌留在 rootfs 里，
+            // git push 仍会带着它去认证。
+            runCatching { LinuxEnv(appCtx).syncGitHubCredentials() }
+            done?.let { cb -> ui { cb(cleared) } }
+        }
     }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -62,11 +74,14 @@ object GitHub {
         val previous = loginName(ctx)
         // login 为 null 表示「只刷新 token」：保留已保存的登录名，
         // 写成空串会让重新登录后账号名短暂丢失、容器凭证 login 为空。
-        val effectiveLogin = login ?: previous.orEmpty()
+        // OCR #819：首次登录（设备流 login=null 且无历史名）时干脆不写 login 键，
+        // 键保持缺失，等 fetchUser 补真名；写空串会让后续 token-only 刷新
+        // 永远把空串当「已保存的名字」保留下来。
+        val effectiveLogin = login ?: previous
         prefs(ctx)
             .edit()
             .putString("token", token)
-            .putString("login", effectiveLogin)
+            .apply { if (effectiveLogin != null) putString("login", effectiveLogin) }
             .apply()
         // 换了账号就作废旧缓存，避免把上一个账号的 PR 当成当前账号的。
         if (previous != null && previous != effectiveLogin) invalidatePullCache()
@@ -378,9 +393,10 @@ object GitHub {
                         )
                     break
                 }
-            } catch (e: java.util.concurrent.CancellationException) {
-                throw e
             } catch (e: Exception) {
+                // OCR #819：这里跑在 Bg.run 的普通线程池上，没有协程可传播取消；
+                // 重抛 CancellationException 只会被 Bg 吞掉并跳过下面的回调，
+                // 抽屉将永远等不到结果。一律按普通失败处理，保证 cb 必然执行。
                 failed = true
                 AppLog.w("GitHub", "查询分支关联 PR 失败（不缓存）：${e.javaClass.simpleName}: ${e.message}")
             }
