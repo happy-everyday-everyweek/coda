@@ -114,23 +114,25 @@ internal object TarLinkSafety {
     // 源与结果必须同一对象原子发布（OCR r11 high）：两个独立 @Volatile
     // 字段在并发解压时会被交叉写，读到「B 的源配 A 的索引」等于给错的
     // 归档做越界判定（缺别名即 fail-open）。
+    // OCR r12：软引用必须包住 Prepared 本体——indexed 复制并展开了整份
+    // 链接表，只软引用源 map 时索引仍被单例强持，内存目标落空；且源被
+    // 回收后每次身份比对都 miss 重建。源用强引用做身份键（与 Prepared
+    // 同生共死），整个 entry 经 SoftReference 持有，内存吃紧一起回收。
     private class PreparedEntry(
-        // 软引用（OCR r11）：进程级单例不能强持上一个归档的整份链接表，
-        // 内存吃紧时允许回收；调用方在归档处理期间本来就强持这份 map。
-        val source: java.lang.ref.SoftReference<Map<String, String>>,
+        val source: Map<String, String>,
         val prepared: Prepared,
     )
 
     @Volatile
-    private var preparedEntry: PreparedEntry? = null
+    private var preparedRef: java.lang.ref.SoftReference<PreparedEntry>? = null
 
     private fun preparedFor(symlinkTargets: Map<String, String>): Prepared? {
-        preparedEntry?.let {
-            if (it.source.get() === symlinkTargets) return if (it.prepared.indexed != null) it.prepared else null
+        preparedRef?.get()?.let {
+            if (it.source === symlinkTargets) return if (it.prepared.indexed != null) it.prepared else null
         }
         // 失败结果同样缓存（indexed=null）：歧义归档不能每个成员都重建一遍。
         val built = buildPrepared(symlinkTargets) ?: Prepared(null, 0)
-        preparedEntry = PreparedEntry(java.lang.ref.SoftReference(symlinkTargets), built)
+        preparedRef = java.lang.ref.SoftReference(PreparedEntry(symlinkTargets, built))
         return if (built.indexed != null) built else null
     }
 

@@ -440,6 +440,8 @@ object DataBackup {
         // 也可能 manifest 与实际条目不一致（手工改包）。以实际条目为准，
         // 未包含的分类一律不动，绝不因为「读不到」就写空覆盖本机数据。
         val present = mutableSetOf<BackupCategory>()
+        // 供应商三件套的缓冲（OCR r12）：循环内只收集，循环后单锁原子应用。
+        val providerPayloads = mutableMapOf<String, String>()
         ZipFile(packageFile).use { zip ->
             val entries = zip.entries().asSequence().toList()
             entries.forEach { e ->
@@ -489,33 +491,22 @@ object DataBackup {
                                     count++
                                 }
 
+                                // OCR r12：三份供应商文件先缓冲，zip 循环结束后在**一次**
+                                // withWriteLock 里原子落盘——逐份各拿各的锁会让并发
+                                // load 看到「新 config + 旧 meta」的混合态并触发自动
+                                // 迁移；writeText 原地截断也会让内核读到半截 JSON。
                                 name == ENTRY_PROVIDERS -> {
-                                    // 持 ProviderStore 写锁写盘（OCR r11）：事后 invalidate
-                                    // 挡不住在途 load 把旧内容钉回缓存。
-                                    ProviderStore.withWriteLock {
-                                        ProviderStore.fileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
-                                        ProviderStore.invalidateReadCache()
-                                    }
+                                    providerPayloads[ENTRY_PROVIDERS] = String(bytes, Charsets.UTF_8)
                                     count++
                                 }
 
                                 name == ENTRY_PROVIDER_META -> {
-                                    // 持 ProviderStore 写锁写盘（OCR r11）：事后 invalidate
-                                    // 挡不住在途 load 把旧内容钉回缓存。
-                                    ProviderStore.withWriteLock {
-                                        ProviderStore.metaFileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
-                                        ProviderStore.invalidateReadCache()
-                                    }
+                                    providerPayloads[ENTRY_PROVIDER_META] = String(bytes, Charsets.UTF_8)
                                     count++
                                 }
 
                                 name == ENTRY_ASR_PROVIDERS -> {
-                                    // 持 ProviderStore 写锁写盘（OCR r11）：事后 invalidate
-                                    // 挡不住在途 load 把旧内容钉回缓存。
-                                    ProviderStore.withWriteLock {
-                                        ProviderStore.asrFileFor(ctx).writeText(String(bytes, Charsets.UTF_8))
-                                        ProviderStore.invalidateReadCache()
-                                    }
+                                    providerPayloads[ENTRY_ASR_PROVIDERS] = String(bytes, Charsets.UTF_8)
                                     count++
                                 }
 
@@ -541,11 +532,26 @@ object DataBackup {
                 if (total > MAX_TOTAL_BYTES) throw IllegalStateException("备份解压总量超过上限")
             }
         }
+        // OCR r12：三件套在同一把写锁里经临时文件+改名落盘（ProviderStore
+        // 的原子写路径），锁内先写齐再作废缓存——在途 load 不可能看到混合态，
+        // 内核进程也不会读到截断 JSON。
+        if (providerPayloads.isNotEmpty()) {
+            ProviderStore.withWriteLock {
+                providerPayloads[ENTRY_PROVIDERS]?.let {
+                    ProviderStore.writeRestoredAtomic(ProviderStore.fileFor(ctx), it)
+                }
+                providerPayloads[ENTRY_PROVIDER_META]?.let {
+                    ProviderStore.writeRestoredAtomic(ProviderStore.metaFileFor(ctx), it)
+                }
+                providerPayloads[ENTRY_ASR_PROVIDERS]?.let {
+                    ProviderStore.writeRestoredAtomic(ProviderStore.asrFileFor(ctx), it)
+                }
+                ProviderStore.invalidateReadCache()
+            }
+        }
         // 只有包里真的带了供应商配置才重载：部分包（比如只含提示词）不该触发
         // 供应商重载，更不该删掉 Linux 环境的 resolv.conf。
         if (BackupCategory.PROVIDERS in present) {
-            // 上面是不持 writeLock 的直接 writeText（OCR r9 medium）：同 mtime
-            // tick 内等长重写时磁盘签名不变，必须先作废读缓存再 load。
             ProviderStore.invalidateReadCache()
             runCatching { ProviderStore.load(ctx) }
         }

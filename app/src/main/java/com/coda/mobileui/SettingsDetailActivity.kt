@@ -2809,10 +2809,19 @@ class SettingsDetailActivity :
             val r =
                 checker.check(
                     applicationContext,
-                    onLog = { msg -> runOnUiThread { panel?.append(msg) } },
+                    onLog = { msg ->
+                        runOnUiThread {
+                            // OCR r12：被取消的旧轮次日志不再刷进面板。
+                            if (!checkCancel.isCancelled) panel?.append(msg)
+                        }
+                    },
                     cancel = checkCancel,
                 )
             runOnUiThread {
+                // OCR r12：取消只停网络，完成回调还会照常投递——旧轮次的
+                // 「检查失败：检查已取消」会当成真失败展示，迟到成功还会叠一张
+                // 过期更新卡。捕获令牌复核，被取消的轮次一律不再动 UI。
+                if (checkCancel.isCancelled) return@runOnUiThread
                 // 静默检查（启动时）只在新版本时打扰用户，其余情况一概不出现。
                 if (silent) {
                     if (r.ok && r.hasUpdate) showUpdateSheet(r)

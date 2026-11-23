@@ -422,6 +422,9 @@ open class FilesPage(
             done = { text, charset ->
                 // 读在途时用户可能已打字（变脏）、切换文件或关掉编辑器：
                 // 迟到的结果直接丢弃，不能覆盖更新的内容。
+                // OCR r12：读之前的 flush 只关了那一段窗口——读+解码在途时
+                // 的等长编辑可能还在 200ms 去抖里，done 里判 dirty 前必须再结算。
+                flushDirty()
                 if (token != reloadGeneration || editing !== file || dirty) return@readInto
                 originalText = text
                 editorCharset = charset

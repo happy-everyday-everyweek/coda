@@ -526,6 +526,15 @@ object ProviderStore {
     private val writeLock = Any()
 
     /**
+     * 供备份恢复使用的原子写入口（OCR r12）：复用临时文件+改名路径，
+     * 调用方（DataBackup）已持 withWriteLock，synchronized 可重入。
+     */
+    internal fun writeRestoredAtomic(
+        target: File,
+        text: String,
+    ): Boolean = writeTextAtomic(target, text)
+
+    /**
      * 先写临时文件再改名：内核可能正在读同一份配置，不能让它看到半截 JSON。
      *
      * 临时名带纳秒后缀：多个写入者共用 `<name>.tmp` 时，一个线程会把另一个线程

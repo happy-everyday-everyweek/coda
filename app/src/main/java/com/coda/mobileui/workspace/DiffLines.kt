@@ -101,9 +101,11 @@ object DiffLines {
             else -> -1
         }
         if (at >= 0) {
-            var tail = pair.substring(at).removePrefix("b/")
+            // OCR r12 high：先剥引号再去 b/ 前缀——引号形式下 removePrefix 是
+            // no-op，剥完引号 b/ 会漏进文件名（正是本回退要处理的混合引号场景）。
+            var tail = pair.substring(at)
             if (tail.startsWith("\"") && tail.endsWith("\"")) tail = tail.substring(1, tail.length - 1)
-            return tail
+            return tail.removePrefix("b/")
         }
         return pair.split(' ').lastOrNull()?.removePrefix("b/")?.removePrefix("a/").orEmpty()
     }

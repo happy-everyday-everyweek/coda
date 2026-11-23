@@ -63,6 +63,9 @@ class TerminalPage(
     private val echo = StringBuilder()
     private val modifierKeys = mutableListOf<Pair<TextView, String>>()
 
+    // OCR r12：reader 线程要按会话身份决定是否追加缓冲，process 在主线程写、
+    // reader 线程读，必须 @Volatile 保证可见。
+    @Volatile
     private var process: Process? = null
     private var writer: OutputStream? = null
     private var started = false
@@ -590,9 +593,15 @@ class TerminalPage(
                     val read = reader.read(buffer)
                     if (read <= 0) break
                     val chunk = String(buffer, 0, read)
+                    // OCR r12：stop()/attach() 换会话后，旧 reader 已读到的块
+                    // 仍可能迟到——共享缓冲被它污染后，新会话的 pump（守卫通过）
+                    // 会把旧输出渲染进新终端。追加前核对会话身份，不是当前
+                    // 会话就丢弃并退出读循环。
+                    if (process !== session) break
                     // 背压：只标记一次「待取」，主线程取走之前不再重复排队；
                     // 否则 cat 大文件或 yes 时会把主线程消息队列堆满。
                     synchronized(incomingLock) {
+                        if (process !== session) break
                         incoming.append(chunk)
                         // 缓冲限长（OCR #821）：主线程忙时 yes/大 cat 会把
                         // StringBuilder 灌到几 MB。丢最旧内容，保最新输出。

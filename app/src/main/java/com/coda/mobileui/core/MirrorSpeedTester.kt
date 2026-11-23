@@ -186,7 +186,7 @@ object MirrorSpeedTester {
                     pool.submit(
                         Callable {
                             if (picked.get() || cancel?.isCancelled == true) return@Callable null
-                            val r = probe(m, url)
+                            val r = probe(m, url, cancel)
                             if (r.ok && r.sustainedBps >= firstPick) {
                                 pickedResult.set(r)
                                 picked.set(true)
@@ -196,13 +196,23 @@ object MirrorSpeedTester {
                     )
                 }
             // 等待上限要覆盖最坏路径：连接 5s + 窗口 6s + 读取结束 8s，另留余量。
+            // OCR r12：单次 get 可阻塞 ~21s，取消只在 get 之间查等于没查——
+            // 改成 200ms 短轮询，每轮先查 cancel，取消后立即撤任务退出。
             val waitMs = WINDOW_MS + 15_000L
             for (f in futures) {
-                if (cancel?.isCancelled == true) {
-                    f.cancel(true)
-                    continue
+                var r: Result? = null
+                val deadline = System.currentTimeMillis() + waitMs
+                while (true) {
+                    if (cancel?.isCancelled == true) break
+                    val left = deadline - System.currentTimeMillis()
+                    if (left <= 0) break
+                    r = runCatching { f.get(minOf(left, 200L), TimeUnit.MILLISECONDS) }.getOrNull()
+                    if (r != null || f.isDone) break
                 }
-                val r = runCatching { f.get(waitMs, TimeUnit.MILLISECONDS) }.getOrNull()
+                if (cancel?.isCancelled == true) {
+                    futures.forEach { it.cancel(true) }
+                    break
+                }
                 if (r != null) done.add(r)
                 if (picked.get()) break
             }
@@ -217,10 +227,11 @@ object MirrorSpeedTester {
         return done.sortedByDescending { it.score }
     }
 
-    /** 探一条镜像：拉前 12MB 或跑满 6 秒，取稳定段速度。 */
+    /** 探一条镜像：拉前 12MB 或跑满 6 秒，取稳定段速度。cancel 穿透读循环（OCR r12）。 */
     private fun probe(
         mirror: GhMirror,
         url: String,
+        cancel: Downloader.Cancel? = null,
     ): Result {
         val full = GhMirrors.wrap(mirror.prefix, url)
         val start = System.currentTimeMillis()
@@ -248,6 +259,12 @@ object MirrorSpeedTester {
                 conn.inputStream.use { input ->
                     while (true) {
                         if (System.currentTimeMillis() - start > WINDOW_MS) break
+                        // OCR r12：阻塞 read 不响应中断，取消要在循环里自查；
+                        // break 经 use{} 关流，连接与读线程随 finally 回收。
+                        if (cancel?.isCancelled == true) {
+                            readError = "已取消"
+                            break
+                        }
                         val n =
                             try {
                                 input.read(buf)

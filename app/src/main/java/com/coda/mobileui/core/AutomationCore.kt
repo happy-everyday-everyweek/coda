@@ -1120,11 +1120,18 @@ object AutomationHost {
         }
         // 内核还会把已达上限的活跃有限任务置 completed（OCR r11）：
         // 降低 maxRuns 到 <= 已执行次数时不能让它再多跑一轮。
+        // OCR r12：update 不带 maxRuns 时回退到已存上限——否则改 cron 就能把
+        // 已达上限的完成任务复活多跑一轮；explicitEnabled=true 也不能绕过上限。
+        val effectiveMax: Int? =
+            when {
+                has("maxRuns") -> params.optInt("maxRuns")
+                !cur.isNull("max_runs") -> cur.optInt("max_runs")
+                else -> null
+            }
         val reachedMaxNow =
             !nextRecurring &&
-                has("maxRuns") &&
-                params.optInt("maxRuns") <= cur.optInt("scheduled_run_count", 0) &&
-                explicitEnabled != true
+                effectiveMax != null &&
+                effectiveMax <= cur.optInt("scheduled_run_count", 0)
         if (next == null) {
             cv.putNull("next_run_at")
             // 显式暂停保持 paused；显式启用但算不出下次运行的拒绝，
@@ -1132,9 +1139,9 @@ object AutomationHost {
             if (explicitEnabled == false) {
                 cv.put("lifecycle_status", "paused")
                 cv.put("enabled", 0)
-            } else if (explicitEnabled == true) {
+            } else if (explicitEnabled == true && !reachedMaxNow) {
                 throw AutomationException("该计划算不出下次运行时间，无法启用")
-            } else if (curEnabled || scheduleChanged) {
+            } else if (reachedMaxNow || curEnabled || scheduleChanged) {
                 cv.put("lifecycle_status", "completed")
                 cv.put("enabled", 0)
             }

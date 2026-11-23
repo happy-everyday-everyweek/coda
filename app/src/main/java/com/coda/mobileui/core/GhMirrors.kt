@@ -153,6 +153,9 @@ object GhMirrors {
         }
         onLog("探测镜像连通性…")
         val pinged = MirrorSpeedTester.pingAll(mirrors, cancel = cancel)
+        // OCR r12：pingAll 取消时返回部分/空结果而不是抛异常——不复查会把取消
+        // 伪装成「没有镜像能 ping 通」，小文件分支还会拿半份数据排序。
+        if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("镜像排序已取消")
         // 过滤一次复用：两次 filter 是两份中间集合；latencyOf 只有小文件分支用，
         // 大文件走测速路径时不为它白建一张 map。
         val okPings = pinged.filter { it.ok }
@@ -197,6 +200,9 @@ object GhMirrors {
             MirrorSpeedTester
                 .testAll(alive, probeUrl, cancel = cancel)
                 .filter { it.ok && it.sustainedBps > 0 }
+        // OCR r12：testAll 取消同样静默返回截断结果，事后复查保证契约一致，
+        // 不再基于半份测速数据打「选定 X」的误导日志。
+        if (cancel?.isCancelled == true) throw java.util.concurrent.CancellationException("镜像排序已取消")
         if (usable.isEmpty()) {
             onLog("测速无结果，按 ping 延迟顺序尝试")
             return alive

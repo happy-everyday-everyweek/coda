@@ -1745,13 +1745,19 @@ class MainActivity : BaseActivity() {
         botPage?.handleActivityResult(requestCode, resultCode, data)
     }
 
+    override fun onPause() {
+        // OCR r12：计数必须与 onResume 成对——onStop 可能在从未 onResume 的实例上
+        // 触发（onStart 后即被遮挡 / API 28+ onCreate 里 finish），在 onStop 减计数
+        // 会把别的仍在 resumed 的实例误判成后台。onPause 与 onResume 严格配对，
+        // 且配置变更时旧实例 onPause 必先于新实例 onResume，无迟到覆盖窗口。
+        com.coda.mobileui.core.AutomationScheduler
+            .hostPaused()
+        super.onPause()
+    }
+
     override fun onStop() {
         // Bot 页在内容区里，按 Home 或切后台不会走 close()：这里把录音收回。
         botPage?.onHostPause()
-        // 后台时把定时轮询拉长到 5 分钟（#222）。按宿主计数判（OCR r11）：
-        // 配置变更时本 onStop 晚于新实例 onResume，直接置 false 会盖掉新实例。
-        com.coda.mobileui.core.AutomationScheduler
-            .hostPaused()
         super.onStop()
     }
 
@@ -1786,7 +1792,7 @@ class MainActivity : BaseActivity() {
             com.coda.mobileui.core.AutomationScheduler
                 .stop()
         }
-        // 非 finishing 不再重复置后台：onStop 的 hostPaused 已按计数处理，
+        // 非 finishing 不再重复置后台：onPause 的 hostPaused 已按计数处理（OCR r12），
         // 这里再置一次再引入一轮迟到覆盖（OCR r11）。
         BrowserControl.detachActivity()
         zListener?.let { zc.removeListener(it) }

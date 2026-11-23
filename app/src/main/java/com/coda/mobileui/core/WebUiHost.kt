@@ -71,6 +71,9 @@ object WebUiHost {
     @Synchronized
     private fun sendTimeoutScheduler(): java.util.concurrent.ScheduledThreadPoolExecutor {
         sendTimeout?.takeIf { !it.isShutdown }?.let { return it }
+        // OCR r12：宿主已停时拒绝再建——否则 post-stop 请求会造出一个
+        // 没人 shutdown 的调度器（核心守护线程常驻到下一次 stop）。
+        check(running.get()) { "WebUiHost 已停止" }
         return java.util.concurrent
             .ScheduledThreadPoolExecutor(1) { r ->
                 Thread(r, "coda-webui-send-timeout").apply { isDaemon = true }
@@ -553,6 +556,13 @@ object WebUiHost {
                             JSONObject().put("error", "内核未就绪").put("kernelReady", false),
                             503,
                         )
+                        return
+                    }
+                    // OCR r12：stop() 之后进来的请求不能走异步移交——工厂会新建
+                    // 一个没人 shutdown 的调度器，请求还会打到已拆的内核上，
+                    // socket 要干等 30s 超时。已停直接 503，由 finally 关闭。
+                    if (!running.get()) {
+                        respondJson(output, JSONObject().put("error", "服务已停止"), 503)
                         return
                     }
                     // 发送结果异步写回（#774）：latch.await 会把连接 worker 占住
