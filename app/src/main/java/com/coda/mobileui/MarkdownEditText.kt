@@ -358,13 +358,16 @@ internal object MarkdownSpans {
      * 所以「没有这些字符」就等于「没有语法」。
      */
     private fun hasAnyMarkup(src: String): Boolean {
+        var prev = ' '
         for (ch in src) {
             when (ch) {
                 '`', '*', '_', '~', '#', '>', '-', '[', '\\', '+' -> return true
-                // 有序列表的标记是「数字 + 点」：只看数字太宽，但漏掉点会让
-                // 「1. x」永远不进入解析，标记一直原样显示。
-                '.' -> return true
+                // 有序列表的标记是「数字 + 点」（^\s*\d+\.\s）：裸点几乎
+                // 每段散文都有（句末、URL、小数、版本号），无条件命中会让
+                // 快速路径形同虚设（OCR #826）。只有紧跟数字的点才算。
+                '.' -> if (prev.isDigit()) return true
             }
+            prev = ch
         }
         return false
     }

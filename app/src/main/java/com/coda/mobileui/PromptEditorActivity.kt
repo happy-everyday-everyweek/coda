@@ -51,6 +51,12 @@ class PromptEditorActivity : BaseActivity() {
 
     /** 正在用代码回填正文：这段时间的文本变化不算用户编辑。 */
     private var applyingText = false
+    /**
+     * 读盘代际（OCR #826）：恢复默认/保存与在途 readAsync 排在同一单线程
+     * 执行器上，迟到的读结果会把刚删掉的内容重新回填。发起写操作时递增
+     * 代际，旧读回调对不上号直接丢弃。
+     */
+    private var readGeneration = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,8 +93,11 @@ class PromptEditorActivity : BaseActivity() {
      * 读失败与加载期间的用户输入都不开保存闸门（#739、#741），并给出重新加载入口。
      */
     private fun loadFromDisk() {
+        val gen = ++readGeneration
         AgentPrompt.readAsync(file) { read ->
             if (isFinishing || isDestroyed) return@readAsync
+            // 写操作已发起：这份读结果过期，回填会覆盖刚保存/删除的内容。
+            if (gen != readGeneration) return@readAsync
             // 只看真实输入标志：旋转/进程重建恢复的正文不算「加载期间输入」。
             val typed = if (userEdited) input.text.toString() else ""
             val d = gate.onLoaded(read, typed = typed)
@@ -293,6 +302,7 @@ class PromptEditorActivity : BaseActivity() {
             return
         }
         saving = true
+        readGeneration++
         val body = input.text.toString()
         // 写盘也走 IO 线程（#173）；失败时保持页面打开，让用户能重试。
         AgentPrompt.saveAsync(file, body) { err ->
@@ -319,8 +329,18 @@ class PromptEditorActivity : BaseActivity() {
             .secondaryAction("取消") { it.dismiss() }
             .primaryAction("恢复") { sheet ->
                 sheet.dismiss()
+                // 与保存同一套闸门（OCR #826）：正文没可信读进来就恢复默认，
+                // 在途读回调会把刚删的内容重新回填；连点也会排多次删除。
+                if (saving) return@primaryAction
+                if (!gate.canSave) {
+                    Toast.makeText(this, "正文尚未就绪，暂不能恢复默认；可点「重新加载」重试", Toast.LENGTH_LONG).show()
+                    return@primaryAction
+                }
+                saving = true
+                readGeneration++
                 // 删除失败必须告知并保持页面：旧提示词还在，报成功会让用户以为已重置（#169）。
                 AgentPrompt.saveAsync(file, "") { err ->
+                    saving = false
                     if (isFinishing || isDestroyed) return@saveAsync
                     if (err != null) {
                         Toast.makeText(this, "恢复失败：$err", Toast.LENGTH_LONG).show()

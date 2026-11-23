@@ -52,6 +52,8 @@ class GitPage(
         /** 已配置的远端名（#96）：remote add 后未 fetch 时 remotes 为空，但它不为空。 */
         val remoteNames: List<String>,
         val stateIgnored: Boolean,
+        /** 关键读（status/branch/remote）任一失败（OCR #825）：不得展示成「干净」。 */
+        val readFailed: Boolean = false,
     )
 
     /** 控制卡要展示的一组文案与按钮。 */
@@ -304,21 +306,27 @@ class GitPage(
                     if (!Git.isRepo(env, root)) {
                         Snapshot(false, "", "", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), true)
                     } else {
+                        val changes = Git.changesOrNull(env, root)
+                        val remoteNames = Git.remotesOrNull(env, root)
+                        val branchName = Git.branchOrNull(env, root)
                         Snapshot(
                             repo = true,
-                            branch = Git.branch(env, root),
+                            branch = branchName ?: Git.branch(env, root),
                             repoRoot = Git.repoRoot(env, root),
-                            changes = Git.changes(env, root),
+                            changes = changes ?: emptyList(),
                             commits = Git.graph(env, root, graphLimit),
                             locals = Git.localBranches(env, root),
                             remotes = Git.remoteBranches(env, root),
-                            remoteNames = Git.remotes(env, root),
+                            remoteNames = remoteNames ?: emptyList(),
                             stateIgnored = Git.ignoresState(env, root),
+                            readFailed = changes == null || remoteNames == null,
                         )
                     }
                 },
                 then = { result ->
                     busy = false
+                    // 读期间入队的写现在可以启动（OCR #825 配套）。
+                    if (!writing && writeQueue.isNotEmpty()) drainWrites()
                     val firstLoad = snapshot == null
                     snapshot = result
                     // 选中项按哈希在新列表里重新认领，刷新不该把用户的选中丢掉。
@@ -345,6 +353,7 @@ class GitPage(
                 },
                 onError = {
                     busy = false
+                    if (!writing && writeQueue.isNotEmpty()) drainWrites()
                     rebuildControl()
                 },
             )
@@ -471,11 +480,20 @@ class GitPage(
                 val summary =
                     buildString {
                         append("本地 ${current.locals.size} 个分支 · 远端 ${current.remotes.size} 个分支")
-                        append(if (changes == 0) " · 工作区干净" else " · $changes 个未提交变更")
+                        append(
+                            when {
+                                current.readFailed -> " · 状态读取失败，请刷新重试"
+                                changes == 0 -> " · 工作区干净"
+                                else -> " · $changes 个未提交变更"
+                            },
+                        )
                         // 工作区只是父仓库的子目录时明确说出来：提交范围按本目录收窄，
                         // 但分支与远端仍是整个仓库的，用户需要知道这一点。
                         val repoRoot = current.repoRoot.trimEnd('/')
-                        val workspacePath = host.root.absolutePath.trimEnd('/')
+                        // rev-parse 输出的是 guest 路径（/sdcard/...），宿主路径
+                        // （/storage/emulated/0/...）必须先映射再比（OCR #825），
+                        // 否则非恒等映射下每个仓库都被误报成「父仓库的子目录」。
+                        val workspacePath = host.env.guestPath(host.root.absolutePath).trimEnd('/')
                         if (repoRoot.isNotEmpty() && repoRoot != workspacePath) {
                             append(" · 父仓库的子目录，提交只包含本目录")
                         }
@@ -833,12 +851,9 @@ class GitPage(
                             Git.Result(false, "没有冲突文件")
                         } else {
                             // 只 stage 冲突文件：add -A 会把无关改动一起带进这次合并提交。
-                            var last = Git.Result(true, "")
-                            for (file in files) {
-                                last = Git.addFile(host.env, host.root, file)
-                                if (!last.ok) break
-                            }
-                            last
+                            // 批量 pathspec（OCR #825）：逐文件每个起一次 proot+git，
+                            // 几十个冲突要跑几分钟。
+                            Git.addFiles(host.env, host.root, files)
                         }
                     }
                 }
@@ -994,7 +1009,18 @@ class GitPage(
      * 保留旧图再拼接反而会出现错位的连线。这里整张重画，但明确告诉用户在加载。
      */
     private fun loadMoreHistory() {
-        graphLimit *= 2
+        // 只有刷新真正能开始才推进上限（OCR #825）：busy 时 refresh 静默返回，
+        // 先翻倍会让截断提示与「加载更多」按钮凭空消失；无界翻倍还会让
+        // git log 解析与泳道重建膨胀到几万条。封顶 6400。
+        if (busy || writing || writeQueue.isNotEmpty()) {
+            toast("正在刷新，稍后再试")
+            return
+        }
+        if (graphLimit >= 6400) {
+            toast("已达加载上限，请用搜索定位更早历史")
+            return
+        }
+        graphLimit = (graphLimit * 2).coerceAtMost(6400)
         toast("正在加载最近 $graphLimit 条…")
         refresh()
     }
@@ -1253,8 +1279,17 @@ class GitPage(
         action: () -> Git.Result,
         done: (Git.Result) -> Unit,
     ) {
-        writeQueue.addLast(WriteOp(label, action, done))
-        if (!writing) drainWrites()
+        // 代际在入队时捕获（OCR #825）：写完成时页面已切走/关闭的话，
+        // done 里的 closeDetail/showResult/pushPage 不得再动本页详情栈。
+        val token = generation
+        writeQueue.addLast(
+            WriteOp(label, action) { result ->
+                if (token == generation) done(result)
+            },
+        )
+        // 读还在途时不启动写（OCR #825）：git status 自己也拿 index.lock，
+        // 单向串行化挡不住读写相撞。读完成后 refreshPending 补跑 drain。
+        if (!writing && !busy) drainWrites()
     }
 
     /**
@@ -1276,7 +1311,8 @@ class GitPage(
         val op = writeQueue.removeFirstOrNull()
         if (op == null) {
             writing = false
-            busy = false
+            // 不动 busy（OCR #825）：它可能属于在途的读，写队列排空无权清掉，
+            // 否则另一个 refresh 会与读并发。
             // 写期间被挂起的刷新在这里补跑：此时仓库已静止，读到的才是一致状态（#533）。
             if (refreshPending) {
                 refreshPending = false

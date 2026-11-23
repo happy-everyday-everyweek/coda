@@ -188,8 +188,17 @@ object CodaBotStore {
             AppLog.w("CodaBot", "旧聊天记录无法解析，已保留原文件")
             return result
         }
+        var failed = 0
         for (i in 0 until items.length()) {
-            decode(items.optJSONObject(i))?.let { result += it }
+            val decoded = decode(items.optJSONObject(i))
+            if (decoded != null) result += decoded else failed++
+        }
+        // 解码失败要计数（OCR #824）：与 jsonl 分支同一口径。partial 时
+        // migrateLegacy 会在 saveMessages 成功后删掉旧文件，把解不出的
+        // 消息永久销毁——置位后 migrateLegacy 保留原件。
+        if (failed > 0) {
+            lastReadPartial = true
+            AppLog.w("CodaBot", "旧聊天记录有 $failed 条无法解析，已保留原文件")
         }
         migrateLegacy(ctx, result)
         return result
@@ -219,6 +228,12 @@ object CodaBotStore {
         if (!saveMessages(ctx, list)) {
             AppLog.w("CodaBot", "迁移写入失败，保留旧文件 ${legacy.absolutePath}")
             return false
+        }
+        // 部分解码时不删旧文件（OCR #824）：新历史只含解得出的那部分，
+        // 删掉原件等于把解不出的消息永久销毁。
+        if (lastReadPartial) {
+            AppLog.w("CodaBot", "旧聊天记录部分解码，迁移后保留原文件 ${legacy.absolutePath}")
+            return true
         }
         // 写盘确认成功后再删；删不掉只是留个旧文件，不影响数据完整性。
         runCatching { legacy.delete() }
@@ -255,20 +270,19 @@ object CodaBotStore {
         val file = messageFile(ctx)
         val text = buildString { messages.forEach { append(encode(it).toString()).append('\n') } }
         // 先写临时文件再改名：写到一半被杀掉时，原文件仍然完整。
-        val tmp = File(file.parentFile, file.name + ".tmp")
+        // 不做「改名失败就 writeText 原地写」的回退（OCR #824）：那会在
+        // 进程被杀时毁掉原件，与上面的保证矛盾。tmp 名带纳秒防并发互写，
+        // finally 清理残留（与 ProviderStore.writeTextAtomic 同一套）。
+        val tmp = File(file.parentFile, file.name + "." + System.nanoTime() + ".tmp")
         val ok =
             runCatching {
-                tmp.writeText(text)
-                if (!tmp.renameTo(file)) {
-                    file.writeText(text)
-                    tmp.delete()
+                try {
+                    tmp.writeText(text)
+                    if (!tmp.renameTo(file)) throw java.io.IOException("替换 ${file.name} 失败")
+                } finally {
+                    if (tmp.exists()) runCatching { tmp.delete() }
                 }
-            }.isSuccess ||
-                // 改名在部分文件系统上不可用，退回直接写；这一遍失败才算真失败。
-                runCatching {
-                    file.writeText(text)
-                    tmp.delete()
-                }.isSuccess
+            }.isSuccess
         if (!ok) AppLog.w("CodaBot", "历史写入失败：${file.absolutePath}")
         return ok
     }

@@ -276,7 +276,20 @@ object Git {
     fun changes(
         env: LinuxEnv,
         root: File,
-    ): List<String> = run(env, root, listOf("status", "--porcelain")).data().lines().filter { it.isNotBlank() }
+    ): List<String> = changesOrNull(env, root) ?: emptyList()
+
+    /**
+     * 变更列表，读失败返回 null（OCR #825）：把失败折叠成空列表会让
+     * index.lock/属主 fatal 被界面当成「工作区干净」，误导用户丢弃工作。
+     * 快照路径用这个变体，把「读取失败」如实显示出来。
+     */
+    fun changesOrNull(
+        env: LinuxEnv,
+        root: File,
+    ): List<String>? {
+        val r = run(env, root, listOf("status", "--porcelain"))
+        return if (r.ok) r.output.lines().filter { it.isNotBlank() } else null
+    }
 
     /** 提交图：跨全部分支按拓扑序取最近若干条。 */
     fun graph(
@@ -327,7 +340,16 @@ object Git {
     fun remotes(
         env: LinuxEnv,
         root: File,
-    ): List<String> = run(env, root, listOf("remote")).data().lines().filter { it.isNotBlank() }
+    ): List<String> = remotesOrNull(env, root) ?: emptyList()
+
+    /** 远端名列表，读失败返回 null（OCR #825）：失败折叠成空会让拉取/推送从菜单消失。 */
+    fun remotesOrNull(
+        env: LinuxEnv,
+        root: File,
+    ): List<String>? {
+        val r = run(env, root, listOf("remote"))
+        return if (r.ok) r.output.lines().filter { it.isNotBlank() } else null
+    }
 
     /** 某个远端的 fetch URL；不存在时返回空串。 */
     fun remoteUrl(
@@ -347,10 +369,9 @@ object Git {
         url: String,
     ): Result {
         if (!isSafeRef(name)) return Result(false, "远端名不合法：$name")
-        // URL 不做 ref 校验（它不是 ref），但要挡住换行与前置 '-'，避免被当成选项。
-        if (url.isBlank() || url.startsWith("-") || url.any { it == '\n' || it == '\r' }) {
-            return Result(false, "远端地址不合法")
-        }
+        // 与 clone 同一套校验（OCR #825）：手写的换行检查比 isSafeUrl 弱，
+        // 漏其他控制字符与空格；ext::/fd:: 传输会在 pull/push 时执行外部命令。
+        if (!isSafeUrl(url)) return Result(false, "远端地址不合法：$url")
         val exists = remotes(env, root).contains(name)
         return if (exists) {
             run(env, root, listOf("remote", "set-url", name, url))
@@ -409,10 +430,16 @@ object Git {
         return value.none { it.code < 0x20 || it in forbidden }
     }
 
-    /** 远端地址是否安全：同样挡掉被 git 当作选项的写法。 */
+    /**
+     * 远端地址是否安全：挡选项写法、控制字符，以及危险传输（OCR #825）。
+     * `ext::sh -c …` 会在 pull/push 时以伪造 root 身份执行外部命令，
+     * `fd::` 同理可接任意文件描述符；两者一律拒绝。
+     */
     internal fun isSafeUrl(value: String): Boolean =
         value.isNotBlank() &&
             !value.startsWith("-") &&
+            !value.startsWith("ext::") &&
+            !value.startsWith("fd::") &&
             value.none { it.code < 0x20 || it == ' ' }
 
     /**
@@ -431,7 +458,17 @@ object Git {
         if (!isSafeRef(local) || !isSafeRef(remoteBranch)) {
             return Result(false, "分支名不合法：$remoteBranch")
         }
-        return run(env, root, listOf("checkout", "-b", local, "--track", remoteBranch))
+        val created = run(env, root, listOf("checkout", "-b", local, "--track", remoteBranch))
+        if (created.ok) return created
+        // 本地同名分支已存在（重复检出已 fetch 的远端分支是常态，OCR #825）：
+        // 对齐 git DWIM——切到既有分支并把上游指到该远端分支。
+        if (localBranches(env, root).contains(local)) {
+            val switched = run(env, root, listOf("checkout", local))
+            if (!switched.ok) return switched
+            run(env, root, listOf("branch", "--set-upstream-to", remoteBranch, local))
+            return switched
+        }
+        return created
     }
 
     /** 当前 HEAD 的完整 hash；没有提交或不在仓库里时返回空串。 */
@@ -610,7 +647,16 @@ object Git {
     fun conflicts(
         env: LinuxEnv,
         root: File,
-    ): List<String> = run(env, root, listOf("diff", "--name-only", "--diff-filter=U")).data().lines().filter { it.isNotBlank() }
+    ): List<String> = conflictsOrNull(env, root) ?: emptyList()
+
+    /** 冲突列表，读失败返回 null（OCR #825）：失败折叠成空会误报「没有冲突文件」。 */
+    fun conflictsOrNull(
+        env: LinuxEnv,
+        root: File,
+    ): List<String>? {
+        val r = run(env, root, listOf("diff", "--name-only", "--diff-filter=U"))
+        return if (r.ok) r.output.lines().filter { it.isNotBlank() } else null
+    }
 
     /** 全部标记为已解决（不改变内容，只进暂存区）。 */
     fun addAll(
@@ -687,12 +733,16 @@ object Git {
         val candidate = if (File(raw).isAbsolute) File(raw) else File(gitDir, raw)
         val target = runCatching { candidate.canonicalFile }.getOrNull() ?: return gitDir
         val base = runCatching { gitDir.canonicalFile }.getOrElse { gitDir.absoluteFile }
-        // 公共目录必须是 gitdir 的祖先、或仍在某个 .git 目录内；否则不认。
+        // 公共目录只认 gitdir 自身或其后代（OCR #825）：旧谓词接受任意祖先，
+        // 仓库给的 commondir=../../../.. 会解析到 /sdcard/Download 之类的
+        // 公共位置，256 个分片目录与 info/exclude 全建到任何 .git 之外。
+        // linked worktree 的合法 commondir 是主仓库 .git（gitdir 的兄弟），
+        // 以 .git 结尾且与 gitdir 同属一个父树才放行。
         val acceptable =
-            base.path.startsWith(target.path + File.separator) ||
+            target == base ||
                 target.path.startsWith(base.path + File.separator) ||
-                target.name == ".git" ||
-                target.path.contains("${File.separator}.git${File.separator}")
+                (target.name == ".git" &&
+                    target.parentFile?.parentFile == base.parentFile?.parentFile)
         return if (acceptable) target else gitDir
     }
 
@@ -712,11 +762,16 @@ object Git {
                 val target = runCatching { raw.canonicalFile }.getOrElse { return null }
                 // `.git` 文件的内容来自仓库本身，而仓库内容可能由 Agent 或远程代码写进来：
                 // 不限定范围就相当于让仓库指定任意目录当 gitdir，随后修对象目录时会写到那里。
+                // 只认工作区树内的目标（OCR #825）：path.contains("/.git/")
+                // 会放行 /sdcard/Download/evil/.git/x 这类任意位置。
+                // worktree 的 gitdir 在主仓库 .git/worktrees/<name> 下，
+                // 允许相邻 .git 目录（同一父树）覆盖该布局。
                 val inside =
                     target == base ||
                         target.path.startsWith(base.path + File.separator) ||
-                        target.path.contains("${File.separator}.git${File.separator}") ||
-                        target.path.endsWith("${File.separator}.git")
+                        ((target.name == ".git" || target.parentFile?.name == ".git" ||
+                            target.parentFile?.parentFile?.name == ".git") &&
+                            target.parentFile?.parentFile?.parentFile == base.parentFile)
                 if (!inside) return null
                 return target
             }
@@ -730,6 +785,24 @@ object Git {
         root: File,
         file: String,
     ): Result = run(env, root, listOf("add", "--", file))
+
+    /**
+     * 批量标记已解决（OCR #825）：逐文件 add 每个都起一次 proot+git，
+     * 几十个冲突的合并要跑几分钟。git 接受多 pathspec，按 64 个一批。
+     */
+    fun addFiles(
+        env: LinuxEnv,
+        root: File,
+        files: List<String>,
+    ): Result {
+        if (files.isEmpty()) return Result(true, "")
+        var last = Result(true, "")
+        for (chunk in files.chunked(64)) {
+            last = run(env, root, listOf("add", "--") + chunk)
+            if (!last.ok) return last
+        }
+        return last
+    }
 
     /** 完成合并提交：用 merge 已经写好的信息，不再追问用户。 */
     fun commitMerge(

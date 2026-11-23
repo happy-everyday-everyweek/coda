@@ -56,9 +56,26 @@ class AndroidLiteDriver(PlatformIODriver):
         )
 
 
-# start 的串行锁（#118）。模块级：send 与 notify_event 可能落在不同协程，
+# start 的串行锁（#118）。send 与 notify_event 可能落在不同协程，
 # 但注册 driver / 启动 Broker 这些动作对整个进程只能做一次。
-_START_LOCK = asyncio.Lock()
+# 按事件循环惰性创建（OCR #824）：模块级 asyncio.Lock 绑定首个 await 它的
+# loop，而每个 LiteRuntimeBridge 自建 loop，Bot 页重入后第二个实例在新 loop
+# 上 await 会抛「bound to a different event loop」，Personal Agent 直到进程
+# 重启都起不来。
+_START_LOCKS: "Dict[asyncio.AbstractEventLoop, asyncio.Lock]" = {}
+_START_LOCKS_GUARD = __import__("threading").Lock()
+
+def _start_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    with _START_LOCKS_GUARD:
+        lock = _START_LOCKS.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _START_LOCKS[loop] = lock
+        # 防泄漏：已关闭 loop 的锁不再有用，顺手清掉。
+        for dead in [l for l in _START_LOCKS if l.is_closed()]:
+            _START_LOCKS.pop(dead, None)
+        return lock
 
 # 当前活动的运行时实例（#119）。旧实例的异步 stop 据此判断自己是否还拥有
 # heartflow / platform io 这些模块级单例，不拥有就只清理自己的资源。
@@ -128,13 +145,30 @@ class LiteRuntime:
         # start 必须串行（#118）：_started 要到函数末尾才置 True，
         # send 与 notify_event 并发进来会两次执行 register_driver，
         # Broker 已启动时那里直接 raise，本次消息/事件就失败了。
-        async with _START_LOCK:
+        async with _start_lock():
             if self._started:
                 return
+            global _ACTIVE_RUNTIME
+            # 新实例启动前先送走旧实例（OCR #824）：旧 stop 是异步的，可能
+            # 晚于新 start；Broker 还在跑时 register_driver 直接 raise，
+            # 或 android.local 重复注册 ValueError。这里主动 await 旧实例
+            # 的 stop（它仍认领全局，会做完整 teardown），再启动自己。
+            previous = _ACTIVE_RUNTIME
+            if previous is not None and previous is not self:
+                # 先清指针再 stop：否则 previous.stop() 会 await 同一把
+                # 非重入锁，自死锁。指针清空后它的 owns_globals 判 False，
+                # 只停自己的 hook dispatcher；全局单例由下面的 reset/start
+                # 幂等接管（heartflow reset、remove+add driver、start 幂等）。
+                _ACTIVE_RUNTIME = None
+                try:
+                    await previous.stop()
+                except Exception:  # noqa: BLE001 - 旧实例清理失败不能拦住新实例
+                    pass
             await self._start_locked()
-        # 谁最后 start，谁就是当前活动实例；旧实例的 stop 据此跳过全局关停（#119）。
-        global _ACTIVE_RUNTIME
-        _ACTIVE_RUNTIME = self
+            # 所有权在锁内认领（OCR #824）：锁外赋值时旧 stop 可能已把
+            # 指针判成 None/旧值并认领全局，await 间隙新实例启动后，
+            # 旧 stop 恢复执行会把新实例的单例一起拆掉。
+            _ACTIVE_RUNTIME = self
 
     async def _start_locked(self) -> None:
         self._prepare_configuration()
@@ -162,7 +196,12 @@ class LiteRuntime:
 
         manager = get_platform_io_manager()
         self._driver = AndroidLiteDriver(self._on_message)
-        manager.register_driver(self._driver)
+        # add_driver 而不是 register_driver（OCR #824）：旧实例 teardown 失败
+        # 或竞态残留时 Broker 可能仍在跑，register_driver 直接 raise；
+        # add_driver 对运行中 Broker 注册并启动驱动，未启动时等价 register。
+        # 同 id 残留先移除，避免 duplicate android.local。
+        await manager.remove_driver(self._driver.driver_id)
+        await manager.add_driver(self._driver)
         route = RouteKey(platform=PLATFORM, account_id=ACCOUNT_ID)
         binding = RouteBinding(
             route_key=route,
@@ -248,25 +287,29 @@ class LiteRuntime:
         # 旧实例的异步 stop 可能晚于新实例的 start（#119）。
         # heartflow_manager 与 platform io 都是模块级单例，无条件 shutdown
         # 会把新实例刚建立的会话链路一起关掉，表现为 Bot 又不回话且没有日志。
-        owns_globals = _ACTIVE_RUNTIME is self or _ACTIVE_RUNTIME is None
-        if owns_globals:
-            _ACTIVE_RUNTIME = None
+        # 所有权判定与全局 teardown 都进锁（OCR #824）：锁外读指针时新
+        # start 可能正在赋值，判成 owns 后 await 间隙指针易主，全局
+        # teardown 会拆掉新实例。持锁期间新 start 进不来，天然串行。
+        async with _start_lock():
+            owns_globals = _ACTIVE_RUNTIME is self or _ACTIVE_RUNTIME is None
+            if owns_globals:
+                _ACTIVE_RUNTIME = None
 
-        steps = (
-            ("heartflow shutdown", heartflow_manager.shutdown),
-            ("remove android driver", lambda: get_platform_io_manager().remove_driver("android.local")),
-            ("stop platform io", get_platform_io_manager().stop),
-            ("stop hook dispatcher", self._plugin_manager._hook_dispatcher.stop),
-        )
-        failures: List[str] = []
-        for label, step in steps:
-            # 不是当前活动实例时，只停自己的 hook dispatcher，不动全局单例。
-            if not owns_globals and label != "stop hook dispatcher":
-                continue
-            try:
-                await step()
-            except Exception as exc:  # noqa: BLE001 - 清理阶段要把异常汇总而不是中断后续清理
-                failures.append(f"{label}: {exc}")
+            steps = (
+                ("heartflow shutdown", heartflow_manager.shutdown),
+                ("remove android driver", lambda: get_platform_io_manager().remove_driver("android.local")),
+                ("stop platform io", get_platform_io_manager().stop),
+                ("stop hook dispatcher", self._plugin_manager._hook_dispatcher.stop),
+            )
+            failures: List[str] = []
+            for label, step in steps:
+                # 不是当前活动实例时，只停自己的 hook dispatcher，不动全局单例。
+                if not owns_globals and label != "stop hook dispatcher":
+                    continue
+                try:
+                    await step()
+                except Exception as exc:  # noqa: BLE001 - 清理阶段要把异常汇总而不是中断后续清理
+                    failures.append(f"{label}: {exc}")
         self._driver = None
         # 关停结束就要把入口重新打开：管理器是单例，退出 Bot 页只是停一次运行时，
         # 下一次进入必须还能创建会话。这里放在最后，避免和 reset() 抢时序。

@@ -28,7 +28,15 @@ object AgentPrompt {
         onResult: (PromptRead) -> Unit,
     ) {
         io.execute {
-            val r = readResult(file)
+            // 包 Throwable（OCR #826）：readResult 只捕 Exception，大文件
+            // OutOfMemoryError 会逃出任务，main.post 永不执行，编辑器的
+            // loaded 永远 false、保存永久卡死。Error 也转成读失败结果投递。
+            val r =
+                try {
+                    readResult(file)
+                } catch (t: Throwable) {
+                    PromptRead(text = null, error = t.message ?: t.javaClass.simpleName)
+                }
             main.post { onResult(r) }
         }
     }
@@ -40,7 +48,12 @@ object AgentPrompt {
         onResult: (String?) -> Unit,
     ) {
         io.execute {
-            val err = save(file, text)
+            val err =
+                try {
+                    save(file, text)
+                } catch (t: Throwable) {
+                    t.message ?: t.javaClass.simpleName
+                }
             main.post { onResult(err) }
         }
     }

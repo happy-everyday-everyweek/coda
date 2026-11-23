@@ -88,9 +88,17 @@ object SystemPrompts {
             AppLog.w("SystemPrompts", "模板基线清单无法解析，状态暂按未知显示")
         }
         val out = LinkedHashMap<String, String>()
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         all.forEach { item ->
             val file = File(dir, item.file)
             val exists = file.isFile
+            // 文件不存在（恢复默认后的正常态）时清掉陈旧基线（OCR #826）：
+            // 不清的话，内核升级后重新释放的模板内容与旧基线不符，
+            // 用户没动过也会被显示成「已修改」。清了键，下次观察从新模板重建。
+            if (!exists) {
+                val key = baselineKey(item)
+                if (prefs.contains(key)) prefs.edit().remove(key).apply()
+            }
             val text =
                 if (!exists) {
                     null

@@ -113,7 +113,10 @@ class CodaBotPage(
         olderRemaining = emptyList()
         removeAllViews()
     }
-    private fun signatureOf(p: CodaBotProfile): String =
+    private fun signatureOf(
+        p: CodaBotProfile,
+        providers: List<ProviderStore.Provider>,
+    ): String =
         listOf(
             p.name,
             p.persona,
@@ -126,24 +129,32 @@ class CodaBotPage(
             p.replyModel,
             // 供应商端点与密钥也要进签名：只改 key 或 base URL 时上面几项不变，
             // 不重建运行时的话内核会一直用创建桥时的旧凭据。
-            providerSignature(p.plannerProviderId),
-            providerSignature(p.replyProviderId),
+            providerSignature(p.plannerProviderId, providers),
+            providerSignature(p.replyProviderId, providers),
         ).joinToString("\u0001")
 
-    /** 供应商当前凭据的指纹；只用内存里的签名，不落盘。 */
-    private fun providerSignature(providerId: String): String {
+    /**
+     * 供应商当前凭据的指纹；只用内存里的签名，不落盘。
+     * key 用原值而不是 hashCode（OCR #824）：哈希碰撞会漏掉凭据变更；
+     * 签名只活在内存里，不外泄。providers 由调用方一次 load 传入，
+     * 不再每个 provider 各读一遍磁盘。
+     */
+    private fun providerSignature(
+        providerId: String,
+        providers: List<ProviderStore.Provider>,
+    ): String {
         if (providerId.isEmpty()) return ""
-        val provider =
-            runCatching {
-                ProviderStore.load(context).firstOrNull { it.id == providerId }
-            }.getOrNull() ?: return ""
-        return "${provider.baseUrl}\u0002${provider.apiKey.hashCode()}\u0002${provider.apiType}"
+        val provider = providers.firstOrNull { it.id == providerId } ?: return ""
+        return "${provider.baseUrl}\u0002${provider.apiKey}\u0002${provider.apiType}"
     }
 
     private fun ensureRuntime() {
-        if (runtime != null && signatureOf(profile) == runtimeSignature) return
+        // 一次 load 供比较与赋值两处用（OCR #824）：此前开页最多 4 次全盘读。
+        val providers = runCatching { ProviderStore.load(context) }.getOrDefault(emptyList())
+        val sig = signatureOf(profile, providers)
+        if (runtime != null && sig == runtimeSignature) return
         runtime?.let { runCatching { it.close() } }
-        runtimeSignature = signatureOf(profile)
+        runtimeSignature = sig
         // 捕获本次代际：旧运行时在途的回复回来时对不上，直接丢弃（#150）。
         val generation = ++runtimeGeneration
         runtime = CodaBotRuntime(host, profile) { message ->
@@ -500,7 +511,9 @@ class CodaBotPage(
         val dir = java.io.File(host.filesDir, "coda-bot/attachments").apply { mkdirs() }
         val name = (uri.lastPathSegment ?: "attachment").substringAfterLast('/')
         val target = java.io.File(dir, "${System.currentTimeMillis()}-$name")
-        val generation = runtimeGeneration
+        // 不用 runtimeGeneration（OCR #824）：改人设/模型/密钥都会递增它，
+        // 拷贝在途时配置一变，成功拷完的文件被静默丢弃且永远留在磁盘。
+        // input !== targetInput 的同一性检查已覆盖页面重建的场景。
         val targetInput = input
         toast("正在读取附件…")
         com.coda.mobileui.core.Bg.run {
@@ -528,8 +541,11 @@ class CodaBotPage(
                     runCatching { if (target.exists()) target.delete() }
                 }
             host.runOnUiThread {
-                if (generation != runtimeGeneration) return@runOnUiThread
-                if (!::input.isInitialized || input !== targetInput) return@runOnUiThread
+                if (!::input.isInitialized || input !== targetInput) {
+                    // 页面已重建：结果被丢弃，拷完的文件不能孤儿在 attachments 里。
+                    runCatching { if (target.exists()) target.delete() }
+                    return@runOnUiThread
+                }
                 outcome
                     .onSuccess {
                         val current = targetInput.text?.toString().orEmpty()
@@ -689,7 +705,11 @@ class CodaBotPage(
         olderRemaining = plan.remaining
         val chunk = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
         // 顶部插入会让视口内容整体下移，先记下锚点位置，插完再补回去。
-        val anchorTop = anchor.top
+        // 锚在幸存的第一个近期气泡上（OCR #824）：exhausted 时「加载更早」
+        // 按钮会被移除，removed 视图的 top 停在旧值，grown 恒 0，
+        // 恰好在最后一批（可能最大）加载时视口跳变。
+        val survivor = messages.getChildAt(0)
+        val anchorTop = survivor?.top ?: anchor.top
         val scrollY = scroll.scrollY
         olderHost.addView(chunk, CodaBotHistoryBatch.INSERT_INDEX)
         plan.batch.forEach { addBubble(it, persist = false, scrollToBottom = false, container = chunk) }
@@ -700,7 +720,7 @@ class CodaBotPage(
         }
         // 保持滚动锚点：新增高度 = 锚点新位置 - 旧位置，补进 scrollY 才不跳。
         scroll.post {
-            val grown = anchor.top - anchorTop
+            val grown = (survivor?.top ?: anchor.top) - anchorTop
             if (grown > 0) scroll.scrollTo(0, scrollY + grown)
         }
     }

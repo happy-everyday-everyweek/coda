@@ -231,11 +231,14 @@ internal class GitCanvasView(
      */
     private val timeTextCache = HashMap<Long, String>()
 
-    private fun timeTextOf(epochSeconds: Long): String =
-        timeTextCache.getOrPut(epochSeconds) {
-            if (timeTextCache.size > 512) timeTextCache.clear()
+    private fun timeTextOf(epochSeconds: Long): String {
+        // getOrPut 的默认 lambda 不得改 map（OCR #825）：HashMap 插入后的
+        // 结构修改检查会在超 512 条时抛 ConcurrentModificationException。
+        if (timeTextCache.size > 512) timeTextCache.clear()
+        return timeTextCache.getOrPut(epochSeconds) {
             timeFormat.format(Date(epochSeconds * 1000L))
         }
+    }
 
     private val surfaceColor: Int get() = colorOf(com.google.android.material.R.attr.colorSurface)
     private val onSurfaceColor: Int get() = colorOf(com.google.android.material.R.attr.colorOnSurface)
