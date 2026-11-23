@@ -1906,13 +1906,22 @@ class SettingsDetailActivity :
         snack("导入")
         // 先在后台做预检：一个损坏或不受支持的包，不该先把核心停下来。
         Thread {
+            // 暂存一次（OCR #823）：validate(uri)+import(uri) 各自落盘会把
+            // 多 GB 的包拷两遍。staged 在导入线程 finally 里 close；预检
+            // 失败路径也要 close，不能让临时文件活过进程。
+            val staged =
+                runCatching { com.coda.mobileui.core.DataBackup.stage(this, uri) }.getOrElse {
+                    runOnUiThread { snack("导入失败：${it.message ?: "无法读取备份文件"}（未改动任何数据）") }
+                    return@Thread
+                }
             val precheckFailure =
                 com.coda.mobileui.core.DataBackup
-                    .validate(this, uri)
+                    .validateStaged(this, staged)
             runOnUiThread {
                 if (!com.coda.mobileui.core.BackupImportFlow
                         .shouldStopRuntime(precheckFailure)
                 ) {
+                    staged.close()
                     snack("导入失败：${precheckFailure ?: "备份不可用"}（未改动任何数据）")
                     return@runOnUiThread
                 }
@@ -1928,7 +1937,12 @@ class SettingsDetailActivity :
                 }
                 runCatching { ZController.get(this).runtime.stopCore() }
                 Thread {
-                    val result = runCatching { DataBackup.import(this, uri) }
+                    val result =
+                        try {
+                            runCatching { DataBackup.importStaged(this, staged) }
+                        } finally {
+                            staged.close()
+                        }
                     val count = result.getOrNull()
                     val err = result.exceptionOrNull()?.message
                     runOnUiThread {

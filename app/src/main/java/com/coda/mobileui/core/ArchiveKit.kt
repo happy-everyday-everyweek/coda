@@ -297,10 +297,13 @@ object ArchiveKit {
         val modified: Long,
     )
 
-    private val tarCache = LinkedHashMap<TarCacheKey, List<TarListing.Member>>()
+    // accessOrder=true（OCR #823）：插入序 FIFO 会让热包被冷包挤掉，改 LRU。
+    private val tarCache = LinkedHashMap<TarCacheKey, List<TarListing.Member>>(16, 0.75f, true)
 
     /** 缓存上限：压缩包可能很大，只留最近几个包的成员表。 */
     private const val TAR_CACHE_MAX = 4
+    /** tar -tvf 输出上限：约 16MB 详细列表，足够几十万条目；超出按无法浏览。 */
+    private const val TAR_LISTING_MAX_BYTES = 16 * 1024 * 1024
 
     private fun tarMembers(
         file: File,
@@ -311,10 +314,14 @@ object ArchiveKit {
             tarCache[key]?.let { return it }
         }
         // -tvf 而不是 -tf：只有详细列表才带大小与修改时间，否则列表全是 0 B 与 1970。
+        // 限长读回（OCR #823）：默认 Int.MAX_VALUE 会把超大包的整份详细列表
+        // 读进内存再缓存 4 份，浏览一个大 tar 就能 OOM。截断的列表不完整，
+        // 按「无法浏览」处理而不是缓存半张成员表。
         val raw =
             runCatching {
-                val result = env.exec(listOf("tar", "-tvf", file.absolutePath))
+                val result = env.exec(listOf("tar", "-tvf", file.absolutePath), maxOutputBytes = TAR_LISTING_MAX_BYTES)
                 if (!result.ok) return null
+                if (result.output.toByteArray(Charsets.UTF_8).size >= TAR_LISTING_MAX_BYTES) return null
                 result.output
             }.getOrNull() ?: return null
         val members = raw.split('\n').mapNotNull { TarListing.parseLine(it) }
@@ -394,8 +401,20 @@ object ArchiveKit {
             // 输出上限要在这里就交给 exec：等它把整个成员读成字符串再判断，
             // 一个几百 MB 的成员已经把内存吃掉了。
             val limit = (maxBytes + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            val result = env.exec(listOf("tar", "-xOf", file.absolutePath, member), maxOutputBytes = limit)
-            if (!result.ok) return null
+            var result = env.exec(listOf("tar", "-xOf", file.absolutePath, member), maxOutputBytes = limit)
+            if (!result.ok) {
+                // busybox 原样输出成员名（OCR #823）：C 转义还原可能把字面
+                // 反斜杠名弄坏。用列表里保留的原始名回退重试一次。
+                val raw =
+                    tarMembers(file, env)
+                        ?.firstOrNull { it.path == member }
+                        ?.rawPath
+                        ?.takeIf { it != member && isSafeMember(it) }
+                if (raw != null) {
+                    result = env.exec(listOf("tar", "-xOf", file.absolutePath, raw), maxOutputBytes = limit)
+                }
+                if (!result.ok) return null
+            }
             // 按字节判上限，不是字符数：UTF-8 中文一个字符占三字节，
             // 用 output.length 比较会让实际内存占用达到上限的三倍。
             if (result.output.toByteArray(Charsets.UTF_8).size.toLong() > maxBytes) return null
@@ -409,7 +428,11 @@ object ArchiveKit {
      * 执行命令）；换行能让一个名字在输出/日志里伪装成两行。这两种都拒绝。
      */
     internal fun isSafeMember(path: String): Boolean =
-        path.isNotEmpty() && !path.startsWith("-") && !path.contains('\n') && !path.contains('\r')
+        path.isNotEmpty() && !path.startsWith("-") && !path.contains('\n') && !path.contains('\r') &&
+            // tar 把成员参数当 glob（OCR #823）：名字含 * ? [ 可能匹配到别的
+            // 成员，readTarText 会显示错误文件的内容。容器 tar 未必支持
+            // --no-wildcards，直接在守卫侧拒绝元字符。
+            path.none { it == '*' || it == '?' || it == '[' }
 
     private fun normalizeDir(path: String): String {
         // 与成员路径用同一种形式：TarListing 已剥掉开头的 ./，这里也必须剥，

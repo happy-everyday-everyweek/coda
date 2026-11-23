@@ -160,7 +160,21 @@ object DataBackup {
             // 只收录已导出路径：部分包里留下未导出路径会造成悬空链接与 chmod 失败。
             val keptExec = BackupCategory.filterManifest(execEntries, exportedPaths)
             if (keptExec.isNotEmpty()) putText("file-modes.txt", keptExec.joinToString("\n"))
-            val keptLinks = symlinks.filter { BackupCategory.shouldExport(it.first, selected) }
+            val keptLinks =
+                symlinks.filter { (path, target) ->
+                    if (!BackupCategory.shouldExport(path, selected)) return@filter false
+                    // 目标也要过滤（OCR #823）：保留的链接指向未导出分类会重建
+                    // 悬空链接。相对目标按链接自身包路径解析后必须仍在导出集合里；
+                    // 绝对系统目标（rootfs 内）按原样保留。
+                    if (target.startsWith("/")) return@filter true
+                    val parent = path.substringBeforeLast('/', "")
+                    val joined = if (parent.isEmpty()) target else "$parent/$target"
+                    val resolved = TarListing.normalizePath(joined)
+                    resolved.isNotEmpty() &&
+                        !resolved.startsWith("/") &&
+                        resolved.split('/').none { it == ".." } &&
+                        (resolved in exportedPaths || exportedPaths.any { it.startsWith("$resolved/") })
+                }
             if (keptLinks.isNotEmpty()) {
                 putText("symlinks.txt", keptLinks.joinToString("\n") { "${it.first}\t${it.second}" })
             }
@@ -225,13 +239,75 @@ object DataBackup {
         val packageFile = File(ctx.cacheDir, "backup-import-${System.nanoTime()}.zip")
         try {
             ctx.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(packageFile).use { output -> input.copyTo(output) }
+                FileOutputStream(packageFile).use { output ->
+                    // 边拷边判上限（OCR #823）：无上限 copyTo 会把多 GB 的包
+                    // 整个灌进内部存储，恰好耗尽 MAX_TOTAL_BYTES 要保护的空间。
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_TOTAL_BYTES) throw IllegalStateException("备份文件超过上限")
+                        output.write(buffer, 0, read)
+                    }
+                }
             } ?: throw IllegalStateException("无法读取备份文件")
             return block(packageFile)
         } finally {
             packageFile.delete()
         }
     }
+
+    /**
+     * 暂存一次供预检与导入复用（OCR #823）：validate(uri)+import(uri) 各自
+     * withPackage 会把同一个多 GB 包拷两遍。调用方先 stage，再用
+     * validateStaged/importStaged，最后 close 删临时文件。
+     */
+    class StagedPackage internal constructor(
+        internal val file: File,
+    ) : java.io.Closeable {
+        override fun close() {
+            runCatching { file.delete() }
+        }
+    }
+
+    /** 把 Uri 落到私有临时文件（限长）；调用方负责 close。 */
+    fun stage(ctx: Context, uri: Uri): StagedPackage {
+        val packageFile = File(ctx.cacheDir, "backup-import-${System.nanoTime()}.zip")
+        try {
+            ctx.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(packageFile).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_TOTAL_BYTES) throw IllegalStateException("备份文件超过上限")
+                        output.write(buffer, 0, read)
+                    }
+                }
+            } ?: throw IllegalStateException("无法读取备份文件")
+            return StagedPackage(packageFile)
+        } catch (t: Throwable) {
+            runCatching { packageFile.delete() }
+            throw t
+        }
+    }
+
+    /** 对已暂存的包做预检；通过返回 null。 */
+    fun validateStaged(ctx: Context, staged: StagedPackage): String? =
+        try {
+            validatePackage(ctx, staged.file)
+            null
+        } catch (e: Exception) {
+            AppLog.w("Backup", "备份预检未通过：${e.message}")
+            e.message ?: "无法读取备份文件"
+        }
+
+    /** 导入已暂存且预检通过的包。 */
+    fun importStaged(ctx: Context, staged: StagedPackage): Int = importPackage(ctx, staged.file)
 
     /** 预检整个包；所有检查都在覆盖用户数据之前完成。 */
     private fun validatePackage(
@@ -240,8 +316,13 @@ object DataBackup {
     ) {
         var manifest: JSONObject? = null
         ZipFile(file).use { zip ->
+            // size() 不物化条目（OCR #823）：百万级中央目录记录先 toList 会
+            // 分配数百 MB ZipEntry 直接 OOM，守卫本身成了攻击面。
+            if (zip.size() > MAX_ENTRIES) throw IllegalStateException("备份条目过多")
             val names = zip.entries().asSequence().toList()
-            if (names.size > MAX_ENTRIES) throw IllegalStateException("备份条目过多")
+            // 预检就拦总量（OCR #823）：只查单条会让 zip-bomb 通过 validate、
+            // 停掉运行时后在 import 半途才拒，留下新旧混合状态。
+            var declaredTotal = 0L
             for (entry in names) {
                 if (entry.isDirectory) continue
                 val name = entry.name
@@ -251,6 +332,10 @@ object DataBackup {
                     throw IllegalStateException("备份包含非法路径")
                 }
                 if (entry.size > MAX_FILE_BYTES) throw IllegalStateException("备份条目过大：$name")
+                if (entry.size > 0) {
+                    declaredTotal += entry.size
+                    if (declaredTotal > MAX_TOTAL_BYTES) throw IllegalStateException("备份声明总量超过上限")
+                }
                 if (name.startsWith("prefs/") && name.endsWith(".json")) {
                     val pref = name.removePrefix("prefs/").removeSuffix(".json")
                     if (!PREFS_NAME.matches(pref)) {
@@ -260,7 +345,12 @@ object DataBackup {
                 }
                 if (name == ENTRY_MANIFEST) {
                     if (entry.size > MAX_TEXT_BYTES) throw IllegalStateException("备份清单过大")
-                    manifest = JSONObject(String(zip.getInputStream(entry).readLimited(MAX_TEXT_BYTES), Charsets.UTF_8))
+                    manifest = JSONObject(
+                        String(
+                            zip.getInputStream(entry).use { it.readLimited(MAX_TEXT_BYTES) },
+                            Charsets.UTF_8,
+                        ),
+                    )
                 }
             }
             val header = manifest ?: throw IllegalStateException("备份缺少 manifest.json")
@@ -270,7 +360,7 @@ object DataBackup {
             val links = names.firstOrNull { it.name == "symlinks.txt" }
             if (links != null) {
                 if (links.size > MAX_TEXT_BYTES) throw IllegalStateException("链接清单过大")
-                val text = String(zip.getInputStream(links).readLimited(MAX_TEXT_BYTES), Charsets.UTF_8)
+                val text = String(zip.getInputStream(links).use { it.readLimited(MAX_TEXT_BYTES) }, Charsets.UTF_8)
                 text.lineSequence().filter { it.isNotBlank() }.forEach { line ->
                     val parts = line.split('\t', limit = 2)
                     if (parts.size != 2) throw IllegalStateException("链接清单格式错误")
@@ -284,6 +374,12 @@ object DataBackup {
                     if (link.startsWith("/")) {
                         if (link.contains('\u0000') || link.split('/').contains("..")) {
                             throw IllegalStateException("链接目标非法")
+                        }
+                        // 绝对目标只对 Linux rootfs 有意义（proot 按 guest 根重解析，
+                        // OCR #823）：files/、databases/、no-backup/ 下的绝对链接会
+                        // 指向恢复根之外，后续文件操作或内核可能跟随它。
+                        if (!parts[0].startsWith("files/linux/")) {
+                            throw IllegalStateException("绝对链接目标只允许在 Linux rootfs 内")
                         }
                     } else {
                         val base = destination.first.canonicalFile
@@ -488,6 +584,10 @@ object DataBackup {
             if (!link.startsWith("/") && !inside(linkTarget, base)) throw IllegalStateException("链接目标越界")
             if (link.startsWith("/") && (link.contains('\u0000') || link.split('/').contains(".."))) {
                 throw IllegalStateException("链接目标非法")
+            }
+            // 与 validatePackage 同口径（OCR #823）：绝对目标只允许 rootfs 子树。
+            if (link.startsWith("/") && !entry.startsWith("files/linux/")) {
+                throw IllegalStateException("绝对链接目标只允许在 Linux rootfs 内")
             }
             raw.parentFile?.mkdirs()
             if (raw.exists() || isSymlink(raw)) {

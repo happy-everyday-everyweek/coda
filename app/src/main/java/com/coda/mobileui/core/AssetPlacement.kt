@@ -41,18 +41,28 @@ internal object AssetPlacement {
             return Result.Placed(target.length())
         }
         // 跨设备（临时目录与目标不在同一挂载点）时重命名会失败，复制是可行的回退。
-        val copied =
+        // 复制先写目标同目录的 staging 再 rename（OCR #823）：直接写 target
+        // 会让进程被杀/并发 ensure 的 step-1 校验看到半截文件，无 sha256 的
+        // spec 甚至能把截断文件当成品。失败只删自己的 staging，绝不动已有 target。
+        val staging = File(target.parentFile, target.name + "." + System.nanoTime() + ".staging")
+        val copyError =
             runCatching {
-                tmp.inputStream().use { input ->
-                    target.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
+                try {
+                    tmp.inputStream().use { input ->
+                        staging.outputStream().use { output -> input.copyTo(output, 256 * 1024) }
+                    }
+                    if (staging.length() != tmp.length()) throw java.io.IOException("复制长度不符")
+                    if (!staging.renameTo(target)) throw java.io.IOException("替换 ${target.name} 失败")
+                } finally {
+                    if (staging.exists()) runCatching { staging.delete() }
                 }
-            }.isSuccess
-        if (copied && target.length() == tmp.length()) {
+            }.exceptionOrNull()
+        if (copyError == null) {
             runCatching { tmp.delete() }
             return Result.Placed(target.length())
         }
-        // 复制也没成：清掉可能写了一半的目标，避免下次把它当成「已就位」。
-        runCatching { target.delete() }
-        return Result.Failed("重命名与复制都失败（${tmp.absolutePath} → ${target.absolutePath}）")
+        return Result.Failed(
+            "重命名与复制都失败（${tmp.absolutePath} → ${target.absolutePath}）：${copyError.message ?: copyError.javaClass.simpleName}",
+        )
     }
 }

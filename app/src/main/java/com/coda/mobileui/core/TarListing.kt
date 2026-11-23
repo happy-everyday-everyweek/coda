@@ -14,6 +14,8 @@ internal object TarListing {
         val isDir: Boolean,
         val size: Long,
         val modifiedAt: Long,
+        /** 转义还原前的原始名（OCR #823）：busybox 原样输出时用它回退提取。 */
+        val rawPath: String = path,
     )
 
     /**
@@ -27,7 +29,13 @@ internal object TarListing {
         return path
     }
 
-    /** 还原 GNU tar 的 C 风格转义；没有转义时原样返回。 */
+    /**
+     * 还原 GNU tar 的 C 风格转义；没有转义时原样返回。
+     *
+     * busybox tar 原样输出成员名（OCR #823）：字面叫 `a\nb.txt` 的文件
+     * 会被还原成真实换行、对不上成员。原始名保留在 [Member.rawPath]，
+     * 提取失败时由调用方用原始名回退重试（见 ArchiveKit.readTarText）。
+     */
     fun unescape(name: String): String {
         if (!name.contains('\\')) return name
         val sb = StringBuilder(name.length)
@@ -92,17 +100,25 @@ internal object TarListing {
         if (line.isBlank()) return null
         val mode = line.firstOrNull() ?: return null
         // 只认 tar 的类型位；其他开头说明这不是详细列表（比如误用了 -tf）。
-        if (mode !in "-dlbcps") return null
+        // h（硬链接）也是文件条目（OCR #823）：漏掉它会让硬链接文件从浏览器
+        // 消失，而 tar -xOf 能正常提取。
+        if (mode !in "-dlbcps h".replace(" ", "")) return null
         val isDir = mode == 'd'
         // 前三个字段是权限、属主、大小；随后是日期与时间；剩下的整段才是名字。
-        val parts = line.split(Regex("\\s+"), limit = 6)
+        val parts = line.split(WHITESPACE, limit = 6)
         if (parts.size < 6) return null
         val size = parts[2].toLongOrNull() ?: 0L
         val stamp = parts[3] + " " + parts[4]
         var name = parts[5]
-        // 符号链接与硬链接的目标不属于成员名。
-        val arrow = name.indexOf(" -> ")
-        if (arrow >= 0) name = name.substring(0, arrow)
+        // 只有链接行才带 ` -> target`（OCR #823）：普通文件名可以合法含
+        // " -> "（如 notes -> draft.txt），一律剥会把名字截断、提取错成员。
+        if (mode == 'l' || mode == 'h') {
+            val arrow = name.indexOf(" -> ")
+            if (arrow >= 0) name = name.substring(0, arrow)
+            val linkTo = name.indexOf(" link to ")
+            if (mode == 'h' && linkTo >= 0) name = name.substring(0, linkTo)
+        }
+        val rawName = normalizePath(name)
         name = normalizePath(unescape(name))
         if (name.isEmpty() || name == ".") return null
         val dirByName = name.endsWith("/")
@@ -111,6 +127,7 @@ internal object TarListing {
             isDir = isDir || dirByName,
             size = if (isDir || dirByName) 0L else size,
             modifiedAt = parseStamp(stamp),
+            rawPath = rawName.trimEnd('/'),
         )
     }
 
@@ -153,11 +170,22 @@ internal object TarListing {
         return Link(path = name.trimEnd('/'), target = target, hardLink = hard)
     }
 
+    /** 行切分正则提为常量（OCR #823）：每行编译一次 Regex 在几十万条目时开销显著。 */
+    private val WHITESPACE = Regex("\\s+")
+
+    /** SimpleDateFormat 非线程安全，按线程复用（OCR #823）：不再每成员新建。 */
+    private val stampFormat =
+        object : ThreadLocal<java.text.SimpleDateFormat>() {
+            override fun initialValue(): java.text.SimpleDateFormat {
+                val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+                fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                return fmt
+            }
+        }
+
     /** 把 `2024-05-06 07:08` 解析成毫秒；解析不出返回 0，由上层决定回退值。 */
     fun parseStamp(stamp: String): Long =
         runCatching {
-            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
-            fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
-            fmt.parse(stamp.trim())?.time ?: 0L
+            stampFormat.get()!!.parse(stamp.trim())?.time ?: 0L
         }.getOrDefault(0L)
 }
