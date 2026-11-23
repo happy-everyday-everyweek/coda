@@ -119,6 +119,10 @@ private data class DrawerConversation(
  */
 class MainActivity : BaseActivity() {
     companion object {
+        /** 索引写盘的去抖窗口：流式期间合并成一次写入。 */
+        private const val INDEX_DEBOUNCE_MS = 800L
+        /** 去抖最大延迟：持续流式时最老条目超过它就立即落盘（OCR #822）。 */
+        private const val INDEX_MAX_DELAY_MS = 4_000L
         /**
          * 从设置页返回主界面时需要在主界面展开抽屉（#599）。
          *
@@ -1841,7 +1845,12 @@ class MainActivity : BaseActivity() {
                         if (target != null) {
                             pendingRestoreConversationId = null
                             showConversation(target)
-                            return
+                            // 不再早退（OCR #822）：抽屉列表/胶囊/只读横幅也要
+                            // 用新快照刷新，showConversation 只画演示数据。
+                        } else if (zc.sessions.isNotEmpty()) {
+                            // 会话列表已到且没有它（别的设备删了）：清掉 pending，
+                            // 否则每次状态变化都白扫一遍（OCR #822）。
+                            pendingRestoreConversationId = null
                         }
                     }
                     renderFromController()
@@ -2171,9 +2180,18 @@ class MainActivity : BaseActivity() {
     }
 
     /** 依据控制器状态刷新界面。 */
+    /** 已标记过已读的当前会话（OCR #822）：避免每次渲染都写 prefs。 */
+    private var seenMarkedSession: String? = null
     private fun renderFromController() {
         syncPet()
         updateReadOnlyBanner()
+        // 正在查看的会话算已读：只在会话切换后的首次渲染标记一次，
+        // 不再在每行绑定里全量扫 prefs 写盘。
+        val cur = zc.currentSessionId
+        if (cur != null && cur != seenMarkedSession) {
+            seenMarkedSession = cur
+            SettingsStore.get(this).markSessionSeen(cur, liveSessionIds = zc.sessions.map { it.id })
+        }
         if (zc.running) {
             if (runningSince == null) runningSince = System.currentTimeMillis()
         } else {
@@ -3678,12 +3696,9 @@ class MainActivity : BaseActivity() {
     ): View {
         val row = inflater.inflate(R.layout.view_drawer_conversation, container, false)
         row.tag = session.id
-        // 正在查看的会话即时算已读；其余按完成时间与上次查看时间判断是否未读。
-        if (session.id ==
-            zc.currentSessionId
-        ) {
-            SettingsStore.get(this).markSessionSeen(session.id, liveSessionIds = zc.sessions.map { it.id })
-        }
+        // 已读标记不在行绑定里写（OCR #822）：每次状态变化/流式刷新都重建
+        // 抽屉，逐行 markSessionSeen 是全量 prefs 扫描+主线程写盘。
+        // 标记只发生在会话点开与当前会话首次渲染（见 openSession 路径）。
         val status = sessionConvStatus(session)
         row.findViewById<TextView>(R.id.conv_status).apply {
             val label =
@@ -3719,7 +3734,9 @@ class MainActivity : BaseActivity() {
         summaryView.text = cachedGit?.branch ?: session.workspacePath ?: session.mode
         bindSessionPull(row, cachedGit)
         val path = session.workspacePath
-        if (path != null && cachedGit == null) {
+        // 缓存过期也刷新（OCR #822）：只在 cachedGit==null 时 inspect 会让
+        // 首次之后永远渲染旧分支名，应用外切分支永不反映。inspect 自带 TTL 去重。
+        if (path != null && (cachedGit == null || GitWorkspace.cachedStale(path))) {
             val sessionId = session.id
             com.coda.mobileui.core.Bg.run {
                 val info = GitWorkspace.inspect(path)
@@ -4915,7 +4932,10 @@ class MainActivity : BaseActivity() {
                     }
 
                     WorkspaceGestureAction.CancelWorkspace -> {
-                        workspaceDragActive = false
+                        // 不清 workspaceDragActive（OCR #822）：策略文档明确
+                        // 「拖拽一旦开始就锁定给工作区」，清了之后同一手势继续
+                        // 右移会命中 OpenDrawer，预览还留着抽屉又开了。
+                        // 旗标只在 DOWN/UP/CANCEL 复位；CancelWorkspace 幂等。
                         workspaceDragFraction = 0f
                         finishWorkspaceDrag(0, cancelled = true)
                     }
@@ -5193,14 +5213,18 @@ class MainActivity : BaseActivity() {
      */
     /** 会话正文与聊天里发过的图片落一份可检索的文本索引；只在会话渲染时增量写，不额外跑后台任务。 */
 
-    /** 索引写盘的去抖窗口：流式期间合并成一次写入。 */
-    private val INDEX_DEBOUNCE_MS = 800L
     private val pendingIndex = java.util.concurrent.ConcurrentHashMap<String, String>()
+    /** 最老待写条目的时间戳：持续流式时去抖不能无限顺延（OCR #822）。 */
+    @Volatile
+    private var oldestPendingAt = 0L
     private val indexHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val indexFlush =
         Runnable {
             val snapshot = HashMap(pendingIndex)
-            pendingIndex.clear()
+            // 只删快照里的键（OCR #822）：copy+clear 之间并发插入的条目
+            // 会被静默丢弃、永不落盘。
+            snapshot.keys.forEach { pendingIndex.remove(it) }
+            oldestPendingAt = 0L
             if (snapshot.isEmpty()) return@Runnable
             com.coda.mobileui.core.Bg.run {
                 val dir = java.io.File(filesDir, "search/sessions")
@@ -5244,9 +5268,18 @@ class MainActivity : BaseActivity() {
                 }
                 sb.toString().take(200_000)
             }.getOrNull() ?: return
+        if (pendingIndex.isEmpty()) oldestPendingAt = System.currentTimeMillis()
         pendingIndex[sessionId] = text
         indexHandler.removeCallbacks(indexFlush)
-        indexHandler.postDelayed(indexFlush, INDEX_DEBOUNCE_MS)
+        // 尾随去抖 + 最大延迟封顶（OCR #822）：chunk 间隔一直小于 800ms 时
+        // 纯尾随去抖会无限顺延，正在生成的会话恰恰搜不到。最老条目超过
+        // 4s 就立即 flush。
+        val age = System.currentTimeMillis() - oldestPendingAt
+        if (age >= INDEX_MAX_DELAY_MS) {
+            indexHandler.post(indexFlush)
+        } else {
+            indexHandler.postDelayed(indexFlush, INDEX_DEBOUNCE_MS)
+        }
     }
 
     private fun searchExtras(

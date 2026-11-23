@@ -55,6 +55,15 @@ object GitWorkspace {
         synchronized(cache) { return cache[path]?.second }
     }
 
+    /** 缓存条目是否已过 TTL（OCR #822）：过期时调用方应触发后台 inspect。 */
+    fun cachedStale(path: String?): Boolean {
+        if (path.isNullOrEmpty()) return false
+        synchronized(cache) {
+            val (at, _) = cache[path] ?: return false
+            return System.currentTimeMillis() - at >= TTL_MS
+        }
+    }
+
     private fun read(start: File): Info? {
         val repo = findRepo(start) ?: return null
         val pair = parseOwnerRepo(readRemoteUrl(repo.gitDir))

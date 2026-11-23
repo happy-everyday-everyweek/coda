@@ -37,7 +37,12 @@ internal object ChatImportRunner {
 
         fun summary(): String =
             if (reject != null) {
-                "导入未开始：${reject.reason}"
+                // 半途失败不能报「未开始」（OCR #822）：已导入的会话要如实计数。
+                if (imported > 0 || skipped > 0) {
+                    "已导入 $imported 个会话，跳过 $skipped 个，随后中断：${reject.reason}"
+                } else {
+                    "导入未开始：${reject.reason}"
+                }
             } else {
                 buildString {
                     append("已导入 $imported 个会话")
@@ -68,6 +73,8 @@ internal object ChatImportRunner {
         runCatching {
             withTempPackage(ctx, uri) { file ->
                 ZipFile(file).use { zip ->
+                    // detect 也要过条目闸门（OCR #822）：百万级中央目录先物化会 OOM。
+                    if (zip.size() > DeepSeekImport.MAX_ENTRIES) return@use Source.UNKNOWN
                     val names =
                         zip
                             .entries()
@@ -77,7 +84,7 @@ internal object ChatImportRunner {
                     val manifestEntry = zip.getEntry("manifest.json") ?: return@use Source.UNKNOWN
                     val manifest =
                         runCatching {
-                            JSONObject(zip.getInputStream(manifestEntry).readBytes().toString(Charsets.UTF_8))
+                            JSONObject(zip.readMetaLimited(manifestEntry) ?: return@use Source.UNKNOWN)
                         }.getOrNull() ?: return@use Source.UNKNOWN
                     when {
                         manifest.optString("app") == "coda" -> Source.CODA_BACKUP
@@ -97,6 +104,7 @@ internal object ChatImportRunner {
         runCatching {
             withTempPackage(ctx, uri) { file ->
                 ZipFile(file).use { zip ->
+                    if (zip.size() > DeepSeekImport.MAX_ENTRIES) return@use 0
                     val index = readIndex(zip) ?: return@use 0
                     DeepSeekImport.pickRecent(index, limit).size
                 }
@@ -135,7 +143,7 @@ internal object ChatImportRunner {
                         zip.getEntry("manifest.json")
                             ?: return@use Report(0, 0, emptyList(), DeepSeekImport.Reject.MISSING_MANIFEST)
                     val manifest =
-                        runCatching { JSONObject(zip.getInputStream(manifestEntry).readBytes().toString(Charsets.UTF_8)) }
+                        runCatching { JSONObject(zip.readMetaLimited(manifestEntry) ?: return@use Report(0, 0, emptyList(), DeepSeekImport.Reject.UNREADABLE_ARCHIVE)) }
                             .getOrNull()
                             ?: return@use Report(0, 0, emptyList(), DeepSeekImport.Reject.UNREADABLE_ARCHIVE)
                     if (!DeepSeekImport.supportedManifest(manifest)) {
@@ -233,10 +241,29 @@ internal object ChatImportRunner {
         return (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
     }
 
+    /** 元数据条目限长读（OCR #822）：高压缩比索引可膨胀到数百 MB 堆。 */
+    private const val MAX_META_BYTES = 8 * 1024 * 1024
+    private fun ZipFile.readMetaLimited(entry: java.util.zip.ZipEntry): String? =
+        runCatching {
+            getInputStream(entry).use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(64 * 1024)
+                var total = 0
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    total += n
+                    if (total > MAX_META_BYTES) return null
+                    out.write(buf, 0, n)
+                }
+                out.toString(Charsets.UTF_8.name())
+            }
+        }.getOrNull()
+
     private fun readIndex(zip: ZipFile): JSONArray? {
         val entry = zip.getEntry("chat_session_index.json") ?: return null
         return runCatching {
-            val text = zip.getInputStream(entry).readBytes().toString(Charsets.UTF_8)
+            val text = zip.readMetaLimited(entry) ?: return null
             // 索引可能直接是数组，也可能包在 {sessions:[...]} 里。
             if (text.trimStart().startsWith("[")) {
                 JSONArray(text)

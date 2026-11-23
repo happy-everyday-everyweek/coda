@@ -207,6 +207,7 @@ class CodaSheet(
         panel = null
         grabberRow = null
         footerRow = null
+        dragAreaRow = null
         backCallback?.let {
             it.isEnabled = false
             it.remove()
@@ -996,9 +997,9 @@ class CodaSheet(
 
         col.postDelayed({
             // 卡片已被关掉，或同一实例又换了一代：这次过渡没有接收者了。
-            // 必须放开 navigating，否则这张卡片之后再也换不了页。
+            // 过期 runnable 不得动 navigating（OCR #822）：它可能属于新一代
+            // 在途过渡，清掉会击穿连点守卫。两条清理路径都已复位该旗标。
             if (!shouldApplyDismiss(myGen, generation) || !col.isAttachedToWindow) {
-                navigating = false
                 return@postDelayed
             }
             try {
@@ -1103,7 +1104,12 @@ class CodaSheet(
         cancelPanelAnim()
         val rootView = root
         if (rootView == null) {
+            // 没有视图可关也要派发回调（OCR #822）：权限/输入对话框靠
+            // onDismiss 复位 responded/pending，静默丢链会让调用方永久
+            // 以为卡片还开着。
+            val block = pendingDismissBlock
             pendingDismissBlock = null
+            runCatching { block?.invoke() }
             return
         }
         val scrimView = scrim
@@ -1132,6 +1138,9 @@ class CodaSheet(
             panel = null
             grabberRow = null
             footerRow = null
+            // dragAreaRow 也持有 Activity 视图树（OCR #822）：不清会让
+            // rebuildHeaderAction 在已 dismiss 的实例上改僵尸视图。
+            dragAreaRow = null
             // 这些引用指向已从窗口移除的视图：不清掉会一直持有整棵视图树，
             // 而且同一个 CodaSheet 实例被复用时 navigate 会操作僵尸视图。
             livePanel = null

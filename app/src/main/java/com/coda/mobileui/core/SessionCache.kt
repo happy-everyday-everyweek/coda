@@ -65,8 +65,9 @@ object SessionCache {
      * 登出清理与后台刷盘是并发的：清理只把目录删掉，排队中的写任务随后会把旧会话
      * 又写回来。清理时递增代际，旧任务发现自己过期就直接丢弃。
      */
-    @Volatile
-    private var generation = 0
+    // AtomicInteger（OCR #822）：@Volatile Int 的 += 是非原子读改写，
+    // 并发 clear 丢增量会让排队快照重新匹配代际、登出后旧数据复活。
+    private val generation = java.util.concurrent.atomic.AtomicInteger(0)
 
     private fun dir(ctx: Context): File = File(ctx.filesDir, DIR).apply { mkdirs() }
 
@@ -188,7 +189,7 @@ object SessionCache {
             list.takeLast(MAX_MESSAGES).map {
                 MsgRow(it.id, it.role, it.createdAt, it.text())
             }
-        pendingMessages[sessionId] = Pending(generation, rows)
+        pendingMessages[sessionId] = Pending(generation.get(), rows)
         scheduleFlush(ctx.applicationContext ?: ctx)
     }
 
@@ -201,7 +202,7 @@ object SessionCache {
                     val id = pendingMessages.keys.firstOrNull() ?: break
                     val item = pendingMessages.remove(id) ?: continue
                     // 清理之后才轮到写盘的快照已经过期，写回去等于把刚清掉的会话复活。
-                    if (item.generation != generation) continue
+                    if (item.generation != generation.get()) continue
                     writeMessages(ctx, id, item.rows)
                 }
                 prune(ctx)
@@ -301,7 +302,7 @@ object SessionCache {
     /** 清空全部缓存（退出登录、切换内核数据目录时用）。 */
     fun clear(ctx: Context) {
         // 先递增代际并丢掉排队快照，再删文件：否则后台刷盘会把会话又写回来。
-        generation += 1
+        generation.incrementAndGet()
         pendingMessages.clear()
         io.execute {
             runCatching {

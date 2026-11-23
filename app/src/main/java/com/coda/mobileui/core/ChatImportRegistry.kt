@@ -109,13 +109,30 @@ internal object ChatImportRegistry {
             adapters.firstOrNull { it.id == want }?.let { return it }
         }
         adapters.firstOrNull { a -> a.markers.any { m -> entryNames.any { it.contains(m) } } }?.let { return it }
-        val prefix = head.take(HEAD_BYTES)
+        // 按字节而不是字符截断（OCR #822）：多字节内容下 take(HEAD_BYTES)
+        // 实际放进来的字节数远超文档说的 64KB 预算。
+        val prefix =
+            if (head.toByteArray(Charsets.UTF_8).size <= HEAD_BYTES) {
+                head
+            } else {
+                val bytes = head.toByteArray(Charsets.UTF_8)
+                String(bytes, 0, HEAD_BYTES, Charsets.UTF_8)
+            }
         return adapters.firstOrNull { a -> a.headMarkers.any { prefix.contains(it) } }
     }
 
-    /** 全部未命中时，逐个说明为什么放弃——比一句「不支持」有用得多。 */
+    /**
+     * 全部未命中时，逐个说明为什么放弃——比一句「不支持」有用得多。
+     *
+     * 无参版本（OCR #822）：旧签名两个参数都没用到，是死参数。
+     * 注册表目前是 #734 的分期基建，生产入口仍走 ChatImportRunner 的
+     * DeepSeek/Coda 硬编码识别；接入注册表时再按命中情况细化原因。
+     */
+    fun rejectReasons(): List<String> = adapters.map { "${it.title}：${it.rejectReason}" }
+
+    @Deprecated("参数从未被使用，改用无参版本", ReplaceWith("rejectReasons()"))
     fun rejectReasons(
         entryNames: List<String>,
         head: String,
-    ): List<String> = adapters.map { "${it.title}：${it.rejectReason}" }
+    ): List<String> = rejectReasons()
 }

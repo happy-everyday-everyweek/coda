@@ -163,6 +163,9 @@ class SessionSearchPage(
     }
 
     fun open() {
+        // 重进必刷新（OCR #822）：上次查询也是空串时 shouldSkipRender("","")
+        // 会跳过渲染，页面隐藏期间新建/改名的会话不出现。
+        lastQuery = null
         input.setText("")
         input.requestFocus()
         input.post {
@@ -176,9 +179,12 @@ class SessionSearchPage(
         imm?.hideSoftInputFromWindow(input.windowToken, 0)
     }
 
+    /** 页面已销毁（OCR #822）：迟到 TextWatcher/在途任务都不得再动视图。 */
+    @Volatile
+    private var released = false
     /** 去抖调度：相同查询直接跳过，取数放后台线程（#658）。 */
     private fun scheduleSearch(raw: String) {
-        if (!::results.isInitialized) return
+        if (released || !::results.isInitialized) return
         val q = raw.trim()
         lastQuery?.let {
             if (com.coda.mobileui.ui.SearchLogic
@@ -197,20 +203,36 @@ class SessionSearchPage(
         val sessionSnapshot = runCatching { zcSessionSnapshot() }.getOrDefault(emptyList())
         val task =
             Runnable {
-                searchPool.execute {
-                    // provider 可能读全部会话索引文件，绝不能在主线程跑。
-                    val all = runCatching { sessions() }.getOrDefault(emptyList())
-                    val others =
-                        if (q.isEmpty()) {
-                            emptyList()
-                        } else {
-                            runCatching { extras(q, sessionSnapshot) }.getOrDefault(emptyList())
-                        }
-                    searchHandler.post {
-                        // 迟到的旧结果不能覆盖新查询的结果。
-                        if (mine >= appliedSeq) {
-                            appliedSeq = mine
-                            paint(q, all, others)
+                // 已销毁的池再 execute 会抛 RejectedExecutionException（OCR #822）。
+                if (released) return@Runnable
+                runCatching {
+                    searchPool.execute {
+                        // provider 可能读全部会话索引文件，绝不能在主线程跑。
+                        // 失败不再静默吞成空列表（OCR #822）：记日志并重置
+                        // lastQuery，让重打同一查询能重试。
+                        val all =
+                            runCatching { sessions() }.getOrElse {
+                                com.coda.mobileui.core.AppLog.w("Search", "会话列表读取失败：${it.message}")
+                                searchHandler.post { if (!released) lastQuery = null }
+                                emptyList()
+                            }
+                        val others =
+                            if (q.isEmpty()) {
+                                emptyList()
+                            } else {
+                                runCatching { extras(q, sessionSnapshot) }.getOrElse {
+                                    com.coda.mobileui.core.AppLog.w("Search", "扩展搜索失败：${it.message}")
+                                    searchHandler.post { if (!released) lastQuery = null }
+                                    emptyList()
+                                }
+                            }
+                        if (released) return@execute
+                        searchHandler.post {
+                            // 迟到的旧结果不能覆盖新查询的结果；已销毁不画。
+                            if (!released && mine >= appliedSeq) {
+                                appliedSeq = mine
+                                paint(q, all, others)
+                            }
                         }
                     }
                 }
@@ -221,6 +243,7 @@ class SessionSearchPage(
 
     /** 页面销毁时停掉在途任务，避免回调持有已销毁的 Activity。 */
     fun release() {
+        released = true
         pendingSearch?.let { searchHandler.removeCallbacks(it) }
         searchHandler.removeCallbacksAndMessages(null)
         searchPool.shutdownNow()
