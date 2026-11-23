@@ -153,6 +153,11 @@ class WorkspaceActivity : BaseActivity() {
                 ?.let { File(it) }
                 ?.takeIf { it.isDirectory }
         root = requestedRoot ?: Workspaces.root(this)
+        // 存储彻底不可写时给出可见说明而不是崩溃（#764）：root() 不再硬抛，
+        // 但用户必须知道文件读写会失败，否则看到的是「操作没反应」。
+        Workspaces.storageError?.let {
+            android.widget.Toast.makeText(this, it, android.widget.Toast.LENGTH_LONG).show()
+        }
         setContentView(buildContainer())
         restoreTabs()
         // 入场完全由上面的 translationX 负责：关掉平台默认的 Activity 转场，

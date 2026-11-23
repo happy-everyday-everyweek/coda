@@ -37,10 +37,19 @@ object Bg {
     private const val QUEUE_CAPACITY = 128
 
     /**
-     * 队列满时不丢任务、也不抛给调用方：由提交线程自己执行一次，形成背压。
+     * 队列满时的处置（#738）。
      *
-     * 这比 RejectedExecution 直接抛出去好——后者会把一次普通的后台请求变成崩溃。
+     * 原来是 CallerRunsPolicy：它让**提交线程**自己跑这个任务。绝大多数提交点是
+     * UI 触发的，于是饱和之后网络请求会在主线程执行，抛
+     * NetworkOnMainThreadException 被外层 catch 吞掉（任务静默失败），
+     * 重文件 IO 则直接卡顿甚至 ANR。这与 run 承诺的「等同 Thread{}.start()」相反。
+     *
+     * 现在改成：记录一条可见的溢出日志，然后**丢弃**这个任务。
+     * 不用 queue.put 阻塞提交者——那会把主线程挂住，比丢任务更糟；
+     * 也不用 caller-runs——那正是本条 Issue。丢弃有日志、有计数，可观测。
      */
+    private val overflow = AtomicInteger(0)
+
     private val pool =
         ThreadPoolExecutor(
             MAX_THREADS,
@@ -49,8 +58,14 @@ object Bg {
             TimeUnit.SECONDS,
             ArrayBlockingQueue(QUEUE_CAPACITY),
             factory,
-            ThreadPoolExecutor.CallerRunsPolicy(),
-        )
+        ) { _, executor ->
+            val n = overflow.incrementAndGet()
+            // 池已关闭时也要留痕：CallerRunsPolicy 在这种情况下会静默丢任务。
+            AppLog.w(TAG, "后台队列已满，丢弃任务（累计 $n，shutdown=${executor.isShutdown}）")
+        }
+
+    /** 因队列满而被丢弃的任务数。用于诊断与设置页展示。 */
+    fun overflowCount(): Int = overflow.get()
 
     /** 提交一个后台任务，语义等同原来的 `Thread { block() }.start()`。 */
     fun run(block: () -> Unit) {

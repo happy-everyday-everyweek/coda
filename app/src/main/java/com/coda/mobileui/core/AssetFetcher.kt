@@ -70,6 +70,17 @@ object AssetFetcher {
         spec: Spec,
         onProgress: Progress? = null,
         onLog: (String) -> Unit = {},
+    ): Boolean =
+        // 同一目标串行（#806）：续传用的是确定性 `.part` 与共享 sidecar，
+        // 启动补资源与设置页同时获取同一资产会互写字节、互删断点。
+        AssetLocks.withLock(target) { ensureLocked(ctx, target, spec, onProgress, onLog) }
+
+    private fun ensureLocked(
+        ctx: Context,
+        target: File,
+        spec: Spec,
+        onProgress: Progress?,
+        onLog: (String) -> Unit,
     ): Boolean {
         // 1. 已经就位：先校验，避免把上次写坏的半截文件当成好的。
         // 只判 isFile，不额外要求非空：合法的空资源（spec.size == 0）也该能复用，

@@ -59,39 +59,59 @@ object SystemPrompts {
     fun summary(
         ctx: Context,
         item: Item,
-    ): String {
-        val file = fileOf(ctx, item.file)
-        if (!file.isFile) return "默认"
-        val text =
-            try {
-                file.readText()
-            } catch (e: Exception) {
-                AppLog.w("SystemPrompts", "读取模板失败 ${item.file}：${e.message ?: e.javaClass.simpleName}")
-                return "读取失败"
-            }
-        val digest = sha256(text)
-        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val key = baselineKey(item)
-        val baseline = prefs.getString(key, null)
-        if (baseline == null) {
-            // 第一次见到：把当前内容当作基线（内核刚释放的默认模板）。
-            prefs.edit().putString(key, digest).apply()
-            return "默认"
+    ): String = statuses(ctx)[item.file] ?: "待内核初始化"
+
+    /**
+     * 一次算出全部模板的状态（#743）。
+     *
+     * **阻塞 I/O，不得在主线程调用**：14 份文件的 readText + SHA-256 放在渲染路径上
+     * 就是 #173 要消除的主线程卡顿。设置页经 SettingsData 的快照机制在后台取这份表。
+     *
+     * 只读，不写任何偏好：状态查询带副作用会让「首次见到即默认」这类误判无法排查（#742）。
+     */
+    fun statuses(ctx: Context): Map<String, String> {
+        val dir = dir(ctx)
+        val manifest =
+            PromptBaseline.parseManifest(
+                runCatching { File(dir, PromptBaseline.MANIFEST).readText() }.getOrNull(),
+            )
+        val out = LinkedHashMap<String, String>()
+        all.forEach { item ->
+            val file = File(dir, item.file)
+            val exists = file.isFile
+            val text =
+                if (!exists) {
+                    null
+                } else {
+                    runCatching { file.readText() }.getOrElse {
+                        AppLog.w("SystemPrompts", "读取模板失败 ${item.file}：${it.message ?: it.javaClass.simpleName}")
+                        null
+                    }
+                }
+            // 文件不存在与读失败都用 text == null 表达，靠 exists 区分。
+            val digest = text?.let { PromptBaseline.sha256(it) }
+            val status = PromptBaseline.statusOf(exists, text, digest, manifest[item.file])
+            out[item.file] = PromptBaseline.label(status)
         }
-        if (digest == baseline) return "默认"
-        // 纯空白也算改动：用户主动清空与从未编辑是两回事。
-        return if (text.isBlank()) "已清空" else "已修改"
+        return out
     }
 
-    /** 用户点「恢复默认」后调用：把当前内容重新设为基线。 */
+    /**
+     * 用户点「恢复默认」后调用：清掉这一项的基线记录（#740）。
+     *
+     * 不能重读文件再算摘要：恢复默认走的是 `AgentPrompt.save(file, "")`，
+     * 那条路径会**删除**文件，readText 必然失败，旧实现在这里直接 return，
+     * 基线永远停在上次的自定义内容上。等内核重新释放默认模板后，
+     * 摘要与陈旧基线不符，设置页反而把默认状态显示成「已修改」。
+     *
+     * 清掉键之后，下次读到内核释放的模板会重新建立基线，语义正确。
+     */
     fun resetBaseline(
         ctx: Context,
         item: Item,
     ) {
-        val file = fileOf(ctx, item.file)
-        val digest = runCatching { sha256(file.readText()) }.getOrNull() ?: return
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(baselineKey(item), digest)
+            .remove(baselineKey(item))
             .apply()
     }
 
@@ -99,9 +119,4 @@ object SystemPrompts {
 
     /** 基线键名只在这里拼一次：读写两处共用，改规则时不必两处同步。 */
     private fun baselineKey(item: Item): String = "baseline_" + item.file
-
-    private fun sha256(text: String): String {
-        val bytes = java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
 }

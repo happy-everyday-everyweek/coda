@@ -7,6 +7,7 @@ import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLongArray
 import java.util.concurrent.atomic.AtomicReference
 
@@ -58,6 +59,8 @@ internal object ChunkedFetch {
         open: (from: Long, to: Long) -> HttpURLConnection,
     ): Outcome {
         if (chunks.isEmpty()) return Outcome(DownloadOutcome.Kind.IO, detail = "没有可下载的分块")
+        // 预分配之前先核对 part 的真实长度（#815）：不符就把各块进度清零。
+        prepare(part, total, done)
         val raf = RandomAccessFile(part, "rw")
         // 预分配长度：各块写的是文件中间的偏移，不先把长度撑开，
         // 靠后的块 seek 到超出文件末尾的位置写入会留下空洞（读出来是 0）。
@@ -65,13 +68,17 @@ internal object ChunkedFetch {
         val writeLock = Any()
         val failure = AtomicReference<Outcome?>(null)
         val speeds = AtomicLongArray(chunks.size)
+        // 停止信号只属于本次分块任务（#807）。调用方的 Cancel 是它的资产：
+        // 镜像回退循环要拿同一个令牌去试下一个源，在这里 cancel 它会让下一轮
+        // 直接返回 CANCELLED，把镜像故障误报成「用户取消」。
+        val stopped = AtomicBoolean(false)
         val pool = Executors.newFixedThreadPool(chunks.size)
         try {
             val tasks =
                 chunks.map { c ->
                     Runnable {
                         try {
-                            fetchChunk(c, raf, writeLock, done, speeds, total, cancel, progress, open)
+                            fetchChunk(c, raf, writeLock, done, speeds, total, cancel, stopped, progress, open)
                         } catch (e: CancellationException) {
                             // 取消不是失败：记下来让主线程据此返回 CANCELLED，
                             // 但不能覆盖已经记下的真实失败原因。
@@ -79,7 +86,7 @@ internal object ChunkedFetch {
                         } catch (e: Exception) {
                             val kind =
                                 if (e is ChunkHttpException) {
-                                    DownloadOutcome.ofHttp(e.code)
+                                    ChunkResume.chunkHttpKind(e.code)
                                 } else {
                                     DownloadOutcome.Kind.IO
                                 }
@@ -87,8 +94,8 @@ internal object ChunkedFetch {
                                 null,
                                 Outcome(kind, detail = "块 ${c.index}：${e.javaClass.simpleName}: ${e.message}"),
                             )
-                            // 一块失败就取消其余块：让它们尽快停下，别继续耗流量。
-                            cancel?.cancel()
+                            // 一块失败就让其余块尽快停下，别继续耗流量；只动本任务的标志。
+                            stopped.set(true)
                         }
                     }
                 }
@@ -114,7 +121,24 @@ internal object ChunkedFetch {
         }
     }
 
-    /** 块请求收到非 2xx：带上状态码，让上层按 HTTP 分类而不是笼统的 IO。 */
+    /**
+     * 预分配之前核对 part 的真实状态（#815）。
+     *
+     * 返回 true 表示进度已被清零、这次要从头下。part 不在或长度不等于 total 时，
+     * done[] 声称的字节已经不在磁盘上了：照旧 setLength 会把空洞补成 0，
+     * 而「已完成」的块会被整块跳过，最终拼出一个长度正确、内容带零洞的文件。
+     */
+    internal fun prepare(
+        part: File,
+        total: Long,
+        done: AtomicLongArray,
+    ): Boolean {
+        if (part.isFile && part.length() == total) return false
+        for (i in 0 until done.length()) done.set(i, 0L)
+        return true
+    }
+
+    /** 块请求收到非 206：带上状态码，让上层按 HTTP 分类而不是笼统的 IO。 */
     private class ChunkHttpException(
         val code: Int,
     ) : Exception("HTTP $code")
@@ -127,11 +151,15 @@ internal object ChunkedFetch {
         speeds: AtomicLongArray,
         total: Long,
         cancel: Downloader.Cancel?,
+        stopped: AtomicBoolean,
         progress: Downloader.Progress?,
         open: (from: Long, to: Long) -> HttpURLConnection,
     ) {
         var written = done.get(c.index)
         if (written >= c.length) return
+        // 别的块已经失败：本块不必再开连接。抛 IO 而不是取消，
+        // 真实失败原因已经记在 failure 里，compareAndSet 不会覆盖它。
+        if (stopped.get()) throw java.io.IOException("块 ${c.index}：同批已有块失败")
         var conn: HttpURLConnection? = null
         try {
             conn = open(c.resumeFrom(written), c.to)
@@ -154,6 +182,7 @@ internal object ChunkedFetch {
                 var emptyReads = 0
                 while (left > 0) {
                     if (cancel?.isCancelled == true) throw CancellationException("下载已取消")
+                    if (stopped.get()) throw java.io.IOException("块 ${c.index}：同批已有块失败")
                     val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
                     if (n < 0) break
                     if (n == 0) {

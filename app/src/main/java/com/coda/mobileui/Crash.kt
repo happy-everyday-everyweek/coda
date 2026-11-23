@@ -5,8 +5,6 @@ import android.app.Application
 import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.Process
 import android.view.ViewGroup
 import android.widget.Button
@@ -56,8 +54,17 @@ object CrashGuard {
         thread: Thread,
         throwable: Throwable,
     ) {
+        // 先安排终止，再做落盘与展示（#737）。
+        //
+        // 之前把 kill 投递到主 Looper：崩溃发生在主线程时 Looper 已经退出，
+        // 那条 postDelayed 永远不会执行；而转发系统处理器又已被移除，
+        // 结果是进程僵死——没有 UI 线程、不重启、也不弹系统崩溃框。
+        // 用独立线程计时，与哪个线程崩溃、saveAndShow 是否中途失败都无关。
+        scheduleKill()
+        // PrintWriter 用 use 包裹（#646）：崩溃路径本身也可能再抛异常，
+        // 不关闭会漏掉 flush，堆栈尾部可能缺失。
         val sw = StringWriter()
-        throwable.printStackTrace(PrintWriter(sw))
+        PrintWriter(sw).use { throwable.printStackTrace(it) }
         // 崩溃前的最后若干行日志是找根因的关键：只有堆栈时，原因往往在上一屏，
         // 而 logcat 在用户设备上拿不到，崩溃一过就被刷掉。
         val before = AppLog.recentText(200)
@@ -114,12 +121,29 @@ object CrashGuard {
             // 崩溃页起不来必须留痕：这是最后一道可见性，不能再静默。
             AppLog.e("Crash", "崩溃页启动失败：${e.javaClass.simpleName}: ${e.message}")
         }
-        Handler(Looper.getMainLooper()).postDelayed({
+    }
+
+    /** 给崩溃页留出的展示时间：它在 :crash 独立进程，杀主进程不影响它。 */
+    internal const val KILL_DELAY_MS = 700L
+
+    /**
+     * 在独立线程上延迟结束本进程（#737）。
+     *
+     * 不用主 Looper：崩溃可能就发生在主线程，那时 Looper 已退出，投递的任务不会执行。
+     * 守护线程 + 捕获 InterruptedException，进程被别的路径先结束时也不会留下挂起线程。
+     */
+    internal fun scheduleKill() {
+        Thread({
+            try {
+                Thread.sleep(KILL_DELAY_MS)
+            } catch (_: InterruptedException) {
+                // 被唤醒也照样终止：这里的目的就是确保进程不会僵死。
+            }
             try {
                 Process.killProcess(Process.myPid())
             } catch (_: Throwable) {
             }
-        }, 700)
+        }, "coda-crash-kill").apply { isDaemon = true }.start()
     }
 }
 

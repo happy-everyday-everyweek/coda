@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -22,7 +23,42 @@ export function ensureSystemPromptFiles(homeDir: string): string {
     // 只补缺失文件：已存在的文件可能正是用户改过的内容，不能覆盖。
     if (!existsSync(file)) writeFileSync(file, `${DEFAULT_SYSTEM_PROMPT_TEMPLATES[key]}\n`, "utf8");
   }
+  writeTemplateBaselines(dir);
   return dir;
+}
+
+/**
+ * 默认模板的摘要清单文件名。
+ *
+ * 客户端要区分「内核释放的默认内容」与「用户改过的内容」。此前客户端用
+ * 「第一次见到的内容即默认」做基线，任何在设置页打开之前发生的修改
+ * （内核侧编辑、备份恢复、从无基线版本升级）都会被记成默认，真实改动被永久隐藏。
+ * 由**释放模板的一方**写出权威摘要，客户端只做比对，不再猜。
+ */
+export const SYSTEM_PROMPT_BASELINE_FILE = ".template-baselines.json";
+
+/** 计算每份默认模板的 sha256（按落盘内容，含结尾换行）。 */
+export function templateBaselineDigests(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(SYSTEM_PROMPT_FILES) as SystemPromptTemplateKey[]) {
+    const body = `${DEFAULT_SYSTEM_PROMPT_TEMPLATES[key]}\n`;
+    out[SYSTEM_PROMPT_FILES[key]] = createHash("sha256").update(body, "utf8").digest("hex");
+  }
+  return out;
+}
+
+/**
+ * 写出默认模板摘要清单。
+ *
+ * 每次启动都重算并覆盖：模板随内核版本变化，清单必须跟着走，
+ * 否则升级后所有段落都会被报成「已修改」。写失败不影响启动。
+ */
+function writeTemplateBaselines(dir: string): void {
+  try {
+    writeFileSync(join(dir, SYSTEM_PROMPT_BASELINE_FILE), JSON.stringify(templateBaselineDigests()), "utf8");
+  } catch {
+    // 清单只服务于状态显示，写不进去时客户端回落到「未知」而不是误判默认。
+  }
 }
 
 /** 读取用户目录下的模板；缺失的段落返回 undefined，由调用方回落到默认模板。 */

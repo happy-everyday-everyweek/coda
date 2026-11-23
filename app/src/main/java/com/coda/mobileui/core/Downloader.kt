@@ -123,6 +123,10 @@ internal object Downloader {
             }
         val sidecar = ResumeState.sidecarFor(tmp)
         var conn: HttpURLConnection? = null
+        // 是否已进入分块路径（#808）。分块的 part 被预分配到全长，
+        // tmp.length() 不是「已连续下好的字节数」，异常分支绝不能据此写 schema-1 记录：
+        // 下次 ResumeState.check 会判 ALREADY_COMPLETE，把零洞当成完整前缀。
+        var chunked = false
         try {
             // 先看有没有可用断点。远端标识从上一次记录里取，本次响应回来后再核对。
             val saved = if (req.resume) ResumeState.load(sidecar) else null
@@ -232,6 +236,7 @@ internal object Downloader {
                         rangesSupported = ResumeProbe.acceptsRanges(conn.getHeaderField("Accept-Ranges")),
                     )
             if (canChunk) {
+                chunked = true
                 return fetchChunked(req, target, tmp, sidecar, total, conn, onProgress, cancel)
             }
             // 续传时 hash 必须覆盖整个文件（已有字节 + 新字节），不能只算这一段。
@@ -297,7 +302,9 @@ internal object Downloader {
         } catch (e: CancellationException) {
             // 取消不是「这次失败，换下一个源」。开启续传时保留已下载字节与记录（#730），
             // 用户下次触发同一下载可以接着下；未开启时按旧行为清掉半成品。
-            if (req.resume) {
+            // 分块路径的进度只由 fetchChunked 内部的 schema-2 记录表达（#808），
+            // 这里写单连接记录会把预分配长度当成连续前缀。
+            if (req.resume && !chunked) {
                 runCatching {
                     if (tmp.isFile) {
                         val prev = ResumeState.load(sidecar)
@@ -321,7 +328,8 @@ internal object Downloader {
             // 只捕获预期内的失败：连接重置、TLS 失败、磁盘写满都要留痕迹，
             // Error 不再被降级成「下载失败」。
             AppLog.w(TAG, "下载异常 ${req.url}：${e.javaClass.simpleName}: ${e.message}")
-            if (req.resume) {
+            // 同上（#808）：分块的稀疏文件不能用单连接记录描述。
+            if (req.resume && !chunked) {
                 // 网络抖动不该让近百 MB 前功尽弃：保留字节与记录，下次续传。
                 runCatching {
                     if (tmp.isFile) {
@@ -369,14 +377,24 @@ internal object Downloader {
         val done = java.util.concurrent.atomic.AtomicLongArray(chunks.size)
         // 读分块断点：URL 与远端标识都吻合才采用，否则从 0 开始。
         val saved = ResumeState.decodeChunks(runCatching { sidecar.readText() }.getOrNull())
-        if (saved != null && saved.url == req.url && saved.total == total &&
-            saved.ranges == chunks &&
-            (saved.etag == etag || saved.etag == null) &&
-            (saved.lastModified == lastModified || saved.lastModified == null) &&
-            (saved.etag != null || saved.lastModified != null)
+        // 采纳条件交给 ChunkResume（#809）：除了 URL/远端标识，还要现取 part 的
+        // 存在性与长度。预分配文件的 length == total 不代表字节都在。
+        if (ChunkResume.adopt(
+                saved = saved,
+                url = req.url,
+                total = total,
+                chunks = chunks,
+                partExists = tmp.isFile,
+                partBytes = tmp.length(),
+                etag = etag,
+                lastModified = lastModified,
+            )
         ) {
-            saved.done.forEachIndexed { i, d -> done.set(i, d) }
-            AppLog.i(TAG, "分块续传：${target.name} 已完成 ${ChunkPlan.totalDone(chunks, saved.done)}/$total")
+            saved?.done?.forEachIndexed { i, d -> done.set(i, d) }
+            AppLog.i(
+                TAG,
+                "分块续传：${target.name} 已完成 ${ChunkPlan.totalDone(chunks, saved?.done ?: emptyList())}/$total",
+            )
         } else {
             runCatching { sidecar.delete() }
         }

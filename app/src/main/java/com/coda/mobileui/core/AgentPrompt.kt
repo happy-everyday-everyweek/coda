@@ -22,14 +22,14 @@ object AgentPrompt {
     }
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
-    /** 在 IO 线程读，结果回主线程。 */
+    /** 在 IO 线程读，结果回主线程。读失败与「文件不存在」严格区分（#741）。 */
     fun readAsync(
         file: File,
-        onResult: (String) -> Unit,
+        onResult: (PromptRead) -> Unit,
     ) {
         io.execute {
-            val text = read(file)
-            main.post { onResult(text) }
+            val r = readResult(file)
+            main.post { onResult(r) }
         }
     }
 
@@ -51,14 +51,22 @@ object AgentPrompt {
     /** 工作区级提示词文件。 */
     fun workspaceFile(ctx: Context): File = File(Workspaces.root(ctx), "AGENTS.md")
 
-    /** 读取文本；文件不存在时返回空串。 */
-    fun read(file: File): String =
+    /**
+     * 读取文本；文件不存在时返回空串。
+     *
+     * 读失败也返回空串，只适用于「显示摘要」这类不会写回的场景。
+     * 编辑器必须用 [readResult]：把读失败当成空内容再保存会造成永久丢失（#741）。
+     */
+    fun read(file: File): String = readResult(file).text ?: ""
+
+    /** 读取文本，区分「不存在」（空串）与「读失败」（text 为 null，带错误说明）。 */
+    fun readResult(file: File): PromptRead =
         try {
-            if (file.isFile) file.readText() else ""
+            PromptRead(text = if (file.isFile) file.readText() else "", error = null)
         } catch (e: Exception) {
-            // 读不出来按「没设置」处理，但不能静默：权限、损坏都要能查。
-            AppLog.w(TAG, "读取提示词失败 ${file.name}：${e.message ?: e.javaClass.simpleName}")
-            ""
+            val why = e.message ?: e.javaClass.simpleName
+            AppLog.w(TAG, "读取提示词失败 ${file.name}：$why")
+            PromptRead(text = null, error = why)
         }
 
     /**

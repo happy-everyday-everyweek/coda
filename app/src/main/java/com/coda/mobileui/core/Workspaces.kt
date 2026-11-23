@@ -37,11 +37,27 @@ object Workspaces {
     var migrationWarning: String? = null
         private set
 
-    /** 当前工作区根目录，保证存在且可写。 */
-    fun root(ctx: Context): File {
+    /**
+     * 当前工作区根目录。
+     *
+     * 存储彻底不可写时返回私有目录的**路径**而不再抛异常（#764）：
+     * 主线程有多个调用点（WorkspaceActivity.onCreate、MainActivity 的文件入口、
+     * ZController.workspacePath），硬抛会把「存储降级」变成启动崩溃。
+     * 真正的失败通过 [rootOrNull] 与 [storageError] 暴露，界面据此给错误提示。
+     */
+    fun root(ctx: Context): File = rootOrNull(ctx) ?: File(ctx.filesDir, "workspace")
+
+    /** 存储不可用时的说明；null 表示可用。 */
+    @Volatile
+    var storageError: String? = null
+        private set
+
+    /** 解析根目录；三处候选都不可写时返回 null 并记下 [storageError]。 */
+    fun rootOrNull(ctx: Context): File? {
         val chosen = SettingsStore.get(ctx).workspaceRoot
         if (chosen.isNotEmpty() && usable(File(chosen))) {
             fallbackReason = null
+            storageError = null
             return File(chosen)
         }
         val brand = brandDir()
@@ -49,6 +65,7 @@ object Workspaces {
             val dir = File(brand, "workspace")
             if (usable(dir)) {
                 fallbackReason = null
+                storageError = null
                 return dir
             }
         }
@@ -56,8 +73,11 @@ object Workspaces {
         // 回退目录也要校验：忽略 mkdirs 失败会返回不存在的路径，
         // 后续写入在随机调用点抛 IOException，错误现场远离根因。
         if (!usable(fallback)) {
-            error("无法创建工作区目录：$fallback（存储不可写或空间不足）")
+            storageError = "无法创建工作区目录：$fallback（存储不可写或空间不足）"
+            AppLog.e("Workspaces", storageError!!)
+            return null
         }
+        storageError = null
         // 回落必须留原因（#93）：私有目录卸载即清空，用户有权知道。
         fallbackReason =
             if (chosen.isNotEmpty()) {
@@ -107,20 +127,30 @@ object Workspaces {
 
     private fun brandDir(): File? {
         for ((brand, legacy) in brandCandidates()) {
-            if (!brand.exists() && legacy.exists()) {
+            val step = WorkspaceRoots.migrationStep(brandExists = brand.exists(), legacyExists = legacy.exists())
+            if (step == WorkspaceRoots.Migration.MOVE) {
                 // 迁移失败不能静默（#93）：老工作区的标签与文件会留在原地不再被读取，
                 // 用户看到的是「文件全没了」。rename 失败先试拷贝，仍失败就留下可读警告。
                 val renamed = runCatching { legacy.renameTo(brand) }.getOrDefault(false)
                 if (!renamed) {
                     val copied = runCatching { legacy.copyRecursively(brand, overwrite = false) }.getOrDefault(false)
                     if (!copied) {
+                        // 半份拷贝必须清掉（#765）：留着它，下次 `!brand.exists()` 为假
+                        // 就再也不会重试迁移，工作区静默指向不完整的副本。
+                        // 这里 brand 在迁移前确认过不存在，删它不会碰到用户已有数据。
+                        WorkspaceRoots.discardPartial(brand)
                         migrationWarning =
                             "旧工作区未能迁移：${legacy.absolutePath} → ${brand.absolutePath}。" +
                             "旧文件仍在原位置，可在文件页手动移动。"
+                        // 迁移彻底失败时优先用完整的旧目录（#769），而不是让 usable 的
+                        // mkdirs 建出一个空 brand 把旧数据永久孤立。
+                        WorkspaceRoots.afterFailedMigration(legacy, brand)?.let { return it }
+                        continue
                     }
                 }
             }
-            if (usable(brand)) return brand
+            // 判定不带创建副作用（#769）：mkdirs 会凭空造出空目录，抹掉下次重试的机会。
+            if (WorkspaceRoots.existsUsable(brand)) return brand
         }
         return null
     }

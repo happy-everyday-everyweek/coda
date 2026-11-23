@@ -133,6 +133,12 @@ class ChunkedFetchTest {
         val dir = tmpDir()
         val part = File(dir, "f.part")
         val chunks = ChunkPlan.split(total = 100, concurrency = 2)
+        // part 必须真的存在且长度等于总长（#815）：否则 done[] 声称的字节无从凭信，
+        // 执行器会把进度清零重下，而不是跳过「已完成」的块。
+        java.io.RandomAccessFile(part, "rw").use { raf ->
+            raf.setLength(100)
+            raf.write(ByteArray(100) { 1 })
+        }
         val done = AtomicLongArray(longArrayOf(50L, 50L))
         var opened = 0
         val out =

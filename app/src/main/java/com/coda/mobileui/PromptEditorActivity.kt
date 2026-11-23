@@ -28,11 +28,14 @@ class PromptEditorActivity : BaseActivity() {
     private var title = ""
     private var hint = ""
 
-    /** 进入页面时的内容，用于判断有没有未保存的修改。 */
-    private var initial = ""
-
-    /** 正文是否已从磁盘读到：没读到就保存会把还没加载出来的内容覆盖成空。 */
-    private var loaded = false
+    /**
+     * 加载与保存的闸门（#739、#741）。
+     *
+     * 判定逻辑在 [com.coda.mobileui.core.PromptLoadGate] 里单测：
+     * 加载期间用户输入、读失败这两条分支都会导致整份提示词被覆盖，
+     * 而它们只在真机的时序缝隙里出现。
+     */
+    private val gate = com.coda.mobileui.core.PromptLoadGate()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,30 +53,42 @@ class PromptEditorActivity : BaseActivity() {
             intent.getStringExtra(EXTRA_TITLE)
                 ?: if (scope == SCOPE_WORKSPACE) "工作区提示词" else "用户级提示词"
         hint = intent.getStringExtra(EXTRA_HINT) ?: ""
-        initial = ""
         setContentView(buildUi())
         updateMeta()
-        // 读文件放到 IO 线程：大提示词或慢存储上，主线程 readText 会卡顿甚至 ANR（#173）。
-        AgentPrompt.readAsync(file) { text ->
-            if (isFinishing || isDestroyed) return@readAsync
-            // 基线无论如何都要记下来：否则「放弃修改」判断会拿空串比对，
-            // 用户加载期间打的字会被当成未修改而静默丢掉。
-            initial = text
-            loaded = true
-            // 加载期间用户已经动过输入框：不能把磁盘内容盖上去，否则刚打的字就没了。
-            if (input.text.isNotEmpty()) return@readAsync
-            input.setText(text)
-            input.setSelection(input.text.length)
-            updateMeta()
-        }
+        loadFromDisk()
         onBackPressedDispatcher.addCallback(
             this,
             object : androidx.activity.OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    if (input.text.toString() != initial) confirmDiscard() else finish()
+                    if (input.text.toString() != gate.initial) confirmDiscard() else finish()
                 }
             },
         )
+    }
+
+    /**
+     * 读文件放到 IO 线程：大提示词或慢存储上，主线程 readText 会卡顿甚至 ANR（#173）。
+     *
+     * 读失败与加载期间的用户输入都不开保存闸门（#739、#741），并给出重新加载入口。
+     */
+    private fun loadFromDisk() {
+        AgentPrompt.readAsync(file) { read ->
+            if (isFinishing || isDestroyed) return@readAsync
+            val d = gate.onLoaded(read, typed = input.text.toString())
+            d.error?.let {
+                Toast.makeText(this, "读取失败：$it，请重试后再编辑", Toast.LENGTH_LONG).show()
+            }
+            if (d.needsReload) {
+                // 不自动合并：磁盘内容与用户输入谁在前谁在后无法判断，
+                // 猜错就是丢数据。让用户自己决定保留哪一份。
+                Toast.makeText(this, "加载期间已输入内容，未套用磁盘正文；保存已暂停，请返回重进", Toast.LENGTH_LONG).show()
+            }
+            d.applyText?.let {
+                input.setText(it)
+                input.setSelection(input.text.length)
+            }
+            updateMeta()
+        }
     }
 
     private fun buildUi(): View {
@@ -196,9 +211,9 @@ class PromptEditorActivity : BaseActivity() {
     }
 
     private fun saveAndFinish() {
-        // 正文还没读进来就保存，会把磁盘上的内容覆盖成空（异步加载引入的新风险）。
-        if (!loaded) {
-            Toast.makeText(this, "正在读取文件，请稍候再保存", Toast.LENGTH_SHORT).show()
+        // 正文还没可信地读进来就保存，会把磁盘上的内容覆盖成几个字或空（#739、#741）。
+        if (!gate.canSave) {
+            Toast.makeText(this, "正文尚未就绪，暂不能保存；请返回重进本页", Toast.LENGTH_LONG).show()
             return
         }
         val body = input.text.toString()
@@ -206,9 +221,11 @@ class PromptEditorActivity : BaseActivity() {
         AgentPrompt.saveAsync(file, body) { err ->
             if (isFinishing || isDestroyed) return@saveAsync
             if (err != null) {
+                gate.onSaveFailed()
                 Toast.makeText(this, "保存失败：$err", Toast.LENGTH_LONG).show()
                 return@saveAsync
             }
+            gate.onSaved(body)
             Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
             setResult(RESULT_OK)
             finish()

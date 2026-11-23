@@ -270,6 +270,9 @@ object SettingsData {
         home: File,
     ): HooksCore.Snapshot? = snapshots.get("hooks:$workspacePath", now())
 
+    /** 系统提示词状态表（#743）：14 份文件的读盘与摘要只在后台算一次。 */
+    private fun cachedPromptStatus(ctx: Context): Map<String, String>? = snapshots.get("sysprompts", now())
+
     /**
      * 后台预热某个键的数据，完成后回调（调用方负责切回主线程重绘）。
      *
@@ -294,6 +297,8 @@ object SettingsData {
                         val db = File(File(app.filesDir, "zcode-data/.zcode/v2"), "tasks-index.sqlite")
                         snapshots.put("automations", CodaExtras.readAutomations(db), now())
                     }
+                    // 提示词状态（#743）：读 14 份文件 + SHA-256，必须留在后台。
+                    key == "sysprompts" -> snapshots.put("sysprompts", SystemPrompts.statuses(app), now())
                     key == "hooks" || key.startsWith("hooks:") -> {
                         val wp = workspacePath ?: ZController.get(app).workspacePath()
                         if (wp != null) {
@@ -318,6 +323,7 @@ object SettingsData {
             SettingsDetailActivity.PAGE_COMMANDS -> "assets:${AgentAssets.Kind.COMMAND.name}"
             SettingsDetailActivity.PAGE_AUTOMATIONS -> "automations"
             SettingsDetailActivity.PAGE_HOOKS -> "hooks"
+            SettingsDetailActivity.PAGE_SYSTEM_PROMPT -> "sysprompts"
             else -> null
         }
 
@@ -335,6 +341,7 @@ object SettingsData {
             }
             key == "automations" -> cachedAutomations(ctx, File(ctx.filesDir, "tasks-index.sqlite")) != null
             key == "hooks" -> workspacePath != null && cachedHooks(ctx, workspacePath, File(ctx.filesDir, "home")) != null
+            key == "sysprompts" -> cachedPromptStatus(ctx) != null
             else -> true
         }
 
@@ -1224,8 +1231,10 @@ object SettingsData {
     fun systemPrompt(ctx: Context): SettingsPage {
         val rows = mutableListOf<SettingRow>()
         rows += SettingRow.Header("模板文件")
+        // 状态来自后台快照（#743）：这里在主线程渲染，绝不能逐份读文件算摘要。
+        val status = cachedPromptStatus(ctx)
         SystemPrompts.all.forEach { item ->
-            rows += SettingRow.Value(item.title, SystemPrompts.summary(ctx, item), "sysprompt_edit:${item.file}")
+            rows += SettingRow.Value(item.title, status?.get(item.file) ?: "读取中…", "sysprompt_edit:${item.file}")
         }
         rows += SettingRow.Header("说明")
         rows += SettingRow.Value("目录", SystemPrompts.dir(ctx).absolutePath)
