@@ -339,9 +339,36 @@ abstract class WorkspacePage(
                 // 内层保留自己的圆角/背景/内边距，与外层分组形状叠加（#575）。
                 val inner = ArrayList<View>(row.childCount)
                 for (i in 0 until row.childCount) inner.add(row.getChildAt(i))
-                // removeAllViews 会解除父子关系，之后直接挂到外壳即可。
+                // 卡片自身的交互与边距要搬到外壳（OCR #821）：外壳明确不可点，
+                // 只搬子视图会把整卡的 click/long-click/内边距全丢掉。
+                val click = extractClickListener(row)
+                val longClick = extractLongClickListener(row)
+                val wasClickable = row.isClickable
+                val padL = row.contentPaddingLeft
+                val padT = row.contentPaddingTop
+                val padR = row.contentPaddingRight
+                val padB = row.contentPaddingBottom
+                val margins = (row.layoutParams as? ViewGroup.MarginLayoutParams)?.let {
+                    intArrayOf(it.leftMargin, it.topMargin, it.rightMargin, it.bottomMargin)
+                }
                 row.removeAllViews()
                 inner.forEach { child -> card.addView(child, ViewGroup.LayoutParams(MATCH, WRAP)) }
+                card.setContentPadding(padL, padT, padR, padB)
+                if (margins != null) {
+                    (card.layoutParams as? ViewGroup.MarginLayoutParams)?.let { outer ->
+                        outer.setMargins(margins[0], margins[1], margins[2], margins[3])
+                        card.layoutParams = outer
+                    }
+                }
+                if (wasClickable || click != null) {
+                    card.isClickable = true
+                    card.isFocusable = true
+                    click?.let { card.setOnClickListener(it) }
+                }
+                longClick?.let {
+                    card.isLongClickable = true
+                    card.setOnLongClickListener(it)
+                }
             } else {
                 card.addView(row, ViewGroup.LayoutParams(MATCH, WRAP))
             }
@@ -351,6 +378,21 @@ abstract class WorkspacePage(
         }
         return out
     }
+
+    /** 取视图已注册的点击监听器（OCR #821）：View 无公开 getter，反射 ListenerInfo。 */
+    private fun extractClickListener(v: View): View.OnClickListener? =
+        runCatching {
+            val info = View::class.java.getDeclaredField("mListenerInfo").apply { isAccessible = true }.get(v)
+                ?: return null
+            info.javaClass.getDeclaredField("mOnClickListener").apply { isAccessible = true }.get(info) as? View.OnClickListener
+        }.getOrNull()
+
+    private fun extractLongClickListener(v: View): View.OnLongClickListener? =
+        runCatching {
+            val info = View::class.java.getDeclaredField("mListenerInfo").apply { isAccessible = true }.get(v)
+                ?: return null
+            info.javaClass.getDeclaredField("mOnLongClickListener").apply { isAccessible = true }.get(info) as? View.OnLongClickListener
+        }.getOrNull()
 
     /** 组内断缝：与页面背景同色的一条细线。 */
     protected fun cardGap(): View =

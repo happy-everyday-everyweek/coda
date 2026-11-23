@@ -12,27 +12,40 @@ data class CaretPosition(
     val totalLines: Int,
 ) {
     companion object {
-        /** 一次遍历同时得到总行数与光标所在行列；caret 越界会被夹到合法范围。 */
+        /**
+         * 光标所在行列；caret 越界会被夹到合法范围。
+         *
+         * [totalLines] 由调用方提供（OCR #821）：每次按键/移动光标都全文
+         * 扫描只为算总行数，2MB 文件上是 O(n) 卡顿。调用方在文本变化时
+         * 增量维护总行数，光标移动只扫到 caret（O(caret)）。
+         */
         fun of(
             text: CharSequence,
             caret: Int,
+            totalLines: Int,
         ): CaretPosition {
             val pos = caret.coerceIn(0, text.length)
             var line = 1
             var lineStart = 0
-            var total = 1
             var i = 0
-            while (i < text.length) {
+            while (i < pos) {
                 if (text[i] == '\n') {
-                    total++
-                    if (i < pos) {
-                        line++
-                        lineStart = i + 1
-                    }
+                    line++
+                    lineStart = i + 1
                 }
                 i++
             }
-            return CaretPosition(line, pos - lineStart + 1, total)
+            return CaretPosition(line, pos - lineStart + 1, totalLines)
+        }
+
+        /** 低频便捷版：全文扫一次算总行数。热路径（每次按键）用三参版。 */
+        fun of(
+            text: CharSequence,
+            caret: Int,
+        ): CaretPosition {
+            var total = 1
+            for (ch in text) if (ch == '\n') total++
+            return of(text, caret, total)
         }
     }
 }

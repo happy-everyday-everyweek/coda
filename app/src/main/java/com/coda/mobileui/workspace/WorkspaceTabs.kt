@@ -111,10 +111,14 @@ object WorkspaceTabs {
             // 就会让其余标签一起写不进去，故障影响被放大（#571）。
             val entry =
                 runCatching {
+                    // put(String, Object) 按引用存嵌套 JSONObject，只校验顶层数值：
+                    // state 深处的不可序列化值到这里不抛，要到外层 toString 才炸，
+                    // 逐条兜底形同虚设（OCR #821）。先强制序列化一遍再入 payload。
+                    val stateJson = JSONObject(tab.state.toString())
                     JSONObject()
                         .put("id", tab.id)
                         .put("kind", tab.kind)
-                        .put("state", tab.state)
+                        .put("state", stateJson)
                         .put("preview", tab.preview)
                 }.getOrElse { e ->
                     AppLog.w("WorkspaceTabs", "标签 ${tab.id} 序列化失败，本次跳过：${e.message}")

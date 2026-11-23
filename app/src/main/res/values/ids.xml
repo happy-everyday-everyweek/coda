@@ -6,4 +6,5 @@
     <item name="tag_setting_key" type="id" />
     <!-- 高度动画句柄：反复展开/收起时用来取消上一个动画（#540）。 -->
     <item name="coda_height_animator" type="id" />
+    <item name="coda_press_settling" type="id" />
 </resources>

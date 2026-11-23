@@ -91,6 +91,9 @@ open class FilesPage(
     /** 单调编辑计数：TextWatcher 每次改动递增，供高亮缓存判「变过又变回来」。 */
     private var editorEditRevision = 0L
 
+    /** 逻辑总行数缓存（OCR #821）：文本变化时重算，光标移动不再全文扫。 */
+    private var editorTotalLines = 1
+
     private var wrapEnabled = false
 
     /** 有未保存修改。用于标题上的圆点，对应 VS Code 的脏标记。 */
@@ -384,7 +387,15 @@ open class FilesPage(
             loadedMtime = 0L
             return
         }
-        if (file.length() > MAX_EDIT_BYTES) return
+        if (file.length() > MAX_EDIT_BYTES) {
+            // 外部把文件撑过上限：不能静默 return，否则用户继续编辑陈旧内容，
+            // 保存时会用旧缓冲覆盖更大的磁盘文件。按冲突处理，保存前必须确认。
+            if (!externalConflict) {
+                externalConflict = true
+                toast("磁盘上的文件已超过编辑上限，当前内容保留；保存前会再确认")
+            }
+            return
+        }
         val mtime = runCatching { file.lastModified() }.getOrDefault(0L)
         if (!force && mtime <= loadedMtime) return
         if (dirty) {
@@ -393,10 +404,14 @@ open class FilesPage(
             toast("磁盘上的文件已被修改，当前未保存内容保留；保存前会再确认")
             return
         }
+        val token = ++reloadGeneration
         readInto(
             file,
-            onFail = { toast(it) },
+            onFail = { if (token == reloadGeneration && editing === file) toast(it) },
             done = { text, charset ->
+                // 读在途时用户可能已打字（变脏）、切换文件或关掉编辑器：
+                // 迟到的结果直接丢弃，不能覆盖更新的内容。
+                if (token != reloadGeneration || editing !== file || dirty) return@readInto
                 originalText = text
                 editorCharset = charset
                 loadedMtime = mtime
@@ -616,6 +631,9 @@ open class FilesPage(
 
     private var loadedMtime = 0L
 
+    /** 异步重载代际：回调落地前复核，防止迟到的读覆盖新编辑或新文件。 */
+    private var reloadGeneration = 0
+
     /** 磁盘内容在编辑器脏状态下变过：保存前必须再次确认，不能静默覆盖。 */
     private var externalConflict = false
 
@@ -697,10 +715,9 @@ open class FilesPage(
                 renderList()
                 renderRightPane()
             },
-            onError = {
-                runCatching { if (target.exists()) target.deleteRecursively() }
-                toast("移动失败")
-            },
+            // onError 在主线程：递归删除大半成品树会 ANR（#64）。
+            // moveOutcome 内部已在后台清理，这里只提示。
+            onError = { toast("移动失败") },
         )
     }
 
@@ -780,10 +797,8 @@ open class FilesPage(
                     renderRightPane()
                 }
             },
-            onError = {
-                runCatching { if (target.exists()) target.deleteRecursively() }
-                toast("复制失败")
-            },
+            // 同 moveToDir：清理在 work 块内做，主线程回调只提示。
+            onError = { toast("复制失败") },
         )
     }
 
@@ -1044,6 +1059,9 @@ open class FilesPage(
     private fun exitArchive() {
         archive = null
         archivePath = ""
+        // 目录分支只递增 listGeneration：不作废包列表代际的话，
+        // 在途的压缩包列表回调仍会通过守卫，把包内卡片混进刚渲染的目录列表。
+        archiveGeneration++
         renderList()
     }
 
@@ -1123,13 +1141,24 @@ open class FilesPage(
                     target.mkdirs()
                     // tar 条目名与链接目标都要预检：绝对路径、.. 或指向目录外的链接
                     // 会把文件写到目标目录之外。ZIP 分支已有同等校验。
-                    if (!tarEntriesSafe(pack, target)) return@background false
+                    if (!tarEntriesSafe(pack, target)) {
+                        runCatching { target.deleteRecursively() }
+                        return@background false
+                    }
                     val r =
-                        host.env.exec(
-                            listOf("tar", "-xf", pack.absolutePath, "-C", target.absolutePath),
-                            timeoutMs = 300_000L,
-                        )
-                    r.ok
+                        runCatching {
+                            host.env.exec(
+                                listOf("tar", "-xf", pack.absolutePath, "-C", target.absolutePath),
+                                timeoutMs = 300_000L,
+                            )
+                        }.getOrNull()
+                    if (r == null || !r.ok) {
+                        // tar 失败/异常：清掉半解压的残树，否则重试永远撞「已存在」。
+                        runCatching { target.deleteRecursively() }
+                        false
+                    } else {
+                        true
+                    }
                 }
             },
             then = { ok ->
@@ -1273,14 +1302,20 @@ open class FilesPage(
                             }
                         }
                     if (!ok) {
-                        runCatching { out.delete() }
+                        // 只删当前条目不够：先前解出的文件全部留在 target，
+                        // 重试永远被「同名目录已存在」挡住。整棵半成品一起清。
+                        runCatching { target.deleteRecursively() }
                         AppLog.w(TAG, "解压中断：累计超过上限 $MAX_EXTRACT_BYTES 字节")
                         return@use false
                     }
                 }
                 true
             }
-        }.getOrDefault(false)
+        }.getOrElse {
+            // 中途抛异常同样要清残树，与 move/copy 的清理契约一致。
+            runCatching { target.deleteRecursively() }
+            false
+        }
 
     private fun pathCard(): View {
         // 不在这里同步 list()：目录项数由后台读完后补（#64）。
@@ -1840,6 +1875,9 @@ open class FilesPage(
                             // 单调编辑计数：节流窗口内 A→B→A 内容指纹不变，
                             // 但 replace 已丢替换区内的 span，靠计数才能判出要重建。
                             editorEditRevision++
+                            // 总行数只在文本变化时重算（OCR #821）：s 是变化后的
+                            // 完整序列，一次 O(n) 换掉每次按键/光标移动的 O(n)。
+                            editorTotalLines = 1 + (s?.count { it == '\n' } ?: 0)
                             refreshDirty()
                             refreshEditorChrome()
                             host.scheduleHighlight(highlightTick)
@@ -1983,81 +2021,131 @@ open class FilesPage(
             end: Int,
             lineNumber: Int,
         ) {
+            // paint 是接下来画正文用的 TextPaint：改完必须还原，
+            // 否则半透明底色与 FILL 会泄漏进后续文字绘制。
+            val oldColor = paint.color
+            val oldStyle = paint.style
             paint.color = color
             paint.style = android.graphics.Paint.Style.FILL
             canvas.drawRect(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), paint)
+            paint.color = oldColor
+            paint.style = oldStyle
         }
     }
+
+    // ---- 行号槽：结构（编号串）与光标高亮分离缓存（OCR #821）----
+    // 原来每次刷新都全文扫描 + 每条视觉行分配 ForegroundColorSpan 重建整串，
+    // 光标移动也要付 O(n)。现在结构只在文本/宽度变化时重建；
+    // 光标移动只换 active span；滚动只平移 translationY，不重建。
+    private var gutterStructureKey = ""
+    private var gutterNumbers = IntArray(0)
+    private var gutterActiveLine = -1
+    private var gutterActiveSpans = emptyList<Any>()
 
     /** 行号槽的一行：当前行用主题色加粗，其余用弱化色。 */
     private fun gutterMarkup(): android.text.SpannableString {
         val text = editorInput.text ?: android.text.SpannableString("")
         val layout = editorInput.layout
         val visualCount = editorInput.lineCount.coerceAtLeast(1)
-        val current = caretLine()
-        // 自动换行后一条逻辑行会拆成多条视觉行：续行留空号，
-        // 否则同一逻辑行会出现好几个编号，与「转到行」和状态栏的口径对不上。
-        val numbers = IntArray(visualCount)
-        var logical = 0
-        var scanned = 0
-        for (i in 0 until visualCount) {
-            val start =
-                if (layout != null) {
-                    runCatching { layout.getLineStart(i) }.getOrDefault(scanned)
-                } else {
-                    scanned
+        // 结构键：编辑计数 + 视觉行数 + 宽度。换行开关/字号变化会改变
+        // 视觉行数或宽度，同样触发重建；纯光标移动不会。
+        val key = "$editorEditRevision:$visualCount:${editorInput.width}"
+        if (key != gutterStructureKey) {
+            // 自动换行后一条逻辑行会拆成多条视觉行：续行留空号，
+            // 否则同一逻辑行会出现好几个编号，与「转到行」和状态栏的口径对不上。
+            val numbers = IntArray(visualCount)
+            var logical = 0
+            var scanned = 0
+            for (i in 0 until visualCount) {
+                val start =
+                    if (layout != null) {
+                        runCatching { layout.getLineStart(i) }.getOrDefault(scanned)
+                    } else {
+                        scanned
+                    }
+                var startsLogical = i == 0
+                while (scanned < start && scanned < text.length) {
+                    if (text[scanned] == '\n') startsLogical = true
+                    scanned++
                 }
-            var startsLogical = i == 0
-            while (scanned < start && scanned < text.length) {
-                if (text[scanned] == '\n') startsLogical = true
-                scanned++
+                if (startsLogical) logical++
+                numbers[i] = if (startsLogical) logical else -1
             }
-            if (startsLogical) logical++
-            numbers[i] = if (startsLogical) logical else -1
-        }
-        val builder = StringBuilder()
-        for (i in 0 until visualCount) {
-            val n = numbers[i]
-            if (n > 0) builder.append(n) else builder.append(' ')
-            if (i < visualCount - 1) builder.append('\n')
-        }
-        val markup = android.text.SpannableString(builder.toString())
-        var offset = 0
-        for (i in 0 until visualCount) {
-            val raw = numbers[i]
-            val label = if (raw > 0) raw.toString() else " "
-            val end = offset + label.length
-            val active = raw == current
-            markup.setSpan(
-                android.text.style.ForegroundColorSpan(if (active) primary else onSurfaceVariant),
-                offset,
-                end,
-                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
-            )
-            if (active) {
+            val builder = StringBuilder()
+            for (i in 0 until visualCount) {
+                val n = numbers[i]
+                if (n > 0) builder.append(n) else builder.append(' ')
+                if (i < visualCount - 1) builder.append('\n')
+            }
+            val markup = android.text.SpannableString(builder.toString())
+            // 非当前行统一一个弱化色 span：不再每行分配一个对象。
+            if (builder.isNotEmpty()) {
                 markup.setSpan(
-                    android.text.style.StyleSpan(Typeface.BOLD),
-                    offset,
-                    end,
-                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                    android.text.style.ForegroundColorSpan(onSurfaceVariant),
+                    0,
+                    builder.length,
+                    android.text.Spanned.SPAN_INCLUSIVE_INCLUSIVE,
                 )
+            }
+            gutterNumbers = numbers
+            gutterActiveLine = -1
+            gutterActiveSpans = emptyList()
+            editorGutterText.text = markup
+            gutterStructureKey = key
+        }
+        updateGutterActive()
+        return editorGutterText.text as android.text.SpannableString
+    }
+
+    /** 光标行变化时只摘旧 active span、贴新的，O(1)。 */
+    private fun updateGutterActive() {
+        val markup = editorGutterText.text as? android.text.SpannableString ?: return
+        val current = caretLine()
+        if (current == gutterActiveLine) return
+        for (s in gutterActiveSpans) markup.removeSpan(s)
+        gutterActiveSpans = emptyList()
+        gutterActiveLine = current
+        val numbers = gutterNumbers
+        var offset = 0
+        for (n in numbers) {
+            val label = if (n > 0) n.toString() else " "
+            val end = offset + label.length
+            if (n == current) {
+                val color = android.text.style.ForegroundColorSpan(primary)
+                val bold = android.text.style.StyleSpan(Typeface.BOLD)
+                markup.setSpan(color, offset, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                markup.setSpan(bold, offset, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                gutterActiveSpans = listOf(color, bold)
+                return
             }
             offset = end + 1
         }
-        return markup
     }
 
-    /** 插入点所在的逻辑行（1 起），按 `\n` 数，与「转到行」一致。 */
+    // 行首偏移索引：只在文本变化时重建（一次 O(n)），光标移动二分 O(log n)。
+    private var caretIndexRevision = -1L
+    private var caretLineStarts = IntArray(0)
+
+    /** 插入点所在的逻辑行（1 起），按换行符数，与「转到行」一致。 */
     private fun caretLine(): Int {
         val text = editorInput.text ?: return 1
         val offset = editorInput.selectionStart.coerceIn(0, text.length)
-        var line = 1
-        var i = 0
-        while (i < offset) {
-            if (text[i] == '\n') line++
-            i++
+        if (caretIndexRevision != editorEditRevision) {
+            val starts = ArrayList<Int>()
+            starts.add(0)
+            for (i in 0 until text.length) {
+                if (text[i] == '\n') starts.add(i + 1)
+            }
+            caretLineStarts = starts.toIntArray()
+            caretIndexRevision = editorEditRevision
         }
-        return line
+        var lo = 0
+        var hi = caretLineStarts.size - 1
+        while (lo < hi) {
+            val mid = (lo + hi + 1) ushr 1
+            if (caretLineStarts[mid] <= offset) lo = mid else hi = mid - 1
+        }
+        return lo + 1
     }
 
     /** 文本的逻辑行数（按 `\n` 数），与自动换行无关。 */
@@ -2468,7 +2556,7 @@ open class FilesPage(
         if (file == null && !readOnlyPreview && !detachedFile) return
         val text = editorInput.text ?: return
         val caret = editorInput.selectionStart.coerceAtLeast(0)
-        val pos = CaretPosition.of(text, caret)
+        val pos = CaretPosition.of(text, caret, editorTotalLines)
         val language = editorRules?.name
         editorStatus.text =
             buildString {
@@ -2944,6 +3032,8 @@ open class FilesPage(
         charset: java.nio.charset.Charset = Charsets.UTF_8,
     ) {
         editing = file
+        // 重开同一文件也要作废在途重载：editing === file 挡不住这种情况。
+        reloadGeneration++
         markdownMode = markdown
         readOnlyPreview = false
         detachedFile = false
@@ -3220,6 +3310,7 @@ open class FilesPage(
 
     private fun leaveEditor() {
         editing = null
+        reloadGeneration++
         readOnlyPreview = false
         detachedFile = false
         detachedName = ""
@@ -3294,7 +3385,7 @@ open class FilesPage(
         val charset: java.nio.charset.Charset = Charsets.UTF_8,
     )
 
-    private companion object {
+    internal companion object {
         const val MAX_EDIT_BYTES = 2L * 1024 * 1024
         const val OPEN_AUTO = "auto"
         const val OPEN_MARKDOWN = "markdown"

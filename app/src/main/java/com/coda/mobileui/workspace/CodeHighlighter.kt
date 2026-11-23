@@ -49,31 +49,59 @@ object CodeHighlighter {
     /** 超过这个长度不再上色，避免大文件拖动时逐帧重扫。 */
     const val MAX_HIGHLIGHT_CHARS = 200_000
 
+    // 规则实例按语言缓存（OCR #821）：每次 detect 新建实例会让
+    // HighlightCache 的 lastRules === rules 在重载后恒 false，
+    // 增量 diff 退化成整篇重建且不清旧 span。
+    private val rulesCache = java.util.concurrent.ConcurrentHashMap<String, LanguageRules>()
+
     /** 按文件名推断语言；认不出来返回 null（纯文本编辑）。 */
     fun detect(fileName: String): LanguageRules? {
         val lower = fileName.lowercase()
         val ext = lower.substringAfterLast('.', "")
-        return when {
-            ext == "kt" || ext == "kts" -> kotlin()
-            ext == "java" -> java()
-            ext == "js" || ext == "mjs" || ext == "cjs" || ext == "jsx" -> javascript()
-            ext == "ts" || ext == "tsx" -> typescript()
-            ext == "py" || ext == "pyw" -> python()
-            ext == "json" || ext == "jsonc" -> json()
-            ext == "xml" || ext == "html" || ext == "htm" || ext == "svg" -> markup()
-            ext == "css" || ext == "scss" || ext == "less" -> css()
-            ext == "md" || ext == "markdown" -> markup()
-            ext == "sh" || ext == "bash" || ext == "zsh" -> shell()
-            ext == "yml" || ext == "yaml" -> yaml()
-            ext == "toml" -> toml()
-            ext == "ini" || ext == "conf" || ext == "properties" -> ini()
-            ext == "c" || ext == "h" || ext == "cc" || ext == "cpp" || ext == "hpp" -> cpp()
-            ext == "go" -> go()
-            ext == "rs" -> rust()
-            ext == "sql" -> sql()
-            ext == "gradle" || lower == "build.gradle.kts" -> kotlin()
-            else -> null
-        }
+        val lang = languageOf(lower, ext) ?: return null
+        return rulesCache.getOrPut(lang) { buildRules(lang) }
+    }
+
+    private fun languageOf(lower: String, ext: String): String? = when {
+        ext == "kt" || ext == "kts" -> "kotlin"
+        ext == "java" -> "java"
+        ext == "js" || ext == "mjs" || ext == "cjs" || ext == "jsx" -> "javascript"
+        ext == "ts" || ext == "tsx" -> "typescript"
+        ext == "py" || ext == "pyw" -> "python"
+        ext == "json" || ext == "jsonc" -> "json"
+        ext == "xml" || ext == "html" || ext == "htm" || ext == "svg" -> "markup"
+        ext == "css" || ext == "scss" || ext == "less" -> "css"
+        ext == "md" || ext == "markdown" -> "markup"
+        ext == "sh" || ext == "bash" || ext == "zsh" -> "shell"
+        ext == "yml" || ext == "yaml" -> "yaml"
+        ext == "toml" -> "toml"
+        ext == "ini" || ext == "conf" || ext == "properties" -> "ini"
+        ext == "c" || ext == "h" || ext == "cc" || ext == "cpp" || ext == "hpp" -> "cpp"
+        ext == "go" -> "go"
+        ext == "rs" -> "rust"
+        ext == "sql" -> "sql"
+        ext == "gradle" || lower == "build.gradle.kts" -> "kotlin"
+        else -> null
+    }
+
+    private fun buildRules(lang: String): LanguageRules = when (lang) {
+        "kotlin" -> kotlin()
+        "java" -> java()
+        "javascript" -> javascript()
+        "typescript" -> typescript()
+        "python" -> python()
+        "json" -> json()
+        "markup" -> markup()
+        "css" -> css()
+        "shell" -> shell()
+        "yaml" -> yaml()
+        "toml" -> toml()
+        "ini" -> ini()
+        "cpp" -> cpp()
+        "go" -> go()
+        "rust" -> rust()
+        "sql" -> sql()
+        else -> kotlin()
     }
 
     /**

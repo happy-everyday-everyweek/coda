@@ -63,6 +63,9 @@ internal object WorkspaceGesturePolicy {
         context: Context,
     ): WorkspaceGestureAction {
         // 已经开始拖工作区：本次手势就归工作区，反向只回弹，不许再命中抽屉分支。
+        // CancelWorkspace 只是「收起预览」的信号，不是解锁（OCR #821）：
+        // 调用方不得据此复位 workspaceDragActive（MainActivity 已按此实现），
+        // 锁只在 DOWN/UP/CANCEL 释放，否则同一手势反向右滑会再开抽屉。
         if (context.workspaceDragActive) {
             return if (dx >= 0f) WorkspaceGestureAction.CancelWorkspace else WorkspaceGestureAction.DragWorkspace
         }

@@ -31,15 +31,40 @@ internal object DiffBudget {
 
     /** 把文本截到预算内：先看字节，再看行数，两者任一超限都算截断。 */
     fun trimText(text: String): TrimmedText {
-        if (text.length <= MAX_DIFF_BYTES) {
+        // 按 UTF-8 字节而不是 UTF-16 码元（OCR #821）：CJK/emoji 下 length
+        // 只有实际字节的 1/3~1/4，内存上界形同虚设。ASCII 快速路径保留。
+        val byteLen = if (text.all { it.code < 0x80 }) text.length else text.toByteArray(Charsets.UTF_8).size
+        if (byteLen <= MAX_DIFF_BYTES) {
             val lineCount = text.count { it == '\n' } + 1
             if (lineCount <= MAX_DIFF_LINES) return TrimmedText(text, false)
             return TrimmedText(text.lineSequence().take(MAX_DIFF_LINES).joinToString("\n"), true)
         }
-        val capped = text.substring(0, MAX_DIFF_BYTES)
+        val capped = capUtf8(text, MAX_DIFF_BYTES)
         val lines = capped.split('\n')
         if (lines.size <= MAX_DIFF_LINES) return TrimmedText(capped, true)
         return TrimmedText(lines.take(MAX_DIFF_LINES).joinToString("\n"), true)
+    }
+
+    /** 截到字节预算内：逐码点累计，不切代理对、不切多字节字符。 */
+    private fun capUtf8(
+        text: String,
+        maxBytes: Int,
+    ): String {
+        var bytes = 0
+        var i = 0
+        while (i < text.length) {
+            val cp = text.codePointAt(i)
+            val size = when {
+                cp < 0x80 -> 1
+                cp < 0x800 -> 2
+                cp < 0x10000 -> 3
+                else -> 4
+            }
+            if (bytes + size > maxBytes) break
+            bytes += size
+            i += Character.charCount(cp)
+        }
+        return text.substring(0, i)
     }
 
     /** 卡片数量上限：超出的文件不建视图，只报个数。 */

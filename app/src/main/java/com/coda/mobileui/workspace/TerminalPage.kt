@@ -460,7 +460,14 @@ class TerminalPage(
                                 var out = if (ctrl) controlCode(char).toString() else char.toString()
                                 // ALT 语义是 ESC 前缀，软键盘路径原先完全不看 altArmed（#564）。
                                 if (alt) out = "\u001b$out"
-                                typeText(out)
+                                if (ctrl || alt) {
+                                    // 控制码/ESC 序列直发会话（OCR #821）：typeText 是
+                                    // 本地回显 API，会把 \u001b 与控制字节追加进 echo，
+                                    // 转录显示原始转义符且退格 DEL 数量错位。
+                                    writeRaw(out)
+                                } else {
+                                    typeText(out)
+                                }
                                 // 点亮一次只作用一次：不复位的话后续每次按键都还是组合键（#564）。
                                 if (ctrlArmed || altArmed) setModifiers(false, false)
                             }
@@ -488,8 +495,9 @@ class TerminalPage(
                 }
 
                 else -> {
-                    echo.append(char)
-                    writeRaw(char.toString())
+                    // 送达失败不进回显（OCR #821）：否则转录显示打过的字，
+                    // 实际没人收，退格还会按错误的长度发 DEL。
+                    if (writeRaw(char.toString())) echo.append(char)
                 }
             }
         }
@@ -498,10 +506,17 @@ class TerminalPage(
     }
 
     private fun submitLine() {
-        lines.append(PROMPT).append(echo).append('\n')
+        val command = echo.toString()
+        // 先确认能送达再提交转录（OCR #821）：writer 为 null 时旧实现
+        // 已把 PROMPT+echo 写进 lines 并清空 echo，幻影命令行留在转录里，
+        // 用户输入不可恢复也无法重试。
+        if (!writeRaw("\n")) {
+            // 保留 echo 原样，用户可继续编辑或重发。
+            return
+        }
+        lines.append(PROMPT).append(command).append('\n')
         bodyDirty = true
         echo.setLength(0)
-        writeRaw("\n")
         cursorOn = true
         render()
     }
@@ -571,8 +586,16 @@ class TerminalPage(
                     val chunk = String(buffer, 0, read)
                     // 背压：只标记一次「待取」，主线程取走之前不再重复排队；
                     // 否则 cat 大文件或 yes 时会把主线程消息队列堆满。
-                    synchronized(incomingLock) { incoming.append(chunk) }
+                    synchronized(incomingLock) {
+                        incoming.append(chunk)
+                        // 缓冲限长（OCR #821）：主线程忙时 yes/大 cat 会把
+                        // StringBuilder 灌到几 MB。丢最旧内容，保最新输出。
+                        if (incoming.length > MAX_PENDING * 2) {
+                            incoming.delete(0, incoming.length - MAX_PENDING * 2)
+                        }
+                    }
                     if (pumpScheduled.compareAndSet(false, true)) {
+                        val mySession = session
                         main.post {
                             pumpScheduled.set(false)
                             val text = synchronized(incomingLock) {
@@ -580,7 +603,9 @@ class TerminalPage(
                                 incoming.setLength(0)
                                 buffered
                             }
-                            if (text.isNotEmpty()) appendChunk(text)
+                            // 会话守卫（OCR #821）：重开会话后旧 reader 的在途
+                            // pump 不得把上一会话的输出画进新转录。
+                            if (process === mySession && text.isNotEmpty()) appendChunk(text)
                         }
                     }
                 }
@@ -606,6 +631,9 @@ class TerminalPage(
 
     private fun stop() {
         started = false
+        // 清掉在途输出缓冲（OCR #821）：旧 reader 可能已缓冲数据且 pump
+        // 已排队，不清会把上一会话的输出渲染进新会话。
+        synchronized(incomingLock) { incoming.setLength(0) }
         // 先把引用取下来再清空：顺序反了（先置 null 再读）会让 destroy 永远走不到。
         val alive = process
         process = null
@@ -636,18 +664,21 @@ class TerminalPage(
         render()
     }
 
-    private fun writeRaw(text: String) {
+    /** 写入会话；返回是否真正送达（OCR #821）：调用方据此决定要不要提交回显。 */
+    private fun writeRaw(text: String): Boolean {
         val stream = writer
         if (stream == null) {
             // 会话没起来或已结束时，输入仍会回显但根本没人收，用户以为命令发出去了（#568）。
             appendNote("会话尚未就绪或已结束，这次输入没有发送。")
-            return
+            return false
         }
-        try {
+        return try {
             stream.write(text.toByteArray(Charsets.UTF_8))
             stream.flush()
+            true
         } catch (_: Throwable) {
             appendNote("写入失败，会话可能已经结束。")
+            false
         }
     }
 

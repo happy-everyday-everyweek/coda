@@ -44,7 +44,9 @@ import java.util.concurrent.Executors
 class WorkspaceActivity : BaseActivity() {
     companion object {
         /** 编辑器上限：与文件页保持一致，入口统一把关。 */
-        private const val MAX_EDITOR_BYTES = 2_000_000L
+        // 与文件页同一常量（OCR #821）：2_000_000 与 2MiB 不一致，
+        // 两层闸门之间的文件列表放行、打开被拒。
+        private const val MAX_EDITOR_BYTES = FilesPage.MAX_EDIT_BYTES
 
         /** 终端底栏的沉浸配色：只有终端页用，进入终端时底栏整条转黑。 */
         private val terminalBarBackground = 0xFF000000.toInt()
@@ -139,6 +141,7 @@ class WorkspaceActivity : BaseActivity() {
     private var swipeStartX = 0f
     private var swipeStartY = 0f
     private var swipeArmed = false
+
     /** 返回手势已在 MOVE 阶段接管（发过 CANCEL），UP 时直接 slideOut（#788）。 */
     private var swipeTaken = false
 
@@ -194,7 +197,9 @@ class WorkspaceActivity : BaseActivity() {
             stepBack()
             return
         }
-        finish()
+        // 与 slideOut 同口径（OCR #821）：page.onBack 只问活动页的编辑器，
+        // 后台标签的未保存编辑在 finish 时会被静默丢弃。
+        guardDirtyEditor { finish() }
     }
 
     override fun onPause() {
@@ -1263,6 +1268,26 @@ class WorkspaceActivity : BaseActivity() {
                 minimumHeight = size
                 setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
                 setOnClickListener {
+                    // 淡出动画放到关闭确认之后（OCR #821）：脏编辑器会先弹确认，
+                    // 用户取消时卡片若已淡出就永远留在总览里不可见。
+                    // 干净标签立即淡出；脏标签等 canClose 通过再淡出并关闭。
+                    val page = entry.page
+                    if (page is FilesPage && page.hasUnsavedEditor()) {
+                        page.requestLeaveEditor { canClose ->
+                            if (canClose) {
+                                card
+                                    .animate()
+                                    .scaleX(0.92f)
+                                    .scaleY(0.92f)
+                                    .alpha(0f)
+                                    .setDuration(Motion.SETTLE_MS)
+                                    .setInterpolator(Motion.standard)
+                                    .withEndAction { closeTabNow(entry.data.id) }
+                                    .start()
+                            }
+                        }
+                        return@setOnClickListener
+                    }
                     // 先让这张卡缩一下再真正关掉，避免网格里"凭空少一格"
                     card
                         .animate()

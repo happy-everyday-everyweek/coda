@@ -37,7 +37,11 @@ object DiffLines {
                     inHunk = false
                     DiffLineKind.FILE_HEADER
                 }
-                !inHunk && line.startsWith("@@") -> {
+                // 良构 hunk 头无歧义（OCR #821）：同一文件第二个及以后的 @@
+                // 也要认，否则多 hunk 文件的后续 hunk 全按 CONTEXT 丢主色。
+                // 只认 `@@ -n,m +n,m @@` 完整形状，hunk 正文里恰好以 @@
+                // 开头的内容行（如 "@@foo"）不会误判。
+                HUNK_HEADER.matches(line) -> {
                     inHunk = true
                     DiffLineKind.HUNK_HEADER
                 }
@@ -75,8 +79,28 @@ object DiffLines {
      * 带空格的路径会被 git 加引号，必须先按引号形式匹配，否则 split(' ') 会切错。
      */
     fun fileName(pair: String): String {
-        Regex("^\"a/(.*)\" \"b/(.*)\"$").find(pair)?.let { return it.groupValues[2] }
-        Regex("^a/(.*) b/(.*)$").find(pair)?.let { return it.groupValues[2] }
+        BOTH_QUOTED.find(pair)?.let { return it.groupValues[2] }
+        BOTH_PLAIN.find(pair)?.let { return it.groupValues[2] }
+        // 混合引号（OCR #821）：git 对两侧独立加引号，`a/plain "b/with space"`
+        // 两条锚定正则都不匹配，旧回退返回残片 space"。按 b 侧锚点切：
+        // 找到 ` b/` 或 ` "b/` 的位置，取其后整段再剥引号。
+        val bPlain = pair.indexOf(" b/")
+        val bQuoted = pair.indexOf(" \"b/")
+        val at = when {
+            bQuoted >= 0 && (bPlain < 0 || bQuoted < bPlain) -> bQuoted + 2
+            bPlain >= 0 -> bPlain + 1
+            else -> -1
+        }
+        if (at >= 0) {
+            var tail = pair.substring(at).removePrefix("b/")
+            if (tail.startsWith("\"") && tail.endsWith("\"")) tail = tail.substring(1, tail.length - 1)
+            return tail
+        }
         return pair.split(' ').lastOrNull()?.removePrefix("b/")?.removePrefix("a/").orEmpty()
     }
+
+    // 正则提为常量（OCR #821）：stat 循环里每行编译一次是主线程渲染路径的纯浪费。
+    private val BOTH_QUOTED = Regex("^\"a/(.*)\" \"b/(.*)\"$")
+    private val BOTH_PLAIN = Regex("^a/(.*) b/(.*)$")
+    private val HUNK_HEADER = Regex("^@@ -\\d+(,\\d+)? \\+\\d+(,\\d+)? @@")
 }

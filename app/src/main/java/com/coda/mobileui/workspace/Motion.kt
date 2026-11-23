@@ -89,8 +89,16 @@ private fun isInsideBounds(
     ev: MotionEvent,
 ): Boolean = ev.x >= 0 && ev.y >= 0 && ev.x < v.width && ev.y < v.height
 
-/** 恢复到未按下的形态；重复调用无副作用。 */
+/**
+ * 恢复到未按下的形态；重复调用无副作用。
+ *
+ * MOVE 拖出边界会连续触发（OCR #821）：每次都 cancel+重启会让回弹
+ * 动画永远从第 0 帧开始、从不前进。已在恢复态（scale==1 且无在途
+ * 按压动画）时直接返回。
+ */
 private fun releasePress(v: View) {
+    if (v.scaleX == 1f && v.scaleY == 1f && v.getTag(R.id.coda_press_settling) == null) return
+    v.setTag(R.id.coda_press_settling, true)
     v.animate().cancel()
     v
         .animate()
@@ -98,6 +106,7 @@ private fun releasePress(v: View) {
         .scaleY(1f)
         .setDuration(Motion.SETTLE_MS)
         .setInterpolator(Motion.settle)
+        .withEndAction { v.setTag(R.id.coda_press_settling, null) }
         .start()
     fadeContent(v, 1f, Motion.SETTLE_MS)
 }
@@ -315,6 +324,10 @@ internal fun View.animateHeightTo(
             parentWidth > 0 -> View.MeasureSpec.makeMeasureSpec(parentWidth, View.MeasureSpec.AT_MOST)
             else -> View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         }
+    // 起点必须在放开测量**之前**取（OCR #821）：show 分支的 measure 会把
+    // measuredHeight 覆盖成目标高度，之后再读 start==target，展开动画
+    // 被下面的早退直接吞掉。
+    val start = if (measuredHeight > 0) measuredHeight else (params.height.coerceAtLeast(0))
     val target =
         if (show) {
             // 量之前先把高度放开，否则 WRAP_CONTENT 之外的固定值会限制测量结果。
@@ -325,8 +338,6 @@ internal fun View.animateHeightTo(
         } else {
             0
         }
-    // 起点用当前实际显示高度；未布局时 measuredHeight 为 0，收起动画从当前 layoutParams 取。
-    val start = if (measuredHeight > 0) measuredHeight else (params.height.coerceAtLeast(0))
     if (show) {
         params.height = start
         layoutParams = params

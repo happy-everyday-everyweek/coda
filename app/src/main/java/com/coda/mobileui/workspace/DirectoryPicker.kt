@@ -46,24 +46,49 @@ object DirectoryPicker {
                 bindContent(into, activity, caption, startAt, onPicked, column)
             }
             primaryAction("选择此目录") {
-                onPicked(currentDir[into] ?: currentDirOf(startAt))
-                currentDir.remove(into)
+                onPicked(dirOf(into) ?: currentDirOf(startAt))
+                removeDir(into)
                 into.dismiss()
             }
         }
-        into.onDismiss { currentDir.remove(into) }
+        into.onDismiss { removeDir(into) }
     }
 
     /**
      * 记录每个宿主当前所在目录：就地换页时目录内导航要能就地刷新。
      *
-     * 用弱引用键（#502）：原先是静态 HashMap<CodaSheet, File>，只在 onDismiss 里移除，
-     * 而 Activity 旋转/finish 不走 dismiss()，条目会一直强引用 CodaSheet→视图树→Activity。
-     * 现在键是 WeakReference，宿主可被回收；另外挂 OnAttachStateChangeListener，
+     * 真正的弱引用键（#502，OCR #821 修正）：表按身份存 WeakReference→目录，
+     * 不再直接强引用 CodaSheet。Activity 旋转/finish 不走 dismiss() 时，
+     * 宿主被 GC 后条目由 prune 回收；另外挂 OnAttachStateChangeListener，
      * 视图从窗口分离时主动清掉条目，不必等 GC。
      */
-    private val currentDir = java.util.Collections.synchronizedMap(mutableMapOf<CodaSheet, File>())
-    private val holders = java.util.Collections.synchronizedList(mutableListOf<java.lang.ref.WeakReference<CodaSheet>>())
+    private val currentDir =
+        java.util.Collections.synchronizedMap(
+            java.util.IdentityHashMap<java.lang.ref.WeakReference<CodaSheet>, File>(),
+        )
+
+    private fun dirOf(sheet: CodaSheet): File? {
+        synchronized(currentDir) {
+            for ((ref, dir) in currentDir) if (ref.get() === sheet) return dir
+        }
+        return null
+    }
+
+    private fun setDir(
+        sheet: CodaSheet,
+        dir: File,
+    ) {
+        synchronized(currentDir) {
+            val existing = currentDir.keys.firstOrNull { it.get() === sheet }
+            currentDir[existing ?: java.lang.ref.WeakReference(sheet)] = dir
+        }
+    }
+
+    private fun removeDir(sheet: CodaSheet) {
+        synchronized(currentDir) {
+            currentDir.keys.removeAll { it.get() === sheet || it.get() == null }
+        }
+    }
 
     /** 记住目录，并保证视图分离时清理，避免静态表持有已销毁的 Activity。 */
     private fun track(
@@ -71,14 +96,13 @@ object DirectoryPicker {
         dir: File,
         anchor: View?,
     ) {
-        currentDir[sheet] = dir
-        holders.add(java.lang.ref.WeakReference(sheet))
+        setDir(sheet, dir)
         anchor?.addOnAttachStateChangeListener(
             object : View.OnAttachStateChangeListener {
                 override fun onViewAttachedToWindow(v: View) = Unit
 
                 override fun onViewDetachedFromWindow(v: View) {
-                    currentDir.remove(sheet)
+                    removeDir(sheet)
                     v.removeOnAttachStateChangeListener(this)
                     prune()
                 }
@@ -92,20 +116,12 @@ object DirectoryPicker {
      *
      * 只按「弱引用已空」清（#801）：track 在 contentBlock 里同步执行，
      * 那时 CodaSheet.show 还没把 isShowing 置 true，按 !isShowing 清会把
-     * 刚登记的宿主立刻删掉——每次导航点选都被下一次 prune 撤销，
-     * 选择器永远进不了子目录。活着但尚未显示的宿主不能动；
+     * 刚登记的宿主立刻删掉。活着但尚未显示的宿主不能动；
      * 已显示又关闭的宿主由 onDismiss / onViewDetached 主动清。
      */
     private fun prune() {
-        synchronized(holders) {
-            val it = holders.iterator()
-            while (it.hasNext()) {
-                val ref = it.next()
-                val sheet = ref.get()
-                if (sheet == null) {
-                    it.remove()
-                }
-            }
+        synchronized(currentDir) {
+            currentDir.keys.removeAll { it.get() == null }
         }
     }
 
@@ -121,11 +137,11 @@ object DirectoryPicker {
         sheet.title(caption)
         sheet.content { column -> bindContent(sheet, activity, caption, startAt, onPicked, column) }
         sheet.primaryAction("选择此目录") {
-            onPicked(currentDir[sheet] ?: currentDirOf(startAt))
-            currentDir.remove(sheet)
+            onPicked(dirOf(sheet) ?: currentDirOf(startAt))
+            removeDir(sheet)
             sheet.dismiss()
         }
-        sheet.onDismiss { currentDir.remove(sheet) }
+        sheet.onDismiss { removeDir(sheet) }
     }
 
     private fun bindContent(
@@ -136,17 +152,17 @@ object DirectoryPicker {
         onPicked: (File) -> Unit,
         column: LinearLayout,
     ) {
-        if (currentDir[sheet] == null) track(sheet, currentDirOf(startAt), column)
+        if (dirOf(sheet) == null) track(sheet, currentDirOf(startAt), column)
         var render: (LinearLayout) -> Unit = {}
         render = { col ->
             col.removeAllViews()
-            val current = currentDir[sheet] ?: currentDirOf(startAt)
+            val current = dirOf(sheet) ?: currentDirOf(startAt)
             col.addView(pathLabel(activity, current))
             val parent = current.parentFile
             if (parent != null) {
                 col.addView(
                     entry(activity, "上一级", true) {
-                        currentDir[sheet] = parent
+                        setDir(sheet, parent)
                         sheet.refreshContent { refreshed -> render(refreshed) }
                     },
                 )
@@ -171,7 +187,7 @@ object DirectoryPicker {
                 for (dir in children) {
                     col.addView(
                         entry(activity, dir.name, true) {
-                            currentDir[sheet] = dir
+                            setDir(sheet, dir)
                             sheet.refreshContent { refreshed -> render(refreshed) }
                         },
                     )

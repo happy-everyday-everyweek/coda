@@ -56,7 +56,7 @@ internal class DiffView(
         // 先截到预算内：后面的 split 与逐文件建卡片都在这个上界之内进行。
         val trimmed = DiffBudget.trimText(text)
         val lines = trimmed.text.split('\n')
-        if (mode == Mode.DIFF) addView(statLine(lines))
+        if (mode == Mode.DIFF) addView(statLine(lines, trimmed.truncated))
         val grouped = groupFiles(lines)
         // preamble（提交头等非 diff 组）不占文件卡预算（#777）：total 只数
         // diff --git 头，groups 却可能多一个前导组，按 take(visible) 切会
@@ -80,7 +80,10 @@ internal class DiffView(
 
     // ------------------------------------------------------------ 统计
 
-    private fun statLine(lines: List<String>): View {
+    private fun statLine(
+        lines: List<String>,
+        truncated: Boolean = false,
+    ): View {
         // 统计交给 DiffLines：它维护 hunk 状态，hunk 内的 ---/+++ 内容行不会被漏计（#499）。
         val stat = DiffLines.stat(lines)
         val files = stat.files
@@ -91,6 +94,8 @@ internal class DiffView(
                 if (files > 0) append("$files 个文件 · ")
                 append("+$added")
                 append(" −$removed")
+                // 截断时计数只覆盖已加载部分（OCR #821）：不标注会被当成全量。
+                if (truncated) append("（统计仅含已加载部分）")
             }
         return TextView(activity).apply {
             text = summary

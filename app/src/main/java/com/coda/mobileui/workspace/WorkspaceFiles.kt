@@ -38,48 +38,62 @@ object WorkspaceFiles {
      * 原先这里硬编码一份 roots，与 xml 各自维护，两边一致只是巧合：
      * 改 xml 忘改代码就会「canShare 说行、FileProvider 抛异常」，反之则白白拒绝。
      * 现在以 xml 为唯一事实来源，按标签映射到对应的实际目录。
+     * 解析结果按进程缓存（OCR #821）：声明在运行期不变，canShare/explain
+     * 落在文件打开路径上，不能每次都重开 XmlResourceParser + canonicalPath。
      */
+    @Volatile private var rootsCache: List<File>? = null
+
     private fun sharedRoots(context: Context): List<File> {
+        rootsCache?.let { return it }
+        val app = context.applicationContext ?: context
         val out = mutableListOf<File>()
-        val parser = runCatching { context.resources.getXml(R.xml.file_paths) }.getOrNull()
+        val parser = runCatching { app.resources.getXml(R.xml.file_paths) }.getOrNull()
         if (parser == null) {
-            AppLog.w("WorkspaceFiles", "无法打开 file_paths.xml，退回内置根列表")
-            return fallbackRoots(context)
+            // fail-closed（OCR #821）：解析失败时退回更宽的内置列表，会重新引入
+            // 「canShare 说行、FileProvider 抛异常」的分裂。宁可全部拒绝。
+            AppLog.w("WorkspaceFiles", "无法打开 file_paths.xml，按不可共享处理")
+            return emptyList()
         }
-        runCatching {
-            var event = parser.eventType
-            while (event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
-                if (event == org.xmlpull.v1.XmlPullParser.START_TAG) {
-                    // path="." 表示整个根；子路径则拼到根后面。
-                    val sub = parser.getAttributeValue(null, "path").orEmpty().trim('.', '/')
-                    val base =
-                        when (parser.name) {
-                            "files-path" -> context.filesDir
-                            "cache-path" -> context.cacheDir
-                            "external-path" -> android.os.Environment.getExternalStorageDirectory()
-                            "external-files-path" -> context.getExternalFilesDir(null)
-                            "external-cache-path" -> context.externalCacheDir
-                            else -> null
+        val parsed =
+            runCatching {
+                var event = parser.eventType
+                while (event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                    if (event == org.xmlpull.v1.XmlPullParser.START_TAG) {
+                        // path="." 表示整个根；子路径则拼到根后面。
+                        // 只剥斜杠与显式的 "./" 前缀：trim('.') 会把 `.config`
+                        // 这类合法子路径误剥成 config，造成错误的 OutOfScope。
+                        var sub = parser.getAttributeValue(null, "path").orEmpty().trim('/')
+                        while (sub.startsWith("./")) sub = sub.substring(2)
+                        if (sub == ".") sub = ""
+                        val base =
+                            when (parser.name) {
+                                "files-path" -> app.filesDir
+                                "cache-path" -> app.cacheDir
+                                "external-path" -> android.os.Environment.getExternalStorageDirectory()
+                                "external-files-path" -> app.getExternalFilesDir(null)
+                                "external-cache-path" -> app.externalCacheDir
+                                "root-path" -> File("/")
+                                else -> null
+                            }
+                        if (base != null) {
+                            val f = if (sub.isEmpty()) base else File(base, sub)
+                            out += runCatching { f.canonicalFile }.getOrDefault(f)
                         }
-                    if (base != null) out += if (sub.isEmpty()) base else File(base, sub)
+                    }
+                    event = parser.next()
                 }
-                event = parser.next()
             }
-        }.onFailure {
-            AppLog.w("WorkspaceFiles", "解析 file_paths.xml 失败，退回内置根列表：${it.message}")
-        }
         // XmlResourceParser 不是 AutoCloseable（API 26 起才有 close 的默认实现），显式关。
         runCatching { parser.close() }
-        return out.ifEmpty { fallbackRoots(context) }
+        if (parsed.isFailure) {
+            AppLog.w("WorkspaceFiles", "解析 file_paths.xml 失败，按不可共享处理：${parsed.exceptionOrNull()?.message}")
+            return emptyList()
+        }
+        // 解析成功才建缓存；失败不缓存，让下次调用还能重试。
+        val roots = out.toList()
+        rootsCache = roots
+        return roots
     }
-
-    /** xml 读不出来时的兜底；与当前 file_paths.xml 的三条声明对应。 */
-    private fun fallbackRoots(context: Context): List<File> =
-        listOfNotNull(
-            context.filesDir,
-            context.getExternalFilesDir(null),
-            android.os.Environment.getExternalStorageDirectory(),
-        )
 
     /**
      * 判断一个真实路径是否落在已声明的可共享范围内。
@@ -92,8 +106,9 @@ object WorkspaceFiles {
         file: File,
     ): Boolean {
         val target = runCatching { file.canonicalPath }.getOrNull() ?: return false
+        // sharedRoots 返回的已是 canonical 根，这里不再逐个做 syscall。
         return sharedRoots(context).any { root ->
-            val base = runCatching { root.canonicalPath }.getOrNull() ?: return@any false
+            val base = root.path
             target == base || target.startsWith(base + File.separator)
         }
     }

@@ -219,14 +219,11 @@ object CodeLexer {
         start: Int,
         end: Int,
     ): Boolean {
-        val len = end - start
-        for (w in words) {
-            if (w.length != len) continue
-            var k = 0
-            while (k < len && w[k] == text[start + k]) k++
-            if (k == len) return true
-        }
-        return false
+        // 子串转 String 一次再哈希查（OCR #821）：线性扫整个关键词/类型表
+        // 在 200k 字符文件上是每轮数百万次比较。标识符长度有限，
+        // 一次小分配的代价远低于全表扫描。
+        if (words.isEmpty() || end <= start) return false
+        return words.contains(text.subSequence(start, end).toString())
     }
 
     private fun startsWith(
