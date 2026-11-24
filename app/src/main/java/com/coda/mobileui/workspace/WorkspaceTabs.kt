@@ -51,12 +51,11 @@ object WorkspaceTabs {
     /** 标签上显示的名字：编辑器显示文件名，其余用页面名。 */
     fun labelOf(tab: WorkspaceTab): String =
         if (tab.kind == EDITOR) {
-            val name = tab.state.optString("name")
-            if (name.isNotEmpty()) {
-                name
-            } else {
-                tab.state.optString("path").substringAfterLast('/').ifEmpty { label(EDITOR) }
-            }
+            // OCR low #574：ifEmpty 链式回退，去掉临时变量与多余分支。
+            tab.state
+                .optString("name")
+                .ifEmpty { tab.state.optString("path").substringAfterLast('/') }
+                .ifEmpty { label(EDITOR) }
         } else {
             label(tab.kind)
         }
@@ -81,11 +80,13 @@ object WorkspaceTabs {
             }
             val array = saved.optJSONArray("tabs") ?: JSONArray()
             val tabs = mutableListOf<WorkspaceTab>()
+            // OCR low #570：重复 id 会让按 id 查找/关闭产生歧义，加载时去重（保留首个）。
+            val seenIds = HashSet<String>()
             for (i in 0 until array.length()) {
                 val item = array.optJSONObject(i) ?: continue
                 val id = item.optString("id")
                 val kind = item.optString("kind")
-                if (id.isEmpty() || kind.isEmpty()) continue
+                if (id.isEmpty() || kind.isEmpty() || !seenIds.add(id)) continue
                 tabs += WorkspaceTab(id, kind, item.optJSONObject("state") ?: JSONObject(), item.optBoolean("preview"))
             }
             val active = saved.optString("active").ifEmpty { null }
@@ -142,10 +143,13 @@ object WorkspaceTabs {
             Workspaces.ensureState(root)
             val target = Workspaces.stateFile(root)
             val temp = File(target.parentFile, target.name + ".tmp")
-            temp.writeText(payload.toString(2))
+            // OCR low #573：序列化一次复用，避免 rename 失败路径重复计算；
+            // 失败分支同样删掉临时文件，不留 .tmp 残留。
+            val text = payload.toString(2)
+            temp.writeText(text)
             if (!temp.renameTo(target)) {
                 // 某些文件系统上 rename 到已存在的目标会失败，退回覆盖写。
-                target.writeText(payload.toString(2))
+                target.writeText(text)
                 temp.delete()
             }
         } catch (e: Throwable) {

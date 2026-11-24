@@ -318,12 +318,6 @@ internal class GitDetailView(
     }
 
     companion object {
-        fun row(
-            title: String,
-            detail: String = "",
-            key: String,
-        ): SettingRow = SettingRow.Value(title, detail, key)
-
         /** Context 版本的 dp，调用方拼视图时用得到。 */
         fun px(
             context: Context,

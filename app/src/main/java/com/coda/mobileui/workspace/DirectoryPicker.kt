@@ -43,7 +43,8 @@ object DirectoryPicker {
             title(caption)
             content { column ->
                 // navigate 之后 content 闭包拿到的是新列，交给 bind 里的渲染逻辑刷新
-                bindContent(into, activity, caption, startAt, onPicked, column)
+                // OCR low #503：caption/onPicked 只用于本函数其余部分，bindContent 不再收。
+                bindContent(into, activity, startAt, column)
             }
             primaryAction("选择此目录") {
                 onPicked(dirOf(into) ?: currentDirOf(startAt))
@@ -135,7 +136,7 @@ object DirectoryPicker {
         onPicked: (File) -> Unit,
     ) {
         sheet.title(caption)
-        sheet.content { column -> bindContent(sheet, activity, caption, startAt, onPicked, column) }
+        sheet.content { column -> bindContent(sheet, activity, startAt, column) }
         sheet.primaryAction("选择此目录") {
             onPicked(dirOf(sheet) ?: currentDirOf(startAt))
             removeDir(sheet)
@@ -147,14 +148,12 @@ object DirectoryPicker {
     private fun bindContent(
         sheet: CodaSheet,
         activity: Activity,
-        caption: String,
         startAt: File,
-        onPicked: (File) -> Unit,
         column: LinearLayout,
     ) {
         if (dirOf(sheet) == null) track(sheet, currentDirOf(startAt), column)
-        var render: (LinearLayout) -> Unit = {}
-        render = { col ->
+        // OCR low #506：先赋空 lambda 再覆盖是死代码，直接声明局部渲染函数。
+        fun render(col: LinearLayout) {
             col.removeAllViews()
             val current = dirOf(sheet) ?: currentDirOf(startAt)
             col.addView(pathLabel(activity, current))

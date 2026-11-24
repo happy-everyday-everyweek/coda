@@ -108,8 +108,7 @@ class GitPage(
 
     private fun detailAttached(): Boolean = ::detail.isInitialized && detail.isAttachedToWindow
 
-    /** 合并失败时顺带查到的冲突文件；非空才进冲突流程。 */
-    private var pendingConflicts: List<String> = emptyList()
+    // OCR low #536：原 pendingConflicts 声明后从未被读写，已删除。
 
     /** 画布上的操作步骤。合并是"选源 → 选目标 → 确认"三段，状态就放在这里。 */
     private var pickingTarget = false

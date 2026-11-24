@@ -18,7 +18,13 @@ object Git {
         val output: String,
     ) {
         /** 按行拆分并去掉空行。 */
-        fun lines(): List<String> = output.split('\n').map { it.trimEnd('\r') }.filter { it.isNotEmpty() }
+        // OCR low #523：惰性逐行处理，末尾才 toList；语义与原来一致（去 \r、丢空行）。
+        fun lines(): List<String> =
+            output
+                .lineSequence()
+                .map { it.trimEnd('\r') }
+                .filter { it.isNotEmpty() }
+                .toList()
     }
 
     /** 一次 diff 读取的结果。text 为空表示没有改动，truncated 为真表示过长被截断。 */
@@ -675,7 +681,8 @@ object Git {
         env: LinuxEnv,
         root: File,
     ): Result {
-        repairObjectDirs(root)
+        // OCR low #519：先直接 add；健康仓库不再每次多建 256 个分片目录、重写 info/exclude。
+        // 只有命中对象库缺失类错误时才修复并重试（下面 broken 分支）。
         // 显式限定为当前工作区目录：工作区只是父仓库的子目录时，裸 `add -A`
         // 会把整棵树（含工作区之外）的改动一起暂存，界面显示的变更数却只有子目录。
         val first = run(env, root, listOf("add", "-A", "--", "."))

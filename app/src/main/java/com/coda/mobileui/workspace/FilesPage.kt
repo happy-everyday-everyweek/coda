@@ -1389,15 +1389,9 @@ open class FilesPage(
     }
 
     private fun fileIcon(name: String): Int {
-        val lower = name.lowercase()
-        return when {
-            lower.endsWith(".md") || lower.endsWith(".txt") -> R.drawable.ic_file
-
-            lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
-                lower.endsWith(".webp") || lower.endsWith(".gif") -> R.drawable.ic_file
-
-            else -> R.drawable.ic_file
-        }
+        // OCR low #513：所有分支原本都返回同一图标，看似按类型区分的 when 是死代码。
+        // 目前只有一种文件图标，直接返回；将来要区分类型时再在这里加分支。
+        return R.drawable.ic_file
     }
 
     // -------------------------------------------------------------- 文件操作
@@ -1695,12 +1689,17 @@ open class FilesPage(
     private fun newFolder() {
         inputSheet("新建文件夹", "new-folder") { name ->
             val target = File(operationDir(), name)
+            // OCR low #515：同名已存在与无权限会落到同一条「创建失败」，先分辨出来。
+            if (target.exists()) {
+                toast("同名条目已存在")
+                return@inputSheet
+            }
             val ok = target.mkdirs()
             if (ok) {
                 renderList()
                 renderRightPane()
             } else {
-                toast("创建失败")
+                toast("创建失败（可能没有写入权限）")
             }
         }
     }

@@ -35,6 +35,7 @@ import com.coda.mobileui.topSafeInsetPx
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 
 /**
  * 标签页容器。
@@ -509,7 +510,10 @@ class WorkspaceActivity : BaseActivity() {
 
     private fun line(): View =
         View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(MATCH, dp(0.7f))
+            // OCR low #561：dp() 是 toInt() 截断，0.7dp 在 1x 密度下变 0px，
+            // 发丝分割线直接消失。四舍五入并保底 1px。
+            val hairline = (0.7f * resources.displayMetrics.density).roundToInt().coerceAtLeast(1)
+            layoutParams = LinearLayout.LayoutParams(MATCH, hairline)
         }
 
     private fun pill(fill: Int): android.graphics.drawable.GradientDrawable =

@@ -585,10 +585,12 @@ class TerminalPage(
         status.visibility = View.GONE
         appendNote("会话已启动：" + host.root.absolutePath)
         primeDirectory()
-        val reader = InputStreamReader(session.inputStream, Charsets.UTF_8)
         thread(name = "coda-terminal-reader", isDaemon = true) {
             val buffer = CharArray(2048)
             try {
+                // OCR low #567：reader 随会话结束关闭，避免每个终端会话漏一个
+                // 文件描述符（use 在 EOF/异常/主动关闭时都会释放）。
+                InputStreamReader(session.inputStream, Charsets.UTF_8).use { reader ->
                 while (true) {
                     val read = reader.read(buffer)
                     if (read <= 0) break
@@ -629,6 +631,7 @@ class TerminalPage(
                             if (text.isNotEmpty()) appendChunk(text)
                         }
                     }
+                }
                 }
             } catch (_: Throwable) {
             }
