@@ -24,8 +24,9 @@ import java.util.concurrent.TimeUnit
  * 在 workbuddy2api 里已经是成熟实现，插件版那套是「粘性单账号」，补起来不如直接用。
  */
 object WorkBuddyGateway {
-    /** 随包资产的版本号；换二进制时改这里。 */
-    const val VERSION = "1.0"
+    // OCR low #437：原先的 VERSION 从不参与安装路径、日志或升级判定（升级完全由
+    // AssetFetcher 的 SHA-256 校验决定），保留会让人误以为改它就能触发升级。
+    // 换二进制只需更新随包资产，摘要校验会自动识别。
 
     private const val DEFAULT_PORT = 17863
 

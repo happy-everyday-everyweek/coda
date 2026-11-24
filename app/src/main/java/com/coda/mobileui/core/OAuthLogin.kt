@@ -124,7 +124,6 @@ object OAuthLogin {
             val effectiveRealm = if (realm == "global") "global" else "cn"
             val raw =
                 panelJson(
-                    ctx,
                     "/panel/api/login/start",
                     method = "POST",
                     payload =
@@ -269,7 +268,6 @@ object OAuthLogin {
         if (OAuthProviders.usesWorkBuddyGateway(session.providerId)) {
             val raw =
                 panelJson(
-                    ctx,
                     "/panel/api/login/poll?state=${android.net.Uri.encode(session.state)}",
                     method = "GET",
                 ) ?: return Result.Failed("无法连接网关")
@@ -396,7 +394,7 @@ object OAuthLogin {
         val raw =
             if (OAuthProviders.usesWorkBuddyGateway(provider.id)) {
                 if (!WorkBuddyGateway.isRunning) return emptyList()
-                panelJsonObject(ctx, "/v1/models", "GET")?.let { readModelIds(it) }.orEmpty()
+                panelJsonObject("/v1/models", "GET")?.let { readModelIds(it) }.orEmpty()
             } else {
                 if (!ProxyHost.isRunning) return emptyList()
                 ProxyHost.clientJson(ctx, "/v1/models")?.let { readModelIds(it) }.orEmpty()
@@ -421,7 +419,6 @@ object OAuthLogin {
      * 会把 127.0.0.1 也交给代理，表现为「网关明明在跑却连不上」。
      */
     private fun panelJson(
-        ctx: Context,
         path: String,
         method: String,
         payload: String? = null,
@@ -490,10 +487,9 @@ object OAuthLogin {
     }
 
     private fun panelJsonObject(
-        ctx: Context,
         path: String,
         method: String,
-    ): JSONObject? = panelJson(ctx, path, method)?.let { runCatching { JSONObject(it) }.getOrNull() }
+    ): JSONObject? = panelJson(path, method)?.let { runCatching { JSONObject(it) }.getOrNull() }
 
     /**
      * 启动时把已保存的 OAuth 供应商接回可用的网关。

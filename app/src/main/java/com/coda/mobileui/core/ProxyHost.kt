@@ -835,10 +835,13 @@ object ProxyHost {
                 // 探测本身失败时把首条异常带上：明文策略拒绝、连接被拒、端口没监听
                 // 三种原因在网关日志里一模一样，区别只在这个异常里。
                 val probeNote = probeFailure.get()?.let { "\n探测异常：$it" } ?: ""
+                // OCR low #390：stop() 之后 isAlive 几乎必然为 false，两条分支退化成
+                // 一条「进程退出」。先取存活状态再停；超时文案跟随常量而不是硬编码。
+                val alive = proc.isAlive
                 stop()
                 return fail(
-                    if (proc.isAlive) {
-                        "网关启动超时（45 秒内未应答$port）$probeNote" + tail
+                    if (alive) {
+                        "网关启动超时（${READY_TIMEOUT_MS / 1000} 秒内未应答$port）$probeNote" + tail
                     } else {
                         "网关进程退出$probeNote" + tail
                     },

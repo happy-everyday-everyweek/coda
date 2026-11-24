@@ -758,7 +758,8 @@ object ProviderStore {
         val mrules = JSONArray()
         // 只为真正落盘的供应商写模型规则：内置 provider 不写 providerRules，
         // 再给它写 modelConfigRules 就是悬空引用（schema 不拦，但内核注册不到）。
-        for (p in persist.filter { it.kind == ProviderStore.ProviderKind.LLM }) {
+        // OCR low #381：persist 定义时已按 LLM 过滤，内层再 filter 恒真。
+        for (p in persist) {
             for (m in p.models) {
                 val r = JSONObject().put("providerId", p.id).put("modelId", m)
                 val cfg = JSONObject()

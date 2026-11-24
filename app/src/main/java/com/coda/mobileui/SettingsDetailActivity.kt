@@ -386,6 +386,10 @@ class SettingsDetailActivity :
             }.apply { isDaemon = true }.start()
         }
         stopGitHubPolling()
+        // OCR low #606：保存供应商后的 700ms 延迟重启挂在 Activity 上，页面先退
+        // 就会带着已销毁的实例执行并弹提示。销毁时撤掉挂起任务。
+        pendingProviderRestart?.let { providerRestartHandler.removeCallbacks(it) }
+        pendingProviderRestart = null
         super.onDestroy()
     }
 
