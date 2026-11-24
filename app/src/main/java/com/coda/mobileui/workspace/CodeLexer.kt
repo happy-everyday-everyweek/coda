@@ -275,8 +275,10 @@ object CodeLexer {
         text: CharSequence,
         from: Int,
     ): Char? {
+        // OCR low #496：换行也属空白——`foo\n(` 这种格式化后的调用写法
+        // 之前看不到括号，函数名漏着色。
         var i = from
-        while (i < text.length && (text[i] == ' ' || text[i] == '\t')) i++
+        while (i < text.length && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r')) i++
         return if (i < text.length) text[i] else null
     }
 

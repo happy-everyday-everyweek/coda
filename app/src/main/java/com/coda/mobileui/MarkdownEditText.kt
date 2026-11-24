@@ -191,8 +191,14 @@ internal object MarkdownSpans {
     private val ORDERED = Regex("^\\s*\\d+\\.\\s")
     private val HR = Regex("^\\s*(?:-{3,}|\\*{3,}|_{3,})\\s*$")
     private val INLINE_CODE = Regex("`([^`\\n]+)`")
-    private val BOLD = Regex("\\*\\*([^*\\n]+)\\*\\*|__([^_\\n]+)__")
-    private val ITALIC = Regex("(?<![*_])\\*([^*\\n]+)\\*(?![*_])|(?<![*_])_([^_\\n]+)_(?![*_])")
+    // OCR low #113：三处修正——
+    // 1) 前面带反斜杠的符号是转义字面量，不应参与强调匹配；
+    // 2) 三重强调单独识别为粗斜体（否则只渲染内层 **a**，两侧星号裸露）；
+    // 3) 强调区间与行内代码相交时整段跳过（旧实现只跳过「完全位于代码内」的，
+    //    `*a `code` b*` 会把代码一起吞进斜体）。
+    private val TRIPLE = Regex("(?<!\\\\)\\*\\*\\*([^*\\n]+)\\*\\*\\*")
+    private val BOLD = Regex("(?<!\\\\)\\*\\*([^*\\n]+)\\*\\*|(?<!\\\\)__([^_\\n]+)__")
+    private val ITALIC = Regex("(?<![*_])(?<!\\\\)\\*([^*\\n]+)\\*(?![*_])|(?<![*_])(?<!\\\\)_([^_\\n]+)_(?![*_])")
     private val STRIKE = Regex("~~([^~\\n]+)~~")
     private val LINK = Regex("\\[([^\\]\\n]*)\\]\\(([^)\\n]*)\\)")
 
@@ -239,6 +245,21 @@ internal object MarkdownSpans {
             e: Int,
         ) = inCode(s, e) || inline.any { s >= it.first && e <= it.last }
 
+        // 强调类与代码区间「相交」即跳过：不必整体被包住也算冲突。
+        fun overlaps(
+            s: Int,
+            e: Int,
+        ) = codeRanges.any { s <= it.last && e >= it.first } || inline.any { s <= it.last && e >= it.first }
+
+        val tripleRanges = mutableListOf<IntRange>()
+        for (m in TRIPLE.findAll(src)) {
+            if (overlaps(m.range.first, m.range.last)) continue
+            val body = m.groups[1] ?: continue
+            text.setSpan(StyleSpan(Typeface.BOLD_ITALIC), body.range.first, body.range.last + 1, SPAN_FLAGS)
+            markPair(text, m, body, markScale, markAlpha)
+            tripleRanges += m.range
+        }
+
         for (m in STRIKE.findAll(src)) {
             if (blocked(m.range.first, m.range.last)) continue
             val body = m.groups[1] ?: continue
@@ -247,14 +268,16 @@ internal object MarkdownSpans {
         }
 
         for (m in BOLD.findAll(src)) {
-            if (blocked(m.range.first, m.range.last)) continue
+            if (overlaps(m.range.first, m.range.last)) continue
+            if (tripleRanges.any { m.range.first in it }) continue
             val body = m.groups[1] ?: m.groups[2] ?: continue
             text.setSpan(StyleSpan(Typeface.BOLD), body.range.first, body.range.last + 1, SPAN_FLAGS)
             markPair(text, m, body, markScale, markAlpha)
         }
 
         for (m in ITALIC.findAll(src)) {
-            if (blocked(m.range.first, m.range.last)) continue
+            if (overlaps(m.range.first, m.range.last)) continue
+            if (tripleRanges.any { m.range.first in it }) continue
             val body = m.groups[1] ?: m.groups[2] ?: continue
             text.setSpan(StyleSpan(Typeface.ITALIC), body.range.first, body.range.last + 1, SPAN_FLAGS)
             markPair(text, m, body, markScale, markAlpha)

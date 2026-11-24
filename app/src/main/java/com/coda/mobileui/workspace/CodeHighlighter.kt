@@ -63,11 +63,11 @@ object CodeHighlighter {
     fun detect(fileName: String): LanguageRules? {
         val lower = fileName.lowercase()
         val ext = lower.substringAfterLast('.', "")
-        val lang = languageOf(lower, ext) ?: return null
+        val lang = languageOf(ext) ?: return null
         return rulesCache.getOrPut(lang) { buildRules(lang) }
     }
 
-    private fun languageOf(lower: String, ext: String): String? = when {
+    private fun languageOf(ext: String): String? = when {
         ext == "kt" || ext == "kts" -> "kotlin"
         ext == "java" -> "java"
         ext == "js" || ext == "mjs" || ext == "cjs" || ext == "jsx" -> "javascript"
@@ -85,7 +85,9 @@ object CodeHighlighter {
         ext == "go" -> "go"
         ext == "rs" -> "rust"
         ext == "sql" -> "sql"
-        ext == "gradle" || lower == "build.gradle.kts" -> "kotlin"
+        // OCR low #498：build.gradle.kts 的 ext 是 kts，前面的 kts 分支已命中，
+        // 这里的 lower 判断不可达，已删除。
+        ext == "gradle" -> "kotlin"
         else -> null
     }
 
@@ -405,7 +407,6 @@ object CodeHighlighter {
                 "HashSet",
                 "Optional",
                 "Stream",
-                "Long",
                 "Thread",
             ),
         )
@@ -454,7 +455,6 @@ object CodeHighlighter {
                 "export",
                 "from",
                 "as",
-                "default",
                 "null",
                 "undefined",
                 "true",

@@ -1325,7 +1325,10 @@ object SettingsData {
         // 状态来自后台快照（#743）：这里在主线程渲染，绝不能逐份读文件算摘要。
         val status = cachedPromptStatus(ctx)
         SystemPrompts.all.forEach { item ->
-            rows += SettingRow.Value(item.title, status?.get(item.file) ?: "读取中…", "sysprompt_edit:${item.file}")
+            // OCR low #402：Item.summary 之前从未被读取。把模板用途接进副标题，
+            // 状态仍跟在后面，信息不丢。
+            val state = status?.get(item.file) ?: "读取中…"
+            rows += SettingRow.Value(item.title, "${item.summary} · $state", "sysprompt_edit:${item.file}")
         }
         rows += SettingRow.Header("说明")
         rows += SettingRow.Value("目录", SystemPrompts.dir(ctx).absolutePath)
