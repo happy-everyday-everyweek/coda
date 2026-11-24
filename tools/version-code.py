@@ -42,6 +42,7 @@
 
 import argparse
 import datetime
+import math
 import sys
 
 # Android 的 versionCode 上限。
@@ -64,7 +65,12 @@ def compute(channel: str, at: datetime.datetime) -> int:
     # 秒粒度：分钟粒度下，同一分钟内的两次构建会算出同一个 versionCode，
     # 与文件头「后发生的构建一定有更大的号」自相矛盾。秒粒度把量级放大 60 倍，
     # 到 2029 年仍只有约 1.9 亿，离 21 亿上限还有十倍余量。
-    seconds = int(delta.total_seconds())
+    # 先取整再判负会把「基准前不到 1 秒」漏过去（OCR low #827）：
+    # int() 向零截断，-0.5 → 0，于是 2025-12-31T23:59:59.5Z 会静默得到 versionCode 0。
+    total = delta.total_seconds()
+    if total < 0:
+        raise ValueError(f"时刻早于基准 {EPOCH.isoformat()}：{at.isoformat()}")
+    seconds = math.floor(total)
     if seconds < 0:
         raise ValueError(f"时刻早于基准 {EPOCH.isoformat()}：{at.isoformat()}")
 

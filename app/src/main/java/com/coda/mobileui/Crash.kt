@@ -42,11 +42,14 @@ object CrashGuard {
     internal const val INTENT_LOG_LIMIT = 64 * 1024
 
     /** 超长正文只保留尾部（堆栈在末尾，最有诊断价值），并标注全文位置提示。 */
-    internal fun tailForIntent(body: String): String =
+    internal fun tailForIntent(
+        context: android.content.Context,
+        body: String,
+    ): String =
         if (body.length <= INTENT_LOG_LIMIT) {
             body
         } else {
-            "(日志过长，以下为尾部摘要，全文见崩溃日志文件)\n" + body.takeLast(INTENT_LOG_LIMIT)
+            context.getString(R.string.crash_log_truncated) + "\n" + body.takeLast(INTENT_LOG_LIMIT)
         }
 
     private fun saveAndShow(
@@ -91,7 +94,9 @@ object CrashGuard {
         // 同时写进运行日志：崩溃之后用户翻日志也能直接看到这一段，不必去找崩溃文件。
         AppLog.e("Crash", "未捕获异常（${thread.name}）：$throwable", throwable)
         val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        var saved = "(未写入)"
+        // 复用资源里的「未保存」文案（OCR low #827）：原来这里与 strings.xml 各写一份，
+        // 英文环境下同一状态会出现两种说法。
+        var saved = app.getString(R.string.crash_not_saved)
         // 外部媒体目录不可写（未挂载、权限被回收）时回退应用私有目录：
         // 只试一次外部路径会让崩溃日志彻底丢失，而这正是排查问题唯一的一手材料。
         val candidates =
@@ -117,7 +122,7 @@ object CrashGuard {
         // Intent extras 走 Binder（约 1MB 事务上限）：完整日志可能超限导致
         // startActivity 抛 TransactionTooLargeException。只带尾部摘要，
         // 崩溃页按 EXTRA_PATH 从文件读全文（跨进程可读同一文件）。
-        intent.putExtra(CrashActivity.EXTRA_LOG, tailForIntent(body))
+        intent.putExtra(CrashActivity.EXTRA_LOG, tailForIntent(app, body))
         intent.putExtra(CrashActivity.EXTRA_PATH, saved)
         try {
             app.startActivity(intent)

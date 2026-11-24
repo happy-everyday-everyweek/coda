@@ -9,4 +9,5 @@
     <string name="reasoning_done">Thought</string>
     <string name="pick_other_directory">Choose another folder…</string>
     <string name="dev_signature_warning">The dev preview is signed with a public debug key, so it cannot prove authenticity. The update manifest is fetched directly from GitHub, and the signature is checked against this app before installing. Use a release build if you need that guarantee.</string>
+    <string name="crash_log_truncated">(log too long; showing the tail — see the crash log file for the full text)</string>
 </resources>

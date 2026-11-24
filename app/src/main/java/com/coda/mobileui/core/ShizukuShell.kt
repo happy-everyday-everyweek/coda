@@ -35,7 +35,10 @@ object ShizukuShell {
             grantResults[0] == PackageManager.PERMISSION_GRANTED
 
     /** 本应用的无障碍服务组件名，供启停时精确定位。 */
-    const val SELF_ACCESSIBILITY = "com.coda.mobileui/com.coda.mobileui.core.PhoneAccessibilityService"
+    // 组件名由包名派生（OCR low #827）：写死字符串时，改 applicationId 或加后缀
+    // 会让「关闭自己的无障碍服务」变成静默无效——它要删的组件根本不存在。
+    val SELF_ACCESSIBILITY: String
+        get() = "${com.coda.mobileui.BuildConfig.APPLICATION_ID}/${PhoneAccessibilityService::class.java.name}"
 
     /** 合法的组件名：包名/类名，只允许字母数字下划线与点。 */
     private val COMPONENT = Regex("^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$")

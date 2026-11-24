@@ -33,6 +33,8 @@ import java.util.concurrent.TimeUnit
  * 截图依赖视图真实绘制，若环境无法绘制会返回结构化错误而不是崩溃。
  */
 object BrowserControl {
+    /** 元素引用的合法形状。热路径（click/fill/type/scroll）每次都要判，别每帧编译一遍。 */
+    private val REF_PATTERN = Regex("^[A-Za-z0-9_-]{1,64}$")
     private const val PREFS = "coda_browser_control"
     private const val BROWSER_ID = "coda-webview"
     private const val TAB_ID = "tab-1"
@@ -568,7 +570,7 @@ object BrowserControl {
      * 一个引号就能闭合选择器并注入任意脚本。
      */
     private fun isSafeRefValue(ref: String): Boolean =
-        ref.isEmpty() || Regex("^[A-Za-z0-9_-]{1,64}$").matches(ref)
+        ref.isEmpty() || REF_PATTERN.matches(ref)
 
     /**
      * 取可用的引擎；不可用时返回 null，让调用方的「未就绪」分支真正可达（#229）。

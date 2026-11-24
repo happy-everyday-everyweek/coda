@@ -80,15 +80,20 @@ class UsageHeatmapView(
     private var selectedColorCached = 0
     private var labelColorCached = 0
     private val cornerPx = dp(2f).toFloat()
+
+    /** 色阶透明度：常量而非每次 cacheDrawColors 现建数组。 */
+    private val LEVEL_ALPHAS = intArrayOf(0x1A, 0x4D, 0x80, 0xB3, 0xFF)
     private val labelXPx = dp(2f).toFloat()
 
     private fun cacheDrawColors() {
         val base = themeColor(androidx.appcompat.R.attr.colorPrimary, 0xFF2E7D32.toInt())
-        val alphas = intArrayOf(0x1A, 0x4D, 0x80, 0xB3, 0xFF)
-        for (i in 0..4) levelColors[i] = (base and 0x00FFFFFF) or (alphas[i] shl 24)
+        for (i in 0..4) levelColors[i] = (base and 0x00FFFFFF) or (LEVEL_ALPHAS[i] shl 24)
         emptyColorCached = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY) and 0x1AFFFFFF
         selectedColorCached = themeColor(com.google.android.material.R.attr.colorOnSurface, Color.BLACK)
         labelColorCached = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY)
+        // 空状态文字的画笔也要跟着刷新（OCR low #827）：它原来只在构造期取一次色，
+        // 主题换了而视图复用（没有重建）时，只有这一处还是旧颜色。
+        textPaint.color = labelColorCached
     }
 
     init {
@@ -165,7 +170,11 @@ class UsageHeatmapView(
                     sum += ms.optJSONObject(j)?.optLong("totalTokens", 0) ?: 0L
                 }
             }
-            byDate[date] = (byDate[date] ?: 0L) + sum
+            // 日期键归一化（OCR low #827）：数据里可能出现 2026-1-5 这种不补零写法，
+            // 它与 2026-01-05 按字符串比较时大小关系是错的，会让统计区间内的日期
+            // 变成空洞。这里统一过一遍 parseDate/formatDate。
+            val key = parseDate(date, Calendar.getInstance())?.let { formatDate(it) } ?: date
+            byDate[key] = (byDate[key] ?: 0L) + sum
         }
         if (byDate.isEmpty()) return emptyList()
 
@@ -262,6 +271,9 @@ class UsageHeatmapView(
         var lastMonth = -1
         weeks.forEachIndexed { ci, week ->
             val x = leftPad + ci * (cellSize + gap)
+            // 列内第一个非空格子（OCR low #827）：数据从周中开始时，第 0 行是补齐出来的
+            // null，只认 ri == 0 会让首月标签整体右移一周，单周数据则完全不画。
+            val firstCell = week.firstOrNull { it != null }
             week.forEachIndexed { ri, cell ->
                 if (ri >= 7) return@forEachIndexed
                 val y = topPad + ri * (cellSize + rowGap)
@@ -288,7 +300,7 @@ class UsageHeatmapView(
                             .split("-")
                             .getOrNull(1)
                             ?.toIntOrNull() ?: -1
-                    if (month > 0 && month != lastMonth && ri == 0) {
+                    if (month > 0 && month != lastMonth && cell === firstCell) {
                         lastMonth = month
                         canvas.drawText("${month}月", x.toFloat(), (topPad - dp(4f)).toFloat(), labelPaint)
                     }
@@ -360,7 +372,9 @@ internal fun quantileLeveler(
     t2: Long,
     t3: Long,
 ): (Long) -> Int {
-    val distinct = positive.distinct()
+    // 自行排序（OCR low #827）：排名映射只有在升序时才与「值越大档越高」一致，
+    // 不能依赖调用方一定传排好序的列表。
+    val distinct = positive.distinct().sorted()
     if (distinct.size < 4) {
         // 按不同值的排名映射到 1..4：1 个值→4，2 个值→2/4，3 个值→2/3/4。
         val rank = distinct.withIndex().associate { (i, v) -> v to i }

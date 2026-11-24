@@ -102,8 +102,10 @@ run_detekt() {
         --report "txt:$out" \
         --parallel ) > "$log" 2>&1
     local rc=$?
-    # detekt：0 无问题、2 达到 max-issues（这里设 0 表示不限，正常不会命中）、
-    # 其余非 0 是执行失败。报告文件没生成一律按失败处理。
+    # detekt 退出码：0 无问题、2 达到 --max-issues 阈值、其余非 0 是执行失败。
+    # 注意 --max-issues 0 的含义是「零容忍」而不是不限（OCR low #827）：
+    # 本仓库既有违规上千条，所以只要跑起来就必然 rc=2，这里把 2 当作常态。
+    # 报告文件没生成一律按失败处理。
     if [ ! -f "$out" ]; then
         echo "!! detekt 未生成报告（退出码 $rc），详见 $log" >&2
         tail -5 "$log" >&2

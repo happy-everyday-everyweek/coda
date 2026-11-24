@@ -10,9 +10,15 @@
 import hashlib
 import pathlib
 import sys
+import re
 import urllib.request
 
 REQUIREMENTS = pathlib.Path(__file__).with_name("android-wheels.requirements.txt")
+
+
+def normalize_name(name: str) -> str:
+    """PEP 503 归一化：同名包的不同写法要落到同一个键上。"""
+    return re.sub(r"[-_.]+", "-", name.lower())
 
 
 def load_pins(path=REQUIREMENTS):
@@ -34,7 +40,7 @@ def load_pins(path=REQUIREMENTS):
         }
         if not version or not hashes:
             continue
-        pins[(name.strip().lower(), version.strip())] = hashes
+        pins[(normalize_name(name.strip()), version.strip())] = hashes
     return pins
 
 
@@ -60,7 +66,9 @@ def main(argv):
         return 2
     name, version, out_dir = argv[1], argv[2], pathlib.Path(argv[3])
     pins = load_pins()
-    expected = pins.get((name.lower(), version))
+    # 两侧都按 PEP 503 归一化（OCR low #827）：pydantic-core 与 pydantic_core 是同一个
+    # 包，只做 lowercase 会让写成下划线的清单/调用方查不到已固定的哈希。
+    expected = pins.get((normalize_name(name), version))
     if not expected:
         print(
             f"{name}=={version} 没有固定 sha256，拒绝下载；"
@@ -69,8 +77,17 @@ def main(argv):
         )
         return 1
     url = sdist_url(name, version)
-    with urllib.request.urlopen(url, timeout=120) as response:
-        data = response.read()
+    try:
+        with urllib.request.urlopen(url, timeout=120) as response:
+            data = response.read()
+    except urllib.error.HTTPError as exc:
+        # 网络/HTTP 失败要给出可操作的说明（OCR low #827）：旧路径 /packages/source/
+        # 对部分上传会 404，原来会直接抛 urllib 的 traceback。
+        print(f"下载 {url} 失败：HTTP {exc.code} {exc.reason}", file=sys.stderr)
+        return 1
+    except urllib.error.URLError as exc:
+        print(f"下载 {url} 失败：{exc.reason}", file=sys.stderr)
+        return 1
     if not verify(data, expected):
         print(
             f"{name}=={version} 摘要不符，已拒绝使用："

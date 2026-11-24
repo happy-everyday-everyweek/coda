@@ -36,6 +36,13 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           TAG="$INPUT_TAG"
+          # 形状校验必须在写进 GITHUB_ENV 之前（OCR low #827）：workflow_dispatch 的输入
+          # 可以是任意文本，含换行时 echo 会往 GITHUB_ENV 写多行，调用方就能给后续所有
+          # 步骤注入环境变量（NODE_OPTIONS、LD_PRELOAD 等），而这个 job 持有 contents: write。
+          if ! printf '%s' "$TAG" | grep -Eq '^v?[0-9]+\.[0-9]+(\.[0-9]+)?([-.][0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag 形状不合法：$TAG（应形如 v1.2.3）"
+            exit 1
+          fi
           echo "CODA_TAG=$TAG" >> "$GITHUB_ENV"
           echo "CODA_VERSION_NAME=${TAG#v}" >> "$GITHUB_ENV"
           # 与 dev 同一套算法、同一条时间序列，只把渠道位换成 1：
@@ -67,6 +74,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          # 依赖缓存（OCR low #827）：compile 与 test 各跑一次 Gradle，没有缓存时
+          # 每次 push/PR 都要重新下载整棵 AGP/Kotlin 依赖图。
+          cache: gradle
 
       - uses: actions/setup-python@v5
         with:
@@ -109,10 +119,10 @@ jobs:
 
       - name: 准备发布签名
         env:
+          # 这一步只解 base64、写路径，口令一律不在这里引用（OCR low #827）：
+          # 注释也说了口令只在 assembleRelease 那一步出现，env 里多挂三个等于把
+          # secret 暴露给一个根本不需要它们的步骤。
           KEYSTORE_B64: ${{ secrets.CODA_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.CODA_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.CODA_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.CODA_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_B64" ]; then
             echo "未配置 CODA_KEYSTORE_BASE64：release 必须用正式密钥签名。" >&2

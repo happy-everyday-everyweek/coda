@@ -35,6 +35,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          # 依赖缓存（OCR low #827）：compile 与 test 各跑一次 Gradle，没有缓存时
+          # 每次 push/PR 都要重新下载整棵 AGP/Kotlin 依赖图。
+          cache: gradle
 
       - name: 准备 Android SDK
         run: |
@@ -124,6 +127,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          # 依赖缓存（OCR low #827）：compile 与 test 各跑一次 Gradle，没有缓存时
+          # 每次 push/PR 都要重新下载整棵 AGP/Kotlin 依赖图。
+          cache: gradle
 
       - uses: dtolnay/rust-toolchain@stable
         with:

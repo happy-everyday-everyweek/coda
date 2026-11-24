@@ -59,7 +59,6 @@ class BgOverflowTest {
         if (!accepted) {
             assertTrue("有任务被丢弃却没有溢出计数", Bg.overflowCount() > 0)
         }
-        assertFalse(Bg.isShutdown())
     }
 
     @Test

@@ -72,10 +72,28 @@ internal class LogSink(
             }
             if (batch.isEmpty()) continue
             runCatching {
+                // 单文件上限（OCR low #827）：per-session 的 core-*.log 原来没有上界，
+                // 长跑的内核会把存储填满。到顶就停止追加，只留一条 logcat 说明。
+                if (file.length() >= MAX_FILE_BYTES) {
+                    if (capped.compareAndSet(false, true)) {
+                        android.util.Log.w("CodaLog", "会话日志已达上限，停止写入：${file.absolutePath}")
+                    }
+                    return@runCatching
+                }
                 file.appendText(batch.joinToString(separator = "\n", postfix = "\n"))
+            }.onFailure {
+            // 写盘失败不能静默（OCR low #827）：磁盘满或文件不可写时，日志会停止增长，
+            // 而没有这条提示就完全查不出原因。用 logcat 直写，避免经 AppLog 绕回本类。
+            if (writeFailed.compareAndSet(false, true)) {
+                android.util.Log.w("CodaLog", "日志写盘失败，后续内容将被丢弃：${file.absolutePath}", it)
             }
         }
+        }
     }
+
+    /** 写失败与到达上限各只提示一次，避免每批都刷。 */
+    private val writeFailed = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val capped = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private companion object {
         /** 队列容量：够缓冲一阵高频输出，又不至于占太多内存。 */
@@ -83,5 +101,8 @@ internal class LogSink(
 
         /** 单次写盘的最大行数：批量追加，减少 IO 次数。 */
         const val BATCH = 128
+
+        /** 单个会话日志的上限：到顶就停写，避免长跑进程把存储填满。 */
+        const val MAX_FILE_BYTES = 8L * 1024 * 1024
     }
 }

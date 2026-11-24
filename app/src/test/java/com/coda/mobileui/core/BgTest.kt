@@ -27,6 +27,5 @@ class BgTest {
         Bg.run { second.countDown() }
         assertTrue(first.await(5, TimeUnit.SECONDS))
         assertTrue(second.await(5, TimeUnit.SECONDS))
-        assertFalse(Bg.isShutdown())
     }
 }

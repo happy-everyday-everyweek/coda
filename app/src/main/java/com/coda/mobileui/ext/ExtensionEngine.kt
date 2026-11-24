@@ -1,10 +1,10 @@
 package com.coda.mobileui.ext
 
+import com.coda.mobileui.core.AppLog
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.system.Os
-import com.coda.mobileui.core.AppLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -127,7 +127,7 @@ class ExtensionEngine private constructor(
             // 扫描成功后才置位：中途抛异常时保持未加载，下一次调用还能重试。
             loaded = true
         } catch (e: Throwable) {
-            com.coda.mobileui.core.AppLog.e("ExtensionEngine", "扫描扩展失败", e)
+            AppLog.e("ExtensionEngine", "扫描扩展失败", e)
             for (entry in entries.values) unloadEntry(entry)
             entries.clear()
             loaded = false
@@ -141,7 +141,7 @@ class ExtensionEngine private constructor(
             scan()
             loaded = true
         } catch (e: Throwable) {
-            com.coda.mobileui.core.AppLog.e("ExtensionEngine", "重载扩展失败", e)
+            AppLog.e("ExtensionEngine", "重载扩展失败", e)
             for (entry in entries.values) unloadEntry(entry)
             entries.clear()
             loaded = false
@@ -201,7 +201,7 @@ class ExtensionEngine private constructor(
                     entry.error = e.message ?: e.toString()
                     entry.provider?.release()
                     entry.provider = null
-                    com.coda.mobileui.core.AppLog.e("ExtensionEngine", "装载扩展失败：${manifest.id}", e)
+                    AppLog.e("ExtensionEngine", "装载扩展失败：${manifest.id}", e)
                 }
             }
             entries[manifest.id] = entry
@@ -380,9 +380,9 @@ class ExtensionEngine private constructor(
             val copied = copyAssetDir(assetPath, dest)
             if (copied) {
                 runCatching { stamp.writeText(version) }
-                    .onFailure { com.coda.mobileui.core.AppLog.e("ExtensionEngine", "写入内置扩展版本戳失败：$id", it) }
+                    .onFailure { AppLog.e("ExtensionEngine", "写入内置扩展版本戳失败：$id", it) }
             } else {
-                com.coda.mobileui.core.AppLog.w("ExtensionEngine", "释放内置扩展不完整：$id")
+                AppLog.w("ExtensionEngine", "释放内置扩展不完整：$id")
                 deleteRecursive(dest)
             }
         }
@@ -517,7 +517,7 @@ class ExtensionEngine private constructor(
                 return null
             }
         } catch (e: Throwable) {
-            com.coda.mobileui.core.AppLog.e("ExtensionEngine", "安装扩展失败：${manifest.id}", e)
+            AppLog.e("ExtensionEngine", "安装扩展失败：${manifest.id}", e)
             deleteRecursive(staging)
             return null
         }

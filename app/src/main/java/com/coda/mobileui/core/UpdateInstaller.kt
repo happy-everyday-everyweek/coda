@@ -221,6 +221,9 @@ internal object UpdateInstaller {
                         apk.absolutePath,
                         android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
                     ) ?: return null
+                // 包名必须与本应用一致（OCR low #827）：只看签名时，一个用同一把
+                // （公开口令的）调试密钥签出的**别的包**也能通过这道门被当成「更新」。
+                if (info.packageName != ctx.packageName) return null
                 signerOf(info.signingInfo)
             } else {
                 @Suppress("DEPRECATION")
@@ -229,6 +232,7 @@ internal object UpdateInstaller {
                         apk.absolutePath,
                         android.content.pm.PackageManager.GET_SIGNATURES,
                     ) ?: return null
+                if (info.packageName != ctx.packageName) return null
                 @Suppress("DEPRECATION")
                 fingerprintOf(info.signatures)
             }

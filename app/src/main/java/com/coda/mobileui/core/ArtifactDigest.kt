@@ -11,13 +11,12 @@ internal object ArtifactDigest {
     /** SHA-256 的十六进制长度。 */
     private const val HEX_LEN = 64
 
-    /** SHA-1 只有 40 位十六进制，存在碰撞风险，不能用于内容校验。 */
-    private const val SHA1_LEN = 40
 
     /** 规范化：去掉空白、统一小写；不是合法 SHA-256 时返回 null。 */
     fun normalize(raw: String?): String? {
         val text = raw?.trim()?.lowercase().orEmpty()
-        if (text.isEmpty() || text.length == SHA1_LEN) return null
+        // 长度不等于 64 一律拒绝（OCR low #827）：SHA-1 的 40 位本来就落在这条判断里，
+        // 单独再判一次是永远走不到的分支。
         if (text.length != HEX_LEN) return null
         return text.takeIf { value -> value.all { it in '0'..'9' || it in 'a'..'f' } }
     }

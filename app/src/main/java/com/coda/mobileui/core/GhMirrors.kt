@@ -161,8 +161,10 @@ object GhMirrors {
         val okPings = pinged.filter { it.ok }
         val alive = okPings.map { it.mirror }
         if (alive.isEmpty()) {
-            onLog("没有镜像能 ping 通，按清单顺序盲试")
-            return mirrors
+            // 全都不通时也要用历史成绩排序（OCR low #827）：这种情况恰恰是「探测不可信、
+            // 只能靠历史成功记录」的场景，而主线程路径的 rankOffline 就是这么做的。
+            onLog("没有镜像能 ping 通，按历史成绩排序后盲试")
+            return rankOffline(mirrors, history)
         }
         onLog("${alive.size}/${mirrors.size} 个镜像可连通")
 

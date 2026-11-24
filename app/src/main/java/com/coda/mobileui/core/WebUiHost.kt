@@ -821,9 +821,14 @@ object WebUiHost {
                 401 -> "Unauthorized"
                 403 -> "Forbidden"
                 404 -> "Not Found"
+                405 -> "Method Not Allowed"
                 413 -> "Payload Too Large"
                 431 -> "Request Header Fields Too Large"
+                // 502/504 是发送失败与发送超时（OCR low #827）：原来都落到 else 的
+                // "Error"，状态行变成 `HTTP/1.1 504 Error`，devtools 与代理里看不出所以然。
+                502 -> "Bad Gateway"
                 503 -> "Service Unavailable"
+                504 -> "Gateway Timeout"
                 else -> "Error"
             }
         // 首次带 ?token= 进来时把凭据写进 cookie，之后前端的 fetch 就不必再带 token。

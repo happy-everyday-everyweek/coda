@@ -27,13 +27,10 @@ object SearchLogic {
     fun <T> groupBySection(
         items: List<T>,
         sectionOf: (T) -> String,
-    ): List<Pair<String, List<T>>> {
-        val order = LinkedHashMap<String, MutableList<T>>()
-        for (item in items) {
-            order.getOrPut(sectionOf(item)) { mutableListOf() }.add(item)
-        }
-        return order.map { (section, list) -> section to list.toList() }
-    }
+    ): List<Pair<String, List<T>>> =
+        // stdlib 的 groupBy 内部就是 LinkedHashMap（OCR low #827）：首次出现顺序与
+        // 组内顺序都与手写循环完全一致，不必自己维护一份再逐组复制。
+        items.groupBy(sectionOf).map { (section, list) -> section to list }
 
     /**
      * 是否保留 provider 的这条命中。

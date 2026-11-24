@@ -63,6 +63,11 @@ object Bg {
             // 池已关闭时也要留痕：CallerRunsPolicy 在这种情况下会静默丢任务。
             AppLog.w(TAG, "后台队列已满，丢弃任务（累计 $n，shutdown=${executor.isShutdown}）")
         }
+    // 核心线程也要能被回收（OCR low #827）：corePoolSize == maximumPoolSize 时
+    // 不打开这个开关，30s 的 keepAlive 对核心线程完全不生效，16 条线程会活到进程结束。
+    init {
+        pool.allowCoreThreadTimeOut(true)
+    }
 
     /** 因队列满而被丢弃的任务数。用于诊断与设置页展示。 */
     fun overflowCount(): Int = overflow.get()
@@ -85,5 +90,5 @@ object Bg {
     }
 
     /** 池是否已关闭。只用于状态查询：池本身不对外开放，避免被谁 shutdown 掉。 */
-    fun isShutdown(): Boolean = pool.isShutdown
+
 }
