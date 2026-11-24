@@ -238,7 +238,10 @@ object OAuthAccounts {
             return code in 200..299 || code == 400 || code == 405 || code == 422
         }
 
-        if (panelRoutes.isEmpty() && !exists("/accounts")) {
+        // /accounts 只探测一次（OCR low #829）：下面还要用它决定是否把路由加进集合，
+        // 再调一次 exists 会多打一次 GET。
+        val accountsProbed = panelRoutes.contains("/accounts") || exists("/accounts")
+        if (panelRoutes.isEmpty() && !accountsProbed) {
             // 全 false 负结果永不缓存（#748）：直接返回，不挂缓存钩子。
             return Capabilities(
                 panel = false,
@@ -253,7 +256,7 @@ object OAuthAccounts {
         routes += panelRoutes
         // 短路分支里若已用 GET 确认过 /accounts，也要计入路由集：
         // panel 现在由 routes 推导，漏掉它会让「面板不提到 accounts 但接口存在」的平台被判成无面板。
-        if (!panelRoutes.contains("/accounts") && exists("/accounts")) routes += "/accounts"
+        if (accountsProbed) routes += "/accounts"
         // 面板外的关键路由逐个确认，确认到才加入能力集。
         for (path in listOf("/keepalive", "/enable", "/disable", "/claim", "/claim-pro", "/clear-cooldown", "/unfreeze", "/delete")) {
             if (exists(path)) routes += path

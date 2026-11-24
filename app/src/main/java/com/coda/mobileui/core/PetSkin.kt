@@ -253,6 +253,9 @@ data class PetSkin(
     /** manifest 里显式声明的 state.still pose 引用（path -> name）。 */
     val declaredStatePoses: Map<String, String> = emptyMap(),
 ) {
+    /** 缺失 part 的告警只打一次：渲染期每帧都会走 gridOf，逐帧刷日志没有意义。 */
+    private val skippedPartWarned = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun clip(name: String?): List<PetFrame> = if (name == null) emptyList() else clips[name] ?: emptyList()
     fun state(mood: PetMood): PetStateSpec = states[mood.key] ?: states.values.firstOrNull() ?: DEFAULT_STATE
 
@@ -297,6 +300,15 @@ data class PetSkin(
         declaredSleepClips.forEach { (path, name) -> needClip(path, name) }
         declaredSleepPoses.forEach { (path, name) -> needPose(path, name) }
         declaredStatePoses.forEach { (path, name) -> needPose(path, name) }
+        // 每个 pose 至少要能落到一个存在的 part（OCR low #829）：只列未知部件名的
+        // pose 能通过上面的引用校验，gridOf() 却会把所有 part 都跳过并返回 null，
+        // 结果同样是「空白宠物且没有诊断」。
+        //
+        // 这里只记日志、不进 problems：最小化构造的皮肤（例如只测粒子区间的用例）
+        // 本来就没有 parts，把它当硬错误会误判掉一堆合法文件。
+        poses.forEach { (pname, names) ->
+            if (names.none { it in parts }) AppLog.w("PetSkin", "poses.$pname 没有可用的 part，渲染会是空白")
+        }
         if (problems.isNotEmpty()) {
             throw IllegalArgumentException("皮肤 '$id' 引用缺失：${problems.joinToString("; ")}")
         }
@@ -320,7 +332,15 @@ data class PetSkin(
         val names = poses[pose] ?: return null
         val pixels = HashMap<Int, HashMap<Int, Char>>()
         for (name in names) {
-            val part = parts[name] ?: continue
+            val part = parts[name]
+            if (part == null) {
+                // 静默跳过会让「pose 引用了不存在的 part」表现成空白宠物，
+                // 与 validateReferences 的加载期诊断口径不一致（OCR low #829）。
+                if (skippedPartWarned.compareAndSet(false, true)) {
+                    AppLog.w("PetSkin", "pose '$pose' 引用了不存在的 part '$name'，已跳过")
+                }
+                continue
+            }
             // 坐标来自 manifest：损坏或被改过时可能是 Int.MIN_VALUE，
             // 直接参与包围盒计算会溢出成负宽度，进而按负长度分配缓冲区。
             if (!isPlausiblePartOrigin(part.x, part.y)) continue
@@ -672,6 +692,12 @@ data class PetSkin(
             if (cols < 1 || rows < 1) {
                 throw IllegalArgumentException("grid 尺寸非法：${cols}x$rows（各维必须 >= 1）")
             }
+            // 上限同样要卡（OCR low #829）：只判下限时，被改坏的 manifest 写
+            // rows = Int.MAX_VALUE 能通过校验，之后在 onMeasure 里 cell * (rows + 4)
+            // 直接溢出；cols 过大则把 unit() 压到接近 0，宠物渲染成一片空白。
+            if (cols > MAX_GRID || rows > MAX_GRID) {
+                throw IllegalArgumentException("grid 尺寸过大：${cols}x$rows（各维上限 $MAX_GRID）")
+            }
             val skin = PetSkin(
                 schema = schema,
                 id = root.optString("name", "skin"),
@@ -735,6 +761,9 @@ internal const val PET_PART_MAX_ORIGIN = 64
 internal const val PET_PART_MAX_LINE = 256
 
 /** 部件原点是可信的：坐标有界，包围盒就不会溢出成负宽度。 */
+/** 网格单维上限：远大于任何真实皮肤，又不会让 onMeasure 的乘法溢出或把 unit() 压成 0。 */
+private const val MAX_GRID = 512
+
 internal fun isPlausiblePartOrigin(
     x: Int,
     y: Int,

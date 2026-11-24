@@ -35,6 +35,9 @@ class PetView(
             actor = PetActor(value)
             actor.hidden = !isShown
             actor.reduceMotion = reduceMotion
+            // 换皮肤时手指可能还按着（OCR low #829）：新 actor 不会继承按住状态，
+            // 松手时那记 drop 会落在从没被拾起过的 actor 上。这里把模式补回去。
+            if (holding) actor.setMode(value.interactions.held.takeIf { it.isNotEmpty() })
             lastSnapshot = null
             requestLayout()
             invalidate()

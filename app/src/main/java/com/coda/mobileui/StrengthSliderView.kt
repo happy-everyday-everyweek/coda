@@ -455,11 +455,11 @@ class StrengthSliderView
         }
 
         companion object {
-        /** 星点呼吸循环时长：常驻动画，不属于 Motion 的一次性过渡三档。 */
-        private const val STAR_LOOP_MS = 2200L
+            /** 星点呼吸循环时长：常驻动画，不属于 Motion 的一次性过渡三档。 */
+            private const val STAR_LOOP_MS = 2200L
 
-        /** 粒子推进循环时长：与固定 dt 配套，改动会直接改变粒子速度。 */
-        private const val PARTICLE_LOOP_MS = 900L
+            /** 粒子推进循环时长：与固定 dt 配套，改动会直接改变粒子速度。 */
+            private const val PARTICLE_LOOP_MS = 900L
 
             /** 五档：轻度 / 中 / 高 / 极高 / Max。 */
             val LEVELS = arrayOf("轻度", "中", "高", "极高", "Max")

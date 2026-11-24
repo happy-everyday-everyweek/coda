@@ -239,24 +239,46 @@ class SettingsStore private constructor(
         liveSessionIds: Collection<String>? = null,
     ) {
         synchronized(slashLock) {
+            val key = KEY_SESSION_SEEN + sessionId
+            val previous = prefs.getLong(key, 0L)
             val editor = prefs.edit()
-            editor.putLong(KEY_SESSION_SEEN + sessionId, at)
-            val seenKeys = prefs.all.keys.filter { it.startsWith(KEY_SESSION_SEEN) }
-            // 空列表当「未知」处理（OCR #820）：内核刚重启时 zc.sessions 还没
-            // 回填，按空集修剪会把所有现存会话的已读标记一次清光，
-            // 未读/已完成徽标全部复活。退化为按数量修剪。
-            val live = liveSessionIds?.takeIf { it.isNotEmpty() }?.toHashSet()
-            if (live != null) {
-                seenKeys.forEach { k ->
-                    if (k.removePrefix(KEY_SESSION_SEEN) !in live) editor.remove(k)
-                }
-            } else if (seenKeys.size > MAX_SEEN_MARKS) {
-                seenKeys
-                    .sortedBy { prefs.getLong(it, 0L) }
-                    .take(seenKeys.size - MAX_SEEN_MARKS)
-                    .forEach { editor.remove(it) }
+            editor.putLong(key, at)
+            // 修剪不必每次调用都跑（OCR low #829）：prefs.all 会复制整张偏好表再过滤，
+            // 而流式输出期间每次控制器状态变化都会重绘抽屉、逐次调用本方法。
+            // 只在「新增了一个标记」或距上次修剪超过间隔时做一次就够了：
+            // 已存在的 key 不会改变 key 集合，短时间内重复修剪也删不掉任何东西。
+            val nowMs = System.currentTimeMillis()
+            val due = nowMs - lastSeenPruneAt > SEEN_PRUNE_INTERVAL_MS
+            if (previous == 0L || due) {
+                lastSeenPruneAt = nowMs
+                pruneSessionSeen(editor, liveSessionIds)
             }
             editor.apply()
+        }
+    }
+
+    /** 已读标记的最近一次修剪时间（见 markSessionSeen 的节流说明）。 */
+    private var lastSeenPruneAt = 0L
+
+    /** 修剪失效的已读标记；调用方已持有 [slashLock] 与同一个 editor。 */
+    private fun pruneSessionSeen(
+        editor: android.content.SharedPreferences.Editor,
+        liveSessionIds: Collection<String>?,
+    ) {
+        val seenKeys = prefs.all.keys.filter { it.startsWith(KEY_SESSION_SEEN) }
+        // 空列表当「未知」处理（OCR #820）：内核刚重启时 zc.sessions 还没
+        // 回填，按空集修剪会把所有现存会话的已读标记一次清光，
+        // 未读/已完成徽标全部复活。退化为按数量修剪。
+        val live = liveSessionIds?.takeIf { it.isNotEmpty() }?.toHashSet()
+        if (live != null) {
+            seenKeys.forEach { k ->
+                if (k.removePrefix(KEY_SESSION_SEEN) !in live) editor.remove(k)
+            }
+        } else if (seenKeys.size > MAX_SEEN_MARKS) {
+            seenKeys
+                .sortedBy { prefs.getLong(it, 0L) }
+                .take(seenKeys.size - MAX_SEEN_MARKS)
+                .forEach { editor.remove(it) }
         }
     }
 
@@ -270,6 +292,8 @@ class SettingsStore private constructor(
         private const val PREFS_NAME = "zcode_ui_settings"
         /** 已读标记的数量上限：超出时按时间淘汰最旧的。 */
         private const val MAX_SEEN_MARKS = 500
+        /** 已读标记修剪的最小间隔；流式输出期间抽屉重绘很频繁，逐次修剪没有意义。 */
+        private const val SEEN_PRUNE_INTERVAL_MS = 5_000L
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_AUTO_COLOR = "auto_color"
         private const val KEY_ACCENT = "accent"

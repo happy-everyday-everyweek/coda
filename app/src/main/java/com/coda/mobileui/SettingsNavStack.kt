@@ -25,11 +25,6 @@ internal class SettingsNavStack(
         pages.addLast(page)
     }
 
-    /** 换掉当前层而不记录历史（例如原地切到日志页）。 */
-    fun replace(page: String) {
-        pages.removeLast()
-        pages.addLast(page)
-    }
 
     /** 退回上一层并返回它；已在栈底时返回 null，表示调用方应当 finish。 */
     fun pop(): String? {
@@ -73,7 +68,6 @@ internal data class GitHubPollStep(
     val attempts: Int,
     val delayMs: Long,
     val schedule: Boolean,
-    val stop: Boolean,
     val timedOut: Boolean,
 ) {
     companion object {
@@ -84,13 +78,13 @@ internal data class GitHubPollStep(
             alive: Boolean,
         ): GitHubPollStep {
             val retryable = status == "pending" || status == "slow_down"
-            if (!retryable) return GitHubPollStep(attempts, delayMs, schedule = false, stop = true, timedOut = false)
+            if (!retryable) return GitHubPollStep(attempts, delayMs, schedule = false, timedOut = false)
             val left = (attempts - 1).coerceAtLeast(0)
             val nextDelay = if (status == "slow_down") delayMs + 5000 else delayMs
             // 页面已销毁或用户已取消：不再排下一次，也不算超时（不是用户看到的失败）。
-            if (!alive) return GitHubPollStep(left, nextDelay, schedule = false, stop = true, timedOut = false)
-            if (left <= 0) return GitHubPollStep(left, nextDelay, schedule = false, stop = true, timedOut = true)
-            return GitHubPollStep(left, nextDelay, schedule = true, stop = false, timedOut = false)
+            if (!alive) return GitHubPollStep(left, nextDelay, schedule = false, timedOut = false)
+            if (left <= 0) return GitHubPollStep(left, nextDelay, schedule = false, timedOut = true)
+            return GitHubPollStep(left, nextDelay, schedule = true, timedOut = false)
         }
     }
 }

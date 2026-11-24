@@ -65,10 +65,6 @@ object PetSkins {
     @Volatile
     private var customEntry: CustomEntry? = null
 
-    /** 手动导入/删除皮肤后调用，强制下次重新扫描。 */
-    fun invalidateCustom() {
-        customEntry = null
-    }
 
     private fun signatureOf(dir: File): String {
         val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".json", true) } ?: return ""
@@ -98,6 +94,9 @@ object PetSkins {
                             AppLog.w(TAG, "自定义皮肤 id 重复，跳过 ${file.name}：${parsed.id}")
                         }
                     }
+                    // 解析失败不能静默（OCR low #829）：加载期校验让一批以前能解析的
+                    // 自定义皮肤开始抛异常，用户只会看到它从列表里消失，却查不到原因。
+                    .onFailure { AppLog.w(TAG, "自定义皮肤 ${file.name} 解析失败：${it.message}") }
             }
         // 解析完成后一次性发布签名+列表。
         customEntry = CustomEntry(sig, custom)

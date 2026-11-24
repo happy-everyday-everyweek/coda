@@ -697,9 +697,12 @@ class OAuthSheet(
                     // 用户点「继续」什么都看不到，会以为按钮坏了（#603）。
                     // 优先写进第二步的进度面板（持久可见），没有面板才退回 Toast。
                     val panel = progressPanel
+                    // 可变属性不能智能转换（OCR low #829）：先取到局部变量再判空，
+                    // 顺手去掉这里多余的 `?.`。
+                    val statusLabel = statusText
                     when {
                         panel != null -> panel.append("请先完成授权，再点「继续」", emphasis = true)
-                        statusText != null -> statusText?.text = "请先完成授权"
+                        statusLabel != null -> statusLabel.text = "请先完成授权"
                         else -> Toast.makeText(host, "请先完成授权", Toast.LENGTH_SHORT).show()
                     }
                     return
@@ -782,8 +785,9 @@ class OAuthSheet(
      * 授权期间必须写进度面板或 Toast，否则轮询静默停摆、界面永远「等待授权」。
      */
     private fun showAuthNotice(text: String) {
+        val statusLabel = statusText
         when {
-            statusText != null -> statusText?.text = text
+            statusLabel != null -> statusLabel.text = text
             progressPanel != null -> progressPanel?.append(text, emphasis = true)
             else -> Toast.makeText(host, text, Toast.LENGTH_LONG).show()
         }

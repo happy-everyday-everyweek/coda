@@ -19,7 +19,6 @@ class GitHubPollStepTest {
         assertEquals(2, s.attempts)
         assertEquals(5000L, s.delayMs)
         assertTrue(s.schedule)
-        assertFalse(s.stop)
     }
 
     @Test
@@ -35,7 +34,6 @@ class GitHubPollStepTest {
     fun lastAttemptStopsInsteadOfScheduling() {
         val s = GitHubPollStep.of("pending", attempts = 1, delayMs = 5000, alive = true)
         assertEquals(0, s.attempts)
-        assertTrue(s.stop)
         assertFalse(s.schedule)
         assertTrue(s.timedOut)
     }
@@ -43,7 +41,6 @@ class GitHubPollStepTest {
     @Test
     fun slowDownOnLastAttemptStops() {
         val s = GitHubPollStep.of("slow_down", attempts = 1, delayMs = 5000, alive = true)
-        assertTrue(s.stop)
         assertFalse(s.schedule)
         assertTrue(s.timedOut)
     }
@@ -52,7 +49,6 @@ class GitHubPollStepTest {
     fun deadPollerNeverReschedules() {
         // 页面已销毁 / 用户已取消：即使还有配额也不能再挂回 Handler。
         val s = GitHubPollStep.of("pending", attempts = 9, delayMs = 5000, alive = false)
-        assertTrue(s.stop)
         assertFalse(s.schedule)
         assertFalse(s.timedOut)
     }
@@ -61,13 +57,11 @@ class GitHubPollStepTest {
     fun deadPollerOnSlowDownDoesNotReschedule() {
         val s = GitHubPollStep.of("slow_down", attempts = 9, delayMs = 5000, alive = false)
         assertFalse(s.schedule)
-        assertTrue(s.stop)
     }
 
     @Test
     fun okStopsWithoutTimeout() {
         val s = GitHubPollStep.of("ok", attempts = 5, delayMs = 5000, alive = true)
-        assertTrue(s.stop)
         assertFalse(s.schedule)
         assertFalse(s.timedOut)
     }
@@ -75,14 +69,12 @@ class GitHubPollStepTest {
     @Test
     fun errorStopsWithoutTimeout() {
         val s = GitHubPollStep.of("error", attempts = 5, delayMs = 5000, alive = true)
-        assertTrue(s.stop)
         assertFalse(s.timedOut)
     }
 
     @Test
     fun unknownStatusStops() {
         val s = GitHubPollStep.of("weird", attempts = 5, delayMs = 5000, alive = true)
-        assertTrue(s.stop)
         assertFalse(s.schedule)
     }
 
@@ -90,7 +82,6 @@ class GitHubPollStepTest {
     fun attemptsNeverGoNegative() {
         val s = GitHubPollStep.of("pending", attempts = 0, delayMs = 5000, alive = true)
         assertEquals(0, s.attempts)
-        assertTrue(s.stop)
     }
 
     @Test
@@ -110,7 +101,7 @@ class GitHubPollStepTest {
             attempts = s.attempts
             delay = s.delayMs
             steps++
-            if (s.stop) break
+            if (!s.schedule) break
         }
         assertEquals(4, steps)
         assertEquals(0, attempts)

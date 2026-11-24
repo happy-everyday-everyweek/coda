@@ -166,8 +166,11 @@ object OAuthProviders {
         }
         all.forEach { p ->
             // asset 命名约定：<pluginId>_<version>_linux_arm64.zip
-            if (!p.asset.startsWith(p.pluginId + "_")) {
-                issues += "asset 与 pluginId 不匹配：${p.id} → ${p.asset}"
+            // 前缀必须同时对上 pluginId 与 version（OCR low #829）：只比 pluginId 时，
+            // 升了 version 却忘改 asset/size 会静默通过自检，正是这次审计要抓的配置错误。
+            val expectedPrefix = "${p.pluginId}_${p.version}_"
+            if (!p.asset.startsWith(expectedPrefix)) {
+                issues += "asset 与 pluginId+version 不匹配：${p.id} → ${p.asset}（应为 ${expectedPrefix}…）"
             }
             if (!p.asset.endsWith("_linux_arm64.zip")) {
                 issues += "asset 架构后缀异常：${p.id} → ${p.asset}"

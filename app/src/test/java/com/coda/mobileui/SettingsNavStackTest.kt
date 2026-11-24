@@ -50,14 +50,6 @@ class SettingsNavStackTest {
         assertNull(nav.pop())
     }
 
-    @Test
-    fun replaceDoesNotRecordHistory() {
-        val nav = SettingsNavStack("system")
-        nav.replace("logs")
-        assertEquals("logs", nav.current)
-        // replace 是「换掉当前层」，不是前进：返回应当直接退出。
-        assertTrue(nav.atRoot)
-    }
 
     @Test
     fun popOnRootKeepsCurrentUnchanged() {

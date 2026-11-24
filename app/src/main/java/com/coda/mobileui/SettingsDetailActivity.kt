@@ -12,12 +12,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatDelegate
 import com.coda.mobileui.core.AgentAssets
 import com.coda.mobileui.core.AgentPrompt
@@ -30,6 +32,7 @@ import com.coda.mobileui.core.BackupCategory
 import com.coda.mobileui.core.Bg
 import com.coda.mobileui.core.BrowserControl
 import com.coda.mobileui.core.BuiltinMarketplaces
+import com.coda.mobileui.core.ChatImportRunner
 import com.coda.mobileui.core.CodaExtras
 import com.coda.mobileui.core.DataBackup
 import com.coda.mobileui.core.HooksCore
@@ -215,7 +218,12 @@ class SettingsDetailActivity :
                 // 失败要落到界面上：否则页面永远停在「正在读取…」，也没有重试入口。
                 extrasError[kind] = "运行时没有返回数据，可能是内核尚未就绪或正在重启"
             }
-            runOnUiThread { renderPage() }
+            runOnUiThread {
+                // 迟到的 RPC 结果不能在已销毁的实例上重建视图（OCR low #829）：
+                // renderPage 会调 ZController.get/ensureSnapshot 并重排整棵树。
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                renderPage()
+            }
         }
         when (kind) {
             "usage" -> zc.fetchUsageStats(usageRange(), done)
@@ -382,7 +390,14 @@ class SettingsDetailActivity :
         if (asrClientLazy.isInitialized()) {
             val client = asrClientLazy.value
             Thread {
-                runCatching { kotlinx.coroutines.runBlocking { client.close() } }
+                // close 会 cancelAndJoin 内部任务，卡在 IO 上就没有返回值（OCR low #829）：
+                // 这个守护线程会一直握着 AsrClient 与 Activity context，进程退出时才被硬杀，
+                // 录音器可能停在打开状态。给个上限，超时也当作清理完成。
+                runCatching {
+                    kotlinx.coroutines.runBlocking {
+                        kotlinx.coroutines.withTimeout(5_000) { client.close() }
+                    }
+                }
             }.apply { isDaemon = true }.start()
         }
         stopGitHubPolling()
@@ -535,7 +550,8 @@ class SettingsDetailActivity :
 
             else -> {
                 // 日志页每次打开都重新统计，不读启动时的缓存快照。
-                if (pageKey == "logs") SettingsData.logsPage() else SettingsData.pages[pageKey] ?: SettingsData.system(this)
+                // 静态页表现已为空（OCR low #829）：直接按 key 分派，不再查表。
+                if (pageKey == "logs") SettingsData.logsPage() else SettingsData.system(this)
             }
         }
     }
@@ -1555,7 +1571,7 @@ class SettingsDetailActivity :
                     .makeText(
                         this,
                         if (ok) "内核已重启" else "重启失败：$msg",
-                        android.widget.Toast.LENGTH_LONG,
+                        Toast.LENGTH_LONG,
                     ).show()
             }
         }
@@ -1703,13 +1719,13 @@ class SettingsDetailActivity :
         Thread {
             // 一次物化（OCR #820）：detect/count/import 原先各拷一遍整包。
             // 包文件保留给导入用；非 DeepSeek 或用户取消时删除。
-            val prepared = com.coda.mobileui.core.ChatImportRunner.materialize(applicationContext, uri)
+            val prepared = ChatImportRunner.materialize(applicationContext, uri)
             val probe =
                 if (prepared != null) {
-                    com.coda.mobileui.core.ChatImportRunner.probePrepared(prepared)
+                    ChatImportRunner.probePrepared(prepared)
                 } else {
-                    com.coda.mobileui.core.ChatImportRunner.Probe(
-                        com.coda.mobileui.core.ChatImportRunner.Source.UNKNOWN, 0, 0,
+                    ChatImportRunner.Probe(
+                        ChatImportRunner.Source.UNKNOWN, 0, 0,
                     )
                 }
             val source = probe.source
@@ -1723,16 +1739,16 @@ class SettingsDetailActivity :
                         com.google.android.material.R.attr.colorOnSurfaceVariant,
                         android.graphics.Color.GRAY,
                     )
-                if (source != com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK || count == 0) {
+                if (source != ChatImportRunner.Source.DEEPSEEK || count == 0) {
                     // 不可导入的包不留临时文件（OCR #820）。
                     prepared?.delete()
                     val hint =
                         when {
-                            source == com.coda.mobileui.core.ChatImportRunner.Source.CODA_BACKUP -> {
+                            source == ChatImportRunner.Source.CODA_BACKUP -> {
                                 "这是 Coda 自己的备份包，请用上面的「导入数据」。"
                             }
 
-                            source == com.coda.mobileui.core.ChatImportRunner.Source.DEEPSEEK -> {
+                            source == ChatImportRunner.Source.DEEPSEEK -> {
                                 // count==0 是错误态而不是可导入包（OCR #820）：
                                 // 索引读不出/没有会话，点开始只会报 MISSING_INDEX。
                                 "包里没有可导入的会话（索引缺失、为空或无法读取）。"
@@ -1832,7 +1848,7 @@ class SettingsDetailActivity :
         var lastProgressAt = 0L
         Thread {
             val report =
-                com.coda.mobileui.core.ChatImportRunner.importPrepared(
+                ChatImportRunner.importPrepared(
                     prepared = prepared,
                     onProgress = { done, total ->
                         // 节流：≥500ms 或最后一条才刷卡片。
@@ -1958,7 +1974,7 @@ class SettingsDetailActivity :
                                     if (cat.bulky) append(" · 体积大耗时较长")
                                 }
                             col.addView(
-                                android.widget.CheckBox(this).apply {
+                                CheckBox(this).apply {
                                     text = "${cat.title}（${DataBackup.formatBytes(size)}$marks）"
                                     isChecked = cat in chosen
                                     minHeight = dp(48)
@@ -2041,7 +2057,7 @@ class SettingsDetailActivity :
                                 "导入失败：${err ?: "文件里没有可恢复的数据"}，应用将重启以恢复一致状态"
                             }
                         android.widget.Toast
-                            .makeText(this, message, android.widget.Toast.LENGTH_LONG)
+                            .makeText(this, message, Toast.LENGTH_LONG)
                             .show()
                         if (relaunch) window.decorView.postDelayed({ relaunchApp() }, 900)
                     }
@@ -2238,7 +2254,12 @@ class SettingsDetailActivity :
                 if (ok) {
                     extrasCache.remove("plugins")
                     ZController.get(this).updatePluginMarketplace(null) { _, _ ->
-                        runOnUiThread { renderPage() }
+                        runOnUiThread {
+                // 迟到的 RPC 结果不能在已销毁的实例上重建视图（OCR low #829）：
+                // renderPage 会调 ZController.get/ensureSnapshot 并重排整棵树。
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                renderPage()
+            }
                     }
                 }
             }
@@ -3431,27 +3452,27 @@ class SettingsDetailActivity :
                 inputType = InputType.TYPE_CLASS_NUMBER
             }
         val imageBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持图片输入"
                 isChecked = existing?.supportsImage ?: true
             }
         val videoBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持视频输入"
                 isChecked = existing?.supportsVideo ?: false
             }
         val audioBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持音频输入"
                 isChecked = existing?.supportsAudio ?: false
             }
         val pdfBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持 PDF 输入"
                 isChecked = existing?.supportsPdf ?: true
             }
         val toolBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持工具调用"
                 isChecked = existing?.supportsToolCall ?: true
             }
@@ -3652,27 +3673,27 @@ class SettingsDetailActivity :
         val list = ProviderStore.load(this)
         val provider = list.firstOrNull { it.id == id } ?: return
         val imageBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持图片输入"
                 isChecked = provider.supportsImage
             }
         val videoBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持视频输入"
                 isChecked = provider.supportsVideo
             }
         val audioBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持音频输入"
                 isChecked = provider.supportsAudio
             }
         val pdfBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持 PDF 输入"
                 isChecked = provider.supportsPdf
             }
         val toolBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持工具调用"
                 isChecked = provider.supportsToolCall
             }
@@ -3755,27 +3776,27 @@ class SettingsDetailActivity :
                 inputType = InputType.TYPE_CLASS_NUMBER
             }
         val imageBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持图片输入"
                 isChecked = existing?.supportsImage ?: true
             }
         val videoBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持视频输入"
                 isChecked = existing?.supportsVideo ?: false
             }
         val audioBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持音频输入"
                 isChecked = existing?.supportsAudio ?: false
             }
         val pdfBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持 PDF 输入"
                 isChecked = existing?.supportsPdf ?: true
             }
         val toolBox =
-            android.widget.CheckBox(this).apply {
+            CheckBox(this).apply {
                 text = "支持工具调用"
                 isChecked = existing?.supportsToolCall ?: true
             }
@@ -4121,6 +4142,9 @@ class SettingsDetailActivity :
         sheet.show()
         asrJob =
             asrScope.launch {
+                // 先记住自己这个 Job（OCR low #829）：无条件置 null 会把用户刚发起的
+                // 新一轮录音的引用抹掉，之后 onDismiss 再也取消不到正在跑的那次。
+                val self = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
                 val result =
                     asrClient.transcribe(
                         provider = provider,
@@ -4128,7 +4152,7 @@ class SettingsDetailActivity :
                         stopSignal = stop,
                     )
                 // 任务结束就清掉引用，否则 isActive 残留会拦住下一次录音（#607）。
-                asrJob = null
+                if (asrJob === self) asrJob = null
                 if (isFinishing || isDestroyed) return@launch
                 showAsrResult(provider, model, result)
             }

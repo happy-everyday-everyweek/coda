@@ -165,7 +165,7 @@ class OAuthAccountsSheet(
                     }
                     rows.forEach { row -> target.addView(platformCard(row.provider, row.accounts)) }
                 }
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 main.post {
                     if (closed) return@post
                     target.removeAllViews()
@@ -405,7 +405,7 @@ class OAuthAccountsSheet(
                     Toast.makeText(host, text + if (anyFail) "\n部分失败" else "", Toast.LENGTH_LONG).show()
                     column?.let { render(it) }
                 }
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 main.post {
                     if (!closed) Toast.makeText(host, "签到失败：${e.message ?: "网络异常"}", Toast.LENGTH_LONG).show()
                 }

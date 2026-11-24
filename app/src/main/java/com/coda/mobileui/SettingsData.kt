@@ -252,26 +252,18 @@ object SettingsData {
             ),
         )
 
-    private fun cachedProviders(ctx: Context): List<ProviderStore.Provider>? = snapshots.get("providers", now())
+    // 只读快照缓存，不再收用不到的 ctx/dbFile/home 参数（OCR low #829）：
+    // 那些参数会让调用方以为传什么路径就读什么路径，而实际键是固定的。
+    private fun cachedProviders(): List<ProviderStore.Provider>? = snapshots.get("providers", now())
 
-    private fun cachedAssets(
-        ctx: Context,
-        kind: AgentAssets.Kind,
-    ): List<AgentAssets.Item>? = snapshots.get("assets:${kind.name}", now())
+    private fun cachedAssets(kind: AgentAssets.Kind): List<AgentAssets.Item>? = snapshots.get("assets:${kind.name}", now())
 
-    private fun cachedAutomations(
-        ctx: Context,
-        dbFile: File,
-    ): List<CodaExtras.AutomationItem>? = snapshots.get("automations", now())
+    private fun cachedAutomations(): List<CodaExtras.AutomationItem>? = snapshots.get("automations", now())
 
-    private fun cachedHooks(
-        ctx: Context,
-        workspacePath: String,
-        home: File,
-    ): HooksCore.Snapshot? = snapshots.get("hooks:$workspacePath", now())
+    private fun cachedHooks(workspacePath: String): HooksCore.Snapshot? = snapshots.get("hooks:$workspacePath", now())
 
     /** 系统提示词状态表（#743）：14 份文件的读盘与摘要只在后台算一次。 */
-    private fun cachedPromptStatus(ctx: Context): Map<String, String>? = snapshots.get("sysprompts", now())
+    private fun cachedPromptStatus(): Map<String, String>? = snapshots.get("sysprompts", now())
 
     /**
      * 后台预热某个键的数据，完成后回调（调用方负责切回主线程重绘）。
@@ -318,10 +310,10 @@ object SettingsData {
                     }
 
                     key == "hooks" || key.startsWith("hooks:") -> {
+                        // workspacePath() 是非空返回值，Elvis 之后 wp 一定非空（OCR low #829）：
+                        // 原来的 if (wp != null) 恒真，编译器也会报冗余判断。
                         val wp = workspacePath ?: ZController.get(app).workspacePath()
-                        if (wp != null) {
-                            snapshots.put("hooks:$wp", HooksCore.discover(wp, File(app.filesDir, "home")), now())
-                        }
+                        snapshots.put("hooks:$wp", HooksCore.discover(wp, File(app.filesDir, "home")), now())
                     }
                 }
             }.onFailure {
@@ -349,10 +341,7 @@ object SettingsData {
     }
 
     /** 当前页面需要哪个快照键；null 表示这一页不读磁盘。 */
-    fun snapshotKeyFor(
-        pageKey: String,
-        providerKind: ProviderStore.ProviderKind? = null,
-    ): String? =
+    fun snapshotKeyFor(pageKey: String): String? =
         when (pageKey) {
             SettingsDetailActivity.PAGE_PROVIDERS, SettingsDetailActivity.PAGE_PROVIDERS_OF_KIND -> "providers"
             SettingsDetailActivity.PAGE_SUBAGENTS -> "assets:${AgentAssets.Kind.SUBAGENT.name}"
@@ -372,24 +361,24 @@ object SettingsData {
     ): Boolean =
         when {
             key == "providers" -> {
-                cachedProviders(ctx) != null
+                cachedProviders() != null
             }
 
             key.startsWith("assets:") -> {
                 val kind = runCatching { AgentAssets.Kind.valueOf(key.removePrefix("assets:")) }.getOrNull()
-                kind != null && cachedAssets(ctx, kind) != null
+                kind != null && cachedAssets(kind) != null
             }
 
             key == "automations" -> {
-                cachedAutomations(ctx, File(ctx.filesDir, "tasks-index.sqlite")) != null
+                cachedAutomations() != null
             }
 
             key == "hooks" -> {
-                workspacePath != null && cachedHooks(ctx, workspacePath, File(ctx.filesDir, "home")) != null
+                workspacePath != null && cachedHooks(workspacePath) != null
             }
 
             key == "sysprompts" -> {
-                cachedPromptStatus(ctx) != null
+                cachedPromptStatus() != null
             }
 
             else -> {
@@ -404,7 +393,7 @@ object SettingsData {
 
     /** 模型设置页：读取真实的供应商配置（provider_config.json），支持增删改。 */
     fun providers(ctx: Context): SettingsPage {
-        val all = cachedProviders(ctx) ?: return loadingPage("模型设置", "providers")
+        val all = cachedProviders() ?: return loadingPage("模型设置", "providers")
         // 读失败落的空快照与「真的没配置」不可区分（OCR medium）：
         // 先渲染错误行，避免用户以为配置丢了、在坏文件上重建。
         // 失败原因作为**头部行**而不是整页替换：早退会把添加/编辑入口全丢掉，
@@ -452,7 +441,7 @@ object SettingsData {
         ctx: Context,
         kind: ProviderStore.ProviderKind,
     ): SettingsPage {
-        val list = (cachedProviders(ctx) ?: return loadingPage("供应商", "providers")).filter { it.kind == kind }
+        val list = (cachedProviders() ?: return loadingPage("供应商", "providers")).filter { it.kind == kind }
         val rows = mutableListOf<SettingRow>()
         // 损坏保护下不给「添加/编辑」入口（OCR r5 high）：添加/编辑表会现场
         // load 出空列表再 save，把读不出但存在的配置原子替换成空。
@@ -551,7 +540,7 @@ object SettingsData {
         kind: AgentAssets.Kind,
         title: String,
     ): SettingsPage {
-        val items = cachedAssets(ctx, kind) ?: return loadingPage(title, "assets:${kind.name}")
+        val items = cachedAssets(kind) ?: return loadingPage(title, "assets:${kind.name}")
         val rows = mutableListOf<SettingRow>()
         // 读失败的空快照要先说明，且**不再渲染「暂无/新建」**（OCR medium）：
         // 目录读不出来时引导新建，可能覆盖存在但读不出的定义。
@@ -905,7 +894,7 @@ object SettingsData {
     /** 定时任务页：读取运行时数据库的 automations 表；点击条目进入管理（启停/删除）。 */
     fun automations(ctx: Context): SettingsPage {
         val dbFile = File(File(ctx.filesDir, "zcode-data/.zcode/v2"), "tasks-index.sqlite")
-        val items = cachedAutomations(ctx, dbFile) ?: return loadingPage("定时任务", "automations")
+        val items = cachedAutomations() ?: return loadingPage("定时任务", "automations")
         val rows = mutableListOf<SettingRow>()
         SnapshotFallback.reasonFor("automations")?.let {
             rows += SettingRow.Header("读取失败")
@@ -957,7 +946,7 @@ object SettingsData {
             rows += SettingRow.Value("无法确定工作区路径", "核心尚未启动")
             return SettingsPage("钩子", rows)
         }
-        val snap = cachedHooks(ctx, wp, home) ?: return loadingPage("钩子", "hooks")
+        val snap = cachedHooks(wp) ?: return loadingPage("钩子", "hooks")
         val trusted = HooksCore.readTrustedDigests(wp, home)
         // discover 已经把读取/解析失败收进 errors，但页面此前从不显示：
         // 「读取失败」与「确实没配钩子」在界面上长得一样（#237）。
@@ -1192,7 +1181,9 @@ object SettingsData {
         }
         rows.add(SettingRow.Header("说明"))
         rows.add(SettingRow.Value("数据来源", "会话与消息来自本机 App，仅限局域网内访问"))
-        rows.add(SettingRow.Value("安全边界", "无鉴权：请勿在公共 Wi-Fi 等不受信网络开启"))
+        // WebUI 现在每次运行生成访问令牌并拒未鉴权请求（OCR low #829）：
+        // 原来写「无鉴权」与实现相反，用户没法判断链接能不能转发。
+        rows.add(SettingRow.Value("安全边界", "访问需携带本次运行的令牌；停止服务后令牌失效。链接等同于访问凭证，请勿公开分享"))
         return SettingsPage("Web UI", rows)
     }
 
@@ -1306,7 +1297,7 @@ object SettingsData {
         )
 
     /** 静态页面表；日志页每次打开都要重新统计，不缓存在这里，直接调 [logsPage]。 */
-    val pages: Map<String, SettingsPage> = emptyMap()
+
 
     /**
      * 系统提示词页。
@@ -1323,7 +1314,7 @@ object SettingsData {
         }
         rows += SettingRow.Header("模板文件")
         // 状态来自后台快照（#743）：这里在主线程渲染，绝不能逐份读文件算摘要。
-        val status = cachedPromptStatus(ctx)
+        val status = cachedPromptStatus()
         SystemPrompts.all.forEach { item ->
             // OCR low #402：Item.summary 之前从未被读取。把模板用途接进副标题，
             // 状态仍跟在后面，信息不丢。
@@ -1504,7 +1495,9 @@ object SettingsData {
         rows += SettingRow.Value("支持的来源与能力", "各来源能带过来什么、缺什么", "chat_import_sources")
         rows += SettingRow.Header("当前数据")
         rows += SettingRow.Value("可备份内容", DataBackup.describe(ctx))
-        rows += SettingRow.Value("不包含", "会话记录、日志与应用本身")
+        // 同页新增了「DeepSeek 聊天记录」导入行，笼统写「不包含会话记录」会自相矛盾：
+        // 限定成 Coda 自身备份的范围（OCR low #829）。
+        rows += SettingRow.Value("不包含", "本备份不含：Coda 会话记录、日志与应用本身")
         return SettingsPage("数据备份", rows)
     }
 
