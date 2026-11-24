@@ -15,7 +15,7 @@ import java.io.File
 object PetSkins {
     private const val TAG = "PetSkins"
 
-    /** assets 下的五个内置形象，顺序与原项目设置页一致。 */
+    /** assets 下的七个内置形象，顺序与原项目设置页一致。 */
     private val BUILTIN = listOf("clawd", "sprig", "mochi", "peep", "bristle", "deepy", "whalegirl")
 
     /** 原项目没给 clawd 写 title，设置里就叫它 Clawd。 */
@@ -28,7 +28,7 @@ object PetSkins {
     val defaultId: String = "clawd"
 
     /**
-     * 全部可用皮肤：五个内置 + filesDir/pet 下的自定义。
+     * 全部可用皮肤：七个内置 + filesDir/pet 下的自定义。
      *
      * 自定义 manifest 解析失败的会被跳过（不会让设置页炸掉）；id 与内置重名时优先用自定义那份。
      */
@@ -156,6 +156,4 @@ object PetSkins {
         }
     }
 
-    /** 全部形象名，给设置页列清单用。 */
-    fun ids(): List<String> = BUILTIN
 }

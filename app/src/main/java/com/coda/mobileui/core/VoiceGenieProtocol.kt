@@ -186,7 +186,8 @@ object VoiceGenieProtocol {
             if (wire == 0) {
                 result.put(name, intValue)
             } else {
-                val bytes = bytesValue ?: ByteArray(0)
+                // OCR low #451：wire==2 分支里 bytesValue 必然非空，空数组兜底只会掩盖解析错误。
+                val bytes = bytesValue ?: throw ProtocolError("wire type 2 缺少字节内容")
                 if (number == 8) {
                     // data 是二进制，不强行当 UTF-8 解：Base64 发布内容本身，
                     // 长度放语义明确的 data_length。只发长度会让消费方拿不到载荷。

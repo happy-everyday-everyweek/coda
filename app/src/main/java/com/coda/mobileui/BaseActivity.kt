@@ -26,7 +26,8 @@ open class BaseActivity : androidx.appcompat.app.AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val store = SettingsStore.get(this)
-        AppCompatDelegate.setDefaultNightMode(store.nightMode)
+        // OCR low #638：夜间模式已由 CodaApp.onCreate 统一设置（用户切换时由设置页
+        // 显式调用）。此处重复设置会在 Activity 创建期触发不必要的重建/闪屏，删掉。
         // 自动取色只在系统真的支持动态取色时生效；Android 8–11 与没有 Material You
         // 取色的设备保持静态色板，此时必须回落到用户已选的主色，否则选了也不生效。
         val dynamicColor =

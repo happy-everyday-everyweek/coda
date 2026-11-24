@@ -151,7 +151,8 @@ internal object UpdateChecker {
         }
 
         // 两个渠道共用一条时间序列，所以「版本号最大」就是「最新」。
-        val best = candidates.maxByOrNull { it.versionCode }!!
+        // OCR low #407：不用 !! 强解包；候选为空时按失败返回而不是崩。
+        val best = candidates.maxByOrNull { it.versionCode } ?: return Result(false, error = "版本清单为空")
         val hasUpdate = best.versionCode > currentVersionCode
         // 一行结论：排查时先看这句，再决定要不要翻上面的选源细节。
         AppLog.i(
@@ -236,7 +237,7 @@ internal object UpdateChecker {
      * 文件也返回 200，内容是一段 HTML 错误页。
      */
     private fun httpGet(
-        ctx: Context?,
+        ctx: Context,
         url: String,
         headers: Map<String, String>,
         net: MirrorScoreboard.Net,
@@ -252,15 +253,14 @@ internal object UpdateChecker {
         val direct = fetchJson(url, headers, cancel)
         // 记账用镜像清单里的规范 id "github"：失败也记 FAILED，
         // 直连的持续劣化在记分板里可见。
-        ctx?.let {
-            MirrorScoreboard.record(
-                it,
-                net,
-                "github",
-                if (direct != null) MirrorScoreboard.Outcome.VERIFIED else MirrorScoreboard.Outcome.FAILED,
-                elapsedMs = System.currentTimeMillis() - t0,
-            )
-        }
+        // OCR low #408：check() 的 ctx 本来就非空，去掉无效空判与包装。
+        MirrorScoreboard.record(
+            ctx,
+            net,
+            "github",
+            if (direct != null) MirrorScoreboard.Outcome.VERIFIED else MirrorScoreboard.Outcome.FAILED,
+            elapsedMs = System.currentTimeMillis() - t0,
+        )
         if (direct != null) {
             AppLog.i(TAG, "清单取自官方直连")
             return direct
@@ -268,9 +268,6 @@ internal object UpdateChecker {
         AppLog.w(TAG, "官方清单获取失败：$url")
         return null
     }
-
-    /** 单个 URL 全部镜像尝试的总时限：超时后放弃剩余源，防止弱网下拖数分钟。 */
-    private const val MANIFEST_TOTAL_BUDGET_MS = 90_000L
 
     /** 清单响应体的字符上限：正常清单几 KB，64K 字符已极宽裕；超限视为无效响应。 */
     internal const val MAX_MANIFEST_CHARS = 64 * 1024

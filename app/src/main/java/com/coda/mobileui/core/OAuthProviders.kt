@@ -15,19 +15,6 @@ package com.coda.mobileui.core
  */
 object OAuthProviders {
     /** 登录时客户端需要呈现什么。 */
-    enum class Flow {
-        /** 需要用户拿手机扫二维码（面板内直接渲染链接）。 */
-        QRCODE,
-
-        /** 需要用户在浏览器里完成授权，给一条可点的链接。 */
-        LINK,
-
-        /** 设备码流程：显示一段短码，用户去固定页面输入。 */
-        DEVICE_CODE,
-
-        /** 通过面板里的授权页完成，链接由插件返回。 */
-        PANEL,
-    }
 
     /**
      * 一个 OAuth 供应商。
@@ -45,7 +32,6 @@ object OAuthProviders {
         val size: Long,
         /** 附件的 SHA-256（小写十六进制）：长度相同但内容被改过的包也要拒（OCR #820）。 */
         val sha256: String,
-        val flow: Flow,
         val note: String,
         /** 承载网关：默认 CLIProxyAPI + 插件，WorkBuddy 系走独立网关（#345）。 */
         val gateway: Gateway = Gateway.CLIPROXY,
@@ -72,7 +58,6 @@ object OAuthProviders {
                 asset = "workbuddy-provider_0.16.5_linux_arm64.zip",
                 size = 2_952_859L,
                 sha256 = "8a15e0c189f4d22719b9c2f6bbab2513b58eb34cd038f7a7de0bc5dde36363a7",
-                flow = Flow.QRCODE,
                 note = "国内版与国际版统一入口，签到、积分与故障转移由插件负责",
                 gateway = Gateway.WORKBUDDY,
             ),
@@ -85,7 +70,6 @@ object OAuthProviders {
                 asset = "workbuddy-ai-provider_0.1.17_linux_arm64.zip",
                 size = 2_938_717L,
                 sha256 = "738a3598b8e8b823ff735760d026b0e24d290aa61dad2c7193b60b761a1e77db",
-                flow = Flow.QRCODE,
                 note = "独立国际站点，扫码登录",
                 gateway = Gateway.WORKBUDDY,
             ),
@@ -98,7 +82,6 @@ object OAuthProviders {
                 asset = "copilot-provider_0.1.9_linux_arm64.zip",
                 size = 2_889_990L,
                 sha256 = "28156e9704ddb133b619c11793ba760490ab3a4d6c575f0a829716570a843fd3",
-                flow = Flow.DEVICE_CODE,
                 note = "设备码授权，无需密码，订阅额度直连",
             ),
             Provider(
@@ -110,7 +93,6 @@ object OAuthProviders {
                 asset = "zcode-provider_0.1.32_linux_arm64.zip",
                 size = 2_999_216L,
                 sha256 = "ce75d7ff550f7bc7eb9c7886608b793924d552a26de119eded6f1dda17296f80",
-                flow = Flow.LINK,
                 note = "Coding Plan 订阅，授权后按 Anthropic 协议转出",
             ),
             Provider(
@@ -122,7 +104,6 @@ object OAuthProviders {
                 asset = "qoderwork-provider_0.9.44_linux_arm64.zip",
                 size = 2_928_644L,
                 sha256 = "66eed0cab70c200f094e476b08c8dd438013a7346f8456763e0470d91b970bde",
-                flow = Flow.LINK,
                 note = "设备授权，登录后自动领取试用",
             ),
             Provider(
@@ -134,7 +115,6 @@ object OAuthProviders {
                 asset = "qoder-ai-provider_0.1.24_linux_arm64.zip",
                 size = 2_961_918L,
                 sha256 = "59b06300fba5672fb05ef9e8a557e7410563919ce16d56e6f0c3d4d707643a45",
-                flow = Flow.LINK,
                 note = "设备授权，含每日签到",
             ),
             Provider(
@@ -146,7 +126,6 @@ object OAuthProviders {
                 asset = "traework-provider_0.2.14_linux_arm64.zip",
                 size = 2_961_476L,
                 sha256 = "31eded5c8df7673991dfb23a3571b38a09118ed83860ff3f05e881ef2570a6e8",
-                flow = Flow.LINK,
                 note = "浏览器授权，无需安装桌面端",
                 browserLoginSubmit = true,
             ),
@@ -159,7 +138,6 @@ object OAuthProviders {
                 asset = "cursor-provider_0.1.6_linux_arm64.zip",
                 size = 3_598_253L,
                 sha256 = "4494db85a7582041bd7fa37dfb7d8f10a695547b6e7cd6bd93a9cf83b6579a75",
-                flow = Flow.LINK,
                 note = "会话凭据授权，走 Connect-RPC 转译",
             ),
         )

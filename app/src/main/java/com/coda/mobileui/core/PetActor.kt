@@ -120,7 +120,6 @@ class PetActor(
     private var onceActive = false
 
     private var asleep = false
-    private var asleepStill: String? = null
     private var idleTicks = 0
     private var waitTicks = 0
     private var fidgetIn = 80
@@ -291,7 +290,6 @@ class PetActor(
         val st = skin.state(next)
         mood = next
         asleep = false
-        asleepStill = null
         idleTicks = 0
         waitTicks = 0
         accessoryName = st.accessory
@@ -350,7 +348,6 @@ class PetActor(
     fun wake() {
         if (!asleep) return
         asleep = false
-        asleepStill = null
         idleTicks = 0
         setLoop(stateLoopName())
         skin

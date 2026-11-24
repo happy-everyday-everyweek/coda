@@ -134,9 +134,11 @@ object ZWorkflowKit {
 
     fun isAgentTool(name: String?): Boolean = AGENT_TOOLS.contains(token(name))
 
-    fun isWorkflowToolRunning(name: String?): Boolean =
-        token(name) == "createworkflow" ||
-            token(name) == "resumeworkflowrun"
+    fun isWorkflowToolRunning(name: String?): Boolean {
+        // OCR low #444：token(name) 只求值一次。
+        val token = token(name)
+        return token == "createworkflow" || token == "resumeworkflowrun"
+    }
 
     fun workflowToolLabel(name: String?): String =
         when (token(name)) {

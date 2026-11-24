@@ -19,10 +19,8 @@ import java.util.Locale
 class OverviewPage(
     host: WorkspaceActivity,
     // 由 WorkspaceActivity 传入用于恢复页面状态；本页目前不读它，
-    // 但构造签名要与其余工作区页面保持一致，不能删。
-    // 不写成 private val：那样会变成未使用的私有属性，而这里只需要
-    // 接收构造参数即可。
-    saved: JSONObject,
+    // 但构造签名要与其余工作区页面保持一致，不能删（OCR low #551：显式标注）。
+    @Suppress("UNUSED_PARAMETER") saved: JSONObject,
 ) : WorkspacePage(host) {
     private data class Snapshot(
         val repo: Boolean,
@@ -203,19 +201,14 @@ class OverviewPage(
         }
         val rows =
             todos.map { todo ->
-                val icon =
+                // OCR low #549：图标与文案原本是两个独立 when，容易只改一处；
+                // 合并成一次映射，解构出两者。
+                val (icon, statusText) =
                     when (todo.status) {
-                        "completed", "done" -> R.drawable.ic_state_done
-                        "in_progress", "running" -> R.drawable.ic_state_current
-                        "failed", "error" -> R.drawable.ic_state_error
-                        else -> R.drawable.ic_state_pending
-                    }
-                val statusText =
-                    when (todo.status) {
-                        "completed", "done" -> "已完成"
-                        "in_progress", "running" -> "进行中"
-                        "failed", "error" -> "失败"
-                        else -> "待开始"
+                        "completed", "done" -> R.drawable.ic_state_done to "已完成"
+                        "in_progress", "running" -> R.drawable.ic_state_current to "进行中"
+                        "failed", "error" -> R.drawable.ic_state_error to "失败"
+                        else -> R.drawable.ic_state_pending to "待开始"
                     }
                 // 任务行只展示状态，不再把「点哪都开终端」当成唯一动作。
                 cardRow(icon, todo.content, statusText, null, 56)

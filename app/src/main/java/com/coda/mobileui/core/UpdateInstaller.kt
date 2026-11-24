@@ -308,8 +308,7 @@ internal object UpdateInstaller {
     }
 
     /** 当前设备架构是否受支持。目前只出 arm64 包，这条用于给出准确提示。 */
-    fun isSupportedAbi(): Boolean {
-        val abis = Build.SUPPORTED_ABIS ?: return true
-        return abis.any { it.contains("arm64") || it.contains("aarch64") }
-    }
+    // OCR low #415：SUPPORTED_ABIS 不会为 null，空判断是死分支。
+    fun isSupportedAbi(): Boolean =
+        Build.SUPPORTED_ABIS.any { it.contains("arm64") || it.contains("aarch64") }
 }

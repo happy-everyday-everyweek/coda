@@ -1082,7 +1082,9 @@ class WorkspaceActivity : BaseActivity() {
                 setBackgroundColor(0x99000000.toInt())
                 layoutParams = FrameLayout.LayoutParams(MATCH, MATCH)
                 alpha = 0f
-                setOnClickListener { hideOverview() }
+                // OCR low #560：面板以 MATCH/MATCH 铺满整个 scrim 且可点击，
+                // 点击背景永远命中面板，这里的监听器不可能触发，已删除。
+                // 「关闭总览」走标题栏关闭按钮或返回键。
             }
         val panel =
             LinearLayout(this).apply {

@@ -182,6 +182,10 @@ object PhoneControl {
 
     fun configFile(ctx: Context): File = File(File(ctx.filesDir, "home"), ".zcode/cli/config.json")
 
+    /** 恒定时间字符串比较：长度不同直接判否，等长时始终比较全部字节。 */
+    internal fun constantTimeEquals(a: String, b: String): Boolean =
+        java.security.MessageDigest.isEqual(a.toByteArray(Charsets.UTF_8), b.toByteArray(Charsets.UTF_8))
+
     fun openAccessibilitySettings(ctx: Context) {
         try {
             val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
@@ -331,7 +335,8 @@ class PhoneControlServer(
     ) {
         when {
             method == "POST" && path == "/mcp" -> {
-                if (auth != "Bearer $token") {
+                // OCR low #364：Bearer 令牌用恒定时间比较，避免逐字节比较的时序侧信道。
+                if (!PhoneControl.constantTimeEquals(auth.orEmpty(), "Bearer $token")) {
                     writeEmpty(output, 401)
                     return
                 }
