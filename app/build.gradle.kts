@@ -152,9 +152,10 @@ tasks.configureEach {
     if (usesCoreSources) dependsOn(syncMaibotCore)
 }
 
-// 显式声明构建工具链，不再依赖构建机的 JAVA_HOME。
-// AGP 8.13 与 Gradle 8.13 的运行要求同为 JDK 17（与上面的编译目标一致），
-// 声明后本地与 CI 行为一致；缺了它，构建机 JDK 版本不同就会在同步阶段直接失败。
+// 显式声明构建工具链，不再依赖构建机的 JAVA_HOME（#1）。
+// AGP 8.13.2 / Gradle 8.13 的运行 JDK 要求是 17（AGP 9 起才要 21），
+// 与字节码目标 17 一致；实测 JDK 17 下构建通过。堆已由 gradle.properties
+// 提到 -Xmx4096m。这条声明本身就是 #1 要求的修复，保持不变。
 kotlin {
     jvmToolchain(17)
 }

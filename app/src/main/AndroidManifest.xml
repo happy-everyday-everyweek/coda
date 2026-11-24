@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Agent 能力所需的网络与存储权限：模型请求走网络；修改本地文件走外置存储 -->
+    <!-- Agent 能力所需的网络与存储权限：模型请求走网络；修改本地文件走外置存储。
+         #4：旧存储权限按 API 分段声明——WRITE 在 API 29+ 无效（scoped storage），
+         READ 在 API 33+ 被 READ_MEDIA_* 取代；maxSdkVersion 防止未来升 targetSdk
+         后带着已废弃权限上架。当前 targetSdk 28（有意选择，见 lint 配置），
+         运行时仍走 legacy 外部存储模型。 -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <!-- API 33+ 的媒体读取（附件选择器走 SAF 不需要，但直接路径访问需要）。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <!-- 应用内更新：下载 APK 后拉起系统安装器 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- ASR 测试：设置 → 模型设置 → ASR 模型 → 测试转写需要现场录音。

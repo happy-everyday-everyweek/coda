@@ -990,6 +990,15 @@ class LinuxEnv(
         mode: Int,
     ) {
         file.parentFile?.mkdirs()
+        // #10：凭据类文件（0600）不能先 writeText 再 chmod——默认 umask 下
+        // 有一个短暂的 0644 窗口，容器内其它进程/adb 能抢到明文 token。
+        // 先以 0600 创建（已存在也先收紧）再写内容，最后显式 chmod 兜底。
+        if (mode == MODE_PRIVATE) {
+            runCatching {
+                if (!file.exists()) file.createNewFile()
+                Os.chmod(file.absolutePath, MODE_PRIVATE)
+            }
+        }
         file.writeText(text)
         runCatching { Os.chmod(file.absolutePath, mode) }
     }

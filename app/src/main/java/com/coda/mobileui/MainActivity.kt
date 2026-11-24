@@ -519,7 +519,8 @@ class MainActivity : BaseActivity() {
         ensureShizukuAccessibility()
         // OAuth 供应商落库时若网关还没注册模型，清单会是空的；启动后补一次对账，
         // 顺手纠正历史上被「串网关」写进来的别家模型。
-        Thread {
+        // 共享有界池（#9）：裸 Thread 无界创建，冷启动路径统一走 Bg。
+        com.coda.mobileui.core.Bg.run {
             runCatching {
                 // 先按已保存的 OAuth 供应商把网关拉起来，并回写实际端口；
                 // 再对账模型清单。端口变了就必须重启内核，否则它仍拿旧地址发请求。
@@ -570,7 +571,7 @@ class MainActivity : BaseActivity() {
                     }
                 }
             }
-        }.start()
+        }
         updateSendAvailability()
         setupSendMode()
         attachScroll = findViewById(R.id.attach_scroll)
@@ -4243,20 +4244,30 @@ class MainActivity : BaseActivity() {
     /** 申请存储权限（Agent 修改安卓文件所需）。 */
     private fun requestStoragePermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < 23) return
-        val read = checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
-        val write = checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        if (read == android.content.pm.PackageManager.PERMISSION_GRANTED &&
-            write == android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        requestPermissions(
-            arrayOf(
-                android.Manifest.permission.READ_EXTERNAL_STORAGE,
-                android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            ),
-            1001,
-        )
+        // #4：按 API 分段请求——33+ 用 READ_MEDIA_*（READ_EXTERNAL_STORAGE 已废弃
+        // 且授权也读不到媒体）；29–32 只请求 READ（WRITE 在 scoped storage 下无效）；
+        // 28 及以下保持 READ+WRITE。与 Manifest 的 maxSdkVersion 声明一致。
+        val wanted =
+            when {
+                Build.VERSION.SDK_INT >= 33 ->
+                    arrayOf(
+                        android.Manifest.permission.READ_MEDIA_IMAGES,
+                        android.Manifest.permission.READ_MEDIA_VIDEO,
+                        android.Manifest.permission.READ_MEDIA_AUDIO,
+                    )
+                Build.VERSION.SDK_INT >= 29 -> arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                else ->
+                    arrayOf(
+                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    )
+            }
+        val missing =
+            wanted.filter {
+                checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+        if (missing.isEmpty()) return
+        requestPermissions(missing.toTypedArray(), 1001)
     }
 
     // ------------------------------------------------------------ 强度映射
