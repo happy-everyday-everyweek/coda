@@ -2546,7 +2546,8 @@ class MainActivity : BaseActivity() {
                 tick.visibility = View.VISIBLE
                 tick.text = fmtDur((doneAt - start).coerceAtLeast(0L))
             } else {
-                title.text = "Thought"
+                // OCR low #54：思考块曾中英混排，统一为中文。
+                title.text = "已思考"
             }
         }
         header.addView(title)

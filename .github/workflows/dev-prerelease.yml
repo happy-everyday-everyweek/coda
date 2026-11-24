@@ -78,7 +78,13 @@ jobs:
           fi
           echo "sdkmanager: $SDKMANAGER"
           ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
-          "$SDKMANAGER" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null 2>&1 || true
+          # 见 build.yml 同段说明：装失败就当场失败，不要 || true 吞掉（OCR low #26）。
+          if ! "$SDKMANAGER" "build-tools;36.0.0" "ndk;28.2.13676358" > "$RUNNER_TEMP/sdk-install.log" 2>&1; then
+            if [ ! -x "$ANDROID_HOME/build-tools/36.0.0/aapt2" ] || [ ! -d "$ANDROID_HOME/ndk/28.2.13676358" ]; then
+              cat "$RUNNER_TEMP/sdk-install.log" >&2
+              exit 1
+            fi
+          fi
           echo "NDK=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
           ls "$ANDROID_HOME/build-tools" 2>/dev/null || true
 
@@ -190,12 +196,19 @@ jobs:
             fi
           } > notes.md
 
-          gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" coda-dev.apk coda-webui.zip sha256.txt update-dev.json \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "开发预览版" \
-            --notes-file notes.md
+          # 原地覆盖 assets，不删了重建（OCR low #26）：delete --cleanup-tag 到
+          # create 之间 release 是不存在的，叠加 cancel-in-progress 后，取消若落在
+          # 这段窗口里，更新清单与 APK 链接会持续 404 直到下次构建成功。
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" coda-dev.apk coda-webui.zip sha256.txt update-dev.json --clobber
+            gh release edit "$TAG" --title "开发预览版" --notes-file notes.md --prerelease
+          else
+            gh release create "$TAG" coda-dev.apk coda-webui.zip sha256.txt update-dev.json \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "开发预览版" \
+              --notes-file notes.md
+          fi
 
           echo "---" >> "$GITHUB_STEP_SUMMARY"
           cat notes.md >> "$GITHUB_STEP_SUMMARY"

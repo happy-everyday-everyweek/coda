@@ -42,7 +42,12 @@ jobs:
           #   code = 距基准日的分钟数 * 2 + 1
           # 这样正式版与 dev 相差 1，且时间越晚号越大，
           # 用户的「正式版 → dev → 下一个正式版」两个方向都能覆盖安装。
-          CODE="$(python3 tools/version-code.py --channel release)"
+          # 号必须与 Tag 绑定（OCR low #26）：按构建时刻取号时，重跑一条旧 Tag
+          # 会生成比之后正式版更大的号，装了重跑版的用户此后再也覆盖不上去。
+          # 用该 Tag 的提交时间取号，同一条 Tag 重跑得到完全相同的号。
+          TAG_COMMIT_TIME="$(git log -1 --format=%cI "$TAG^{commit}" 2>/dev/null || true)"
+          [ -n "$TAG_COMMIT_TIME" ] || TAG_COMMIT_TIME="$(git log -1 --format=%cI HEAD)"
+          CODE="$(python3 tools/version-code.py --channel release --at "$TAG_COMMIT_TIME")"
           echo "CODA_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
           echo "版本号：$CODE（时间序列 × 2 + 1）" >> "$GITHUB_STEP_SUMMARY"
           # 仓库内固定密钥（keystore/coda-debug.jks）的证书摘要，核对步骤用它比对。
@@ -81,7 +86,13 @@ jobs:
           fi
           echo "sdkmanager: $SDKMANAGER"
           ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
-          "$SDKMANAGER" "build-tools;36.0.0" "ndk;28.2.13676358" > /dev/null 2>&1 || true
+          # 见 build.yml 同段说明：装失败就当场失败，不要 || true 吞掉（OCR low #26）。
+          if ! "$SDKMANAGER" "build-tools;36.0.0" "ndk;28.2.13676358" > "$RUNNER_TEMP/sdk-install.log" 2>&1; then
+            if [ ! -x "$ANDROID_HOME/build-tools/36.0.0/aapt2" ] || [ ! -d "$ANDROID_HOME/ndk/28.2.13676358" ]; then
+              cat "$RUNNER_TEMP/sdk-install.log" >&2
+              exit 1
+            fi
+          fi
           echo "NDK=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
           ls "$ANDROID_HOME/build-tools" 2>/dev/null || true
 

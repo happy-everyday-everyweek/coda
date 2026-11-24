@@ -40,7 +40,14 @@ jobs:
         run: |
           SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
           ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
-          "$SDKMANAGER" "build-tools;36.0.0" > /dev/null 2>&1 || true
+          # 安装失败不能用 || true 吞掉（OCR low #26）：错误会延迟到编译步骤才暴露，
+          # 表现为 aapt2 找不到。这里落到日志，再按关键产物是否存在判断真实结果。
+          if ! "$SDKMANAGER" "build-tools;36.0.0" > "$RUNNER_TEMP/sdk-install.log" 2>&1; then
+            if [ ! -x "$ANDROID_HOME/build-tools/36.0.0/aapt2" ]; then
+              cat "$RUNNER_TEMP/sdk-install.log" >&2
+              exit 1
+            fi
+          fi
 
       - name: 编译 Kotlin 与生成 Python 包
         run: |

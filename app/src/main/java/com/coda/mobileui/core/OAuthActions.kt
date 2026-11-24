@@ -189,32 +189,34 @@ object OAuthActions {
      */
     fun available(caps: OAuthAccounts.Capabilities): List<Action> {
         if (!caps.panel) return emptyList()
+        // OCR low #326：按 id 建一次索引，各分支 O(1) 取，不再逐个 firstOrNull 线性扫。
+        val byId = all.associateBy { it.id }
         val out = mutableListOf<Action>()
-        if (caps.checkin) all.firstOrNull { it.id == "checkin" }?.let { out += it }
+        if (caps.checkin) byId["checkin"]?.let { out += it }
         if (caps.growth) {
             // growth 在 capabilities 里表示"有 /growth 或 /claim"，这里要按具体路由再分。
-            all.firstOrNull { it.id == "growth" && caps.growthRoutes.contains("growth") }?.let { out += it }
-            all.firstOrNull { it.id == "claim" && caps.growthRoutes.contains("claim") }?.let { out += it }
+            byId["growth"]?.takeIf { caps.growthRoutes.contains("growth") }?.let { out += it }
+            byId["claim"]?.takeIf { caps.growthRoutes.contains("claim") }?.let { out += it }
         }
-        if (caps.claimPro) all.firstOrNull { it.id == "claim-pro" }?.let { out += it }
-        if (caps.trial) all.firstOrNull { it.id == "trial" }?.let { out += it }
-        if (caps.refresh) all.firstOrNull { it.id == "refresh" }?.let { out += it }
+        if (caps.claimPro) byId["claim-pro"]?.let { out += it }
+        if (caps.trial) byId["trial"]?.let { out += it }
+        if (caps.refresh) byId["refresh"]?.let { out += it }
         // select 与 test-active 面板里一定在用，探到路由表里有就放出来。
-        if (caps.routes.contains("/select")) all.firstOrNull { it.id == "select" }?.let { out += it }
-        if (caps.routes.contains("/test-active")) all.firstOrNull { it.id == "test-active" }?.let { out += it }
-        if (caps.keepalive) all.firstOrNull { it.id == "keepalive" }?.let { out += it }
-        if (caps.unfreeze) all.firstOrNull { it.id == "unfreeze" }?.let { out += it }
+        if (caps.routes.contains("/select")) byId["select"]?.let { out += it }
+        if (caps.routes.contains("/test-active")) byId["test-active"]?.let { out += it }
+        if (caps.keepalive) byId["keepalive"]?.let { out += it }
+        if (caps.unfreeze) byId["unfreeze"]?.let { out += it }
         // clear-cooldown 按真实路由判断（OCR #820）：caps.clearCooldown 含
         // "|| /unfreeze"，只实现 unfreeze 的插件会拿到一个必然 404 的入口。
-        if (caps.routes.contains("/clear-cooldown")) all.firstOrNull { it.id == "clear-cooldown" }?.let { out += it }
+        if (caps.routes.contains("/clear-cooldown")) byId["clear-cooldown"]?.let { out += it }
         if (caps.enableDisable) {
-            all.firstOrNull { it.id == "enable" }?.let { out += it }
-            all.firstOrNull { it.id == "disable" }?.let { out += it }
+            byId["enable"]?.let { out += it }
+            byId["disable"]?.let { out += it }
         }
         // 删除按探测到的路由判断，与其他动作一致：只看 caps.panel 会让没实现 /delete
         // 的插件也显示「删除」，用户点了必然 404。前面已对 !caps.panel 提前返回，
         // 再判一次 panel 恒为真，属于掩盖选错条件的死代码。
-        if (caps.routes.contains("/delete")) all.firstOrNull { it.id == "delete" }?.let { out += it }
+        if (caps.routes.contains("/delete")) byId["delete"]?.let { out += it }
         return out
     }
 

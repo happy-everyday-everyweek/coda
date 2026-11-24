@@ -40,6 +40,17 @@ open class BaseActivity : androidx.appcompat.app.AppCompatActivity() {
         super.onCreate(savedInstanceState)
         if (dynamicColor) {
             DynamicColors.applyToActivityIfAvailable(this)
+            // OCR low #54：动态取色只替换主题属性，xml 里的 windowBackground 仍是
+            // 静态色板，转场/启动会露出不同源的底色。运行时把窗口底色同步成
+            // 解析后的 colorSurface，兼顾不透明（不闪黑边）与同源。
+            runCatching {
+                val surface =
+                    com.google.android.material.color.MaterialColors.getColor(
+                        window.decorView,
+                        com.google.android.material.R.attr.colorSurface,
+                    )
+                window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(surface))
+            }
         }
         // 图标颜色跟随主色，每次进入页面同步一次，保证与设置一致。
         AppIconManager.apply(this, store.iconSlot)

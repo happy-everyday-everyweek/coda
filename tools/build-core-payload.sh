@@ -86,7 +86,10 @@ kernel_inputs_fingerprint() {
             printf '%s %s\n' "${path#"$ROOT"/}" "$(file_digest "$path")"
           done
     fi
-    git -C "$ROOT" ls-files -z -- kernel/zcode \
+    # -o --exclude-standard：把本地新增但还没 git add 的源文件也算进指纹。
+    # 只取 git ls-files 的话，改完没 add 时 stamp 判定为「无变化」，CI 与本地
+    # 会各自得到不同的指纹含义（CI 干净检出不受影响，本地容易踩）。
+    git -C "$ROOT" ls-files -z -c -o --exclude-standard -- kernel/zcode \
       | LC_ALL=C sort -z \
       | while IFS= read -r -d '' path; do
           case "$path" in

@@ -21,7 +21,14 @@ android {
         // versionCode 与 versionName 同步递增，只增不减（覆盖安装依赖它单调）。
         //
         // 允许 CI 用 -PcodaVersionCode/-PcodaVersionName 覆盖，Tag 打包即用 Tag 号。
-        versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt() ?: 28
+        // 本地默认号刻意不走时间序列（OCR low #26）：CI 的 dev/正式号由
+        // tools/version-code.py 按时间算，量级已是数千万；本地若也按时间算，
+        // 每次构建都变号，增量构建会反复失效。代价是本地包不能覆盖安装 CI 包，
+        // 需要覆盖时显式传号：
+        //   -PcodaVersionCode=$(python3 tools/version-code.py --channel dev)
+        versionCode = (project.findProperty("codaVersionCode") as String?)?.toInt()
+            ?: System.getenv("CODA_VERSION_CODE")?.toIntOrNull()
+            ?: 28
         versionName = (project.findProperty("codaVersionName") as String?) ?: "0.8.4-core"
         // Personal Agent 内核只提供 Python 3.12 的 64 位 Chaquopy 运行时。
         ndk {

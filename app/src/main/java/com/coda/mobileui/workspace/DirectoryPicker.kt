@@ -7,7 +7,9 @@ import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import com.coda.mobileui.CodaSheet
+import com.coda.mobileui.core.Workspaces
 import java.io.File
 
 /**
@@ -47,7 +49,12 @@ object DirectoryPicker {
                 bindContent(into, activity, startAt, column)
             }
             primaryAction("选择此目录") {
-                onPicked(dirOf(into) ?: currentDirOf(startAt))
+                val target = dirOf(into) ?: currentDirOf(startAt)
+                if (!writable(target)) {
+                    Toast.makeText(activity, "该目录不可写，无法作为工作区", Toast.LENGTH_SHORT).show()
+                    return@primaryAction
+                }
+                onPicked(target)
                 removeDir(into)
                 into.dismiss()
             }
@@ -126,6 +133,16 @@ object DirectoryPicker {
         }
     }
 
+    /**
+     * 目标目录是否真的可写（OCR low #67）：只读挂载/受保护目录能打开能浏览，
+     * 但 .coda 状态永远存不下，用户只会觉得「工作区坏了」。这里做一次真实探测。
+     */
+    private fun writable(dir: File): Boolean =
+        runCatching {
+            val state = File(dir, Workspaces.STATE_DIR)
+            (state.isDirectory || state.mkdirs()) && state.canWrite()
+        }.getOrDefault(false)
+
     private fun currentDirOf(startAt: File): File = if (startAt.isDirectory) startAt else startAt.parentFile ?: File("/")
 
     private fun bind(
@@ -138,7 +155,12 @@ object DirectoryPicker {
         sheet.title(caption)
         sheet.content { column -> bindContent(sheet, activity, startAt, column) }
         sheet.primaryAction("选择此目录") {
-            onPicked(dirOf(sheet) ?: currentDirOf(startAt))
+            val target = dirOf(sheet) ?: currentDirOf(startAt)
+            if (!writable(target)) {
+                Toast.makeText(activity, "该目录不可写，无法作为工作区", Toast.LENGTH_SHORT).show()
+                return@primaryAction
+            }
+            onPicked(target)
             removeDir(sheet)
             sheet.dismiss()
         }
