@@ -141,7 +141,9 @@ class OverviewPage(
         if (!::body.isInitialized) return
         body.removeAllViews()
         body.addView(locationCard())
-        loadError?.let { body.addView(hint(it)) }
+        // 错误文案已经在 locationCard 里作为卡片说明渲染过（OCR low #828），
+        // 这里再挂一条 hint 会让同一句话出现两次。
+
         body.addView(groupSpacing())
         body.addView(groupHeader("任务"))
         // 任务区块装进独立容器：controller 状态变化时只替换它的子视图。

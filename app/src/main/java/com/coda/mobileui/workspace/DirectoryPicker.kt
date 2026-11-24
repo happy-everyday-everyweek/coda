@@ -105,12 +105,21 @@ object DirectoryPicker {
         anchor: View?,
     ) {
         setDir(sheet, dir)
-        anchor?.addOnAttachStateChangeListener(
+        if (anchor == null) {
+            prune()
+            return
+        }
+        // 监听器被 anchor 所在的视图树持有，而视图树又属于这个 sheet（OCR low #828）：
+        // 直接捕获 sheet 会形成一条自己不断开的引用链。改持弱引用，视图分离时能清就清，
+        // 取不到说明宿主已被回收，条目交给 prune。
+        val weakSheet = java.lang.ref.WeakReference(sheet)
+        anchor.addOnAttachStateChangeListener(
             object : View.OnAttachStateChangeListener {
                 override fun onViewAttachedToWindow(v: View) = Unit
 
                 override fun onViewDetachedFromWindow(v: View) {
-                    removeDir(sheet)
+                    weakSheet.get()?.let { removeDir(it) }
+                    weakSheet.clear()
                     v.removeOnAttachStateChangeListener(this)
                     prune()
                 }

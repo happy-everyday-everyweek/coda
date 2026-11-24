@@ -42,9 +42,12 @@ internal object DiffBudget {
             return TrimmedText(text.lineSequence().take(MAX_DIFF_LINES).joinToString("\n"), true)
         }
         val capped = capUtf8(text, MAX_DIFF_BYTES)
-        val lines = capped.split('\n')
-        if (lines.size <= MAX_DIFF_LINES) return TrimmedText(capped, true)
-        return TrimmedText(lines.take(MAX_DIFF_LINES).joinToString("\n"), true)
+        // 与上面分支保持一致，用惰性序列（OCR low #828）：split('\n') 会先把
+        // 整个 cap 结果物化成一串 String，1.5M 字符的短行文本就是几十万个对象，
+        // 而这里本来就是为了限制主线程上的这部分开销。
+        val lineCount = capped.count { it == '\n' } + 1
+        if (lineCount <= MAX_DIFF_LINES) return TrimmedText(capped, true)
+        return TrimmedText(capped.lineSequence().take(MAX_DIFF_LINES).joinToString("\n"), true)
     }
 
     /** UTF-8 字节数：不物化字节数组，代理对按一个码点计。 */

@@ -109,36 +109,41 @@ internal class DiffView(
 
     /** 按 `diff --git` 切开；前面若有提交头之类的行，单独成一组。 */
     private fun groupFiles(lines: List<String>): Grouped {
-        val groups = mutableListOf<Group>()
-        var current: MutableList<String>? = mutableListOf()
-        var name = ""
+        // 同名文件并进同一张卡片（OCR low #828）：拼接两段 diff 时同一文件会出现
+        // 两条 `diff --git`，而 DiffLines.stat 是按名字去重的。原来这里逐条建卡，
+        // 于是统计行说「1 个文件」、界面却是两张卡，省略提示也按未去重数算。
+        val byName = LinkedHashMap<String, MutableList<String>>()
+        val preamble = mutableListOf<String>()
+        var current: MutableList<String>? = null
         var total = 0
         for (line in lines) {
             if (line.startsWith("diff --git ")) {
-                total++
-                current?.let { if (it.isNotEmpty()) groups.add(Group(name, it)) }
                 // "diff --git a/lib/x.kt b/lib/x.kt" 取后半段，路径更好读。
-                name = parseDiffName(line.removePrefix("diff --git ").trim())
-                // 卡片数到上限后不再累积内容：后面的文件只计数，不保存行，也不建视图。
-                // 预算按文件组数（total）算，preamble 不占额（#777）：按 groups.size
-                // 判会在有前导组时提前一个文件停止收集。
-                current = if (total <= DiffBudget.MAX_FILES) mutableListOf() else null
+                // 文件名解析统一走 DiffLines，避免两份实现漂移。
+                val name = DiffLines.fileName(line.removePrefix("diff --git ").trim())
+                val existing = byName[name]
+                if (existing != null) {
+                    current = existing
+                } else {
+                    total++
+                    // 卡片数到上限后不再累积内容：后面的文件只计数，不保存行，也不建视图。
+                    // 预算按文件数（total）算，preamble 不占额（#777）。
+                    current =
+                        if (total <= DiffBudget.MAX_FILES) {
+                            mutableListOf<String>().also { byName[name] = it }
+                        } else {
+                            null
+                        }
+                }
             }
-            current?.add(line)
+            (current ?: preamble).add(line)
         }
-        current?.let { if (it.isNotEmpty()) groups.add(Group(name, it)) }
-        // 没有 diff 头的纯文本也会成一组，此时 total 至少按实际组数算。
+        // 交给 Group 的一律是副本：Group.lines 声明成 List，实际别名可变缓冲会被后续改动带跑。
+        val groups = byName.map { (name, list) -> Group(name, list.toList()) }.toMutableList()
+        // 没有 diff 头的纯文本也会成一组，放在最前面。
+        if (preamble.isNotEmpty()) groups.add(0, Group("", preamble.toList()))
         return Grouped(groups, total.coerceAtLeast(groups.size))
     }
-
-    /**
-     * 从 `diff --git` 的尾部取目标路径。
-     *
-     * 路径含空格时 git 会给两端加引号，按空格切分会得到 `file.txt"` 这样的残片；
-     * 这里先按带引号的完整形式匹配，再退回无引号形式。
-     */
-    /** 文件名解析统一走 DiffLines，避免两份实现漂移。 */
-    private fun parseDiffName(tail: String): String = DiffLines.fileName(tail)
 
     private fun fileCard(
         group: Group,

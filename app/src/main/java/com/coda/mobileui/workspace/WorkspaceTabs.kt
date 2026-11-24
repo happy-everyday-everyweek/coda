@@ -1,4 +1,5 @@
 package com.coda.mobileui.workspace
+
 import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.Workspaces
 import org.json.JSONArray
@@ -75,7 +76,9 @@ object WorkspaceTabs {
             // 造成不可逆丢失。留证后直接返回空集合，不解析也不覆盖（#569）。
             if (saved.optInt("version", VERSION) > VERSION) {
                 AppLog.w("WorkspaceTabs", "标签状态版本 ${saved.optInt("version")} 高于本构建 $VERSION，已留证并跳过")
-                runCatching { file.renameTo(File(file.parentFile, file.name + ".bad")) }
+                // 留证文件必须唯一（OCR low #828）：固定名会被下一次坏文件覆盖，
+                // 反而丢掉「当时那份」的现场。
+                runCatching { file.renameTo(File(file.parentFile, file.name + ".bad." + System.currentTimeMillis())) }
                 return mutableListOf<WorkspaceTab>() to null
             }
             val array = saved.optJSONArray("tabs") ?: JSONArray()
@@ -95,7 +98,7 @@ object WorkspaceTabs {
             // 解析失败（多半是上次写入被中断，留下半个 JSON）。
             // 把坏文件改名留证，不要让它挡住后续写入，也别悄悄删掉。
             AppLog.w("WorkspaceTabs", "读取标签状态失败：${e.javaClass.simpleName}: ${e.message}")
-            runCatching { file.renameTo(File(file.parentFile, file.name + ".bad")) }
+            runCatching { file.renameTo(File(file.parentFile, file.name + ".bad." + System.currentTimeMillis())) }
             mutableListOf<WorkspaceTab>() to null
         }
     }

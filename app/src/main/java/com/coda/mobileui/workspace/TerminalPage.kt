@@ -348,7 +348,7 @@ class TerminalPage(
         if (altArmed) out = "\u001b$out"
         // 无修饰键的可打印字符要走 typeText：直接 writeRaw 时字符进了 shell 却不进本地
         // echo，随后退格因为 echo 为空而不发 DEL，那个字符就删不掉了（#566）。
-        if (plain && out.length == 1 && out[0] >= ' ' && out[0] != '') {
+        if (plain && out.length == 1 && out[0] >= ' ' && out[0] != '\u007f') {
             typeText(out)
         } else {
             writeRaw(out)
@@ -413,7 +413,22 @@ class TerminalPage(
                     text: CharSequence?,
                     newCursorPosition: Int,
                 ): Boolean {
-                    if (!text.isNullOrEmpty()) typeText(text.toString())
+                    val body = text?.toString().orEmpty()
+                    if (body.isEmpty()) return true
+                    // 输入法提交同样要消费修饰键（OCR low #828）：单字符按当前组合键
+                    // 转换后直发，多字符只清状态，不能把整串当一次组合键输入。
+                    val hadCtrl = ctrlArmed
+                    val hadAlt = altArmed
+                    if (hadCtrl || hadAlt) {
+                        setModifiers(false, false)
+                        if (body.length == 1) {
+                            val mapped = if (hadCtrl) controlCode(body[0]) else body[0]
+                            val out = if (hadAlt) "\u001b$mapped" else mapped.toString()
+                            writeRaw(out)
+                            return true
+                        }
+                    }
+                    typeText(body)
                     return true
                 }
 
@@ -432,6 +447,7 @@ class TerminalPage(
                     afterLength: Int,
                 ): Boolean {
                     repeat(beforeLength) { typeText(BACKSPACE) }
+                    consumeModifiers()
                     return true
                 }
 
@@ -448,10 +464,14 @@ class TerminalPage(
                     when (event.keyCode) {
                         KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                             submitLine()
+                            // 修饰键只作用一次（OCR low #828）：回车也要消费，
+                            // 否则键位一直亮着，并且会悄悄改掉下一次输入。
+                            consumeModifiers()
                         }
 
                         KeyEvent.KEYCODE_DEL -> {
                             typeText(BACKSPACE)
+                            consumeModifiers()
                         }
 
                         else -> {
@@ -477,7 +497,7 @@ class TerminalPage(
                                     typeText(out)
                                 }
                                 // 点亮一次只作用一次：不复位的话后续每次按键都还是组合键（#564）。
-                                if (ctrlArmed || altArmed) setModifiers(false, false)
+                                consumeModifiers()
                             }
                         }
                     }
@@ -485,6 +505,17 @@ class TerminalPage(
                 }
             }
         }
+    }
+
+    /**
+     * 消费一次性的修饰键状态。
+     *
+     * 所有「键已经发出去了」的路径都要调它（OCR low #828）：可打印字符、回车、
+     * 退格、输入法提交。漏掉任何一条都会让键位常亮，并悄悄改写下一次输入。
+     */
+    private fun consumeModifiers() {
+        if (!ctrlArmed && !altArmed) return
+        setModifiers(false, false)
     }
 
     /** 键入字符：写进会话，同时在本地回显，没有伪终端时才看得到自己打了什么。 */
@@ -716,8 +747,13 @@ class TerminalPage(
         // 一直不出现换行（例如二进制输出）时 pending 会无限长，先截断再继续。
         if (pending.length > MAX_PENDING) {
             pending.delete(0, pending.length - MAX_PENDING)
-            lines.append("…（输出过多，已丢弃较早内容）\n")
-            bodyDirty = true
+            // 提示只加一次（OCR low #828）：二进制输出每泵一次都会超限，逐次追加会把
+            // 转录刷满同一句话。等有正常行流过（消费到换行）再允许下一次提示。
+            if (!truncatedNoticeShown) {
+                lines.append("…（输出过多，已丢弃较早内容）\n")
+                truncatedNoticeShown = true
+                bodyDirty = true
+            }
         }
         var index = pending.indexOf("\n")
         while (index >= 0) {
@@ -727,10 +763,14 @@ class TerminalPage(
                 lines.append(lineText).append('\n')
                 bodyDirty = true
             }
+            truncatedNoticeShown = false
             index = pending.indexOf("\n")
         }
         schedule()
     }
+
+    /** 上一次「输出过多」提示之后还没有正常行流过，避免重复刷屏。 */
+    private var truncatedNoticeShown = false
 
     private fun appendNote(text: String) {
         lines.append(text).append('\n')
@@ -774,6 +814,19 @@ class TerminalPage(
 
     private fun render() {
         if (!::transcript.isInitialized) return
+        refreshBodyCache()
+        transcript.text = bodyCache + tailText()
+        if (follow) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    /**
+     * 按需重建正文缓存。
+     *
+     * blink 走 [renderTail] 时也必须调用它（OCR low #828）：appendChunk 刚定稿的行
+     * 只置脏不重建，若这 50ms 窗口里正好有一次闪烁，尾部会配上一份过期的正文，
+     * 新定稿的行在下一帧前看起来像是丢了，MAX_CHARS 的裁剪也会被跳过。
+     */
+    private fun refreshBodyCache() {
         if (lines.length > MAX_CHARS) {
             lines.delete(0, lines.length - MAX_CHARS)
             lines.insert(0, "…\n")
@@ -783,13 +836,13 @@ class TerminalPage(
             bodyCache = lines.toString()
             bodyDirty = false
         }
-        transcript.text = bodyCache + tailText()
-        if (follow) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
     /** 只重拼提示行与光标；blink 用这条路径，不触碰正文。 */
     private fun renderTail() {
         if (!::transcript.isInitialized) return
+        // 正文脏时必须先重建，否则尾部配的是过期正文。
+        refreshBodyCache()
         transcript.text = bodyCache + tailText()
     }
 

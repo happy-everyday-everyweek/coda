@@ -12,8 +12,13 @@ enum class TokenKind { COMMENT, STRING, NUMBER, KEYWORD, TYPE, FUNCTION, IDENT }
 object CodeLexer {
     data class Token(val start: Int, val end: Int, val kind: TokenKind)
 
-    /** 增量上色计划：保留公共前缀，只替换尾部（#495）。 */
-    data class Plan(val keep: Int, val remove: List<Token>, val add: List<Token>)
+    /**
+     * 增量上色计划：保留公共前缀，只替换尾部（#495）。
+     *
+     * 只暴露「要移除的旧 token」与「要补的新 token」：公共前缀长度原本也放在这里，
+     * 但没有任何调用方读它（OCR low #828）。
+     */
+    data class Plan(val remove: List<Token>, val add: List<Token>)
 
     /**
      * 与上一轮 token 列表比对，给出最少改动。
@@ -29,7 +34,10 @@ object CodeLexer {
         var i = 0
         val limit = minOf(old.size, new.size)
         while (i < limit && old[i] == new[i]) i++
-        return Plan(keep = i, remove = old.drop(i), add = new.drop(i))
+        // 用 subList 视图而不是 drop()（OCR low #828）：改动落在文件开头时，
+        // drop 会把几乎整份 token 列表复制一遍，正好抵消这个增量计划省下的开销。
+        // 视图只在本轮渲染里用完即弃，调用方不会长期持有。
+        return Plan(remove = old.subList(i, old.size), add = new.subList(i, new.size))
     }
 
     /** 线性扫描；块注释状态跨行保留，其余状态不跨行。 */
@@ -107,11 +115,23 @@ object CodeLexer {
     ): Int {
         val n = text.length
         var i = from
-        // 0x / 0b / 0o 前缀
-        if (i + 1 < n && text[i] == '0' && (text[i + 1] == 'x' || text[i + 1] == 'X' || text[i + 1] == 'b' || text[i + 1] == 'B')) {
-            i += 2
-            while (i < n && (text[i].isLetterOrDigit() || text[i] == '_')) i++
-            return i
+        // 0x / 0b / 0o 前缀（OCR low #828：注释早就写了 0o，实现只认 x/b）
+        if (i + 1 < n && text[i] == '0') {
+            when (text[i + 1]) {
+                'x', 'X', 'b', 'B' -> {
+                    // 十六进制/二进制：吸收字母数字。非法字面量（0xZZ）也会整段算数字，
+                    // 只是观感问题，不影响正确代码的高亮。
+                    i += 2
+                    while (i < n && (text[i].isLetterOrDigit() || text[i] == '_')) i++
+                    return i
+                }
+                'o', 'O' -> {
+                    // 八进制只允许 0-7：越界字符停在这里，剩余部分按标识符上色。
+                    i += 2
+                    while (i < n && ((text[i] in '0'..'7') || text[i] == '_')) i++
+                    return i
+                }
+            }
         }
         while (i < n && (text[i].isDigit() || text[i] == '_')) i++
         // 小数部分：点后必须还是数字，否则这个点属于成员访问或 range 运算符。
@@ -140,7 +160,7 @@ object CodeLexer {
     ): Boolean =
         when (c) {
             '"', '\'' -> true
-            '`' -> rules.name == "JavaScript" || rules.name == "TypeScript"
+            '`' -> rules.backquoteTemplate
             else -> false
         }
 
@@ -159,7 +179,7 @@ object CodeLexer {
         val n = text.length
         val triple =
             (quote == '"' || quote == '\'') &&
-                (rules.name == "Kotlin" || rules.name == "Python") &&
+                rules.tripleQuoted &&
                 from + 2 < n && text[from + 1] == quote && text[from + 2] == quote
         if (triple) {
             val close = indexOf(text, "$quote$quote$quote", from + 3)

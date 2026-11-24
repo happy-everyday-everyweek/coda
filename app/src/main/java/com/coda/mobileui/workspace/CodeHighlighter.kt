@@ -33,6 +33,15 @@ class LanguageRules(
     val types: Set<String>,
     /** 关键字与类型是否大小写不敏感（SQL 这类语言需要）。 */
     val caseInsensitive: Boolean = false,
+    /**
+     * 反引号是否作为可跨行字符串（JS/TS 的模板串）。
+     *
+     * 这类契约放在规则对象上（OCR low #828）：词法分析器原来按 `name` 字符串比较，
+     * 改个显示名或新增一种语言就会静默丢掉行为。新增语言可以直接传参覆盖默认值。
+     */
+    val backquoteTemplate: Boolean = name == "JavaScript" || name == "TypeScript",
+    /** 三引号是否作为可跨行字符串（Kotlin/Python）。同上。 */
+    val tripleQuoted: Boolean = name == "Kotlin" || name == "Python",
 ) {
     // 按长度分桶的懒索引（OCR r10）：大小写敏感热路径不再为每个标识符
     // subSequence().toString() 复制字符串，长度筛后通常 0~2 个候选逐字符比。

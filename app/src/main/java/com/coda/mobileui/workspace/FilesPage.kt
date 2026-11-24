@@ -14,12 +14,14 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.coda.mobileui.R
+import com.coda.mobileui.SettingsStore
 import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.ArchiveKit
 import com.coda.mobileui.core.TarLinkSafety
 import com.coda.mobileui.core.TarListing
 import org.json.JSONObject
 import java.io.File
+import java.nio.charset.Charset
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1763,8 +1765,8 @@ open class FilesPage(
                 .get(host)
         wrapEnabled = codeStore.wrapLongLines
         val codeSizeSp =
-            com.coda.mobileui.SettingsStore.CODE_FONT_SIZES[
-                codeStore.codeFontSizeIndex.coerceIn(com.coda.mobileui.SettingsStore.CODE_FONT_SIZES.indices),
+            SettingsStore.CODE_FONT_SIZES[
+                codeStore.codeFontSizeIndex.coerceIn(SettingsStore.CODE_FONT_SIZES.indices),
             ]
         editor =
             LinearLayout(host).apply {
@@ -2220,6 +2222,9 @@ open class FilesPage(
         // 拿旧行界来对新空文本 setSpan(0, 1)——IndexOutOfBoundsException 的根源。
         if (text.isEmpty()) return
         val length = text.length
+        // 光标停在末尾的空行上（OCR low #828）：此时 start == length，任何向前扩一格的
+        // span 都会盖住上一行的换行符，把底色画到上一行去。这帧直接跳过。
+        if (length > 0 && text[length - 1] == '\n' && editorInput.selectionStart >= length) return
         val layout = editorInput.layout ?: return
         val offset = editorInput.selectionStart.coerceIn(0, length)
         val line = runCatching { layout.getLineForOffset(offset) }.getOrDefault(0)
@@ -2710,8 +2715,8 @@ open class FilesPage(
             com.coda.mobileui.SettingsStore
                 .get(host)
         val sp =
-            com.coda.mobileui.SettingsStore.CODE_FONT_SIZES[
-                store.codeFontSizeIndex.coerceIn(com.coda.mobileui.SettingsStore.CODE_FONT_SIZES.indices),
+            SettingsStore.CODE_FONT_SIZES[
+                store.codeFontSizeIndex.coerceIn(SettingsStore.CODE_FONT_SIZES.indices),
             ]
         editorInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
         if (::editorGutterText.isInitialized) editorGutterText.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)

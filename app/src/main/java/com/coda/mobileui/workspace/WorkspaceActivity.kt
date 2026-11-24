@@ -44,6 +44,12 @@ import kotlin.math.roundToInt
  */
 class WorkspaceActivity : BaseActivity() {
     companion object {
+        /** 底栏内容高度；构建与名义回退共用，避免两处数字漂移（OCR low #828）。 */
+        private const val BOTTOM_BAR_DP = 52f
+
+        /** 底栏上方的分隔线高度：名义高度要把这条算进去。 */
+        private const val BOTTOM_BAR_DIVIDER_DP = 1f
+
         /** 编辑器上限：与文件页保持一致，入口统一把关。 */
         // 与文件页同一常量（OCR #821）：2_000_000 与 2MiB 不一致，
         // 两层闸门之间的文件列表放行、打开被拒。
@@ -109,7 +115,10 @@ class WorkspaceActivity : BaseActivity() {
      * restoreTabs 期间页面在 onShown 里就要拿它算底部留白，
      * 那时布局还没发生，返回 0 会让最后一行被底栏盖住。
      */
-    fun bottomBarHeight(): Int = if (::bottomBar.isInitialized) bottomBar.height.takeIf { it > 0 } ?: dp(53f) else dp(53f)
+    fun bottomBarHeight(): Int {
+        val nominal = dp(BOTTOM_BAR_DP + BOTTOM_BAR_DIVIDER_DP)
+        return if (::bottomBar.isInitialized) bottomBar.height.takeIf { it > 0 } ?: nominal else nominal
+    }
 
     /**
      * 把一次重活推迟到输入停顿后再做，期间重复请求只保留最后一次。
@@ -405,7 +414,7 @@ class WorkspaceActivity : BaseActivity() {
             LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                layoutParams = LinearLayout.LayoutParams(MATCH, dp(52f))
+                layoutParams = LinearLayout.LayoutParams(MATCH, dp(BOTTOM_BAR_DP))
             }
         backButton = toolButton(R.drawable.ic_arrow_back, "返回") { handleBack() }
         aheadButton = toolButton(R.drawable.ic_arrow_forward, "前进") { if (ahead.isNotEmpty()) stepAhead() }
@@ -622,8 +631,12 @@ class WorkspaceActivity : BaseActivity() {
         if (file.length() > MAX_EDITOR_BYTES) return "文件超过 2 MB，未打开"
         val head = ByteArray(minOf(8192, file.length().toInt().coerceAtLeast(0)))
         if (head.isEmpty()) return null
-        runCatching { file.inputStream().use { it.read(head) } }.getOrNull() ?: return null
-        if (head.any { it == 0.toByte() }) return "这是二进制文件，已阻止以文本打开"
+        val read = runCatching { file.inputStream().use { it.read(head) } }.getOrNull() ?: return null
+        // 只看真正读到的字节（OCR low #828）：read 不保证填满缓冲区，未读部分是 0，
+        // 按整个数组判断会把普通文本文件误判成二进制。
+        for (i in 0 until read) {
+            if (head[i] == 0.toByte()) return "这是二进制文件，已阻止以文本打开"
+        }
         return null
     }
 
@@ -830,6 +843,15 @@ class WorkspaceActivity : BaseActivity() {
         persist()
         return true
     }
+
+    /**
+     * 该页所在标签当前是否已是常驻（非预览）。
+     *
+     * 与 [promotePage] 配合使用（OCR low #828）：promote 对「本来就是常驻」也返回
+     * false，而这种情况不会自己变好，调用方必须能区分它，否则每次改动都要重扫一遍标签。
+     */
+    fun isPagePinned(page: WorkspacePage): Boolean =
+        tabs.firstOrNull { it.page === page }?.let { !it.data.preview } ?: false
 
     /** 页面用：把自己从预览转成常驻。找不到标签时返回 false，调用方还能再试。 */
     fun promotePage(page: WorkspacePage): Boolean {
