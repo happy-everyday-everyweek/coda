@@ -185,10 +185,13 @@ object GhMirrors {
             val hasHistory = scored.any { (history[it.first.id]?.samples ?: 0) > 0 }
             onLog(
                 if (hasHistory) {
-                    "目标 ${bytes / 1024}KB，小于 1MB，按「历史校验通过率+平均速度」排序" +
+                    // OCR low #247：probeUrl 探测常传 bytes=1，整数除法会打成「0KB」。
+                        // 小于 1KB 时按字节显示；指标名按实际算法（历史综合评分）写。
+                        "目标 ${if (bytes < 1024) "${bytes}B" else "${bytes / 1024}KB"}，小于 1MB，" +
+                            "按「历史校验通过率+失败惩罚+平均速度」的综合评分排序" +
                         "（首选 ${scored.first().first.id}）"
                 } else {
-                    "目标 ${bytes / 1024}KB，小于 1MB，暂无可用的历史成绩，按 ping 延迟排序"
+                    "目标 ${if (bytes < 1024) "${bytes}B" else "${bytes / 1024}KB"}，小于 1MB，暂无可用的历史成绩，按 ping 延迟排序"
                 },
             )
             return scored.map { it.first }
@@ -218,7 +221,8 @@ object GhMirrors {
         val best = ranked.first().first
         onLog("选定 ${best.mirror.id}（${"%.1f MB/s".format(best.sustainedBps / 1024.0 / 1024.0)}）")
         // 测出速度的排前面，剩下的活源接在后面：前者优先，但一个都不丢。
-        return ranked.map { it.first.mirror } +
-            alive.filter { m -> usable.none { it.mirror.id == m.id } }
+        // OCR low #246：差集用 id 集合一次完成，不再对每个存活镜像扫一遍 usable。
+        val scoredIds = usable.map { it.mirror.id }.toHashSet()
+        return ranked.map { it.first.mirror } + alive.filter { it.id !in scoredIds }
     }
 }

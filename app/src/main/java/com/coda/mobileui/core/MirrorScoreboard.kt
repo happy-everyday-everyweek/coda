@@ -223,35 +223,39 @@ object MirrorScoreboard {
                 val bucket = root.optJSONObject(key) ?: JSONObject().also { root.put(key, it) }
                 val old = bucket.optJSONObject(id)
                 val now = System.currentTimeMillis()
-                val next =
-                    JSONObject().apply {
-                        put("verified", old?.optInt("verified", 0) ?: 0)
-                        put("hashFailed", old?.optInt("hashFailed", 0) ?: 0)
-                        put("failed", old?.optInt("failed", 0) ?: 0)
-                        put("okBytes", old?.optLong("okBytes", 0) ?: 0L)
-                        put("okMs", old?.optLong("okMs", 0) ?: 0L)
-                        put("lastOkMs", old?.optLong("lastOkMs", 0) ?: 0L)
-                        put("lastFailMs", old?.optLong("lastFailMs", 0) ?: 0L)
-                        when (outcome) {
-                            Outcome.VERIFIED -> {
-                                put("verified", (old?.optInt("verified", 0) ?: 0) + 1)
-                                put("lastOkMs", now)
-                                // 只有成功样本才计入速度，失败的耗时不代表带宽。
-                                if (bytes > 0 && elapsedMs > 0) {
-                                    put("okBytes", (old?.optLong("okBytes", 0) ?: 0L) + bytes)
-                                    put("okMs", (old?.optLong("okMs", 0) ?: 0L) + elapsedMs)
-                                }
-                            }
-                            Outcome.HASH_FAILED -> {
-                                put("hashFailed", (old?.optInt("hashFailed", 0) ?: 0) + 1)
-                                put("lastFailMs", now)
-                            }
-                            Outcome.FAILED -> {
-                                put("failed", (old?.optInt("failed", 0) ?: 0) + 1)
-                                put("lastFailMs", now)
-                            }
-                        }
+                // OCR low #296：先在局部变量上算增量，再一次性写入——旧写法先整体
+                // 复制旧值、在 when 里覆盖同名字段，同一份 JSON 被重复解析，
+                // 「哪个计数器 +1」也被淹没在反复出现的 optInt 里。
+            val verifiedOld = old?.optInt("verified", 0) ?: 0
+            val hashFailedOld = old?.optInt("hashFailed", 0) ?: 0
+            val failedOld = old?.optInt("failed", 0) ?: 0
+            var okBytes = old?.optLong("okBytes", 0) ?: 0L
+            var okMs = old?.optLong("okMs", 0) ?: 0L
+            var lastOkMs = old?.optLong("lastOkMs", 0) ?: 0L
+            var lastFailMs = old?.optLong("lastFailMs", 0) ?: 0L
+            val verified = if (outcome == Outcome.VERIFIED) verifiedOld + 1 else verifiedOld
+            val hashFailed = if (outcome == Outcome.HASH_FAILED) hashFailedOld + 1 else hashFailedOld
+            val failed = if (outcome == Outcome.FAILED) failedOld + 1 else failedOld
+            when (outcome) {
+                Outcome.VERIFIED -> {
+                    lastOkMs = now
+                    // 只有成功样本才计入速度，失败的耗时不代表带宽。
+                    if (bytes > 0 && elapsedMs > 0) {
+                        okBytes += bytes
+                        okMs += elapsedMs
                     }
+                }
+                Outcome.HASH_FAILED, Outcome.FAILED -> lastFailMs = now
+            }
+            val next =
+                JSONObject()
+                    .put("verified", verified)
+                    .put("hashFailed", hashFailed)
+                    .put("failed", failed)
+                    .put("okBytes", okBytes)
+                    .put("okMs", okMs)
+                    .put("lastOkMs", lastOkMs)
+                    .put("lastFailMs", lastFailMs)
                 bucket.put(id, next)
                 if (!writeAtomic(f, root.toString())) {
                     AppLog.w(TAG, "写镜像账本失败：替换未完成")
@@ -343,12 +347,11 @@ object MirrorScoreboard {
         val bps = stat.avgBps
         if (bps > 0) {
             // log2 压缩：1MB/s → 0，8MB/s → +180，64KB/s → −240。
+            // OCR low #295：bps>0 已保证 ratio>0，原来那层 if(ratio>0) 是死分支，
+            // 反而把真正的守卫条件藏起来了。拉平。
             val ref = 1024.0 * 1024.0
-            val ratio = bps / ref
-            if (ratio > 0) {
-                val pts = (Math.log(ratio) / Math.log(2.0)) * 60.0
-                s += pts.coerceIn(-600.0, 600.0)
-            }
+            val pts = (Math.log(bps / ref) / Math.log(2.0)) * 60.0
+            s += pts.coerceIn(-600.0, 600.0)
         }
         return s
     }

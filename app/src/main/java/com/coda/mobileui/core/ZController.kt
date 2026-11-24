@@ -501,7 +501,7 @@ class ZController private constructor(
                     }
 
                     else -> {
-                        if (AutomationHost.get(app).handleReverse(runtime, this@ZController, requestId, method, params)) {
+                        if (AutomationHost.handleReverse(runtime, this@ZController, requestId, method, params)) {
                             true
                         } else if (BrowserControl.handleReverse(runtime, requestId, method, params)) {
                             true

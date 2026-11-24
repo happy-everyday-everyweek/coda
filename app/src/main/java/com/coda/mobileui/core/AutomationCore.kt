@@ -884,13 +884,8 @@ class AutomationStore(
  * 五个方法均为「内核向客户端发起」，在此完成校验、落库与应答。
  */
 object AutomationHost {
-    @Volatile
-    private var inst: AutomationHost? = null
-
-    fun get(ctx: Context): AutomationHost =
-        inst ?: synchronized(this) {
-            inst ?: AutomationHost.also { inst = it }
-        }
+    // OCR low #221：原本持有指向自身的 inst + 忽略 ctx 的双重检查 get(ctx)，
+    // 是纯冗余间接层；调用方已改成直接引用本 object。
 
     /** 返回 true 表示该请求已受理（异步应答，勿在调用线程等待）。 */
     fun handleReverse(
