@@ -36,6 +36,31 @@ object SessionCache {
             Thread(r, "coda-session-cache").apply { isDaemon = true }
         }
 
+    /** 文件名里允许的字符；其余一律替换成下划线。 */
+    private val ILLEGAL_FILE_CHARS = Regex("[^A-Za-z0-9_-]")
+
+    /**
+     * 按线程复用摘要器。
+     *
+     * [msgFile] 在 [hasMessages] 里也会被调用，那是冷启动路径上的主线程 stat 探测，
+     * 每次新建 MessageDigest 没必要（OCR low #830）。
+     */
+    private val DIGEST =
+        object : ThreadLocal<java.security.MessageDigest>() {
+            override fun initialValue(): java.security.MessageDigest = java.security.MessageDigest.getInstance("SHA-256")
+        }
+
+    private fun hex(bytes: ByteArray): String {
+        val table = "0123456789abcdef"
+        val out = StringBuilder(bytes.size * 2)
+        for (b in bytes) {
+            val v = b.toInt() and 0xFF
+            out.append(table[v ushr 4])
+            out.append(table[v and 0x0F])
+        }
+        return out.toString()
+    }
+
     /** 一条待缓存的消息：只留离线要显示的那四个字段。 */
     private class MsgRow(
         val id: String,
@@ -81,13 +106,10 @@ object SessionCache {
         ctx: Context,
         sessionId: String,
     ): File {
-        val safe = sessionId.replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
-        val digest =
-            java.security.MessageDigest
-                .getInstance("SHA-256")
-                .digest(sessionId.toByteArray())
-                .take(6)
-                .joinToString("") { "%02x".format(it) }
+        val safe = sessionId.replace(ILLEGAL_FILE_CHARS, "_").take(48)
+        val md = DIGEST.get() ?: java.security.MessageDigest.getInstance("SHA-256")
+        md.reset()
+        val digest = hex(md.digest(sessionId.toByteArray())).take(12)
         return File(dir(ctx), "msg_${safe}_$digest.json")
     }
 
@@ -196,21 +218,29 @@ object SessionCache {
     /** 把排队的快照写到盘上；同一时刻只有一个刷盘任务在跑。 */
     private fun scheduleFlush(ctx: Context) {
         if (!pendingFlush.compareAndSet(false, true)) return
-        io.execute {
-            try {
-                while (true) {
-                    val id = pendingMessages.keys.firstOrNull() ?: break
-                    val item = pendingMessages.remove(id) ?: continue
-                    // 清理之后才轮到写盘的快照已经过期，写回去等于把刚清掉的会话复活。
-                    if (item.generation != generation.get()) continue
-                    writeMessages(ctx, id, item.rows)
+        // 提交失败必须复位（OCR low #830）：池已 shutdown 时 execute 会抛
+        // RejectedExecutionException，旗标卡在 true 会让此后所有快照都被丢弃，
+        // 消息缓存静默失效到进程结束。
+        runCatching {
+            io.execute {
+                try {
+                    while (true) {
+                        val id = pendingMessages.keys.firstOrNull() ?: break
+                        val item = pendingMessages.remove(id) ?: continue
+                        // 清理之后才轮到写盘的快照已经过期，写回去等于把刚清掉的会话复活。
+                        if (item.generation != generation.get()) continue
+                        writeMessages(ctx, id, item.rows)
+                    }
+                    prune(ctx)
+                } finally {
+                    pendingFlush.set(false)
+                    // 刷盘期间可能又来了新快照，补一次调度，保证最后一次写入生效。
+                    if (pendingMessages.isNotEmpty()) scheduleFlush(ctx)
                 }
-                prune(ctx)
-            } finally {
-                pendingFlush.set(false)
-                // 刷盘期间可能又来了新快照，补一次调度，保证最后一次写入生效。
-                if (pendingMessages.isNotEmpty()) scheduleFlush(ctx)
             }
+        }.onFailure {
+            pendingFlush.set(false)
+            AppLog.w("SessionCache", "刷盘任务提交失败：${it.message}")
         }
     }
 

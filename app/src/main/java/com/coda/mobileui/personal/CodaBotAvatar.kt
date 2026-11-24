@@ -34,11 +34,15 @@ class CodaBotAvatar @JvmOverloads constructor(
     private var gridW = 0
     private var gridH = 0
 
-    /** 主题色只查一次；缺该属性时 MaterialColors 会抛，兜底成中性灰而不是崩掉。 */
+    /** 主题色只查一次；缺该属性时 MaterialColors 会抛，兜底不崩。 */
     private val background: Int by lazy {
         runCatching {
             MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimaryContainer)
-        }.getOrDefault(0xFFE0E0E0.toInt())
+        }.getOrElse {
+            // 不能退回硬编码浅灰（OCR low #832）：暗色主题下会闪一块亮底。
+            // 退回窗口底色，两种主题下都与周围一致；再取不到就透明。
+            runCatching { MaterialColors.getColor(this, android.R.attr.colorBackground) }.getOrDefault(0)
+        }
     }
 
     /** 圆角半径（dp）：与设计里 36–40dp 头像的观感一致。 */
@@ -134,7 +138,10 @@ class CodaBotAvatar @JvmOverloads constructor(
         val left = (width - gridW * cell) / 2f
         val top = (height - gridH * cell) / 2f
         paint.style = Paint.Style.FILL
-        for (c in cells) {
+        // 按下标遍历而不是 for-in（OCR low #832）：List 的 for-in 每帧都会建一个
+        // Iterator，与这个视图「每帧零分配」的目标冲突。
+        for (i in 0 until cells.size) {
+            val c = cells[i]
             paint.color = c.color
             canvas.drawRect(left + c.x * cell, top + c.y * cell, left + (c.x + 1) * cell, top + (c.y + 1) * cell, paint)
         }

@@ -5,4 +5,8 @@
     <string name="crash_close">Close</string>
     <string name="crash_no_log">(no log)</string>
     <string name="crash_not_saved">(not saved)</string>
+    <string name="reasoning_running">Thinking</string>
+    <string name="reasoning_done">Thought</string>
+    <string name="pick_other_directory">Choose another folder…</string>
+    <string name="dev_signature_warning">The dev preview is signed with a public debug key, so it cannot prove authenticity. The update manifest is fetched directly from GitHub, and the signature is checked against this app before installing. Use a release build if you need that guarantee.</string>
 </resources>

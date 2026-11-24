@@ -108,8 +108,24 @@ internal object PromptBaseline {
 
     /** 文本摘要，与内核侧 `sha256(utf8(body))` 一致。 */
     fun sha256(text: String): String =
-        java.security.MessageDigest
-            .getInstance("SHA-256")
-            .digest(text.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+        hex(
+            java.security.MessageDigest
+                .getInstance("SHA-256")
+                .digest(text.toByteArray(Charsets.UTF_8)),
+        )
+
+    // 查表拼十六进制（OCR low #833）：`"%02x".format(it)` 依赖默认 locale，
+    // 某些 locale 下数字字形不是 ASCII，摘要字符串会随切换 locale 变化，
+    // 表现成「模板被改过」。查表还省掉每字节一次 Formatter 分配。
+    private const val HEX_DIGITS = "0123456789abcdef"
+
+    private fun hex(bytes: ByteArray): String {
+        val out = StringBuilder(bytes.size * 2)
+        for (b in bytes) {
+            val v = b.toInt() and 0xFF
+            out.append(HEX_DIGITS[v ushr 4])
+            out.append(HEX_DIGITS[v and 0x0F])
+        }
+        return out.toString()
+    }
 }

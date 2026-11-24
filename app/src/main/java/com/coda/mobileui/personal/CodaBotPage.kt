@@ -1,5 +1,6 @@
 package com.coda.mobileui.personal
 
+import com.coda.mobileui.Motion
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
@@ -234,7 +235,7 @@ class CodaBotPage(
                         // 碰撞箱：松手时如果明显高于输入框上沿，就当它站在消息内容上，
                         // 停在落点；否则回到地面（输入框上沿）。
                         if (v.translationY > -dp(40).toFloat()) {
-                            v.animate().translationX(0f).translationY(0f).setDuration(com.coda.mobileui.Motion.STANDARD).start()
+                            v.animate().translationX(0f).translationY(0f).setDuration(Motion.STANDARD).start()
                         }
                         false
                     }

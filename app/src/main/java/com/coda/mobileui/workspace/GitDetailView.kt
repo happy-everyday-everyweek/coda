@@ -219,7 +219,13 @@ internal class GitDetailView(
         inputConfirm = {
             val value = edit.text.toString().trim()
             // 行文案承诺「为空时不会提交」，校验必须在处理器里，不能只靠调用方。
-            if (value.isNotEmpty()) onConfirm(value)
+            // 但空值不能静默（OCR low #831）：原来直接吞掉，用户点确定毫无反应，
+            // 看起来像按钮坏了。这里给出提示，调用方就不必再重复判空。
+            if (value.isEmpty()) {
+                android.widget.Toast.makeText(activity, "不能为空", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                onConfirm(value)
+            }
         }
         container.addView(space())
         SettingsViewBuilder.render(

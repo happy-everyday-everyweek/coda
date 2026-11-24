@@ -37,6 +37,11 @@ class GitPage(
     // 但构造签名要与其余工作区页面保持一致，不能删。
     private val saved: JSONObject,
 ) : WorkspacePage(host) {
+    private companion object {
+        /** 提交图分页步长（OCR low #831）：编译期常量，不必每个实例各存一份。 */
+        const val GRAPH_PAGE = 400
+    }
+
     override val kind: String = WorkspaceTabs.GIT
     override val title: String = "Git"
 
@@ -97,8 +102,6 @@ class GitPage(
      */
     private var generation = 0
 
-    /** 提交图分页步长。 */
-    private val GRAPH_PAGE = 400
 
     /** 提交图一次取多少条（#89）：点「加载更多」时翻倍。 */
     private var graphLimit = GRAPH_PAGE
@@ -864,7 +867,7 @@ class GitPage(
                 keys["out"] = { showText("合并输出", conflictText) }
                 bindRows(rows, keys)
             },
-            onError = { detail.showLoading("读取冲突失败，返回重试") },
+            onError = { if (!stale(token)) detail.showLoading("读取冲突失败，返回重试") },
         )
     }
 
@@ -904,7 +907,7 @@ class GitPage(
                 bindRows(rows, keys)
                 detail.showDiff(text, DiffView.Mode.CONFLICT, clear = false)
             },
-            onError = { detail.showLoading("读取冲突内容失败，返回重试") },
+            onError = { if (!stale(token)) detail.showLoading("读取冲突内容失败，返回重试") },
         )
     }
 
@@ -987,7 +990,7 @@ class GitPage(
                 keys["add"] = { editRemote("origin", "") }
                 bindRows(rows, keys)
             },
-            onError = { view.showLoading("读取远端失败，返回重试") },
+            onError = { if (!stale(token)) view.showLoading("读取远端失败，返回重试") },
         )
     }
 
@@ -1071,7 +1074,7 @@ class GitPage(
                 }
                 bindRows(rows, keys)
             },
-            onError = { view.showLoading("读取分支失败，返回重试") },
+            onError = { if (!stale(token)) view.showLoading("读取分支失败，返回重试") },
         )
     }
 
@@ -1176,20 +1179,22 @@ class GitPage(
                 keys["commit"] = { commitDialog() }
                 bindRows(rows, keys)
             },
-            onError = { view.showLoading("读取改动失败，返回重试") },
+            onError = { if (!stale(token)) view.showLoading("读取改动失败，返回重试") },
         )
     }
 
     private fun showDiff() {
         val view = openDetail("未提交改动", "git diff")
         view.showLoading("正在读取改动…")
+        val token = generation
         host.background(
             work = { Git.diffUncommitted(host.env, host.root) },
-            then = { diff ->
+            then = then@{ diff ->
+                if (stale(token)) return@then
                 val text = if (diff.truncated) diff.text + "\n\n（内容过长，已截断）" else diff.text
                 view.showDiff(text)
             },
-            onError = { view.showLoading("读取改动失败，返回重试") },
+            onError = { if (!stale(token)) view.showLoading("读取改动失败，返回重试") },
         )
     }
 
@@ -1244,7 +1249,7 @@ class GitPage(
                 bindRows(rows, keys)
                 view.appendCode(output)
             },
-            onError = { view.showLoading("读取提交失败，返回重试") },
+            onError = { if (!stale(token)) view.showLoading("读取提交失败，返回重试") },
         )
     }
 
@@ -1356,10 +1361,7 @@ class GitPage(
     ) {
         val view = openDetail(title)
         view.showInput(initial) { value ->
-            if (value.isEmpty()) {
-                toast("不能为空")
-                return@showInput
-            }
+            // 空值由 GitDetailView.showInput 就地提示（OCR low #831），能到这里的一定非空。
             closeDetail()
             onDone(value)
         }

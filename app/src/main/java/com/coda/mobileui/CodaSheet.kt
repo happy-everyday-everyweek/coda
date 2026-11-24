@@ -715,6 +715,9 @@ class CodaSheet(
         // secondaryAction（如克隆完成后再给"打开工作区"），只清内容不重建按钮，
         // 按钮永远不会出现。按钮全空时移除旧底栏。
         rebuildFooter()
+        // 头部操作行也要重建（OCR low #830）：调用方可能在内容就位后才补 headerAction，
+        // 只重建底栏会让表头停在旧状态，直到下次 navigate() 才出现（#649 同类问题）。
+        liveColors?.get(0)?.let { rebuildHeaderAction(it) }
     }
 
     /** 按当前 primary/secondary 字段重建底栏；卡片未显示或无按钮时移除旧底栏。 */

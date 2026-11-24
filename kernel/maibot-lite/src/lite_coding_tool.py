@@ -236,8 +236,10 @@ def _readonly_violation(command: str) -> Optional[str]:
             why = _ref_listing_violation(parts[1], args)
             if why:
                 return why
-        if "-O" in args:
-            return "只读检查不允许 -O（会启动分页器执行命令）"
+        # -O 只对 git grep 有风险（--open-files-in-pager 会拉起分页器执行命令）；
+        # git diff/log 的 -O<orderfile> 是只读选项，一律拒绝会误伤正常命令（OCR low #832）。
+        if parts[1] == "grep" and "-O" in args:
+            return "只读检查不允许 git grep -O（会启动分页器执行命令）"
         return None
     if first not in _READONLY_COMMANDS:
         return f"只读检查不允许执行 {first}；可用命令：grep、ls、cat、head、tail、wc、find、git（只读子命令）等"

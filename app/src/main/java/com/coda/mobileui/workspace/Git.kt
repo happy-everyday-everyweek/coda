@@ -432,9 +432,16 @@ object Git {
     internal fun isSafeRef(value: String): Boolean {
         if (value.isEmpty() || value.startsWith("-")) return false
         if (value.contains("..") || value.contains("//")) return false
-        val forbidden = setOf('~', '^', ':', '?', '*', '[', '\\', ' ')
-        return value.none { it.code < 0x20 || it in forbidden }
+        return value.none { it.code < 0x20 || it in FORBIDDEN_REF_CHARS }
     }
+
+    /**
+     * 引用名里不允许出现的字符（OCR low #831）。
+     *
+     * 原来在 [isSafeRef] 里每次调用现构一个 `setOf`，而这个函数对每个分支名、
+     * 远端名、起点名都要跑，`checkoutTracking` 一次就调两遍。提到对象级只分配一次。
+     */
+    private val FORBIDDEN_REF_CHARS = charArrayOf('~', '^', ':', '?', '*', '[', '\\', ' ')
 
     /**
      * 远端地址是否安全：挡选项写法、控制字符，以及危险传输（OCR #825）。

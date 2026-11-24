@@ -1,6 +1,8 @@
 package com.coda.mobileui
 
 import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.SpannableString
 import android.text.TextWatcher
@@ -15,11 +17,14 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.coda.mobileui.core.AppLog
 import com.coda.mobileui.core.ZSessionInfo
+import com.coda.mobileui.ui.SearchLogic
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 /**
  * 会话搜索页。
@@ -64,13 +69,13 @@ class SessionSearchPage(
 
     // 每个按键都同步跑 extras() 会在大历史上卡住 UI 线程（#658）：
     // 去抖 180ms，取数放后台，序号丢弃过期结果。
-    private val searchHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val searchHandler = Handler(Looper.getMainLooper())
     private var pendingSearch: Runnable? = null
     private var lastQuery: String? = null
     private var searchSeq = 0
     private var appliedSeq = 0
     private val searchPool =
-        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Executors.newSingleThreadExecutor { r ->
             Thread(r, "session-search").apply { isDaemon = true }
         }
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
@@ -158,7 +163,7 @@ class SessionSearchPage(
                 visibility = View.GONE
             }
         root.addView(hint, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        render("")
+        renderInitial()
         return root
     }
 
@@ -183,11 +188,16 @@ class SessionSearchPage(
     @Volatile
     private var released = false
     /** 去抖调度：相同查询直接跳过，取数放后台线程（#658）。 */
+    /** 输入去抖（毫秒）：连打时合并成一次搜索。 */
+    private companion object {
+        const val SEARCH_DEBOUNCE_MS = 180L
+    }
+
     private fun scheduleSearch(raw: String) {
         if (released || !::results.isInitialized) return
         val q = raw.trim()
         lastQuery?.let {
-            if (com.coda.mobileui.ui.SearchLogic
+            if (SearchLogic
                     .shouldSkipRender(it, q)
             ) {
                 return
@@ -212,7 +222,7 @@ class SessionSearchPage(
                         // lastQuery，让重打同一查询能重试。
                         val all =
                             runCatching { sessions() }.getOrElse {
-                                com.coda.mobileui.core.AppLog.w("Search", "会话列表读取失败：${it.message}")
+                                AppLog.w("Search", "会话列表读取失败：${it.message}")
                                 searchHandler.post { if (!released) lastQuery = null }
                                 emptyList()
                             }
@@ -221,7 +231,7 @@ class SessionSearchPage(
                                 emptyList()
                             } else {
                                 runCatching { extras(q, sessionSnapshot) }.getOrElse {
-                                    com.coda.mobileui.core.AppLog.w("Search", "扩展搜索失败：${it.message}")
+                                    AppLog.w("Search", "扩展搜索失败：${it.message}")
                                     searchHandler.post { if (!released) lastQuery = null }
                                     emptyList()
                                 }
@@ -238,7 +248,7 @@ class SessionSearchPage(
                 }
             }
         pendingSearch = task
-        searchHandler.postDelayed(task, 180L)
+        searchHandler.postDelayed(task, SEARCH_DEBOUNCE_MS)
     }
 
     /** 页面销毁时停掉在途任务，避免回调持有已销毁的 Activity。 */
@@ -249,11 +259,17 @@ class SessionSearchPage(
         searchPool.shutdownNow()
     }
 
-    private fun render(raw: String) {
+    /**
+     * 首次填充。
+     *
+     * 按键处理早已交给 [scheduleSearch]，这里只可能是空查询，所以不再收参数、
+     * 也不再走「非空查询要调 extras」的分支（OCR low #830）——留着那段等于
+     * 允许一条同步取数的旁路重新长回来。
+     */
+    private fun renderInitial() {
         if (!::results.isInitialized) return
-        val q = raw.trim()
-        lastQuery = q
-        paint(q, sessions(), if (q.isEmpty()) emptyList() else extras(q, zcSessionSnapshot()))
+        lastQuery = ""
+        paint("", sessions(), emptyList())
     }
 
     private fun paint(
@@ -278,14 +294,14 @@ class SessionSearchPage(
         // provider 已按全文匹配，这里只按 matched 原文判定，不再用标题/摘要二次过滤（#659）。
         val others =
             rawExtras.filter {
-                com.coda.mobileui.ui.SearchLogic.keeps(
-                    com.coda.mobileui.ui.SearchLogic
+                SearchLogic.keeps(
+                    SearchLogic
                         .ExtraHit(it.section, it.title, it.subtitle, it.matched),
                     q,
                 )
             }
         // 按 section 聚拢后再渲染：provider 结果按文件/行交错，逐个比较会让分组头重复（#660）。
-        com.coda.mobileui.ui.SearchLogic.groupBySection(others) { it.section }.forEach { (section, group) ->
+        SearchLogic.groupBySection(others) { it.section }.forEach { (section, group) ->
             results.addView(
                 TextView(host).apply {
                     text = section
@@ -356,10 +372,10 @@ class SessionSearchPage(
         val time = timeFormat.format(Date(session.updatedAt))
         // 查询命中父目录时，光显示 basename 看不出匹配理由，补一行命中的路径前缀。
         val ctx =
-            com.coda.mobileui.ui.SearchLogic
+            SearchLogic
                 .pathContext(session.workspacePath, q)
         val sub =
-            com.coda.mobileui.ui.SearchLogic
+            SearchLogic
                 .subtitle(where, time)
         row.addView(
             TextView(host).apply {

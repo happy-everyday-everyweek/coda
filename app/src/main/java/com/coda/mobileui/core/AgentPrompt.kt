@@ -119,7 +119,15 @@ object AgentPrompt {
     ): Boolean {
         val tmp = File(target.parentFile, target.name + "." + System.nanoTime() + ".tmp")
         return try {
-            tmp.writeText(text)
+            // 必须 fsync 之后再改名（OCR low #833）：writeText 只关流，数据可能还在
+            // page cache 里。掉电或内核崩溃时目录项（改名）可能已落盘而数据块没有，
+            // 目标文件变成 0 字节或半截——正是这个「原子替换」要避免的损坏，
+            // 而改名之后旧内容已经不在了，无法回退。
+            java.io.FileOutputStream(tmp).use { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+                out.flush()
+                out.fd.sync()
+            }
             tmp.renameTo(target)
         } finally {
             if (tmp.exists()) runCatching { tmp.delete() }

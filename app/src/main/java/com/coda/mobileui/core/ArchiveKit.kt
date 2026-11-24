@@ -133,8 +133,14 @@ object ArchiveKit {
         kind: Kind? = null,
     ): String? =
         when (kind ?: kindOf(file)) {
+            // 先判文件还在不在（OCR low #834）：tar 分支原来只要容器就绪就直接报可读，
+            // 列目录时会走到失败的 tar -tvf 再返回空列表，界面表现成「包是空的」。
             Kind.TAR, Kind.TAR_GZ ->
-                if (env == null) "运行环境尚未就绪，暂时无法读取该压缩包" else null
+                when {
+                    !file.isFile -> "压缩包文件不存在"
+                    env == null -> "运行环境尚未就绪，暂时无法读取该压缩包"
+                    else -> null
+                }
             Kind.UNKNOWN -> "不支持的压缩包格式"
             Kind.GZ -> "单个 gzip 文件不支持按目录浏览"
             else -> if (!file.isFile) "压缩包文件不存在" else null

@@ -757,11 +757,7 @@ class MainActivity : BaseActivity() {
             if (UpdateChecker.channel == "dev") {
                 // dev 包由仓库内公开口令的密钥签名，签名本身不构成防线，必须让用户知道。
                 col.addView(
-                    updateBodyText(
-                        "dev 预览版使用公开的调试签名，不具备防伪造能力；" +
-                            "更新清单只从 GitHub 官方直连获取，安装前会核对签名是否与本应用一致。" +
-                            "需要安全保证请改用正式签名的 release 版。",
-                    ),
+                    updateBodyText(getString(R.string.dev_signature_warning)),
                 )
             }
             if (r.crossesChannel) {
@@ -1770,6 +1766,9 @@ class MainActivity : BaseActivity() {
         // 否则它会一直等下去（#673）。
         denyDeferredRequests()
         indexHandler.removeCallbacks(indexFlush)
+        // 只移除会把最后 800ms 的索引丢掉（OCR low #830）：indexFlush 自己会
+        // 快照并转投 Bg，这里直接跑一次不碰 UI，尾部内容才不会漏。
+        indexFlush.run()
         // 模糊覆盖层持有的位图要显式释放，否则 Activity 销毁后仍占着整屏像素。
         blurRequested = false
         clearBlurOverlay()
@@ -2262,12 +2261,12 @@ class MainActivity : BaseActivity() {
         host: LinearLayout,
         messages: List<com.coda.mobileui.core.ZMessage>,
         trackViews: Boolean = true,
-        ownerSessionId: String? = zc.currentSessionId,
+        // 原来还有个 ownerSessionId 参数，但没有任何调用方传值（OCR low #830），已删。
     ) {
         // 索引必须归到真正拥有这批消息的会话：子代理/工作流渲染复用本函数，
         // 一律写 currentSessionId 会把子会话正文塞进父会话的搜索索引（#670）。
         // trackViews=false 即子会话渲染，直接不索引。
-        if (trackViews) indexSessionContent(ownerSessionId, messages)
+        if (trackViews) indexSessionContent(zc.currentSessionId, messages)
         val inflater = LayoutInflater.from(this)
         val neutral =
             com.google.android.material.color.MaterialColors.getColor(
@@ -2340,7 +2339,7 @@ class MainActivity : BaseActivity() {
                             // 长对话里紧挨着的工具行很容易点错且没有任何「点到了」的反馈。
                             minHeight = dp(48)
                             gravity = Gravity.CENTER_VERTICAL
-                            background = rippleBackground()
+                            setBackgroundResource(rippleBackgroundRes())
                             isClickable = true
                             setOnClickListener { v ->
                                 val open = toolHost.visibility == View.VISIBLE
@@ -2440,14 +2439,20 @@ class MainActivity : BaseActivity() {
      * 聊天区这几个可点元素原来都是裸 TextView，按下没有任何变化，
      * 用户不知道刚才那一下有没有点中。
      */
-    private fun rippleBackground(): android.graphics.drawable.Drawable? {
+    /** 按下反馈的资源 id（0 表示主题没提供）。解析一次就够，别每行都查一遍主题。 */
+    private var rippleResId: Int? = null
+
+    private fun rippleBackgroundRes(): Int {
+        rippleResId?.let { return it }
         val value = android.util.TypedValue()
-        return if (theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, value, true)) {
-            androidx.core.content.ContextCompat
-                .getDrawable(this, value.resourceId)
-        } else {
-            null
-        }
+        val id =
+            if (theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, value, true)) {
+                value.resourceId
+            } else {
+                0
+            }
+        rippleResId = id
+        return id
     }
 
     /** 思考块：参考样式「一行标题 + 用时 + 折叠箭头」；无底色，点阵/标题/正文左对齐（12dp）。 */
@@ -2493,11 +2498,11 @@ class MainActivity : BaseActivity() {
                 setPadding(0, dp(2), 0, dp(2))
                 // 48dp 触控目标 + ripple（#50）：原来只有文字高度，很难点中也没有反馈。
                 minimumHeight = dp(48)
-                background = rippleBackground()
+                setBackgroundResource(rippleBackgroundRes())
             }
         val title =
             TextView(this).apply {
-                this.text = if (streaming) "思考中" else "已思考"
+                this.text = if (streaming) getString(R.string.reasoning_running) else getString(R.string.reasoning_done)
                 textSize = 14f
                 typeface = medium
                 // 思考中不用纯色：亮色主题下纯黑、暗色主题下纯白都太扎眼，统一走中性灰。
@@ -2547,7 +2552,7 @@ class MainActivity : BaseActivity() {
                 tick.text = fmtDur((doneAt - start).coerceAtLeast(0L))
             } else {
                 // OCR low #54：思考块曾中英混排，统一为中文。
-                title.text = "已思考"
+                title.text = getString(R.string.reasoning_done)
             }
         }
         header.addView(title)
@@ -3817,7 +3822,7 @@ class MainActivity : BaseActivity() {
                 )
             }
             col.addView(
-                sheetAction("选择其他目录…", null, onSurface) {
+                sheetAction(getString(R.string.pick_other_directory), null, onSurface) {
                     // 就地换成目录选择器，不再关掉这张卡另开一张
                     DirectoryPicker.attachTo(sheet, this, "选择会话所属的工作区", File(bound ?: current)) { picked ->
                         applySessionWorkspace(session, picked.absolutePath)
@@ -5810,7 +5815,7 @@ class MainActivity : BaseActivity() {
             pickerRow(getString(R.string.workspace_create), accent = true, onClick = { showCreateWorkspaceEditor() }),
         )
         // 与「会话改绑」保持同一能力：新会话也能浏览任意已有目录，而不只是最近的几个。
-        list.addView(pickerRow("选择其他目录…", onClick = { showWorkspaceBrowseSheet() }))
+        list.addView(pickerRow(getString(R.string.pick_other_directory), onClick = { showWorkspaceBrowseSheet() }))
     }
 
     /** 新会话的目录浏览：复用会话改绑用的同一个目录选择器。 */

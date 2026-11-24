@@ -295,16 +295,18 @@ class LiteRuntime:
             if owns_globals:
                 _ACTIVE_RUNTIME = None
 
+            # 第三个元素标明该步骤是否只影响本实例（OCR low #832）：
+            # 原来用 label 字符串做判定，改文案或增删步骤时会静默改变释放范围。
             steps = (
-                ("heartflow shutdown", heartflow_manager.shutdown),
-                ("remove android driver", lambda: get_platform_io_manager().remove_driver("android.local")),
-                ("stop platform io", get_platform_io_manager().stop),
-                ("stop hook dispatcher", self._plugin_manager._hook_dispatcher.stop),
+                ("heartflow shutdown", heartflow_manager.shutdown, False),
+                ("remove android driver", lambda: get_platform_io_manager().remove_driver("android.local"), False),
+                ("stop platform io", get_platform_io_manager().stop, False),
+                ("stop hook dispatcher", self._plugin_manager._hook_dispatcher.stop, True),
             )
             failures: List[str] = []
-            for label, step in steps:
+            for label, step, instance_local in steps:
                 # 不是当前活动实例时，只停自己的 hook dispatcher，不动全局单例。
-                if not owns_globals and label != "stop hook dispatcher":
+                if not owns_globals and not instance_local:
                     continue
                 try:
                     await step()

@@ -218,7 +218,7 @@ class CodaBotRuntime(
             }
             else -> return result(false, "不支持的动作：$action")
         }
-        val timedOut = !latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        val timedOut = !latch.await(CodaBotTiming.WAIT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         if (timedOut) gate.close()
         val outcome = CodaBotTiming.waitOutcome(timedOut, ok, message, action)
         return pendingResult(outcome)
@@ -269,7 +269,7 @@ class CodaBotRuntime(
                 latch.countDown()
             }
         }
-        val timedOut = !latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        val timedOut = !latch.await(CodaBotTiming.WAIT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         if (timedOut) gate.close()
         // 超时不能报「发送超时」了事：消息可能已经发出去了，重试会重复发（#157）。
         val outcome =
@@ -290,7 +290,7 @@ class CodaBotRuntime(
                 latch.countDown()
             }
         }
-        val timedOut = !latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        val timedOut = !latch.await(CodaBotTiming.WAIT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         if (timedOut) gate.close()
         return pendingResult(
             CodaBotTiming.waitOutcome(timedOut, ok, if (ok) "已停止" else detail.ifBlank { "停止失败" }, "stop"),
@@ -306,7 +306,7 @@ class CodaBotRuntime(
             options = list
             latch.countDown()
         }
-        if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) return result(false, "读取模型超时")
+        if (!latch.await(CodaBotTiming.WAIT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) return result(false, "读取模型超时")
         val items = org.json.JSONArray()
         options.forEach { option ->
             val levels = org.json.JSONArray()
@@ -348,7 +348,7 @@ class CodaBotRuntime(
                 latch.countDown()
             }
         }
-        val timedOut = !latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        val timedOut = !latch.await(CodaBotTiming.WAIT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         if (timedOut) gate.close()
         return pendingResult(
             CodaBotTiming.waitOutcome(timedOut, ok, detail.ifBlank { if (ok) "已切换" else "切换失败" }, "set_model"),

@@ -10,6 +10,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object CodaBotTiming {
     /**
+     * 阻塞等待回调的超时（毫秒）。
+     *
+     * 运行时里有 5 处 `latch.await`，用户可见文案也写着「30 秒」。
+     * 原来各写各的字面量，调一处就会与文案脱节（OCR low #832）。
+     */
+    const val WAIT_TIMEOUT_MS = 30_000L
+
+    /**
      * 下一次过期扫描应等待多久；没有待处理请求时返回 null。
      *
      * 必须按**最早**到达时间算（#158）：按最近一次请求算会让定时器每次被重置，
@@ -48,7 +56,9 @@ object CodaBotTiming {
             WaitOutcome(
                 ok = false,
                 pending = true,
-                message = "操作已提交但 30 秒内未收到结果（$action）：底层可能仍在执行，不要重试，请稍后核对状态",
+                message =
+                    "操作已提交但 ${WAIT_TIMEOUT_MS / 1000} 秒内未收到结果（$action）：" +
+                        "底层可能仍在执行，不要重试，请稍后核对状态",
             )
         } else {
             WaitOutcome(ok = ok, pending = false, message = detail)

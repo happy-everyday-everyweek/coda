@@ -36,6 +36,20 @@ import kotlin.math.min
 internal class GitCanvasView(
     context: Context,
 ) : View(context) {
+    private companion object {
+        /**
+         * focusOn 等布局的重试次数上限，以及惯性滑行时长（#53）。
+         *
+         * 都是编译期常量（OCR low #831）：原来写成实例 `val`，每个视图各存一份，
+         * 命名又是常量风格，读代码时容易误以为它们是共享的。
+         *
+         * 惯性时长比普通过渡长：fling 要顺着速度滑一段再停，压到 Motion.EMPHASIZED
+         * 的 340ms 会显得突然停住，所以不入三档，单独具名。
+         */
+        const val FOCUS_MAX_RETRIES = 30
+        const val INERTIA_MS = 520L
+    }
+
     /** 提交列表，顺序是 git log 给的拓扑序（新的在前）。 */
     var commits: List<Git.Commit> = emptyList()
         set(value) {
@@ -345,15 +359,6 @@ internal class GitCanvasView(
 
     /** focusOn 等待布局的重试次数上限。 */
     private var focusRetries = 0
-    private val FOCUS_MAX_RETRIES = 30
-
-    /**
-     * 脉冲与惯性滑行时长（#53）。
-     *
-     * 这两个动作比普通过渡长：fling 要顺着速度滑一段再停，压到 Motion.EMPHASIZED
-     * 的 340ms 会显得突然停住。所以不入三档，单独具名。
-     */
-    private val INERTIA_MS = 520L
 
     private fun focusRow(row: Int) {
         val usableHeight = (height - bottomInset).coerceAtLeast(dp(120f))
