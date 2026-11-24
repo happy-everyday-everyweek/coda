@@ -484,7 +484,13 @@ object SettingsData {
                             // 内置实现不需要端点与密钥，标明「免配置」，
                             // 点进去是测试页而不是编辑表单。
                             ProviderStore.isBuiltin(p) -> {
-                                "内置 · 免密钥 · ${if (AsrTester.realtimeSupported(p)) "支持实时" else "仅一次性"}"
+                                // OCR low #617：实时能力只对 ASR 有意义（realtimeSupported
+                                // 实际只是「是否内置」）。内置 LLM 不能标成「支持实时/仅一次性」。
+                                if (p.kind == ProviderStore.ProviderKind.ASR) {
+                                    "内置 · 免密钥 · ${if (AsrTester.realtimeSupported(p)) "支持实时" else "仅一次性"}"
+                                } else {
+                                    "内置 · 免密钥"
+                                }
                             }
 
                             p.isOAuthManaged -> {
@@ -557,7 +563,9 @@ object SettingsData {
         }
         rows += SettingRow.Header("已保存")
         if (items.isEmpty()) {
-            rows += SettingRow.Value("暂无$title", "点此新建", "assets_new:${kind.name}")
+            // OCR low #619：空状态行与下方「新建」行曾共用同一 key，页面出现两个等价入口。
+            // 空状态用独立的只读 key，不参与点击分发。
+            rows += SettingRow.Value("暂无$title", "用下方入口新建", "assets_empty:${kind.name}")
         } else {
             items.forEach { item ->
                 rows +=
@@ -576,7 +584,6 @@ object SettingsData {
 
     /** 使用统计页：数据来自运行时 usage/stats（界面层异步加载后传入）。 */
     fun usage(
-        ctx: Context,
         range: String,
         data: JSONObject?,
     ): SettingsPage {
@@ -750,7 +757,6 @@ object SettingsData {
 
     /** 插件页：数据来自运行时 plugins/overview（界面层异步加载后传入）。 */
     fun plugins(
-        ctx: Context,
         data: JSONObject?,
     ): SettingsPage {
         val rows = mutableListOf<SettingRow>()
@@ -814,7 +820,6 @@ object SettingsData {
 
     /** 插件市场全页：市场源列表、可用插件安装与索引刷新。 */
     fun pluginMarket(
-        ctx: Context,
         data: JSONObject?,
     ): SettingsPage {
         val rows = mutableListOf<SettingRow>()
@@ -870,7 +875,6 @@ object SettingsData {
 
     /** MCP 服务器页：数据来自运行时 mcp/list（界面层异步加载后传入）。 */
     fun mcp(
-        ctx: Context,
         data: JSONObject?,
     ): SettingsPage {
         val rows = mutableListOf<SettingRow>()

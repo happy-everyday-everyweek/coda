@@ -411,7 +411,7 @@ class SettingsDetailActivity :
 
             PAGE_PLUGIN_MARKET -> {
                 ensureExtrasLoaded("plugins")
-                SettingsData.pluginMarket(this, extrasCache["plugins"])
+                SettingsData.pluginMarket(extrasCache["plugins"])
             }
 
             PAGE_PROVIDERS -> {
@@ -436,12 +436,12 @@ class SettingsDetailActivity :
 
             PAGE_USAGE -> {
                 ensureExtrasLoaded("usage")
-                SettingsData.usage(this, usageRange(), extrasCache["usage"])
+                SettingsData.usage(usageRange(), extrasCache["usage"])
             }
 
             PAGE_PLUGINS -> {
                 ensureExtrasLoaded("plugins")
-                SettingsData.plugins(this, extrasCache["plugins"])
+                SettingsData.plugins(extrasCache["plugins"])
             }
 
             PAGE_GITHUB -> {
@@ -458,7 +458,7 @@ class SettingsDetailActivity :
 
             PAGE_MCP -> {
                 ensureExtrasLoaded("mcp")
-                SettingsData.mcp(this, extrasCache["mcp"])
+                SettingsData.mcp(extrasCache["mcp"])
             }
 
             PAGE_AUTOMATIONS -> {

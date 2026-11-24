@@ -299,21 +299,14 @@ class SettingsStore private constructor(
         const val MODE_LIGHT = 1
         const val MODE_DARK = 2
 
-        /** 主题模式选项：设置键 -> 标题。 */
-        val THEME_MODES =
-            arrayOf(
-                "theme=$MODE_SYSTEM" to "跟随系统",
-                "theme=$MODE_LIGHT" to "浅色",
-                "theme=$MODE_DARK" to "深色",
-            )
-
+        // OCR low #624：THEME_MODES 全项目零引用（外观页自行拼装键值），已删除。
         // 自定义主色：设置键 -> 标题，下标与 ACCENT_THEMES 对应。
 
         // 主色色板；顺序与图标套件一一对应。
-        val ACCENT_NAMES = arrayOf("黑", "蓝", "紫", "绿", "琥珀", "玫红", "青", "橙")
+        val ACCENT_NAMES: List<String> = listOf("黑", "蓝", "紫", "绿", "琥珀", "玫红", "青", "橙")
 
-        val ACCENT_COLORS =
-            intArrayOf(
+        val ACCENT_COLORS: List<Int> =
+            listOf(
                 0xFF1B1B1B.toInt(),
                 0xFF1D5FD0.toInt(),
                 0xFF6A4CA8.toInt(),
@@ -324,8 +317,8 @@ class SettingsStore private constructor(
                 0xFFB4551C.toInt(),
             )
 
-        val ACCENT_THEMES =
-            intArrayOf(
+        val ACCENT_THEMES: List<Int> =
+            listOf(
                 R.style.Theme_Coda,
                 R.style.Theme_Coda_Blue,
                 R.style.Theme_Coda_Violet,
@@ -365,13 +358,13 @@ class SettingsStore private constructor(
             return dr * dr * 3 + dg * dg * 4 + db * db * 2
         }
 
-        val FONT_SCALES = floatArrayOf(0.85f, 1.0f, 1.15f, 1.3f)
-        val FONT_SCALE_NAMES = arrayOf("小", "默认", "大", "特大")
+        val FONT_SCALES: List<Float> = listOf(0.85f, 1.0f, 1.15f, 1.3f)
+        val FONT_SCALE_NAMES: List<String> = listOf("小", "默认", "大", "特大")
 
-        val CODE_FONT_SIZES = floatArrayOf(11f, 13f, 15f, 17f)
-        val CODE_FONT_SIZE_NAMES = arrayOf("小", "默认", "大", "特大")
+        val CODE_FONT_SIZES: List<Float> = listOf(11f, 13f, 15f, 17f)
+        val CODE_FONT_SIZE_NAMES: List<String> = listOf("小", "默认", "大", "特大")
 
-        val CODE_THEMES = arrayOf("默认", "GitHub", "Monokai", "Solarized", "One Dark")
+        val CODE_THEMES: List<String> = listOf("默认", "GitHub", "Monokai", "Solarized", "One Dark")
 
         fun codeThemeName(index: Int): String = CODE_THEMES[index.coerceIn(CODE_THEMES.indices)]
 
