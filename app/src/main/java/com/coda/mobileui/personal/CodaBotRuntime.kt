@@ -58,6 +58,9 @@ class CodaBotRuntime(
     private val lastEventAt = HashMap<String, Long>()
     private val mergedEvents = HashMap<String, Int>()
 
+    /** 各会话待执行的「窗口结束补发」任务（OCR low #105）。 */
+    private val mergedRunnables = HashMap<String, Runnable>()
+
     /**
      * 监听 Coding Agent 的宿主事件。
      *
@@ -68,8 +71,10 @@ class CodaBotRuntime(
         object : ZController.Listener {
             override fun onSessionTurnFinished(sessionId: String, status: String) {
                 val title = codingAgent.sessionSnapshot().firstOrNull { it.id == sessionId }?.title ?: sessionId
-                val state = if (status == "turn.failed") "回合失败" else "已完成"
-                notifyHost("Coding Agent 会话「$title」$state，请复核成果后决定是否告知用户。", sessionId)
+                val failed = status == "turn.failed"
+                val state = if (failed) "回合失败" else "已完成"
+                // OCR low #105：失败不能参与 8s 合并——被吞掉时规划模型会以为任务成功。
+                notifyHost("Coding Agent 会话「$title」$state，请复核成果后决定是否告知用户。", sessionId, urgent = failed)
             }
 
             override fun onSessionPermissionRequest(sessionId: String, requestId: Any, params: JSONObject) {
@@ -411,27 +416,82 @@ class CodaBotRuntime(
         return result(true, if (allow) "已放行" else "已拒绝")
     }
 
-    /** 把宿主事件作为一条消息送进 MaiBot，触发规划轮次。 */
-    private fun notifyHost(text: String, sessionId: String = "") {
+    /**
+     * 把宿主事件作为一条消息送进 MaiBot，触发规划轮次。
+     *
+     * OCR low #105：窗口内只计数、没有窗口结束的补发，会把「先完成、后失败」里的
+     * 失败通知永久吞掉——规划模型以为任务成功。失败与审批属紧急事件，直接发送、
+     * 不参与合并；其余合并事件在窗口结束时由 Handler 补发一条摘要。
+     */
+    private fun notifyHost(
+        text: String,
+        sessionId: String = "",
+        urgent: Boolean = false,
+    ) {
         // 设置里可以整体关掉：用户只想安静看 Coding Agent干活时不打扰。
         if (!CodaBotStore.forwardsCodingEvents(context)) return
-        val body =
-            if (sessionId.isBlank()) {
-                text
-            } else {
+        if (sessionId.isBlank() || urgent) {
+            if (urgent) {
                 synchronized(eventLock) {
-                    val now = System.currentTimeMillis()
-                    val last = lastEventAt[sessionId] ?: 0L
-                    // 同一会话在窗口内的连续事件合并成一条，避免一次连发多轮规划。
-                    if (now - last < eventWindowMs) {
-                        mergedEvents[sessionId] = (mergedEvents[sessionId] ?: 1) + 1
-                        return
-                    }
-                    lastEventAt[sessionId] = now
-                    val merged = mergedEvents.remove(sessionId) ?: 1
-                    if (merged > 1) "$text（同一会话另有 ${merged - 1} 次同类事件已合并）" else text
+                    // 紧急事件已单独送达，清掉该会话的待补发计数，避免重复摘要。
+                    lastEventAt[sessionId] = System.currentTimeMillis()
+                    mergedEvents.remove(sessionId)
                 }
             }
+            sendEvent(text)
+            return
+        }
+        val now = System.currentTimeMillis()
+        var mergedBefore = 0
+        synchronized(eventLock) {
+            val last = lastEventAt[sessionId] ?: 0L
+            // 同一会话在窗口内的连续事件合并成一条，避免一次连发多轮规划。
+            if (now - last < eventWindowMs) {
+                mergedEvents[sessionId] = (mergedEvents[sessionId] ?: 1) + 1
+                // 窗口结束时补发：只计数不补发（旧行为）会丢事件。
+                if (mergedRunnables[sessionId] == null) {
+                    val delayed = Runnable { flushMerged(sessionId) }
+                    mergedRunnables[sessionId] = delayed
+                    expiryHandler.postDelayed(delayed, eventWindowMs)
+                }
+                pruneEventTablesLocked()
+                return
+            }
+            lastEventAt[sessionId] = now
+            mergedBefore = (mergedEvents.remove(sessionId) ?: 1) - 1
+            pruneEventTablesLocked()
+        }
+        sendEvent(if (mergedBefore > 0) "$text（同一会话另有 $mergedBefore 次同类事件已合并）" else text)
+    }
+
+    /** 窗口结束补发合并摘要（#105）。 */
+    private fun flushMerged(sessionId: String) {
+        val count =
+            synchronized(eventLock) {
+                mergedRunnables.remove(sessionId)
+                lastEventAt.remove(sessionId)
+                mergedEvents.remove(sessionId) ?: 0
+            }
+        if (count <= 0) return
+        sendEvent("Coding Agent 会话在最近 ${eventWindowMs / 1000} 秒内另有 $count 次事件已合并，请复核该会话当前状态。")
+    }
+
+    /** 会话很多时表只增不减：超过阈值清掉最久未更新的那批（含待补发任务）。 */
+    private fun pruneEventTablesLocked() {
+        if (lastEventAt.size <= 64) return
+        val stale =
+            lastEventAt.entries
+                .sortedBy { it.value }
+                .take(lastEventAt.size - 32)
+                .map { it.key }
+        for (key in stale) {
+            lastEventAt.remove(key)
+            mergedEvents.remove(key)
+            mergedRunnables.remove(key)?.let { expiryHandler.removeCallbacks(it) }
+        }
+    }
+
+    private fun sendEvent(body: String) {
         Bg.run {
             runCatching {
                 // 与 send 共用同一把锁（#118）：两者都会触发 Python 侧的 start()，

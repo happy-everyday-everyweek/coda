@@ -41,9 +41,34 @@ class CodaBotAvatar @JvmOverloads constructor(
         }.getOrDefault(0xFFE0E0E0.toInt())
     }
 
+    /** 圆角半径（dp）：与设计里 36–40dp 头像的观感一致。 */
+    private val cornerRadiusPx: Float get() = 12f * resources.displayMetrics.density
+
     init {
+        // OCR low #139/#140：clipToOutline 单用不会产生圆角——默认轮廓从 background
+        // 推导，本控件没有 background。显式给圆角矩形轮廓，图片与像素网格一起被裁。
         clipToOutline = true
+        outlineProvider =
+            object : android.view.ViewOutlineProvider() {
+                override fun getOutline(
+                    view: android.view.View,
+                    outline: android.graphics.Outline,
+                ) {
+                    outline.setRoundRect(0, 0, view.width, view.height, cornerRadiusPx)
+                }
+            }
         scaleType = ScaleType.CENTER_CROP
+    }
+
+    override fun onSizeChanged(
+        w: Int,
+        h: Int,
+        oldw: Int,
+        oldh: Int,
+    ) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        // 轮廓依赖宽高：尺寸变化后必须刷新，否则首帧/旋转后圆角过期。
+        invalidateOutline()
     }
 
     fun load(profile: CodaBotProfile) {
@@ -53,11 +78,27 @@ class CodaBotAvatar @JvmOverloads constructor(
             prepareCells(next)
         }
         if (profile.avatarUri.isNotEmpty()) {
-            runCatching { setImageURI(Uri.parse(profile.avatarUri)) }.onFailure { setImageDrawable(null) }
+            // OCR low #33：直接 setImageURI 会把整张大图解码进控件，相册原图动辄
+            // 几十 MB，足以 OOM。先读边界按控件尺寸算采样率再解码。
+            runCatching { loadScaled(Uri.parse(profile.avatarUri)) }.onFailure { setImageDrawable(null) }
         } else {
             setImageDrawable(null)
         }
         invalidate()
+    }
+
+    private fun loadScaled(uri: Uri) {
+        val resolver = context.contentResolver
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+        val target = (if (width > 0) width else (36 * resources.displayMetrics.density).toInt()).coerceAtLeast(1)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= target && bounds.outHeight / (sample * 2) >= target) {
+            sample *= 2
+        }
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        val bmp = resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+        if (bmp != null) setImageBitmap(bmp) else setImageDrawable(null)
     }
 
     /** 换皮肤时一次性解析网格与颜色，之后每帧零分配。 */

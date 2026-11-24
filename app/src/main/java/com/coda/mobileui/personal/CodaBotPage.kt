@@ -184,7 +184,7 @@ class CodaBotPage(
             setPadding(0, 0, 0, 0)
         }
         addView(column, FrameLayout.LayoutParams(-1, -1))
-        column.addView(topBar(profile.name, ""), LinearLayout.LayoutParams(-1, dp(56) + statusBarHeight()))
+        column.addView(topBar(profile.name), LinearLayout.LayoutParams(-1, dp(56) + statusBarHeight()))
         scroll = ScrollView(host).apply { isFillViewport = true }
         messages = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
@@ -341,11 +341,12 @@ class CodaBotPage(
         renderHistory(CodaBotStore.messages(host))
     }
 
-    /** 聊天页顶栏：只有返回，逐层关系与工作台一致（抽屉 → 本页 → 抽屉）。 */
-    private fun topBar(
-        title: String,
-        subtitle: String,
-    ): View {
+    /**
+     * 聊天页顶栏：只有返回与头像，逐层关系与工作台一致（抽屉 → 本页 → 抽屉）。
+     *
+     * OCR low #155：subtitle 参数唯一调用点恒传空串，分支是死代码，已删除。
+     */
+    private fun topBar(title: String): View {
         val bar = LinearLayout(host).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -359,6 +360,16 @@ class CodaBotPage(
             contentDescription = "返回"
             setOnClickListener { onExit() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        // OCR low #33：头像设置此前只改设置页文案，聊天页从不渲染 avatarUri，
+        // CodaBotAvatar 也是零引用死代码。这里接进顶栏：有图片显示图片，
+        // 没有则回落同一皮肤的像素形象（onDraw 兜底）。
+        bar.addView(
+            CodaBotAvatar(host).apply {
+                contentDescription = "Coda Bot 头像"
+                load(profile)
+            },
+            LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginStart = dp(4) },
+        )
         val labels = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -371,15 +382,6 @@ class CodaBotPage(
             setTextColor(attr(com.google.android.material.R.attr.colorOnSurface))
             gravity = Gravity.CENTER
         })
-        // 副标题只在有内容时占一行；默认不再重复显示「Coda Bot」，标题区保持单行。
-        if (subtitle.isNotBlank()) {
-            labels.addView(TextView(host).apply {
-                text = subtitle
-                textSize = 11f
-                setTextColor(attr(com.google.android.material.R.attr.colorOnSurfaceVariant))
-                gravity = Gravity.CENTER
-            })
-        }
         bar.addView(labels, LinearLayout.LayoutParams(0, -1, 1f))
         return bar
     }
@@ -448,7 +450,17 @@ class CodaBotPage(
                         val text = result.text.trim()
                         if (text.isNotEmpty()) {
                             val current = targetInput.text?.toString().orEmpty()
-                            targetInput.setText(if (current.isBlank()) text else "$current$text")
+                            // OCR low #153：直接拼接会把两次听写粘成一个词（helo+world→heloworld）。
+                            // 旧内容非空且结尾不是空白时补一个空格。
+                            targetInput.setText(
+                                if (current.isBlank()) {
+                                    text
+                                } else if (current.last().isWhitespace()) {
+                                    "$current$text"
+                                } else {
+                                    "$current $text"
+                                },
+                            )
                             targetInput.setSelection(targetInput.text?.length ?: 0)
                         } else {
                             toast("没听清")
@@ -656,8 +668,25 @@ class CodaBotPage(
             true
         }
         row.addView(bubble, LinearLayout.LayoutParams(-2, -2).apply {
-            width = (resources.displayMetrics.widthPixels * 0.78f).toInt()
-            width = minOf(width, (text.paint.measureText(message.text) + dp(30)).toInt())
+            // OCR low #154：只按正文源码测量会让「短正文 + 长引用」被压窄，Markdown
+            // 的标记符号（**、#、`、列表符）也会把宽度算偏。按去掉标记后的正文与
+            // 引用预览取较大者，并保留 0.78 屏宽上限。
+            val cap = (resources.displayMetrics.widthPixels * 0.78f).toInt()
+            val quoteWidth =
+                if (message.replyToText.isNotBlank()) {
+                    val who = if (message.replyToFromUser) profile.userName else profile.name
+                    text.paint.measureText("$who：${message.replyToText}") + dp(30)
+                } else {
+                    0f
+                }
+            val plain =
+                if (message.fromUser) {
+                    message.text
+                } else {
+                    message.text.replace(Regex("[#*`>\\[\\]()!_~]"), "")
+                }
+            val bodyWidth = text.paint.measureText(plain) + dp(30)
+            width = minOf(cap, maxOf(bodyWidth, quoteWidth).toInt())
         })
         val parent = container ?: messages
         parent.addView(row, LinearLayout.LayoutParams(-1, -2))

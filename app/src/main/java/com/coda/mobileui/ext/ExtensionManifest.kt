@@ -55,22 +55,11 @@ data class ExtensionManifest(
     fun section(key: String): JSONObject = raw.optJSONObject(key) ?: JSONObject()
 
     /** 读取清单一层的字符串数组。 */
-    fun stringList(key: String): List<String> {
-        val arr: JSONArray = raw.optJSONArray(key) ?: return emptyList()
-        val out = mutableListOf<String>()
-        for (i in 0 until arr.length()) {
-            val value = arr.optString(i, "").trim()
-            if (value.isNotEmpty()) out += value
-        }
-        return out
-    }
+    fun stringList(key: String): List<String> = stringsOf(raw.optJSONArray(key))
 
     companion object {
         /** 释放权限：0755（Kotlin 不支持八进制字面量，写成十进制 493）。 */
         const val MODE_EXECUTABLE = 493
-
-        /** 释放权限：0644。 */
-        const val MODE_DEFAULT = 420
 
         /** id 用作目录名与存储键，限制在安全字符集内。 */
         fun isValidId(id: String): Boolean =
@@ -132,8 +121,11 @@ data class ExtensionManifest(
             return out
         }
 
-        /** 别名链接：多调用二进制以多个名字出现，每个名字都是释放后的路径。 */
-        private fun parseLinks(arr: JSONArray?): List<String> {
+        /**
+         * JSONArray → 非空字符串列表的单一实现（OCR low #474）：
+         * stringList 与 parseLinks 曾各写一份，规则容易分叉。
+         */
+        private fun stringsOf(arr: JSONArray?): List<String> {
             if (arr == null) return emptyList()
             val out = mutableListOf<String>()
             for (i in 0 until arr.length()) {
@@ -142,6 +134,9 @@ data class ExtensionManifest(
             }
             return out
         }
+
+        /** 别名链接：多调用二进制以多个名字出现，每个名字都是释放后的路径。 */
+        private fun parseLinks(arr: JSONArray?): List<String> = stringsOf(arr)
 
         /** 权限按八进制文本解析（清单里写 `"0755"`）；非法或超出 0777 时回退到默认值。 */
         internal fun parseMode(

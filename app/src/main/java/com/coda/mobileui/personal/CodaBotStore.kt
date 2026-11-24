@@ -38,6 +38,9 @@ data class CodaBotMessage(
 object CodaBotStore {
     private const val PREFS = "coda_bot_profile"
 
+    /** 默认资料的单一来源（OCR low #147）：读默认人设不再每次构造临时对象。 */
+    private val DEFAULT_PROFILE = CodaBotProfile()
+
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** 是否已经走过「选形象 → 设人设」的首次引导。 */
@@ -68,12 +71,14 @@ object CodaBotStore {
         }
 
     fun profile(ctx: Context): CodaBotProfile {
-        val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // OCR low #147：统一走 prefs()，默认人设复用单一来源，不再每读一次构造两次对象。
+        val p = prefs(ctx)
+        val defaults = DEFAULT_PROFILE
         return CodaBotProfile(
             name = p.getString("name", "麦麦")?.trim()?.ifEmpty { "麦麦" } ?: "麦麦",
             avatarSkinId = p.getString("avatar_skin", "clawd") ?: "clawd",
             avatarUri = p.getString("avatar_uri", "") ?: "",
-            persona = p.getString("persona", CodaBotProfile().persona) ?: CodaBotProfile().persona,
+            persona = p.getString("persona", defaults.persona) ?: defaults.persona,
             systemPrompt = p.getString("system_prompt", "") ?: "",
             userName = p.getString("user_name", "你")?.trim()?.ifEmpty { "你" } ?: "你",
             userAbout = p.getString("user_about", "") ?: "",
@@ -141,7 +146,9 @@ object CodaBotStore {
                 id = item.optString("id").ifEmpty { UUID.randomUUID().toString() },
                 fromUser = item.optBoolean("fromUser"),
                 text = item.optString("text"),
-                timestamp = item.optLong("timestamp"),
+                // OCR low #145：缺失/非法时间戳会落成 0，导出成 1970 并打乱排序。
+                // 用当前时间兜底，保留记录但不产生假年代。
+                timestamp = item.optLong("timestamp").takeIf { it > 0L } ?: System.currentTimeMillis(),
                 replyToId = item.optString("replyToId"),
                 replyToText = item.optString("replyToText"),
                 replyToFromUser = item.optBoolean("replyToFromUser"),
@@ -160,7 +167,8 @@ object CodaBotStore {
         private set
 
     @Synchronized
-    fun messages(ctx: Context): MutableList<CodaBotMessage> {
+    // OCR low #148：返回不可变 List，避免调用方以为 add/remove 能改历史（改动不会持久化）。
+    fun messages(ctx: Context): List<CodaBotMessage> {
         val result = mutableListOf<CodaBotMessage>()
         lastReadPartial = false
         val file = messageFile(ctx)
