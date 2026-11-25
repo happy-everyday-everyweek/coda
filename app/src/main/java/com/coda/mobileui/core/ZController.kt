@@ -10,6 +10,15 @@ import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
+ * 读到 maxBytes 之后的收尾判定。
+ *
+ * 只有「探测请求成功且确实没有更多数据」才算完整；探测失败（null）不能当成完整，
+ * 否则会把未验证的截断内容报成成功（OCR low #854）。
+ */
+internal fun attachmentAtCapIsComplete(probe: ByteArray?): Boolean = probe != null && probe.isEmpty()
+
+
+/**
  * 会话与消息状态控制器：把协议能力封装成 UI 可直接调用的一组操作。
  * 所有回调都会切到主线程。
  */
@@ -2013,6 +2022,32 @@ class ZController private constructor(
         val maxPages = 256
         val out = java.io.ByteArrayOutputStream()
 
+        /** 读到上限后再取 1 字节，用来区分「正好读完」与「确实超限」。 */
+        fun probeTail(next: Long) {
+            val params =
+                JSONObject()
+                    .put("sessionId", sid)
+                    .put("ref", ref)
+                    .put("offset", next)
+                    .put("limit", 1)
+            runtime.call("v4/attachment/read", params) { ok, body ->
+                // 探测本身失败时按失败处理：拿不到证据就不能声称「已完整」。
+                if (!ok) {
+                    post { cb(false, null) }
+                    return@call
+                }
+                val probe =
+                    runCatching {
+                        android.util.Base64.decode(body.optString("dataBase64"), android.util.Base64.DEFAULT)
+                    }.getOrNull()
+                if (attachmentAtCapIsComplete(probe)) {
+                    post { cb(true, out.toByteArray()) }
+                } else {
+                    post { cb(false, null) }
+                }
+            }
+        }
+
         fun step(
             offset: Long,
             pages: Int,
@@ -2052,10 +2087,10 @@ class ZController private constructor(
                         post { cb(true, data) }
                     }
 
-                    // 到上限就是截断。截断的附件解不出来，报成功只会让上层以为拿到了完整内容。
-                    out.size() >= maxBytes -> {
-                        post { cb(false, null) }
-                    }
+                    // 到上限不等于截断（OCR low #854）：文件总大小恰好等于上限时，
+                    // 内核仍会给出推进后的偏移，按「到顶即失败」会把这个完整文件判丢。
+                    // 再探 1 字节：没有数据说明正好读完，有数据才是真的超限。
+                    out.size() >= maxBytes -> probeTail(next)
 
                     else -> {
                         step(next, pages + 1)
