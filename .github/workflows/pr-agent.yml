@@ -1,0 +1,59 @@
+name: PR Agent (LLM, optional)
+
+# 可选的 LLM 审查。仓库没配 `GEMINI_API_KEY` / `DEEPSEEK_API_KEY` 时整个 job 直接跳过，
+# 不会让 PR 变红。配好任一 key 后即可自动评论：摘要、逐行建议、改动描述。
+#
+# 不花钱的取法（按易用程度）：
+#   1) 装 CodeRabbit App（开源仓库免费，零配置，见 docs/pr-review.md）
+#   2) 装 Gemini Code Assist App（个人免费额度，零配置）
+#   3) 用本文件：Google AI Studio 的 Gemini 免费额度 / DeepSeek 的低价额度，存进仓库 secret
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          GEMINI: ${{ secrets.GEMINI_API_KEY }}
+          DEEPSEEK: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -n "$GEMINI" ] || [ -n "$DEEPSEEK" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "未配置 LLM key，跳过 LLM 审查。"
+          fi
+
+  review:
+    needs: guard
+    if: needs.guard.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 官方 Action；若上游改了引用方式，按 https://github.com/The-PR-Agent/pr-agent 的 README 更新。
+      - uses: The-PR-Agent/pr-agent@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_AI_STUDIO.GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          config.model: "gemini/gemini-2.5-flash"
+          config.fallback_models: '["gemini/gemini-2.5-flash"]'
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_improve: "false"

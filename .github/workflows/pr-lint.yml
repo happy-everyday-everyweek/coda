@@ -1,0 +1,84 @@
+name: PR lint review
+
+# 非 LLM 审查：ktlint（格式）+ detekt（静态规则），结果以 reviewdog 行内评论发到 PR。
+# 只报「本次改动新增的行」，避免仓库既有上千条历史违规刷屏；不阻塞合并（fail-level=none）。
+
+on:
+  pull_request:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-lint-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: 准备 ktlint 与 detekt
+        run: |
+          mkdir -p build/lint
+          curl -fsSL -o build/lint/ktlint.jar \
+            https://mirrors.huaweicloud.com/repository/maven/com/pinterest/ktlint/ktlint-cli/1.8.0/ktlint-cli-1.8.0-all.jar
+          curl -fsSL -o build/lint/detekt.jar \
+            https://github.com/detekt/detekt/releases/download/v1.23.8/detekt-cli-1.23.8-all.jar
+
+      - name: ktlint 生成 checkstyle 报告
+        continue-on-error: true
+        run: |
+          java -jar build/lint/ktlint.jar \
+            --reporter=checkstyle,output=build/lint/ktlint.xml \
+            app/src || true
+          test -f build/lint/ktlint.xml || printf '<?xml version="1.0" encoding="UTF-8"?>\n<checkstyle version="8.0"/>\n' > build/lint/ktlint.xml
+
+      - name: detekt 生成 checkstyle 报告
+        continue-on-error: true
+        run: |
+          java -jar build/lint/detekt.jar \
+            --input app/src \
+            --report xml:build/lint/detekt.xml \
+            --max-issues -1 || true
+          test -f build/lint/detekt.xml || printf '<?xml version="1.0" encoding="UTF-8"?>\n<checkstyle version="8.0"/>\n' > build/lint/detekt.xml
+
+      - uses: reviewdog/action-setup@v1
+        with:
+          reviewdog_version: latest
+
+      - name: reviewdog 发布 ktlint 结果
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          reviewdog -f=checkstyle -name=ktlint \
+            -reporter=github-pr-review -filter-mode=added \
+            -level=warning -fail-level=none < build/lint/ktlint.xml
+
+      - name: reviewdog 发布 detekt 结果
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          reviewdog -f=checkstyle -name=detekt \
+            -reporter=github-pr-review -filter-mode=added \
+            -level=warning -fail-level=none < build/lint/detekt.xml
+
+      - name: 汇总
+        if: always()
+        run: |
+          {
+            echo "### 静态检查摘要"
+            echo
+            echo "- ktlint 报告：${{ github.run_id }} 产物目录 build/lint/ktlint.xml"
+            echo "- detekt 报告：build/lint/detekt.xml"
+            echo "- 只报新增行；既有历史问题不计入本次评论。"
+          } >> "$GITHUB_STEP_SUMMARY"

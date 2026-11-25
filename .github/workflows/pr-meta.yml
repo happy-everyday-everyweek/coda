@@ -1,0 +1,97 @@
+name: PR meta checks
+
+# 不依赖 LLM 的一组 PR 规范检查：标题格式、关联 Issue、依赖变更、密钥泄露、改动规模。
+# 除「关联 Issue」外都不阻塞合并，只作为审查提示。
+
+on:
+  pull_request:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  title:
+    name: 标题格式
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            docs
+            test
+            build
+            ci
+            chore
+            style
+          requireScope: false
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            标题的主语不要以大写字母开头，也不要带句号。
+
+  linked-issue:
+    name: 关联 Issue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || "";
+            const ok = /#\d+/.test(body) || /无需\s*Issue|no-issue/i.test(body);
+            if (!ok) {
+              core.setFailed("PR 描述里没有关联任何 Issue。请写 `Closes #123`，或注明「无需 Issue」并说明原因。");
+            }
+
+  dependency-review:
+    name: 依赖变更审查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        continue-on-error: true
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  secret-scan:
+    name: 密钥扫描
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  size-label:
+    name: 改动规模
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr = context.payload.pull_request;
+            const size = (pr.additions || 0) + (pr.deletions || 0);
+            const label = size <= 50 ? "size/S" : size <= 300 ? "size/M" : size <= 1000 ? "size/L" : "size/XL";
+            // 标签可能还不存在：先补齐再打，避免整个 job 因为 404 失败。
+            const table = [["size/S", "0e8a16"], ["size/M", "fbca04"], ["size/L", "d93f0b"], ["size/XL", "b60205"]];
+            for (const [name, color] of table) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (e) {
+                await github.rest.issues.createLabel({ owner, repo, name, color });
+              }
+            }
+            await github.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: [label] });
