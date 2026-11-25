@@ -716,6 +716,8 @@ if (req.resume) {
             }
         }
         var done = from
+        // 最后一次算出的速度：完成时复用，别把进度条打回 0（OCR low #849）。
+        var lastSpeed = 0L
         java.io.RandomAccessFile(part, "rw").use { raf ->
             raf.seek(from)
             input.use {
@@ -745,11 +747,12 @@ if (req.resume) {
                         report(progress, done, total, speed)
                         lastReportBytes = done
                         lastReportAt = at
+                        lastSpeed = speed
                     }
                 }
             }
         }
-        report(progress, done, total, 0L)
+        report(progress, done, total, lastSpeed)
         return Pumped(done, md?.digest()?.let { hex(it) })
     }
 
@@ -848,6 +851,8 @@ if (req.resume) {
         val buf = ByteArray(BUF_BYTES)
         var done = 0L
         var lastReportBytes = 0L
+        // 最后一次算出的速度：完成时复用，别把进度条打回 0（OCR low #849）。
+        var lastSpeed = 0L
         var lastReportAt = now()
         var emptyReads = 0
         while (true) {
@@ -874,9 +879,10 @@ if (req.resume) {
                 report(progress, done, total, speed)
                 lastReportBytes = done
                 lastReportAt = at
+                lastSpeed = speed
             }
         }
-        report(progress, done, total, 0L)
+        report(progress, done, total, lastSpeed)
         return Pumped(done, md?.digest()?.let { hex(it) })
     }
 
