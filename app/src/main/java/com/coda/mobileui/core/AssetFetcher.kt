@@ -165,7 +165,8 @@ internal object AssetFetcher {
         for (m in ranked) {
             // 每个源开试前查取消（#776）：用户退出页面后镜像循环不得继续跑。
             if (cancel?.isCancelled == true) {
-                runCatching { tmp.delete() }
+                // 这里原先删 tmp，但 tmp 是解压用的临时文件（上面各分支已删或从未创建），
+                // 下载分片由 Downloader 自己清理（OCR low #860）。
                 throw CancellationException("资产获取已取消：${target.name}")
             }
             val url = GhMirrors.wrap(m.prefix, spec.remoteUrl)
@@ -229,7 +230,7 @@ internal object AssetFetcher {
                 DownloadOutcome.Kind.CANCELLED -> {
                     // 取消不是「这次失败，换下一个源」：吞掉它会让协程取消失效，
                     // 循环继续跑下去，用户已经退出页面了下载还在继续。
-                    runCatching { tmp.delete() }
+                    // 分片由 Downloader 内部删除，这里不再做一次空操作（OCR low #860）。
                     throw CancellationException("资产获取已取消：${target.name}")
                 }
 
