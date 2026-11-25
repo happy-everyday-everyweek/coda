@@ -19,7 +19,6 @@ class SessionSwitchGuardTest {
         val c = guard.begin("C")
         assertFalse(guard.isCurrent(b))
         assertTrue(guard.isCurrent(c))
-        assertEquals("C", guard.currentTarget())
     }
 
     @Test
@@ -44,6 +43,5 @@ class SessionSwitchGuardTest {
     fun `before any open everything is accepted`() {
         val guard = SessionSwitchGuard()
         assertTrue(guard.accepts("A"))
-        assertEquals(null, guard.currentTarget())
     }
 }

@@ -132,7 +132,12 @@ object Workspaces {
             pairs += File(external, BRAND_NAME) to File(external, LEGACY_NAME)
         }
         pairs += File(BRAND_DIR) to File(LEGACY_DIR)
-        return pairs
+        // 去重（OCR low #827）：多数设备上 getExternalStorageDirectory() 就是 /sdcard，
+        // 与 BRAND_DIR 指向同一处。不去重时迁移分支与 usable() 会对同一路径各跑一遍
+        // mkdirs/canWrite，每次 root() 都多一轮存储 IO。
+        return pairs.distinctBy {
+            runCatching { it.first.canonicalPath }.getOrDefault(it.first.absolutePath)
+        }
     }
 
     private fun brandDir(): File? {

@@ -521,9 +521,9 @@ object CodaExtras {
             val out = mutableListOf<AutomationItem>()
             db
                 .rawQuery(
-                    "SELECT automation_id, title, cron_expr, prompt, enabled, lifecycle_status, " +
-                        "recurring, run_count, next_run_at, last_run_at, last_error " +
-                        "FROM automations ORDER BY created_at DESC",
+                    // 投影由列清单生成（OCR low #827）：手写的 SQL 与 AUTOMATION_COLUMNS
+                    // 是两份必须同步的副本，漏改一处就会让 getColumnIndex 拿到 -1。
+                    "SELECT ${AUTOMATION_COLUMNS.joinToString(", ")} FROM automations ORDER BY created_at DESC",
                     null,
                 ).use { c ->
                     val index = AUTOMATION_COLUMNS.associateWith { c.getColumnIndex(it) }

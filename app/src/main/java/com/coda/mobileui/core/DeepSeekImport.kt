@@ -131,7 +131,11 @@ internal object DeepSeekImport {
     }
 
     /** 被内容过滤撤回的回答：整轮（含提问）都要略去。 */
-    fun isWithdrawn(message: JSONObject): Boolean = message.optString("status").uppercase() == "CONTENT_FILTER"
+    fun isWithdrawn(message: JSONObject): Boolean =
+        // 只看助手回答（OCR low #827）：用户消息也可能带 CONTENT_FILTER，那样会把
+        // 上一轮正常回答过的提问一起删掉，上下文出现无来由的缺口。
+        message.optString("role").uppercase() == "ASSISTANT" &&
+            message.optString("status").uppercase() == "CONTENT_FILTER"
 
     /** 非 FINISHED 的回答给一句可展示的失败说明；正常回答返回 null。 */
     fun failureNote(message: JSONObject): String? {
@@ -152,11 +156,17 @@ internal object DeepSeekImport {
         if (s.isEmpty()) return "未命名会话"
         val sb = StringBuilder()
         var bytes = 0
-        for (ch in s) {
-            val n = ch.toString().toByteArray(Charsets.UTF_8).size
+        // 按码点遍历（OCR low #827）：按 UTF-16 char 走时预算可能正好卡在代理对中间，
+        // 留下的孤立代理项编码后会变成 '?'／U+FFFD，正是这段代码要避免的乱码。
+        var i = 0
+        while (i < s.length) {
+            val cp = s.codePointAt(i)
+            val piece = String(Character.toChars(cp))
+            val n = piece.toByteArray(Charsets.UTF_8).size
             if (bytes + n > TITLE_MAX_BYTES) break
-            sb.append(ch)
+            sb.append(piece)
             bytes += n
+            i += Character.charCount(cp)
         }
         return sb.toString().ifEmpty { "未命名会话" }
     }

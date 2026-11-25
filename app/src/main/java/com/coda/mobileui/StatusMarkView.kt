@@ -164,7 +164,9 @@ class StatusMarkView
                 val target = if (unit > 0f) Math.floor((travelPx / unit).toDouble()).toFloat() * unit else 0f
                 val stop =
                     ValueAnimator.ofFloat(travelPx, target).apply {
-                        duration = Motion.EMPHASIZED
+                        // 与同一批动画里的 morph/ring（300ms）对齐（OCR low #827）：
+                        // 用 EMPHASIZED 的 340ms 会让相位滑行比虚线环变形晚 40ms 收尾。
+                        duration = STOP_ALIGN_MS
                         interpolator = uiEase
                         addUpdateListener {
                             travelPx = it.animatedValue as Float
@@ -380,6 +382,8 @@ class StatusMarkView
         ): Int = (color and 0x00FFFFFF) or ((a.coerceIn(0f, 1f) * 255f).toInt() shl 24)
 
         private companion object {
+            /** 弧停止时相位滑行的时长：与同批 morph/ring 的 300ms 对齐。 */
+            const val STOP_ALIGN_MS = 300L
             const val BOX = 24f
             const val STROKE = 2f
             const val RADIUS = 9f

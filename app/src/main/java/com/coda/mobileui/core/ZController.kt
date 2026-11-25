@@ -158,8 +158,6 @@ class ZController private constructor(
      * 这些集合原先只有写入路径，长时间运行后内存随会话数与工具调用数线性上升，
      * 会话早已关闭也不释放。改成 accessOrder 的 LRU，超限自动淘汰最久未用的条目。
      */
-    private val CHILD_CACHE_LIMIT = 64
-    private val CALL_CACHE_LIMIT = 512
 
     private fun <K, V> lru(limit: Int): MutableMap<K, V> =
         java.util.Collections.synchronizedMap(
@@ -194,8 +192,26 @@ class ZController private constructor(
     /** 待应答的权限请求参数（requestId → requestPermission 的原始 params），只保留最近 10 条。 */
     private val pendingPermissionParams = java.util.Collections.synchronizedMap(linkedMapOf<String, JSONObject>())
 
+    /**
+     * 记下权限请求的原始参数，并维持「只留最近 10 条」的上限。
+     *
+     * 抽成一处（OCR low #827）：replayDeferredInteractions 原来直接往表里塞，
+     * 绕过到达路径的淘汰，重放同样多时上限就不再成立。
+     */
+    private fun rememberPermissionParams(
+        id: String,
+        params: JSONObject,
+    ) {
+        synchronized(pendingPermissionParams) {
+            pendingPermissionParams[id] = params
+            while (pendingPermissionParams.size > 10) {
+                val oldest = pendingPermissionParams.keys.firstOrNull() ?: break
+                pendingPermissionParams.remove(oldest)
+            }
+        }
+    }
+
     /** 无监听者时确认请求的最长挂起时间；超时按拒绝收尾并落日志（#464）。 */
-    private val DEFERRED_TIMEOUT_MS = 60_000L
 
     /**
      * 会话 id → 模式。
@@ -315,9 +331,7 @@ class ZController private constructor(
             if (d.method == "interaction/requestUserInput") {
                 notif { onUserInputRequest(d.requestId, d.params) }
             } else {
-                synchronized(pendingPermissionParams) {
-                    pendingPermissionParams[d.requestId.toString()] = d.params
-                }
+                rememberPermissionParams(d.requestId.toString(), d.params)
                 val sid = d.params.optString("sessionId")
                 notif { onSessionPermissionRequest(sid, d.requestId, d.params) }
             }
@@ -2391,6 +2405,11 @@ class ZController private constructor(
     private fun errMsg(body: JSONObject): String = body.optString("message").ifEmpty { body.toString().take(200) }
 
     companion object {
+        /** 会话/调用维度 LRU 的上限与确认请求的挂起上限（OCR low #827）：编译期常量。 */
+        private const val CHILD_CACHE_LIMIT = 64
+        private const val CALL_CACHE_LIMIT = 512
+        private const val DEFERRED_TIMEOUT_MS = 60_000L
+
         @Volatile
         private var instance: ZController? = null
 

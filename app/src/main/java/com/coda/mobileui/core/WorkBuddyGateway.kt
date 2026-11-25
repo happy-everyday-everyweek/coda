@@ -237,7 +237,19 @@ object WorkBuddyGateway {
             // 保留程序生成的全部推荐值，只把 listen 改成错开真实端口的临时端口。
             // 注意：生成阶段它仍会短暂监听自带默认端口，这一段无法通过配置文件消除。
             val generated = runCatching { tmp.readText() }.getOrDefault("")
-            tmp.writeText(GatewayConfigText.seedListen(generated, bootstrapPort))
+            // 读失败得到空串时不能继续（OCR low #827）：把它写回去等于用空内容覆盖
+            // 程序刚生成的 100+ 字节配置，再 copy 过去、报成功；错误要到很久以后
+            // 才以「默认配置不可解析」的形式出现，原始文件也已经没了。
+            if (generated.isBlank()) {
+                lastError = "网关生成的默认配置为空，未覆盖"
+                return false
+            }
+            val seeded = GatewayConfigText.seedListen(generated, bootstrapPort)
+            if (seeded.isBlank()) {
+                lastError = "网关默认配置缺少可用的 listen 段，未覆盖"
+                return false
+            }
+            tmp.writeText(seeded)
             tmp.copyTo(file, overwrite = true)
             runCatching { tmp.delete() }
             true

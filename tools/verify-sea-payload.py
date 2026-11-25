@@ -115,6 +115,13 @@ def main(path):
                 for i in range(e_shnum):
                     head = struct.unpack_from("<IIQQQQIIQQ", data, e_shoff + i * e_shentsize)
                     name_off = head[0]
+                    # 越界偏移要单独报（OCR low #827）：name_off 是不可信的 u32，
+                    # str_off + name_off 可能已经超出文件尾，此时 find 同样返回 -1，
+                    # 会被误报成「没有 NUL 结束符」，掩盖真正的越界问题。
+                    if str_off + name_off >= size:
+                        problems.append("节名偏移越出文件尾：%d（第 %d 项）" % (str_off + name_off, i))
+                        names.append("")
+                        continue
                     end = data.find(b"\x00", str_off + name_off)
                     # find 找不到 NUL 时返回 -1：拿 -1 去切片会得到一段莫名其妙的
                     # 字符串（甚至是空串），把「表被写坏」掩盖成「节名为空」。

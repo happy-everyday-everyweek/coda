@@ -70,7 +70,8 @@ object TerminalCategory : ExtensionCategory {
     }
 
     /** 内核认识的方言取值；其余一律回退默认，避免把非法值原样注入（#483）。 */
-    val DIALECTS = setOf("posix", "git-bash", "cmd")
+    /** 合法方言白名单：只在本文件的归一化里用，测试也通过 normalizeDialect 间接覆盖。 */
+    private val DIALECTS = setOf("posix", "git-bash", "cmd")
     const val DEFAULT_DIALECT = "posix"
 
     /** 统一小写并做白名单校验；不认识的值回退 posix 并落日志。 */

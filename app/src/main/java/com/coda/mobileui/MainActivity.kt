@@ -118,6 +118,9 @@ private data class DrawerConversation(
  * 会话、消息、模型与工具调用均来自本地 zcode app-server（stdio 子进程）。
  */
 class MainActivity : BaseActivity() {
+    /** 聊天正文的左边距：AI 文本、工具组、思考块共用同一条对齐线（OCR low #827）。 */
+    private val chatInset: Int by lazy { resources.getDimensionPixelSize(R.dimen.chat_inset_start) }
+
     companion object {
         /** 索引写盘的去抖窗口：流式期间合并成一次写入。 */
         private const val INDEX_DEBOUNCE_MS = 800L
@@ -2334,7 +2337,7 @@ class MainActivity : BaseActivity() {
                             text = if (expanded) "收起 $plainCount 个工具" else "调用 $plainCount 个工具"
                             textSize = 13f
                             setTextColor(neutral)
-                            setPadding(dp(12), dp(6), dp(12), dp(6))
+                            setPadding(chatInset, dp(6), chatInset, dp(6))
                             // 48dp 触控目标 + 按下反馈（#50）：原来只有约 26dp 高、无 ripple，
                             // 长对话里紧挨着的工具行很容易点错且没有任何「点到了」的反馈。
                             minHeight = dp(48)
@@ -2483,7 +2486,7 @@ class MainActivity : BaseActivity() {
         val wrap =
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(12), dp(2), dp(12), dp(2))
+                setPadding(chatInset, dp(2), chatInset, dp(2))
                 layoutParams =
                     LinearLayout
                         .LayoutParams(

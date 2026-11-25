@@ -70,6 +70,10 @@ object ProxyHost {
      * 就位本机密钥。幂等：已生成过就复用，不会每次启动换一把
      * （换掉会让已写进网关配置的旧密钥失效）。
      */
+    // 必须串行（OCR low #827）：两个首次调用者（start 与 OAuthLogin）同时进来时，
+    // 都会读到空的 prefs 并各自生成一对密钥，内存里的与落盘的可能不是同一对，
+    // 重启后写进网关配置的密钥与调用方发出的对不上，整个管理面 401。
+    @Synchronized
     fun initKeys(ctx: android.content.Context) {
         if (managementKeyValue.isNotEmpty() && clientKeyValue.isNotEmpty()) return
         val prefs = ctx.applicationContext.getSharedPreferences(KEY_PREFS, android.content.Context.MODE_PRIVATE)
@@ -129,6 +133,9 @@ object ProxyHost {
     private const val TAG = "ProxyHost"
     /** 插件 .so 的最小可信大小；配置写入与已安装判定共用同一门槛（#393）。 */
     private const val PLUGIN_MIN_BYTES = 500_000L
+
+    /** 网关日志上限：与 WorkBuddyGateway 同一口径（2MB），到顶后停止追加。 */
+    private const val MAX_LOG_BYTES = 2L * 1024 * 1024
 
     /**
      * 就绪探测的首个失败原因。
@@ -692,15 +699,11 @@ object ProxyHost {
                 // 只为真正装好的插件写启用项。判据必须与 installedPluginIds() 完全一致：
                 // 这里只看 isFile 而那边还要求 length>500K 时，半截文件会被写进配置却
                 // 不计入已安装集合，installed==loadedPlugins 永不成立，每次 start 都重启（#393）。
-                val present =
-                    OAuthProviders.all.filter {
-                        val f = File(pluginsDirFor(ctx), OAuthProviders.pluginFile(it))
-                        f.isFile && f.length() > PLUGIN_MIN_BYTES
-                    }
+                val present = installedPluginIds(ctx)
                 if (present.isNotEmpty()) {
                     appendLine("  configs:")
                     for (p in present) {
-                        appendLine("    ${p.pluginId}:")
+                        appendLine("    $p:")
                         appendLine("      enabled: true")
                     }
                 }
@@ -896,6 +899,9 @@ object ProxyHost {
             }.getOrNull()
         val lock = Any()
         val remaining = java.util.concurrent.atomic.AtomicInteger(2)
+        // 与 WorkBuddyGateway.pump 同一个上限（OCR low #827）：这里原来只在下次 start()
+        // 才截断，长跑且话多的网关会把应用存储填满。
+        val written = java.util.concurrent.atomic.AtomicLong(0)
 
         fun drain(stream: java.io.InputStream) {
             Thread {
@@ -904,12 +910,14 @@ object ProxyHost {
                         for (line in lines) {
                             val w = writer ?: break
                             synchronized(lock) {
+                                if (written.get() >= MAX_LOG_BYTES) continue
                                 runCatching {
                                     w.write(line)
                                     w.newLine()
                                     // 排查时要能实时 tail，缓冲不能攒着不放。
                                     w.flush()
                                 }
+                                written.addAndGet(line.length + 1L)
                             }
                         }
                     }

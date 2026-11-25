@@ -288,7 +288,7 @@ object MirrorSpeedTester {
                 conn.disconnect()
             }
             val elapsed = System.currentTimeMillis() - start
-            return analyze(mirror, samples, total, firstByteMs, elapsed, null)
+            return analyze(mirror, samples, total, firstByteMs, elapsed)
         } catch (t: Throwable) {
             return Result(mirror, false, error = t.message ?: t.javaClass.simpleName)
         }
@@ -300,9 +300,7 @@ object MirrorSpeedTester {
         total: Long,
         firstByteMs: Long,
         elapsedMs: Long,
-        error: String?,
     ): Result {
-        if (error != null) return Result(mirror, false, error = error)
         if (total <= 0) return Result(mirror, false, error = "无数据")
         // 样本太少或时间窗口过短时无法判断持续速度，不能靠一次突发算出“极速”。
         // 但完整跑完 PROBE_BYTES 本身就是持续速度的强证据（#763）：>24MB/s 的

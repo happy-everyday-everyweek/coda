@@ -676,7 +676,7 @@ class CoreRuntime(
         mainHandler.post(task)
         val settled =
             runCatching {
-                latch.await(interactiveDelegateTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+                latch.await(INTERACTIVE_DELEGATE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
             }.getOrDefault(false)
         if (!settled) {
             expired.set(true)
@@ -687,7 +687,7 @@ class CoreRuntime(
     }
 
     /** 等宿主处理交互式反向请求的上限：超时后走默认应答，不堵死 reader 线程。 */
-    private val interactiveDelegateTimeoutMs = 120_000L
+
 
     /** 已知反向请求的默认应答（与桌面端一致）。 */
     fun defaultReverseResult(method: String): JSONObject? =
@@ -755,7 +755,9 @@ class CoreRuntime(
             if (cb != null) mainHandler.post { cb(false, error) }
             return
         }
-        if (cb != null) pending[RpcFrame.idKey(id)!!] = cb
+        // id 就是本地自增的 Int（OCR low #827）：直接用它做键，不必再走 idKey 的
+        // Number 归一化，也就不需要非空断言。
+        if (cb != null) pending[id.toString()] = cb
         writeFrame(JSONObject().put("id", id).put("method", method).put("params", params))
     }
 
@@ -850,6 +852,9 @@ class CoreRuntime(
     companion object {
         /** 自检最多等这么久：内核在这步挂住时，不能让启动线程无限等下去。 */
         private const val SELF_CHECK_TIMEOUT_MS = 10_000L
+
+        /** 交互式代理回执的等待上限；与自检超时同一组常量（OCR low #827）。 */
+        private const val INTERACTIVE_DELEGATE_TIMEOUT_MS = 120_000L
 
         /**
          * 解包标记前缀。清单内容一变，标记跟着变，上一版的解包结果自然失效。

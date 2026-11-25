@@ -634,6 +634,11 @@ class LinuxEnv(
             if (restored) {
                 throw IllegalStateException("根文件系统无法就位，已回退到上一版")
             }
+            // 首次安装时根本没有上一版（backup 从未创建），此时再报「上一版保留在…」
+            // 会让用户去找一个不存在的文件（OCR low #827）。
+            if (!backup.exists()) {
+                throw IllegalStateException("根文件系统无法就位（首次安装，没有可回退的上一版），请检查存储空间后重试")
+            }
             throw IllegalStateException(
                 "根文件系统无法就位且回退失败：上一版保留在 ${backup.absolutePath}，请检查存储空间后重试",
             )
@@ -1015,6 +1020,9 @@ class LinuxEnv(
         try {
             android.system.OsConstants.S_ISLNK(Os.lstat(file.absolutePath).st_mode)
         } catch (_: Throwable) {
-            false
+            // 判断不出来时要往「是链接」fail-closed（OCR low #827）：deleteRecursive 用它
+            // 决定能不能继续往下递归，判成 false 会顺着 file.isDirectory 跟进链接目标，
+            // 把宿主上的真实文件删掉——正是这层防护要挡的事。
+            true
         }
 }

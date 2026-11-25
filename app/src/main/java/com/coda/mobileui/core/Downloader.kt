@@ -382,7 +382,7 @@ if (req.resume) {
                     md.update(buf, 0, n)
                 }
             }
-            md.digest().joinToString("") { "%02x".format(it) }
+            hex(md.digest())
         }.getOrNull()
 
     /**
@@ -750,7 +750,7 @@ if (req.resume) {
             }
         }
         report(progress, done, total, 0L)
-        return Pumped(done, md?.digest()?.joinToString("") { "%02x".format(it) })
+        return Pumped(done, md?.digest()?.let { hex(it) })
     }
 
     /**
@@ -877,7 +877,7 @@ if (req.resume) {
             }
         }
         report(progress, done, total, 0L)
-        return Pumped(done, md?.digest()?.joinToString("") { "%02x".format(it) })
+        return Pumped(done, md?.digest()?.let { hex(it) })
     }
 
     /**
@@ -912,16 +912,33 @@ if (req.resume) {
         limit: Int,
         cancel: Cancel? = null,
     ): String? {
-        val buf = CharArray(limit)
-        var total = 0
-        while (total < limit) {
+        // 上限本身要校验（OCR low #827）：limit <= 0 时 CharArray(limit) 会抛
+        // NegativeArraySizeException（被外层误报成 IO），而 int 级的上限会直接
+        // 按 2×limit 字节预分配——正是这个有界读取器要避免的 OOM。
+        if (limit <= 0) return null
+        val buf = CharArray(minOf(limit, 8 * 1024))
+        val out = StringBuilder(minOf(limit, 64 * 1024))
+        while (out.length < limit) {
             if (cancel?.isCancelled == true) throw CancellationException("下载已取消")
-            val n = reader.read(buf, total, limit - total)
-            if (n < 0) return String(buf, 0, total)
-            total += n
+            val want = minOf(buf.size, limit - out.length)
+            val n = reader.read(buf, 0, want)
+            if (n < 0) return out.toString()
+            out.append(buf, 0, n)
         }
         // 读满上限后探一个字符：还有内容说明超限。
-        return if (reader.read() < 0) String(buf, 0, total) else null
+        return if (reader.read() < 0) out.toString() else null
+    }
+
+    /** 摘要转十六进制：查表而不是 `"%02x".format`（每次下载完成都会走这里）。 */
+    private fun hex(bytes: ByteArray): String {
+        val table = "0123456789abcdef"
+        val out = StringBuilder(bytes.size * 2)
+        for (b in bytes) {
+            val v = b.toInt() and 0xFF
+            out.append(table[v ushr 4])
+            out.append(table[v and 0x0F])
+        }
+        return out.toString()
     }
 
     private const val TAG = "Downloader"

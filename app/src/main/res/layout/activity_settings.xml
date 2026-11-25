@@ -10,7 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="56dp"
         android:paddingStart="@dimen/settings_card_margin"
-        android:paddingEnd="12dp">
+        android:paddingEnd="@dimen/settings_card_margin">
 
         <ImageButton
             android:id="@+id/btn_back"

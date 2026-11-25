@@ -30,6 +30,5 @@ internal class SessionSwitchGuard {
      */
     fun accepts(sessionId: String): Boolean = target == null || target == sessionId
 
-    /** 当前最新意图指向的会话。 */
-    fun currentTarget(): String? = target
+
 }
