@@ -106,7 +106,10 @@ object GitWorkspace {
                 if (!target.isNullOrEmpty()) {
                     val resolved = File(target)
                     val gitDir = if (resolved.isAbsolute) resolved else File(cur, target)
-                    return Repo(gitDir, cur)
+                    // 目标必须真的存在（OCR low #827）：失效的 worktree gitfile 会让
+                    // Repo 指向不存在的 gitDir，Info 里分支/远端全为 null，还会被整个
+                    // TTL 缓存住。继续向上找，与「损坏的 .git 文件」同一套处理。
+                    if (gitDir.isDirectory) return Repo(gitDir, cur)
                 }
             }
             cur = cur.parentFile

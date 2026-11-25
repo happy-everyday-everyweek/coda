@@ -44,6 +44,14 @@ class AsrClient(
         private const val TAG = "AsrClient"
 
         /**
+         * 自动收尾时等待最终片段的宽限。
+         *
+         * Doubao 的 final 在 finish() 内同步送达，这段等待主要为将来可能出现
+         * 异步实现留余量（OCR low #827）。
+         */
+        private const val FINAL_CHUNK_GRACE_MS = 800L
+
+        /**
          * 一次性拿到「当前配置里第一个可用的 ASR 供应商」。
          *
          * 大部分调用方并不关心具体用哪个，只想「把这段音转成字」。
@@ -321,8 +329,10 @@ class AsrClient(
                     AppLog.i(TAG, "流式识别到达上限 ${maxMs}ms，自动收尾")
                     runCatching { recorder.stop() }
                     runCatching { live.finish() }
-                    // finish 的回调是异步的：留一段时间等最终片段送达再关闭通道。
-                    delay(800)
+                    // 留一段时间等最终片段送达再关闭通道（OCR low #827）：
+                    // Doubao 的 final 其实在 finish() 内同步送达，这段等待主要是
+                    // 为将来可能出现异步实现留的余量，因此抽成具名常量便于调整。
+                    delay(FINAL_CHUNK_GRACE_MS)
                     close()
                 }
             awaitClose {

@@ -534,8 +534,18 @@ class CoreRuntime(
             reader.start()
             val finished = process.waitFor(SELF_CHECK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             if (!finished) {
+                // 只发 SIGTERM 时卡在系统调用里的内核会活下来（OCR low #827）：
+                // 与 LinuxEnv.exec 同一套「先礼后兵」，日志也要如实反映结果。
                 process.destroy()
-                log("[core] 自检超时（${SELF_CHECK_TIMEOUT_MS}ms），已终止子进程")
+                val gone = runCatching { process.waitFor(500, TimeUnit.MILLISECONDS) }.getOrDefault(false)
+                if (!gone) runCatching { process.destroyForcibly() }
+                log(
+                    if (gone) {
+                        "[core] 自检超时（${SELF_CHECK_TIMEOUT_MS}ms），已终止子进程"
+                    } else {
+                        "[core] 自检超时（${SELF_CHECK_TIMEOUT_MS}ms），SIGTERM 无响应，已强制终止"
+                    },
+                )
             }
             runCatching { reader.join(500) }
             val code = if (finished) process.exitValue() else -1

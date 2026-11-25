@@ -326,8 +326,6 @@ object BrowserControl {
                 okResult(params, started) { it.put("state", pageState(view)) }
             }
 
-            "reload" ->
-                errorResult(params, "internal_error", "该命令应由 executeBlocking 处理", started)
 
             "snapshot" -> {
                 val view = engineOrNull(params, started) ?: return errorResult(params, "backend_unavailable", "内置浏览器未就绪", started)

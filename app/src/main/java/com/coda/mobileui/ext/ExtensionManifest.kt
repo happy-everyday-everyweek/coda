@@ -30,6 +30,9 @@ data class ExtensionManifest(
      *
      * 读取时通过 [section] / [stringList] 取只读视图；需要直接改 raw 的调用方应自行复制。
      */
+    // 注意：raw 不在主构造里，data class 生成的 copy() 不会带上它——复制出来的对象
+    // 取任何分类都是空的。目前没有 copy() 调用点；若将来需要，请显式构造并重新挂 raw
+    // （OCR low #827）。
     var raw: JSONObject = JSONObject()
         internal set
 

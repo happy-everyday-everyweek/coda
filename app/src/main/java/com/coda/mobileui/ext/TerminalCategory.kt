@@ -178,7 +178,11 @@ private class TerminalProviderImpl(
     override val pathEntries: List<String> get() = resolvedEntries
 
     override fun prepare(): PrepareResult {
-        val shellFile = File(if (TerminalCategory.isAbsoluteSpec(shellSpec)) shellSpec else File(runtimeDir, shellSpec).path)
+        // 判断与建路径必须用同一个 trim 过的值（OCR low #827）：isAbsoluteSpec 内部会
+        // trim，这里若用原串构造 File，「 /system/bin/sh」这样的值会被判成绝对路径，
+        // 然后拿带空格的名字去查文件，报出误导性的「shell 不存在」。
+        val spec = shellSpec.trim()
+        val shellFile = File(if (TerminalCategory.isAbsoluteSpec(spec)) spec else File(runtimeDir, spec).path)
         if (!shellFile.isFile) {
             return PrepareResult.Failed("shell 不存在：${shellFile.absolutePath}")
         }
