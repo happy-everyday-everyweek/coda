@@ -540,34 +540,34 @@ object DoubaoAsr {
                     closeSocket("connect-failed")
                     throw it
                 }
-            send("StartTask")
-            // 与一次性模式一致：必须等到 TaskStarted，不能只取队列下一条。
-            val resp = waitForReturning("TaskStarted")
-            taskId = resp.optString("task_id")
-            if (taskId.isEmpty()) throw AsrError("创建语音任务后未收到 task_id")
-            send(
-                "StartSession",
-                payload =
-                    JSONObject()
-                        .apply {
-                            put("business", 1)
-                            put("request_type", 3)
-                            put(
-                                "asr",
-                                JSONObject().apply {
-                                    put(
-                                        "audio_info",
-                                        JSONObject().apply {
-                                            put("channel", 1)
-                                            put("format", "pcm")
-                                            put("sample_rate", 16000)
-                                        },
-                                    )
-                                },
-                            )
-                        }.toString(),
-            )
-            waitFor("SessionStarted")
+                send("StartTask")
+                // 与一次性模式一致：必须等到 TaskStarted，不能只取队列下一条。
+                val resp = waitForReturning("TaskStarted")
+                taskId = resp.optString("task_id")
+                if (taskId.isEmpty()) throw AsrError("创建语音任务后未收到 task_id")
+                send(
+                    "StartSession",
+                    payload =
+                        JSONObject()
+                            .apply {
+                                put("business", 1)
+                                put("request_type", 3)
+                                put(
+                                    "asr",
+                                    JSONObject().apply {
+                                        put(
+                                            "audio_info",
+                                            JSONObject().apply {
+                                                put("channel", 1)
+                                                put("format", "pcm")
+                                                put("sample_rate", 16000)
+                                            },
+                                        )
+                                    },
+                                )
+                            }.toString(),
+                )
+                waitFor("SessionStarted")
                 sessionStarted = true
             } catch (t: Throwable) {
                 // 启动到一半失败：连接不能留着，否则每次失败都漏一条 WS 和它的读线程。
