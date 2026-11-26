@@ -2,6 +2,10 @@ name: CodeQL
 
 # 免费（public 仓库）的语义级静态分析，能量出数据流问题（注入、路径穿越等），
 # 与 ktlint/detekt 的规则检查互补。只在 push 与每周跑，不阻塞 PR。
+#
+# 注意：Java/Kotlin 不支持 build-mode: none——CodeQL 会以
+# 「detected code written in Java/Kotlin but could not process any of it」失败。
+# 必须给 manual build，让它真正编译一遍再建库。
 
 on:
   push:
@@ -30,10 +34,20 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      - name: 准备 Android SDK
+        run: |
+          SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          ( set +o pipefail; yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 ) || true
+          "$SDKMANAGER" "build-tools;36.0.0" > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" > /dev/null 2>&1 || true
+
       - uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          build-mode: none
+          build-mode: manual
+
+      - name: 编译 Kotlin（供 CodeQL 建库）
+        run: ./gradlew :app:compileDebugKotlin -x installDebugPythonRequirements --console=plain
 
       - uses: github/codeql-action/analyze@v3
         with:

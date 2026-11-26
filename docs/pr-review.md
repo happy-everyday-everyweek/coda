@@ -41,7 +41,18 @@
 PR-Agent 是 MIT 协议、16k+ star 的开源项目；官方文档里也支持 Ollama 等本地模型，
 但本地模型需要自建运行环境，成本更高，不建议放在 GitHub 托管的 runner 上。
 
-## 三、日常流程
+## 三、分支保护
+
+`dev` 与 `main` 都已开启保护，规则一致：
+
+- 必须通过 PR 合入，不能直接 push（管理员同样受限，`enforce_admins` 为真）；
+- 必需检查：`lint`、`compile`、`标题格式`、`关联 Issue`、`依赖变更审查`、`密钥扫描`、`改动规模`；
+- `strict`：分支落后时先更新再合；
+- 禁止 force push、禁止删除分支；对话必须全部解决。
+
+**只有全部必需检查都跑到 `success` 才能合并**。检查还在 `in_progress` 时合并，等于绕过保护；GitHub 会拦住，人为操作（或脚本）也不应该抢跑。
+
+## 四、日常流程
 
 1. 从 `dev` 切分支：`git checkout -b fix/<issue>-<slug> dev`；
 2. 改动完成后跑本地三套测试（app 单测 / tools / kernel）；
