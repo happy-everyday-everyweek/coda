@@ -71,17 +71,17 @@ export function nextDelay({ running, hidden }) {
 }
 
 /**
- * 单飞轮询器。in-flight 期间的重复调用直接丢弃（send()/stop() 触发的立即刷新
- * 若已在途就复用那次结果）；响应带序号，迟到的旧响应不再覆盖新状态。
+ * 单飞轮询器。in-flight 期间的重复调用直接丢弃并返回 `{ skipped: true }`
+ * （send()/stop() 触发的立即刷新若已在途，就复用那次结果）。
+ *
+ * 因为同一时刻最多只有一个请求在飞，响应必然按发出顺序落地，
+ * 不需要再记序号做乱序保护（旧代码里的 `mine < applied` 分支不可达）。
  */
 export function createPoller({ fetchState, render, onError }) {
   let inFlight = false;
-  let seq = 0;
-  let applied = 0;
   async function poll() {
     if (inFlight) return { skipped: true };
     inFlight = true;
-    const mine = ++seq;
     try {
       const r = await fetchState();
       if (!r || !r.ok) {
@@ -89,9 +89,6 @@ export function createPoller({ fetchState, render, onError }) {
         return { ok: false };
       }
       const state = await r.json();
-      // 乱序保护：只有比已应用序号更新的响应才允许落地。
-      if (mine < applied) return { ok: true, stale: true };
-      applied = mine;
       render(state);
       return { ok: true, state };
     } catch (e) {

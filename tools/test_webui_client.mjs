@@ -72,7 +72,7 @@ test('empty next clears', () => {
   assert.deepEqual(plan.append, []);
 });
 
-// ---------------------------------------------------------------- #684 单飞/乱序
+// ---------------------------------------------------------------- #684 单飞串行
 test('poller drops overlapping call while one is in flight', async () => {
   let resolveFirst;
   const calls = [];
@@ -92,26 +92,26 @@ test('poller drops overlapping call while one is in flight', async () => {
   assert.equal(seen.length, 1);
 });
 
-test('poller discards out-of-order response by sequence', async () => {
+// #861/#863：单飞就等于串行，因此不需要序号记账。
+// 这里断言两件事：在途期间的调用被丢弃，且上一次完成后不会饿死。
+test('poller serializes polls: one request at a time, then keeps polling', async () => {
   const seen = [];
-  let n = 0;
   const gates = [];
   const fetchState = () => {
-    const i = n++;
+    const i = gates.length;
     return new Promise((r) => { gates[i] = r; });
   };
   const poller = createPoller({ fetchState, render: (s) => seen.push(s.tag), onError: () => {} });
   const p1 = poller.poll();
+  assert.deepEqual(await poller.poll(), { skipped: true }, 'in-flight 期间的调用必须被丢弃');
+  assert.equal(gates.length, 1, '同一时刻只能有一个在飞请求');
   gates[0]({ ok: true, json: async () => ({ tag: 'first', messages: [] }) });
   await p1;
   const p2 = poller.poll();
+  assert.equal(gates.length, 2, '上一次完成后必须能继续轮询');
   gates[1]({ ok: true, json: async () => ({ tag: 'second', messages: [] }) });
   await p2;
-  const p3 = poller.poll();
-  // 第三个请求先发后到，第二个的迟到响应必须被丢弃
-  gates[2]({ ok: true, json: async () => ({ tag: 'third', messages: [] }) });
-  await p3;
-  assert.deepEqual(seen, ['first', 'second', 'third']);
+  assert.deepEqual(seen, ['first', 'second']);
 });
 
 test('poller treats non-ok response as error, keeps last state untouched', async () => {
