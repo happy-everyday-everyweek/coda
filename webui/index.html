@@ -123,9 +123,16 @@ const sender = createSender({
 async function stop() {
   $('btnStop').disabled = true;
   try {
-    await fetch('/api/stop', { method: 'POST' });
-  } catch {
+    const r = await fetch('/api/stop', { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    // 停止失败必须让人看见：按钮恢复原样时，用户会以为 agent 已经停了。
+    // 401/403/503 服务端都带 error 字段（见 WebUiHost 的鉴权与停止分支）。
+    if (!r.ok || j.error) {
+      window.alert(j.error || '停止失败（HTTP ' + r.status + '）');
+    }
+  } catch (e) {
     onPollError();
+    window.alert('停止失败：' + (e && e.message ? e.message : '网络错误'));
   } finally {
     $('btnStop').disabled = false;
   }
